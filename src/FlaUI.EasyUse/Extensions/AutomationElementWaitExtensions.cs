@@ -1,4 +1,5 @@
 using FlaUI.Core.AutomationElements;
+using System.Linq;
 using FlaUI.EasyUse.Waiting;
 
 namespace FlaUI.EasyUse.Extensions;
@@ -50,6 +51,21 @@ public static class AutomationElementWaitExtensions
         var waitResult = UiWait.TryUntil(
             () => listBox.Items.Length,
             actual => actual >= minCount,
+            new UiWaitOptions { Timeout = TimeSpan.FromMilliseconds(timeoutMs) });
+
+        return waitResult.Success;
+    }
+
+    public static bool WaitUntilHasItemContaining(this ListBox listBox, string expectedText, int timeoutMs = 5000)
+    {
+        ArgumentNullException.ThrowIfNull(listBox);
+
+        var waitResult = UiWait.TryUntil(
+            () =>
+                listBox.Items
+                    .Select(item => item.Text ?? item.Name ?? string.Empty)
+                    .ToArray(),
+            items => items.Any(item => item.Contains(expectedText, StringComparison.Ordinal)),
             new UiWaitOptions { Timeout = TimeSpan.FromMilliseconds(timeoutMs) });
 
         return waitResult.Success;

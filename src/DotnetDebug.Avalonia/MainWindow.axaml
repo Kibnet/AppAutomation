@@ -5,11 +5,11 @@
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
         mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
         x:Class="DotnetDebug.Avalonia.MainWindow"
-        Title="DotnetDebug - GCD Visualizer"
+        Title="DotnetDebug - Math Operations Showcase"
         MinWidth="640"
         MinHeight="420">
-    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" ColumnDefinitions="*" Margin="16" RowSpacing="12">
-        <TextBlock Grid.Row="0" FontSize="22" FontWeight="SemiBold" Text="GCD Visualizer" />
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnDefinitions="*" Margin="16" RowSpacing="12">
+        <TextBlock Grid.Row="0" FontSize="22" FontWeight="SemiBold" Text="DotnetDebug - Math Operations Showcase" />
 
         <StackPanel Grid.Row="1" Spacing="6">
             <TextBlock Text="Enter integers separated by spaces, commas, or new lines:" />
@@ -21,11 +21,59 @@
                      Watermark="48 18 30" />
         </StackPanel>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+        <StackPanel Grid.Row="2" Spacing="6">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="Operation" VerticalAlignment="Center" />
+                <ComboBox x:Name="OperationCombo"
+                          automation:AutomationProperties.AutomationId="OperationCombo"
+                          Width="120"
+                          SelectedIndex="0">
+                    <x:String>GCD</x:String>
+                    <x:String>LCM</x:String>
+                    <x:String>MIN</x:String>
+                </ComboBox>
+                <CheckBox x:Name="UseAbsoluteValuesCheck"
+                          automation:AutomationProperties.AutomationId="UseAbsoluteValuesCheck"
+                          VerticalAlignment="Center"
+                          Content="Use absolute values" />
+                <CheckBox x:Name="ShowStepsCheck"
+                          automation:AutomationProperties.AutomationId="ShowStepsCheck"
+                          VerticalAlignment="Center"
+                          IsChecked="False"
+                          Content="Show steps" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <TextBlock Text="History filter" VerticalAlignment="Center" />
+                <TextBox x:Name="HistoryFilterInput"
+                         automation:AutomationProperties.AutomationId="HistoryFilterInput"
+                         Width="240"
+                         MinHeight="0" />
+                <Button x:Name="ApplyFilterButton"
+                        automation:AutomationProperties.AutomationId="ApplyFilterButton"
+                        Width="100"
+                        Content="Apply filter"
+                        Click="OnApplyHistoryFilterClick" />
+                <Button x:Name="ClearHistoryButton"
+                        automation:AutomationProperties.AutomationId="ClearHistoryButton"
+                        Width="90"
+                        Content="Clear"
+                        Click="OnClearHistoryClick" />
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
             <Button x:Name="CalculateButton"
                     automation:AutomationProperties.AutomationId="CalculateButton"
                     Content="Calculate"
                     Click="OnCalculateClick" />
+            <Label x:Name="ModeLabel"
+                   automation:AutomationProperties.AutomationId="ModeLabel"
+                   FontSize="14"
+                   VerticalContentAlignment="Center"
+                   HorizontalContentAlignment="Left">
+                Mode: GCD | Absolute: Off | Steps: Off
+            </Label>
             <TextBlock x:Name="ResultText"
                        automation:AutomationProperties.AutomationId="ResultText"
                        FontSize="16"
@@ -33,11 +81,27 @@
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <Border Grid.Row="3" BorderBrush="#444444" BorderThickness="1" CornerRadius="6" Padding="8">
-            <ListBox x:Name="StepsList" automation:AutomationProperties.AutomationId="StepsList" />
-        </Border>
+        <Grid Grid.Row="4" ColumnDefinitions="*,*" ColumnSpacing="12">
+            <Border Grid.Column="0" BorderBrush="#444444" BorderThickness="1" CornerRadius="6" Padding="8">
+                <StackPanel Spacing="4">
+                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="Steps" />
+                    <ListBox x:Name="StepsList"
+                             automation:AutomationProperties.AutomationId="StepsList"
+                             MinHeight="130" />
+                </StackPanel>
+            </Border>
 
-        <TextBlock Grid.Row="4"
+            <Border Grid.Column="1" BorderBrush="#444444" BorderThickness="1" CornerRadius="6" Padding="8">
+                <StackPanel Spacing="4">
+                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="History" />
+                    <ListBox x:Name="HistoryList"
+                             automation:AutomationProperties.AutomationId="HistoryList"
+                             MinHeight="130" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="5"
                    x:Name="ErrorText"
                    automation:AutomationProperties.AutomationId="ErrorText"
                    Foreground="#C62828"
