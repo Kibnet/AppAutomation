@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia.Headless" Version="11.3.6" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.6" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
     <PackageReference Include="TUnit" Version="1.12.111" />
   </ItemGroup>
 

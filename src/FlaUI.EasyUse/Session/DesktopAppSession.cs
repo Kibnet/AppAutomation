@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
@@ -167,15 +168,38 @@ public sealed class DesktopAppSession : IDisposable
 
     private static string FindSolutionRoot(string solutionFileName)
     {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        string?[] candidates =
         {
-            if (File.Exists(Path.Combine(current.FullName, solutionFileName)))
+            AppContext.BaseDirectory,
+            Directory.GetCurrentDirectory(),
+            Path.GetDirectoryName(Assembly.GetEntryAssembly()?.Location)
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
             {
-                return current.FullName;
+                continue;
             }
 
-            current = current.Parent;
+            var current = new DirectoryInfo(candidate);
+            while (current is not null)
+            {
+                var normalized = current.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!visited.Add(normalized))
+                {
+                    break;
+                }
+
+                if (File.Exists(Path.Combine(current.FullName, solutionFileName)))
+                {
+                    return current.FullName;
+                }
+
+                current = current.Parent;
+            }
         }
 
         throw new DirectoryNotFoundException($"Could not locate solution root ({solutionFileName}).");

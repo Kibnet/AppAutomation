@@ -229,6 +229,23 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             4 => ("global::FlaUI.Core.AutomationElements.ListBox", "FindListBox"),
             5 => ("global::FlaUI.Core.AutomationElements.CheckBox", "FindCheckBox"),
             6 => ("global::FlaUI.Core.AutomationElements.ComboBox", "FindComboBox"),
+            7 => ("global::FlaUI.Core.AutomationElements.RadioButton", "FindRadioButton"),
+            8 => ("global::FlaUI.Core.AutomationElements.ToggleButton", "FindToggleButton"),
+            9 => ("global::FlaUI.Core.AutomationElements.Slider", "FindSlider"),
+            10 => ("global::FlaUI.Core.AutomationElements.ProgressBar", "FindProgressBar"),
+            11 => ("global::FlaUI.Core.AutomationElements.Calendar", "FindCalendar"),
+            12 => ("global::FlaUI.Core.AutomationElements.DateTimePicker", "FindDateTimePicker"),
+            13 => ("global::FlaUI.Core.AutomationElements.Spinner", "FindSpinner"),
+            14 => ("global::FlaUI.Core.AutomationElements.Tab", "FindTab"),
+            15 => ("global::FlaUI.Core.AutomationElements.Tree", "FindTree"),
+            16 => ("global::FlaUI.Core.AutomationElements.TreeItem", "FindTreeItem"),
+            17 => ("global::FlaUI.Core.AutomationElements.DataGridView", "FindDataGridView"),
+            18 => ("global::FlaUI.Core.AutomationElements.GridRow", "FindDataGridViewRow"),
+            19 => ("global::FlaUI.Core.AutomationElements.GridCell", "FindDataGridViewCell"),
+            20 => ("global::FlaUI.Core.AutomationElements.TabItem", "FindTabItem"),
+            21 => ("global::FlaUI.Core.AutomationElements.Grid", "FindGrid"),
+            22 => ("global::FlaUI.Core.AutomationElements.GridRow", "FindGridRow"),
+            23 => ("global::FlaUI.Core.AutomationElements.GridCell", "FindGridCell"),
             _ => ("global::FlaUI.Core.AutomationElements.AutomationElement", "FindElement")
         };
     }
