@@ -22,4 +22,9 @@
     <ProjectReference Include="..\..\src\FlaUI.EasyUse.Generators\FlaUI.EasyUse.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\DotnetDebug.UiTests.Avalonia.Headless\Pages\MainWindowPage.cs" Link="Pages\MainWindowPage.cs" />
+    <Compile Include="..\DotnetDebug.UiTests.Avalonia.Headless\Tests\MainWindowFlaUI.EasyUseTests.cs" Link="Tests\MainWindowFlaUI.EasyUseTests.cs" />
+  </ItemGroup>
+
 </Project>
