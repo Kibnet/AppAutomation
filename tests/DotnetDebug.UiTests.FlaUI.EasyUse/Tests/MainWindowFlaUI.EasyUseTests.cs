@@ -209,6 +209,51 @@ public sealed class MainWindowFlaUIEasyUseTests : DesktopUiTestBase<MainWindowPa
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task DataGrid_BuildSelectClear_ShowsRowsSelectionAndValidation()
+    {
+        Page
+            .SelectTabItem(p => p.MainTabs, "Data Grid")
+            .EnterText(p => p.DataGridRowsInput, "5")
+            .ClickButton(p => p.BuildGridButton)
+            .WaitUntilNameEquals(p => p.GridResultLabel, "Grid rows: 5")
+            .WaitUntilNameEquals(p => p.GridSelectionLabel, "No row selected")
+            .WaitUntilNameEquals(p => p.DataGridErrorText, string.Empty);
+
+        Page
+            .EnterText(p => p.DataGridSelectRowInput, "2")
+            .ClickButton(p => p.SelectGridRowButton)
+            .WaitUntilNameEquals(p => p.GridSelectionLabel, "Selected row: R3");
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextEqualsAsync(() => Page.GridResultLabel.Text, "Grid rows: 5");
+            await UiAssert.TextEqualsAsync(() => Page.GridSelectionLabel.Text, "Selected row: R3");
+            await UiAssert.TextEqualsAsync(() => Page.DataGridErrorText.Text, string.Empty);
+        }
+
+        Page
+            .EnterText(p => p.DataGridSelectRowInput, "99")
+            .ClickButton(p => p.SelectGridRowButton)
+            .WaitUntilNameContains(p => p.DataGridErrorText, "out of range");
+
+        await UiAssert.TextContainsAsync(() => Page.DataGridErrorText.Text, "out of range");
+
+        Page
+            .ClickButton(p => p.ClearGridButton)
+            .WaitUntilNameEquals(p => p.GridResultLabel, string.Empty)
+            .WaitUntilNameEquals(p => p.GridSelectionLabel, "No row selected")
+            .WaitUntilNameEquals(p => p.DataGridErrorText, string.Empty);
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextEqualsAsync(() => Page.GridResultLabel.Text, string.Empty);
+            await UiAssert.TextEqualsAsync(() => Page.GridSelectionLabel.Text, "No row selected");
+            await UiAssert.TextEqualsAsync(() => Page.DataGridErrorText.Text, string.Empty);
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task DateTime_InvalidRange_ShowsValidation()
     {
         Page
