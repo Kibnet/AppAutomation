@@ -1,5 +1,6 @@
 using Avalonia.Headless;
 using DotnetDebug.Avalonia;
+using FlaUI.EasyUse.Session;
 using TUnit.Core;
 
 namespace DotnetDebug.UiTests.Avalonia.Headless.Infrastructure;
@@ -12,11 +13,13 @@ public sealed class HeadlessSessionHooks
     public static void SetupSession()
     {
         _session = HeadlessUnitTestSession.StartNew(typeof(App));
+        HeadlessRuntime.SetSession(_session);
     }
 
     [After(TestSession)]
     public static void CleanupSession()
     {
+        HeadlessRuntime.SetSession(null);
         _session?.Dispose();
         _session = null;
     }
