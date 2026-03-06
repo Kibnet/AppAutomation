@@ -1,6 +1,6 @@
 using Avalonia.Headless;
 using DotnetDebug.Avalonia;
-using FlaUI.EasyUse.Session;
+using Avalonia.Headless.EasyUse.Session;
 using TUnit.Core;
 
 namespace DotnetDebug.UiTests.Avalonia.Headless.Infrastructure;

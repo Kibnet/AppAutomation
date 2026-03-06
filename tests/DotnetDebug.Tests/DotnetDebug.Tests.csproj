@@ -13,5 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DotnetDebug.Core\DotnetDebug.Core.csproj" />
+    <ProjectReference Include="..\..\src\EasyUse.Session.Contracts\EasyUse.Session.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\EasyUse.TUnit.Core\EasyUse.TUnit.Core.csproj" />
   </ItemGroup>
 </Project>

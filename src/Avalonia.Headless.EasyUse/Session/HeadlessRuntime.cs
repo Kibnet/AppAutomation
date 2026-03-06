@@ -1,6 +1,6 @@
 using Avalonia.Headless;
 
-namespace FlaUI.EasyUse.Session;
+namespace Avalonia.Headless.EasyUse.Session;
 
 public static class HeadlessRuntime
 {

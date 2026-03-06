@@ -1,12 +1,13 @@
-using System;
+using Avalonia.Headless.EasyUse.Session;
 using DotnetDebug.UiTests.FlaUI.EasyUse.Pages;
-using FlaUI.EasyUse.Session;
+using EasyUse.Session.Contracts;
+using EasyUse.TUnit.Core;
 using TUnit.Core;
 
 namespace DotnetDebug.UiTests.FlaUI.EasyUse.Tests.UIAutomationTests;
 
 [InheritsTests]
-public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase
+public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<MainWindowHeadlessRuntimeTests.HeadlessRuntimeSession>
 {
     protected override DesktopProjectLaunchOptions CreateLaunchOptions()
     {
@@ -19,8 +20,28 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase
         };
     }
 
-    protected override MainWindowPage CreatePage(DesktopAppSession session)
+    protected override HeadlessRuntimeSession LaunchSession(DesktopProjectLaunchOptions options)
     {
-        return new MainWindowPage(session.MainWindow, session.ConditionFactory);
+        return new HeadlessRuntimeSession(DesktopAppSession.LaunchFromProject(options));
+    }
+
+    protected override MainWindowPage CreatePage(HeadlessRuntimeSession session)
+    {
+        return new MainWindowPage(session.Inner.MainWindow, session.Inner.ConditionFactory);
+    }
+
+    public sealed class HeadlessRuntimeSession : IUiTestSession
+    {
+        public HeadlessRuntimeSession(DesktopAppSession inner)
+        {
+            Inner = inner;
+        }
+
+        public DesktopAppSession Inner { get; }
+
+        public void Dispose()
+        {
+            Inner.Dispose();
+        }
     }
 }

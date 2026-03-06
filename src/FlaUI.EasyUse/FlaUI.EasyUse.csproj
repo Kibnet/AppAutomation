@@ -12,11 +12,16 @@
     <Authors>DotnetDebug</Authors>
     <RepositoryUrl>https://github.com</RepositoryUrl>
     <PackageTags>flaui;uiautomation;desktop;testing</PackageTags>
+    <Version>2.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="FlaUI.Core" Version="5.0.0" />
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EasyUse.Session.Contracts\EasyUse.Session.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

@@ -18,7 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FlaUI.EasyUse\FlaUI.EasyUse.csproj" />
-    <ProjectReference Include="..\..\src\FlaUI.EasyUse.TUnit\FlaUI.EasyUse.TUnit.csproj" />
+    <ProjectReference Include="..\..\src\EasyUse.Session.Contracts\EasyUse.Session.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\EasyUse.TUnit.Core\EasyUse.TUnit.Core.csproj" />
     <ProjectReference Include="..\..\src\FlaUI.EasyUse.Generators\FlaUI.EasyUse.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

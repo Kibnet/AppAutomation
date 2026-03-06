@@ -3,13 +3,14 @@ using System.Linq;
 using FlaUI.Core.Definitions;
 using DotnetDebug.UiTests.FlaUI.EasyUse.Pages;
 using FlaUI.EasyUse.Extensions;
-using FlaUI.EasyUse.TUnit;
+using EasyUse.TUnit.Core;
 using TUnit.Assertions;
 using TUnit.Core;
 
 namespace DotnetDebug.UiTests.FlaUI.EasyUse.Tests.UIAutomationTests;
 
-public abstract class MainWindowScenariosBase : DesktopUiTestBase<MainWindowPage>
+public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
+    where TSession : class, IUiTestSession
 {
     [Test]
     [NotInParallel(DesktopUiConstraint)]
@@ -18,12 +19,12 @@ public abstract class MainWindowScenariosBase : DesktopUiTestBase<MainWindowPage
         var initialHistoryItems = Page.HistoryList.Items.Length;
 
         Page.EnterText(p => p.NumbersInput, "48 18 30");
-            Page.SelectComboItem(p => p.OperationCombo, "GCD");
-            Page.SetChecked(p => p.ShowStepsCheck, true);
-            Page.ClickButton(p => p.CalculateButton);
-            Page.WaitUntilNameEquals(p => p.ResultText, "GCD = 6");
-            Page.WaitUntilHasItemsAtLeast(p => p.StepsList, 1);
-            Page.WaitUntilListBoxContains(p => p.HistoryList, "GCD");
+        Page.SelectComboItem(p => p.OperationCombo, "GCD");
+        Page.SetChecked(p => p.ShowStepsCheck, true);
+        Page.ClickButton(p => p.CalculateButton);
+        Page.WaitUntilNameEquals(p => p.ResultText, "GCD = 6");
+        Page.WaitUntilHasItemsAtLeast(p => p.StepsList, 1);
+        Page.WaitUntilListBoxContains(p => p.HistoryList, "GCD");
 
         using (Assert.Multiple())
         {

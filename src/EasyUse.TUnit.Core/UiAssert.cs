@@ -1,8 +1,8 @@
-using FlaUI.EasyUse.Waiting;
+using EasyUse.TUnit.Core.Waiting;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
-namespace FlaUI.EasyUse.TUnit;
+namespace EasyUse.TUnit.Core;
 
 public static class UiAssert
 {

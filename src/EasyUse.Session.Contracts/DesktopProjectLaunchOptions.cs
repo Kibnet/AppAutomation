@@ -1,4 +1,4 @@
-namespace FlaUI.EasyUse.Session;
+namespace EasyUse.Session.Contracts;
 
 public sealed record class DesktopProjectLaunchOptions
 {

@@ -1,4 +1,4 @@
-namespace Avalonia.Headless.EasyUse.Waiting;
+namespace EasyUse.TUnit.Core.Waiting;
 
 public sealed record UiWaitOptions
 {
@@ -9,14 +9,4 @@ public sealed record UiWaitOptions
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     public static UiWaitOptions Default { get; } = new();
-
-    internal global::FlaUI.EasyUse.Waiting.UiWaitOptions ToLegacy()
-    {
-        return new global::FlaUI.EasyUse.Waiting.UiWaitOptions
-        {
-            Timeout = Timeout,
-            PollInterval = PollInterval,
-            TimeProvider = TimeProvider
-        };
-    }
 }

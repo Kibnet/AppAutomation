@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using EasyUse.Session.Contracts;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;

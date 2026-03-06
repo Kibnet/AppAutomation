@@ -141,7 +141,7 @@ public class AutomationElement
 
     protected static T Ui<T>(Func<T> action)
     {
-        return FlaUI.EasyUse.Session.HeadlessRuntime.Dispatch(action);
+        return Avalonia.Headless.EasyUse.Session.HeadlessRuntime.Dispatch(action);
     }
 
     protected T RequireControl<T>() where T : Control
