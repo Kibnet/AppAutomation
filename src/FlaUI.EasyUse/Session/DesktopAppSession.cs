@@ -80,6 +80,8 @@ public sealed class DesktopAppSession : IDisposable
                 throw new TimeoutException("Main window was not found within timeout.");
             }
 
+            WaitForAutomationTree(mainWindowResult.Result, options.MainWindowTimeout, options.PollInterval);
+
             var conditionFactory = new ConditionFactory(new UIA3PropertyLibrary());
             return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory);
         }
@@ -104,6 +106,30 @@ public sealed class DesktopAppSession : IDisposable
         TryTerminateApplication(_application);
         _application.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private static void WaitForAutomationTree(Window mainWindow, TimeSpan timeout, TimeSpan pollInterval)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        while (stopwatch.Elapsed < timeout)
+        {
+            try
+            {
+                if (mainWindow.IsAvailable && mainWindow.FindAllDescendants().Length > 0)
+                {
+                    return;
+                }
+            }
+            catch
+            {
+                // The automation tree can be transient while the window is initializing.
+            }
+
+            Thread.Sleep(pollInterval);
+        }
+
+        throw new TimeoutException("Main window automation tree was not ready within timeout.");
     }
 
     private static void TryTerminateApplication(Application application)

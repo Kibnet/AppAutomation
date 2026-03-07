@@ -1,8 +1,13 @@
 {
   "sdk": {
-    "version": "10.0.100-rc.2.25502.107",
+    "version": "10.0.103",
     "rollForward": "disable",
-    "allowPrerelease": true
+    "allowPrerelease": false,
+    "paths": [
+      ".dotnet",
+      "$host$"
+    ],
+    "errorMessage": "Install the pinned stable .NET SDK with: powershell -ExecutionPolicy Bypass -File ./eng/install-dotnet.ps1"
   },
   "test": {
     "runner": "Microsoft.Testing.Platform"

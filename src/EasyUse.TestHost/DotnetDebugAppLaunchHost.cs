@@ -8,7 +8,7 @@ public static class DotnetDebugAppLaunchHost
 {
     private const string SolutionFileName = "DotnetDebug.sln";
     private const string DesktopProjectRelativePath = "src\\DotnetDebug.Avalonia\\DotnetDebug.Avalonia.csproj";
-    private const string DesktopTargetFramework = "net9.0";
+    private const string DesktopTargetFramework = "net10.0";
     private static readonly object BuildLock = new();
     private static readonly HashSet<string> BuiltProjectKeys = new(StringComparer.OrdinalIgnoreCase);
 
