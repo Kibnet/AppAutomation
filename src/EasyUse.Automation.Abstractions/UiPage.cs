@@ -9,6 +9,8 @@ public abstract class UiPage
 
     protected IUiControlResolver Resolver { get; }
 
+    internal IUiControlResolver ResolverInternal => Resolver;
+
     public UiRuntimeCapabilities Capabilities => Resolver.Capabilities;
 
     protected TControl Resolve<TControl>(UiControlDefinition definition)

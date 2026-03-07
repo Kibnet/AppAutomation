@@ -1,14 +1,16 @@
 using EasyUse.Automation.Abstractions;
+using System.Diagnostics;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
+using System.Text;
 
 namespace FlaUI.EasyUse.Automation;
 
-public sealed class FlaUiControlResolver : IUiControlResolver
+public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
@@ -61,6 +63,33 @@ public sealed class FlaUiControlResolver : IUiControlResolver
         return resolved as TControl
             ?? throw new InvalidOperationException(
                 $"Resolved control '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
+    }
+
+    public ValueTask<IReadOnlyList<UiFailureArtifact>> CollectAsync(
+        UiFailureContext failureContext,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var screenshotArtifact = CreateScreenshotArtifact();
+        var windowHandleArtifact = CreateWindowHandleArtifact();
+        var processInfoArtifact = CreateProcessInfoArtifact();
+
+        IReadOnlyList<UiFailureArtifact> artifacts =
+        [
+            new UiFailureArtifact(
+                Kind: "logical-tree",
+                LogicalName: "logical-tree",
+                RelativePath: "artifacts/ui-failures/flaui/logical-tree.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: true,
+                InlineTextPreview: BuildLogicalTreeSnapshot()),
+            screenshotArtifact,
+            processInfoArtifact,
+            windowHandleArtifact
+        ];
+
+        return ValueTask.FromResult(artifacts);
     }
 
     private GridRow FindGridRow(UiControlDefinition definition)
@@ -173,6 +202,109 @@ public sealed class FlaUiControlResolver : IUiControlResolver
         catch
         {
             return default;
+        }
+    }
+
+    private string BuildLogicalTreeSnapshot()
+    {
+        var builder = new StringBuilder();
+        AppendElement(builder, _window, depth: 0);
+
+        foreach (var candidate in _window.FindAllDescendants())
+        {
+            AppendElement(builder, candidate, depth: 1);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static void AppendElement(StringBuilder builder, AutomationElement element, int depth)
+    {
+        builder.Append(' ', depth * 2)
+            .Append(TryRead(() => element.ControlType.ToString()) ?? "<unknown>")
+            .Append(" | Id=")
+            .Append(TryRead(() => element.AutomationId) ?? string.Empty)
+            .Append(" | Name=")
+            .Append(TryRead(() => element.Name) ?? string.Empty)
+            .AppendLine();
+    }
+
+    private UiFailureArtifact CreateScreenshotArtifact()
+    {
+        try
+        {
+            using var screenshot = _window.Capture();
+            return new UiFailureArtifact(
+                Kind: "screenshot",
+                LogicalName: "window-screenshot",
+                RelativePath: "artifacts/ui-failures/flaui/window.png",
+                ContentType: "image/png",
+                IsRequiredByContract: true,
+                InlineTextPreview: $"{screenshot.Width}x{screenshot.Height}");
+        }
+        catch (Exception ex)
+        {
+            return new UiFailureArtifact(
+                Kind: "screenshot-unavailable",
+                LogicalName: "window-screenshot",
+                RelativePath: "artifacts/ui-failures/flaui/window.png",
+                ContentType: "text/plain",
+                IsRequiredByContract: false,
+                InlineTextPreview: ex.Message);
+        }
+    }
+
+    private UiFailureArtifact CreateWindowHandleArtifact()
+    {
+        var handle = TryRead(() => _window.FrameworkAutomationElement.NativeWindowHandle.ValueOrDefault);
+        var isAvailable = handle != IntPtr.Zero;
+
+        return new UiFailureArtifact(
+            Kind: "window-handle",
+            LogicalName: "window-handle",
+            RelativePath: "artifacts/ui-failures/flaui/window-handle.txt",
+            ContentType: "text/plain",
+            IsRequiredByContract: isAvailable,
+            InlineTextPreview: isAvailable
+                ? $"0x{handle.ToInt64():X}"
+                : "Window handle unavailable.");
+    }
+
+    private UiFailureArtifact CreateProcessInfoArtifact()
+    {
+        var processId = TryRead(() => _window.FrameworkAutomationElement.ProcessId.ValueOrDefault);
+        if (processId <= 0)
+        {
+            return new UiFailureArtifact(
+                Kind: "process-info",
+                LogicalName: "process-info",
+                RelativePath: "artifacts/ui-failures/flaui/process-info.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: false,
+                InlineTextPreview: "Process id unavailable.");
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var startedAt = TryRead(() => process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            return new UiFailureArtifact(
+                Kind: "process-info",
+                LogicalName: "process-info",
+                RelativePath: "artifacts/ui-failures/flaui/process-info.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: true,
+                InlineTextPreview: $"Pid={processId}; Name={process.ProcessName}; StartedAtUtc={startedAt ?? "<unknown>"}");
+        }
+        catch (Exception ex)
+        {
+            return new UiFailureArtifact(
+                Kind: "process-info",
+                LogicalName: "process-info",
+                RelativePath: "artifacts/ui-failures/flaui/process-info.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: false,
+                InlineTextPreview: $"Pid={processId}; Error={ex.Message}");
         }
     }
 

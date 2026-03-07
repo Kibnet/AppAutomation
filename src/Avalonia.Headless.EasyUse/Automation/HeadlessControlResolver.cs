@@ -1,10 +1,11 @@
 using EasyUse.Automation.Abstractions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
+using System.Text;
 
 namespace Avalonia.Headless.EasyUse.Automation;
 
-public sealed class HeadlessControlResolver : IUiControlResolver
+public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
@@ -56,6 +57,36 @@ public sealed class HeadlessControlResolver : IUiControlResolver
         return resolved as TControl
             ?? throw new InvalidOperationException(
                 $"Resolved control '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
+    }
+
+    public ValueTask<IReadOnlyList<UiFailureArtifact>> CollectAsync(
+        UiFailureContext failureContext,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var logicalTree = BuildLogicalTreeSnapshot();
+        var controlState = BuildControlStateSnapshot(failureContext.LocatorValue, failureContext.LocatorKind);
+
+        IReadOnlyList<UiFailureArtifact> artifacts =
+        [
+            new UiFailureArtifact(
+                Kind: "logical-tree",
+                LogicalName: "logical-tree",
+                RelativePath: "artifacts/ui-failures/avalonia-headless/logical-tree.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: true,
+                InlineTextPreview: logicalTree),
+            new UiFailureArtifact(
+                Kind: "control-state",
+                LogicalName: "control-state",
+                RelativePath: "artifacts/ui-failures/avalonia-headless/control-state.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: true,
+                InlineTextPreview: controlState)
+        ];
+
+        return ValueTask.FromResult(artifacts);
     }
 
     private Grid FindGrid(UiControlDefinition definition)
@@ -123,9 +154,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver
         var normalized = locatorValue.Trim();
         return _window.FindAllDescendants()
             .FirstOrDefault(candidate =>
-                string.Equals(candidate.AutomationId, normalized, StringComparison.Ordinal)
-                || string.Equals(candidate.Name, normalized, StringComparison.Ordinal)
-                || string.Equals(candidate.Name, normalized, StringComparison.OrdinalIgnoreCase));
+                string.Equals(candidate.AutomationId, normalized, StringComparison.Ordinal));
     }
 
     private AutomationElement? SearchByName(string locatorValue)
@@ -135,6 +164,69 @@ public sealed class HeadlessControlResolver : IUiControlResolver
             .FirstOrDefault(candidate =>
                 string.Equals(candidate.Name, normalized, StringComparison.Ordinal)
                 || string.Equals(candidate.Name, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string BuildLogicalTreeSnapshot()
+    {
+        var builder = new StringBuilder();
+        AppendElement(builder, _window, depth: 0);
+
+        foreach (var candidate in _window.FindAllDescendants())
+        {
+            AppendElement(builder, candidate, depth: 1);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private string BuildControlStateSnapshot(string? locatorValue, UiLocatorKind? locatorKind)
+    {
+        if (string.IsNullOrWhiteSpace(locatorValue) || locatorKind is null)
+        {
+            return "No locator context available.";
+        }
+
+        var element = locatorKind.Value switch
+        {
+            UiLocatorKind.AutomationId => SearchByAutomationId(locatorValue),
+            UiLocatorKind.Name => SearchByName(locatorValue),
+            _ => null
+        };
+
+        if (element is null)
+        {
+            return $"Element [{locatorKind}:{locatorValue}] was not found during artifact collection.";
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("ControlType=").Append(TryRead(() => element.ControlType.ToString()) ?? "<unknown>").AppendLine();
+        builder.Append("AutomationId=").Append(TryRead(() => element.AutomationId) ?? string.Empty).AppendLine();
+        builder.Append("Name=").Append(TryRead(() => element.Name) ?? string.Empty).AppendLine();
+        builder.Append("IsEnabled=").Append(TryRead(() => element.IsEnabled) is bool isEnabled ? isEnabled.ToString() : "<unknown>");
+        return builder.ToString();
+    }
+
+    private static void AppendElement(StringBuilder builder, AutomationElement element, int depth)
+    {
+        builder.Append(' ', depth * 2)
+            .Append(TryRead(() => element.ControlType.ToString()) ?? "<unknown>")
+            .Append(" | Id=")
+            .Append(TryRead(() => element.AutomationId) ?? string.Empty)
+            .Append(" | Name=")
+            .Append(TryRead(() => element.Name) ?? string.Empty)
+            .AppendLine();
+    }
+
+    private static T? TryRead<T>(Func<T> accessor)
+    {
+        try
+        {
+            return accessor();
+        }
+        catch
+        {
+            return default;
+        }
     }
 
     private abstract class HeadlessControlBase<TControl> : IUiControl
