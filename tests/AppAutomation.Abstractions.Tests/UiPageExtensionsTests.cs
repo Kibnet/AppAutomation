@@ -117,6 +117,19 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task SelectTabItem_ByStableTabItemControl_SelectsTab()
+    {
+        var tabItem = new FakeTabItemControl("TasksTabItem");
+        var page = new TabsPage(new FakeResolver(("TasksTabItem", tabItem)));
+
+        page
+            .SelectTabItem(static candidate => candidate.TasksTabItem)
+            .WaitUntilIsSelected(static candidate => candidate.TasksTabItem);
+
+        await Assert.That(tabItem.IsSelected).IsEqualTo(true);
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -133,6 +146,14 @@ public sealed class UiPageExtensionsTests
             "ResultLabel",
             UiLocatorKind.Name,
             FallbackToName: false);
+    }
+
+    public static class TabsPageDefinitions
+    {
+        public static UiControlDefinition TasksTabItem { get; } = new(
+            "TasksTabItem",
+            UiControlType.TabItem,
+            "TasksTabItem");
     }
 
     private sealed class ComboPage : UiPage
@@ -153,6 +174,16 @@ public sealed class UiPageExtensionsTests
         }
 
         public ILabelControl ResultLabel => Resolve<ILabelControl>(DiagnosticsPageDefinitions.ResultLabel);
+    }
+
+    private sealed class TabsPage : UiPage
+    {
+        public TabsPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ITabItemControl TasksTabItem => Resolve<ITabItemControl>(TabsPageDefinitions.TasksTabItem);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -265,6 +296,21 @@ public sealed class UiPageExtensionsTests
 
         public void Expand()
         {
+        }
+    }
+
+    private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl
+    {
+        public FakeTabItemControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public bool IsSelected { get; private set; }
+
+        public void Select()
+        {
+            IsSelected = true;
         }
     }
 

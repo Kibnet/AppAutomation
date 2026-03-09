@@ -249,6 +249,31 @@ public static class UiPageExtensions
         return page;
     }
 
+    public static TSelf SelectTabItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITabItemControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var tabItem = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => tabItem.IsEnabled,
+            timeoutMs,
+            $"Tab item '{tabItem.AutomationId}' is not enabled.",
+            () => tabItem.IsEnabled.ToString(CultureInfo.InvariantCulture));
+        tabItem.Select();
+        WaitUntil(
+            page,
+            selector,
+            () => tabItem.IsSelected,
+            timeoutMs,
+            $"Tab item '{tabItem.AutomationId}' was not selected.",
+            () => tabItem.IsSelected.ToString(CultureInfo.InvariantCulture));
+        return page;
+    }
+
     public static TSelf SelectTreeItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITreeControl>> selector,
@@ -371,6 +396,24 @@ public static class UiPageExtensions
             timeoutMs,
             $"Radio button '{radioButton.AutomationId}' did not become '{expected}'.",
             () => radioButton.IsChecked?.ToString());
+        return page;
+    }
+
+    public static TSelf WaitUntilIsSelected<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITabItemControl>> selector,
+        bool expected = true,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var tabItem = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => tabItem.IsSelected == expected,
+            timeoutMs,
+            $"Tab item '{tabItem.AutomationId}' did not become '{expected}'.",
+            () => tabItem.IsSelected.ToString(CultureInfo.InvariantCulture));
         return page;
     }
 

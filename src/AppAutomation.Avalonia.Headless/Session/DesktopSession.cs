@@ -19,11 +19,24 @@ public sealed class DesktopAppSession : IDisposable
     public static DesktopAppSession Launch(HeadlessAppLaunchOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(options.CreateMainWindow);
+
+        if (options.CreateMainWindow is null && options.CreateMainWindowAsync is null)
+        {
+            throw new InvalidOperationException(
+                "Headless launch options must configure CreateMainWindow or CreateMainWindowAsync.");
+        }
+
+        if (options.BeforeLaunchAsync is not null)
+        {
+            options.BeforeLaunchAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }
 
         var window = HeadlessRuntime.Dispatch(() =>
         {
-            var created = options.CreateMainWindow();
+            var created = options.CreateMainWindowAsync is not null
+                ? options.CreateMainWindowAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult()
+                : options.CreateMainWindow?.Invoke();
+
             return created as AvaloniaWindow
                 ?? throw new InvalidOperationException("Headless launch factory must return Avalonia.Controls.Window.");
         });

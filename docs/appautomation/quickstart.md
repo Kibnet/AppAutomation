@@ -1,6 +1,8 @@
 # AppAutomation Quickstart
 
-Этот quickstart показывает минимальный working setup для внешнего solution, который хочет писать UI-тесты на `AppAutomation`.
+Этот quickstart показывает минимальный working setup для внешнего solution, который хочет подключить `AppAutomation` через NuGet и начать писать UI-тесты.
+
+Для nested solution, repo-specific bootstrap, stateful headless apps и troubleshooting смотрите [advanced-integration.md](advanced-integration.md).
 
 ## 1. Рекомендуемая topology
 
@@ -66,6 +68,8 @@ using AppAutomation.Abstractions;
 
 namespace MyApp.UiTests.Authoring.Pages;
 
+[UiControl("MainTabs", UiControlType.Tab, "MainTabs")]
+[UiControl("LoginTabItem", UiControlType.TabItem, "LoginTabItem")]
 [UiControl("UserNameInput", UiControlType.TextBox, "UserNameInput")]
 [UiControl("LoginButton", UiControlType.Button, "LoginButton")]
 [UiControl("StatusLabel", UiControlType.Label, "StatusLabel")]
@@ -80,16 +84,19 @@ public sealed partial class MainWindowPage : UiPage
 После сборки generator создаст:
 
 - `MainWindowPageDefinitions`
-- strongly typed properties `UserNameInput`, `LoginButton`, `StatusLabel`
+- strongly typed properties `MainTabs`, `LoginTabItem`, `UserNameInput`, `LoginButton`, `StatusLabel`
 - generated locator manifest provider в namespace `<AssemblyName>.Generated`
+
+Для production-grade navigation предпочитайте stable controls с `AutomationId`, например `LoginTabItem`, а не выбор tab-а только по тексту header-а.
 
 ## 5. Вынесите shared scenarios
 
 `tests/MyApp.UiTests.Authoring/Tests/MainWindowScenariosBase.cs`:
 
 ```csharp
-using MyApp.UiTests.Authoring.Pages;
+using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
+using MyApp.UiTests.Authoring.Pages;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -99,9 +106,15 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     where TSession : class, IUiTestSession
 {
     [Test]
-    public async Task Login_button_is_reachable()
+    public async Task Login_flow_is_reachable()
     {
-        await Assert.That(Page.LoginButton.AutomationId).IsEqualTo("LoginButton");
+        Page
+            .SelectTabItem(static candidate => candidate.LoginTabItem)
+            .EnterText(static candidate => candidate.UserNameInput, "alice")
+            .ClickButton(static candidate => candidate.LoginButton)
+            .WaitUntilNameContains(static candidate => candidate.StatusLabel, "alice");
+
+        await Assert.That(Page.LoginTabItem.IsSelected).IsEqualTo(true);
     }
 }
 ```
@@ -130,7 +143,8 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MyApp.UiTests.Authoring\MyApp.UiTests.Authoring.csproj" />
+    <ProjectReference Include="..\\MyApp.UiTests.Authoring\\MyApp.UiTests.Authoring.csproj" />
+    <ProjectReference Include="..\\MyApp.AppAutomation.TestHost\\MyApp.AppAutomation.TestHost.csproj" />
   </ItemGroup>
 </Project>
 ```
@@ -138,45 +152,47 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
 Минимальный runtime wrapper:
 
 ```csharp
+using AppAutomation.Avalonia.Headless.Automation;
+using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.TUnit;
+using MyApp.AppAutomation.TestHost;
 using MyApp.UiTests.Authoring.Pages;
 using MyApp.UiTests.Authoring.Tests;
-using AppAutomation.Abstractions;
-using AppAutomation.TUnit;
 using TUnit.Core;
 
 namespace MyApp.UiTests.Headless;
 
 [InheritsTests]
-public sealed class MainWindowHeadlessTests : MainWindowScenariosBase<MainWindowHeadlessTests.FakeSession>
+public sealed class MainWindowHeadlessTests : MainWindowScenariosBase<MainWindowHeadlessTests.HeadlessSession>
 {
-    protected override FakeSession LaunchSession() => new();
+    protected override HeadlessSession LaunchSession() => HeadlessSession.Start();
 
-    protected override MainWindowPage CreatePage(FakeSession session)
+    protected override MainWindowPage CreatePage(HeadlessSession session)
     {
-        return new MainWindowPage(new FakeResolver());
+        return new MainWindowPage(new HeadlessControlResolver(session.Session.MainWindow));
     }
 
-    public sealed class FakeSession : IUiTestSession
+    public sealed class HeadlessSession : IUiTestSession
     {
+        private HeadlessSession(DesktopAppSession session)
+        {
+            Session = session;
+        }
+
+        public DesktopAppSession Session { get; }
+
+        public static HeadlessSession Start()
+        {
+            return new HeadlessSession(DesktopAppSession.Launch(MyAppLaunchHost.CreateHeadlessLaunchOptions()));
+        }
+
         public void Dispose()
         {
-        }
-    }
-
-    private sealed class FakeResolver : IUiControlResolver
-    {
-        public UiRuntimeCapabilities Capabilities { get; } = new("headless");
-
-        public TControl Resolve<TControl>(UiControlDefinition definition)
-            where TControl : class
-        {
-            throw new NotImplementedException();
+            Session.Dispose();
         }
     }
 }
 ```
-
-В реальном solution вместо `FakeResolver` вы передаёте runtime-specific resolver, например `HeadlessControlResolver`.
 
 ## 7. Добавьте Windows runtime при необходимости
 
@@ -191,28 +207,94 @@ public sealed class MainWindowHeadlessTests : MainWindowScenariosBase<MainWindow
 <PackageReference Include="TUnit" Version="1.12.111" />
 ```
 
-и `ProjectReference` на `MyApp.UiTests.Authoring`.
+и `ProjectReference` на `MyApp.UiTests.Authoring` и `MyApp.AppAutomation.TestHost`.
 
 ## 8. Когда нужен repo-specific TestHost
 
 Если ваш runtime test project должен:
 
-- искать `.sln`;
+- искать `.sln` или repo root;
 - собирать AUT перед запуском;
 - вычислять пути в `bin/<Configuration>/<TFM>`;
 - формировать `DesktopAppLaunchOptions` / `HeadlessAppLaunchOptions`;
+- подготавливать temp dirs, test data или isolated settings;
 
 выносите это в отдельный repo-only project, аналогичный `src/DotnetDebug.AppAutomation.TestHost`.
 
-Это не часть reusable framework contract. Это ваша локальная инфраструктура solution.
+### Пример desktop launch options с аргументами и env vars
 
-## 9. Запуск
+```csharp
+using AppAutomation.Session.Contracts;
+
+return new DesktopAppLaunchOptions
+{
+    ExecutablePath = executablePath,
+    WorkingDirectory = appWorkingDirectory,
+    Arguments = ["--automation", "--profile", "smoke"],
+    EnvironmentVariables = new Dictionary<string, string?>
+    {
+        ["MYAPP_ENV"] = "Test",
+        ["MYAPP_SETTINGS_PATH"] = settingsPath
+    }
+};
+```
+
+### Пример advanced headless bootstrap
+
+```csharp
+using AppAutomation.Session.Contracts;
+
+return new HeadlessAppLaunchOptions
+{
+    BeforeLaunchAsync = async cancellationToken =>
+    {
+        await ResetStaticStateAsync(cancellationToken);
+        PrepareIsolatedFiles();
+    },
+    CreateMainWindowAsync = cancellationToken =>
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult<object>(MyAppBootstrap.CreateMainWindowForAutomation());
+    }
+};
+```
+
+`BeforeLaunchAsync` используйте для repo/app-specific reset logic. `CreateMainWindowAsync` используйте, когда создание окна требует async/bootstrap шага. Для простых приложений достаточно старого `CreateMainWindow`.
+
+## 9. Readiness и retry helpers
+
+`UiTestBase` теперь даёт framework-level helpers для readiness logic:
+
+- `WaitUntil(...)`
+- `WaitUntil<T>(...)`
+- `WaitUntilAsync<T>(...)`
+- `RetryUntil(...)`
+
+Пример:
+
+```csharp
+protected override MainWindowPage CreatePage(HeadlessSession session)
+{
+    var page = new MainWindowPage(new HeadlessControlResolver(session.Session.MainWindow));
+
+    WaitUntil(
+        () => page.LoginButton.IsEnabled,
+        timeout: TimeSpan.FromSeconds(10),
+        because: "Main window should become interactive before tests continue.");
+
+    return page;
+}
+```
+
+Используйте эти helpers для readiness и transient transitions. Если без retry нельзя даже стабильно найти control, сначала улучшайте locator strategy и `AutomationId`.
+
+## 10. Запуск
 
 ```powershell
 dotnet restore
 dotnet build
-dotnet test tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
-dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj
+dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
+dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj
 ```
 
 Если хотите проверить именно package install story, используйте локальный smoke path из этого репозитория:

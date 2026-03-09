@@ -1,6 +1,7 @@
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Abstractions;
+using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -33,5 +34,19 @@ public sealed class HeadlessControlResolverTests
         }
 
         await Assert.That(exception is InvalidOperationException).IsEqualTo(true);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task SelectTabItem_ByStableTabItemControl_SelectsHeadlessTab()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+
+        page
+            .SelectTabItem(static candidate => candidate.ControlMixTabItem)
+            .WaitUntilIsSelected(static candidate => candidate.ControlMixTabItem);
+
+        await Assert.That(page.ControlMixTabItem.IsSelected).IsEqualTo(true);
     }
 }

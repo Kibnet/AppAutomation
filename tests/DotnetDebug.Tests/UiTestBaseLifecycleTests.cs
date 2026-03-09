@@ -30,6 +30,37 @@ public class UiTestBaseLifecycleTests
         }
     }
 
+    [Test]
+    public async Task WaitUntil_ReturnsWhenConditionEventuallyMatches()
+    {
+        var fixture = new FakeUiFixture();
+        var attempts = 0;
+
+        var result = fixture.RunWaitUntil(
+            () => ++attempts,
+            static value => value >= 3,
+            timeout: TimeSpan.FromSeconds(1));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result).IsEqualTo(3);
+            await Assert.That(attempts >= 3).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RetryUntil_RepeatsUntilAttemptSucceeds()
+    {
+        var fixture = new FakeUiFixture();
+        var attempts = 0;
+
+        fixture.RunRetryUntil(
+            () => ++attempts >= 3,
+            timeout: TimeSpan.FromSeconds(1));
+
+        await Assert.That(attempts >= 3).IsEqualTo(true);
+    }
+
     private sealed class FakeUiFixture : UiTestBase<FakeUiSession, string>
     {
         public int LaunchSessionCalls { get; private set; }
@@ -52,6 +83,12 @@ public class UiTestBaseLifecycleTests
         public FakeUiSession AccessSession() => Session;
 
         public string AccessPage() => Page;
+
+        public int RunWaitUntil(Func<int> valueFactory, Predicate<int> condition, TimeSpan timeout) =>
+            WaitUntil(valueFactory, condition, timeout: timeout);
+
+        public void RunRetryUntil(Func<bool> attempt, TimeSpan timeout) =>
+            RetryUntil(attempt, timeout: timeout);
     }
 
     private sealed class FakeUiSession : IUiTestSession

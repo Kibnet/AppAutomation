@@ -153,7 +153,7 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     public async Task ControlMix_SliderSpinnerRadioToggle_BuildsSeriesAndShowsProgress()
     {
         Page
-            .SelectTabItem(p => p.MainTabs, "Control Mix")
+            .SelectTabItem(p => p.ControlMixTabItem)
             .SelectComboItem(p => p.MixModeCombo, "Fibonacci")
             .SetChecked(p => p.MixShowDetailsCheck, true)
             .SetChecked(p => p.MixDirectionAscendingRadio, true)
@@ -193,7 +193,7 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     public async Task DataGrid_BuildSelectClear_ShowsRowsSelectionAndValidation()
     {
         Page
-            .SelectTabItem(p => p.MainTabs, "Data Grid")
+            .SelectTabItem(p => p.DataGridTabItem)
             .EnterText(p => p.DataGridRowsInput, "5")
             .ClickButton(p => p.BuildGridButton)
             .WaitUntilNameEquals(p => p.GridResultLabel, "Grid rows: 5")
@@ -238,7 +238,7 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     public async Task DateTime_InvalidRange_ShowsValidation()
     {
         Page
-            .SelectTabItem(p => p.MainTabs, "DateTime")
+            .SelectTabItem(p => p.DateTimeTabItem)
             .SetDate(p => p.StartDatePicker, DateTime.Today)
             .SetDate(p => p.EndDatePicker, DateTime.Today.AddDays(-2))
             .ClickButton(p => p.DateDiffButton)
@@ -256,7 +256,7 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     public async Task DateTime_ComputeDateDifference_ByDatePickers()
     {
         Page
-            .SelectTabItem(p => p.MainTabs, "DateTime")
+            .SelectTabItem(p => p.DateTimeTabItem)
             .SetDate(p => p.StartDatePicker, DateTime.Today.AddDays(-7))
             .SetDate(p => p.EndDatePicker, DateTime.Today)
             .ClickButton(p => p.DateDiffButton)
@@ -275,14 +275,14 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     public async Task TabControl_NavigatesAcrossTabs_WithExpectedControls()
     {
         Page
-            .SelectTabItem(p => p.MainTabs, "Control Mix")
-            .SelectTabItem(p => p.MainTabs, "Hierarchy")
-            .SelectTabItem(p => p.MainTabs, "DateTime")
+            .SelectTabItem(p => p.ControlMixTabItem)
+            .SelectTabItem(p => p.HierarchyTabItem)
+            .SelectTabItem(p => p.DateTimeTabItem)
             .SetDate(p => p.StartDatePicker, DateTime.Today.AddDays(-2))
             .SetDate(p => p.EndDatePicker, DateTime.Today)
             .ClickButton(p => p.DateDiffButton)
             .WaitUntilNameContains(p => p.DateResult, "Date difference = 2 days")
-            .SelectTabItem(p => p.MainTabs, "Math")
+            .SelectTabItem(p => p.MathTabItem)
             .SelectComboItem(p => p.OperationCombo, "GCD")
             .EnterText(p => p.NumbersInput, "6 9")
             .ClickButton(p => p.CalculateButton)
@@ -299,7 +299,7 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     [NotInParallel(DesktopUiConstraint)]
     public async Task Hierarchy_SelectTreeItem_ShowsSelectionInResult()
     {
-        Page.SelectTabItem(p => p.MainTabs, "Hierarchy");
+        Page.SelectTabItem(p => p.HierarchyTabItem);
 
         Page
             .SelectTreeItem(p => p.DemoTree, "Fibonacci")

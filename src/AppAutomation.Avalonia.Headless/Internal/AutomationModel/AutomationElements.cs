@@ -618,6 +618,7 @@ internal class TabItem : AutomationElement
             if (Native.Parent is global::Avalonia.Controls.TabControl parent)
             {
                 parent.SelectedItem = Native;
+                Native.IsSelected = true;
                 return true;
             }
 

@@ -57,12 +57,7 @@ public sealed class DesktopAppSession : IDisposable
             workingDirectory = Path.GetDirectoryName(executablePath);
         }
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executablePath,
-            WorkingDirectory = workingDirectory ?? string.Empty,
-            UseShellExecute = true
-        };
+        var startInfo = CreateProcessStartInfo(options, executablePath, workingDirectory);
 
         var application = Application.Launch(startInfo);
         var automation = new UIA3Automation();
@@ -106,6 +101,53 @@ public sealed class DesktopAppSession : IDisposable
         TryTerminateApplication(_application);
         _application.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    internal static ProcessStartInfo CreateProcessStartInfo(
+        DesktopAppLaunchOptions options,
+        string executablePath,
+        string? workingDirectory = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+
+        if (options.Arguments.Any(static argument => argument is null))
+        {
+            throw new ArgumentException("Arguments cannot contain null values.", nameof(options));
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                ? Path.GetDirectoryName(executablePath) ?? string.Empty
+                : workingDirectory,
+            UseShellExecute = false
+        };
+
+        foreach (var argument in options.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        foreach (var environmentVariable in options.EnvironmentVariables)
+        {
+            if (string.IsNullOrWhiteSpace(environmentVariable.Key))
+            {
+                throw new ArgumentException("Environment variable names cannot be empty.", nameof(options));
+            }
+
+            if (environmentVariable.Value is null)
+            {
+                _ = startInfo.Environment.Remove(environmentVariable.Key);
+            }
+            else
+            {
+                startInfo.Environment[environmentVariable.Key] = environmentVariable.Value;
+            }
+        }
+
+        return startInfo;
     }
 
     private static void WaitForAutomationTree(Window mainWindow, TimeSpan timeout, TimeSpan pollInterval)

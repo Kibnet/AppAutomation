@@ -10,7 +10,12 @@ public class LaunchOptionsDefaultsTests
     {
         var options = DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions();
 
-        await Assert.That(options.CreateMainWindow is not null).IsEqualTo(true);
+        using (Assert.Multiple())
+        {
+            await Assert.That(options.CreateMainWindow is not null).IsEqualTo(true);
+            await Assert.That(options.BeforeLaunchAsync is null).IsEqualTo(true);
+            await Assert.That(options.CreateMainWindowAsync is null).IsEqualTo(true);
+        }
     }
 
     [Test]
@@ -24,6 +29,8 @@ public class LaunchOptionsDefaultsTests
         using (Assert.Multiple())
         {
             await Assert.That(options.WorkingDirectory).IsNull();
+            await Assert.That(options.Arguments.Count).IsEqualTo(0);
+            await Assert.That(options.EnvironmentVariables.Count).IsEqualTo(0);
             await Assert.That(options.MainWindowTimeout).IsEqualTo(TimeSpan.FromSeconds(20));
             await Assert.That(options.PollInterval).IsEqualTo(TimeSpan.FromMilliseconds(200));
         }

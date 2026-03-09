@@ -23,6 +23,7 @@
 
 - Быстрый consumer setup: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
 - Какая topology нужна в solution: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
+- Advanced integration cases: [docs/appautomation/advanced-integration.md](docs/appautomation/advanced-integration.md)
 - Как собирать и публиковать пакеты: [docs/appautomation/publishing.md](docs/appautomation/publishing.md)
 
 Рекомендуемый минимальный набор проектов у consumer-а:
