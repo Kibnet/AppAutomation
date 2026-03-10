@@ -8,14 +8,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="TUnit" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\DotnetDebug.Core\DotnetDebug.Core.csproj" />
+    <ProjectReference Include="..\DotnetDebug.AppAutomation.Authoring\DotnetDebug.AppAutomation.Authoring.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
-    <ProjectReference Include="..\..\src\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj" />
+    <ProjectReference Include="..\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.TUnit\AppAutomation.TUnit.csproj" />
+    <ProjectReference Include="..\DotnetDebug.Avalonia\DotnetDebug.Avalonia.csproj" />
   </ItemGroup>
+
 </Project>

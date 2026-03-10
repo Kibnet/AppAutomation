@@ -6,6 +6,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DotnetDebug.Avalonia\DotnetDebug.Avalonia.csproj" />
-    <ProjectReference Include="..\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
   </ItemGroup>
 </Project>

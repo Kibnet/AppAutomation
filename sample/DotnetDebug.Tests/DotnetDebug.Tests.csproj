@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TUnit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DotnetDebug.Core\DotnetDebug.Core.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
+    <ProjectReference Include="..\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.TUnit\AppAutomation.TUnit.csproj" />
+  </ItemGroup>
+</Project>

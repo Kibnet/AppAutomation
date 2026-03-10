@@ -1,25 +1,23 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.4.11506.43
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AppAutomation", "src\AppAutomation\AppAutomation.csproj", "{37777D71-F3C0-43C1-852F-CA05388826C2}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AppAutomation.Tests", "tests\AppAutomation.Tests\AppAutomation.Tests.csproj", "{121267DE-A771-4FB9-BE74-C178E35FAABE}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DotnetDebug.Tests", "sample\DotnetDebug.Tests\DotnetDebug.Tests.csproj", "{121267DE-A771-4FB9-BE74-C178E35FAABE}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Core", "src\AppAutomation.Core\AppAutomation.Core.csproj", "{458EA032-87AF-4837-8566-E855D3B23868}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.Core", "sample\DotnetDebug.Core\DotnetDebug.Core.csproj", "{458EA032-87AF-4837-8566-E855D3B23868}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Avalonia", "src\AppAutomation.Avalonia\AppAutomation.Avalonia.csproj", "{170DE045-508C-4EFE-90E8-998D9EECCBFD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.Avalonia", "sample\DotnetDebug.Avalonia\DotnetDebug.Avalonia.csproj", "{170DE045-508C-4EFE-90E8-998D9EECCBFD}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.AppAutomation.FlaUI.Tests", "tests\AppAutomation.AppAutomation.FlaUI.Tests\AppAutomation.AppAutomation.FlaUI.Tests.csproj", "{35FDD3D3-B108-4238-8FAD-FDAE9C1D59D5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.AppAutomation.FlaUI.Tests", "sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj", "{35FDD3D3-B108-4238-8FAD-FDAE9C1D59D5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.FlaUI", "src\AppAutomation.FlaUI\AppAutomation.FlaUI.csproj", "{0B74C4FC-0716-478C-8303-173E038802CC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.AppAutomation.Avalonia.Headless.Tests", "tests\AppAutomation.AppAutomation.Avalonia.Headless.Tests\AppAutomation.AppAutomation.Avalonia.Headless.Tests.csproj", "{4D7A33CC-C7E1-417C-8B22-AD6B25D97C57}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.AppAutomation.Avalonia.Headless.Tests", "sample\DotnetDebug.AppAutomation.Avalonia.Headless.Tests\DotnetDebug.AppAutomation.Avalonia.Headless.Tests.csproj", "{4D7A33CC-C7E1-417C-8B22-AD6B25D97C57}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Avalonia.Headless", "src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj", "{7D481410-AE0D-40FF-82D7-12215A9301D9}"
 EndProject
@@ -31,13 +29,15 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Abstractions"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Authoring", "src\AppAutomation.Authoring\AppAutomation.Authoring.csproj", "{43C03FD6-EBA6-4524-9ACA-7C1989ED49FC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.AppAutomation.TestHost", "src\AppAutomation.AppAutomation.TestHost\AppAutomation.AppAutomation.TestHost.csproj", "{23F15BDD-9865-4CB0-8DDC-F3DBD34E5DE6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.AppAutomation.TestHost", "sample\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj", "{23F15BDD-9865-4CB0-8DDC-F3DBD34E5DE6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.AppAutomation.Authoring", "tests\AppAutomation.AppAutomation.Authoring\AppAutomation.AppAutomation.Authoring.csproj", "{64938559-B1FD-4398-BD11-1D7E9264CB11}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetDebug.AppAutomation.Authoring", "sample\DotnetDebug.AppAutomation.Authoring\DotnetDebug.AppAutomation.Authoring.csproj", "{64938559-B1FD-4398-BD11-1D7E9264CB11}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Abstractions.Tests", "tests\AppAutomation.Abstractions.Tests\AppAutomation.Abstractions.Tests.csproj", "{85205CA6-0A16-4CF4-B5B0-71E6B8643A15}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppAutomation.Authoring.Tests", "tests\AppAutomation.Authoring.Tests\AppAutomation.Authoring.Tests.csproj", "{C336F2BC-74F9-4428-809C-A7BA75CCA3AF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "sample", "sample", "{B3A2F61B-97CF-499D-B2A2-E37A0031B752}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -49,18 +49,6 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|x64.Build.0 = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Debug|x86.Build.0 = Debug|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|Any CPU.Build.0 = Release|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|x64.ActiveCfg = Release|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|x64.Build.0 = Release|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|x86.ActiveCfg = Release|Any CPU
-		{37777D71-F3C0-43C1-852F-CA05388826C2}.Release|x86.Build.0 = Release|Any CPU
 		{121267DE-A771-4FB9-BE74-C178E35FAABE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{121267DE-A771-4FB9-BE74-C178E35FAABE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{121267DE-A771-4FB9-BE74-C178E35FAABE}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -246,19 +234,23 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
-		{458EA032-87AF-4837-8566-E855D3B23868} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{170DE045-508C-4EFE-90E8-998D9EECCBFD} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{35FDD3D3-B108-4238-8FAD-FDAE9C1D59D5} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{121267DE-A771-4FB9-BE74-C178E35FAABE} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
+		{458EA032-87AF-4837-8566-E855D3B23868} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
+		{170DE045-508C-4EFE-90E8-998D9EECCBFD} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
+		{35FDD3D3-B108-4238-8FAD-FDAE9C1D59D5} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
 		{0B74C4FC-0716-478C-8303-173E038802CC} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{4D7A33CC-C7E1-417C-8B22-AD6B25D97C57} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{4D7A33CC-C7E1-417C-8B22-AD6B25D97C57} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
 		{7D481410-AE0D-40FF-82D7-12215A9301D9} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{1F11F763-E6EB-4720-9A4E-313582A646A4} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{3E66B56E-26CF-45CD-8BBC-D516CC6C1932} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{998A24D9-B8EF-49C0-AEEE-3E322BC4D413} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{43C03FD6-EBA6-4524-9ACA-7C1989ED49FC} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{23F15BDD-9865-4CB0-8DDC-F3DBD34E5DE6} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{64938559-B1FD-4398-BD11-1D7E9264CB11} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{23F15BDD-9865-4CB0-8DDC-F3DBD34E5DE6} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
+		{64938559-B1FD-4398-BD11-1D7E9264CB11} = {B3A2F61B-97CF-499D-B2A2-E37A0031B752}
 		{85205CA6-0A16-4CF4-B5B0-71E6B8643A15} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{C336F2BC-74F9-4428-809C-A7BA75CCA3AF} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {408BCBC0-EF59-4B68-BF48-92F7EF5F1419}
 	EndGlobalSection
 EndGlobal
