@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup Condition="'$(IsPackable)' == 'true'">
-    <Version>$(EasyUseVersion)$(EasyUsePrereleaseSuffix)</Version>
-    <PackageVersion>$(EasyUseVersion)$(EasyUsePrereleaseSuffix)</PackageVersion>
+    <Version>$(AppAutomationVersion)</Version>
+    <PackageVersion>$(AppAutomationVersion)</PackageVersion>
     <Authors>AppAutomation</Authors>
     <RepositoryUrl>https://github.com/Kibnet/AppAutomation</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

@@ -327,7 +327,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
 
     private static string RenderManifestSource(Compilation compilation, IReadOnlyList<PageCandidate> candidates)
     {
-        var assemblyName = compilation.AssemblyName ?? "EasyUseAuthoring";
+        var assemblyName = compilation.AssemblyName ?? "AppAutomationAuthoring";
         var providerNamespace = $"{assemblyName}.Generated";
         var providerName = $"{SanitizeIdentifier(assemblyName)}ManifestProvider";
 

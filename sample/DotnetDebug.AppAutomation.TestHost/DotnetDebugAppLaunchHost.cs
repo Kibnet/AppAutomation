@@ -6,8 +6,14 @@ namespace DotnetDebug.AppAutomation.TestHost;
 
 public static class DotnetDebugAppLaunchHost
 {
-    private const string SolutionFileName = "DotnetDebug.sln";
-    private const string DesktopProjectRelativePath = "src\\DotnetDebug.Avalonia\\DotnetDebug.Avalonia.csproj";
+    private static readonly string[] SolutionFileNames =
+    [
+        "AppAutomation.sln"
+    ];
+    private static readonly string[] DesktopProjectRelativePaths =
+    [
+        "sample\\DotnetDebug.Avalonia\\DotnetDebug.Avalonia.csproj"
+    ];
     private const string DesktopTargetFramework = "net10.0";
     private static readonly object BuildLock = new();
     private static readonly HashSet<string> BuiltProjectKeys = new(StringComparer.OrdinalIgnoreCase);
@@ -25,8 +31,8 @@ public static class DotnetDebugAppLaunchHost
             throw new ArgumentException("Build configuration is required.", nameof(buildConfiguration));
         }
 
-        var solutionRoot = FindSolutionRoot();
-        var projectPath = Path.GetFullPath(Path.Combine(solutionRoot, DesktopProjectRelativePath));
+        var solutionRoot = FindRepositoryRoot();
+        var projectPath = ResolveDesktopProjectPath(solutionRoot);
         if (buildBeforeLaunch)
         {
             EnsureProjectBuilt(
@@ -55,7 +61,7 @@ public static class DotnetDebugAppLaunchHost
         };
     }
 
-    private static string FindSolutionRoot()
+    private static string FindRepositoryRoot()
     {
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string?[] candidates =
@@ -80,7 +86,7 @@ public static class DotnetDebugAppLaunchHost
                     break;
                 }
 
-                if (File.Exists(Path.Combine(current.FullName, SolutionFileName)))
+                if (HasRepositoryMarkers(current.FullName))
                 {
                     return current.FullName;
                 }
@@ -89,7 +95,44 @@ public static class DotnetDebugAppLaunchHost
             }
         }
 
-        throw new DirectoryNotFoundException($"Could not locate solution root ({SolutionFileName}).");
+        throw new DirectoryNotFoundException("Could not locate repository root for DotnetDebug sample.");
+    }
+
+    private static bool HasRepositoryMarkers(string rootPath)
+    {
+        foreach (var solutionFileName in SolutionFileNames)
+        {
+            if (File.Exists(Path.Combine(rootPath, solutionFileName)))
+            {
+                return true;
+            }
+        }
+
+        foreach (var relativeProjectPath in DesktopProjectRelativePaths)
+        {
+            if (File.Exists(Path.Combine(rootPath, relativeProjectPath)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ResolveDesktopProjectPath(string repositoryRoot)
+    {
+        foreach (var relativeProjectPath in DesktopProjectRelativePaths)
+        {
+            var candidatePath = Path.GetFullPath(Path.Combine(repositoryRoot, relativeProjectPath));
+            if (File.Exists(candidatePath))
+            {
+                return candidatePath;
+            }
+        }
+
+        throw new FileNotFoundException(
+            "Desktop project file was not found for DotnetDebug sample.",
+            string.Join(" | ", DesktopProjectRelativePaths.Select(path => Path.Combine(repositoryRoot, path))));
     }
 
     private static void EnsureProjectBuilt(

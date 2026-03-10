@@ -2,6 +2,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$PackagesPath,
+    [string]$Version,
     [string]$WorkspaceRoot,
     [switch]$SkipPack,
     [switch]$KeepWorkspace
@@ -9,15 +10,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Get-RepoRoot {
-    return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-}
+. (Join-Path $PSScriptRoot "versioning.ps1")
 
-function Get-FullVersion {
-    param([string]$RepoRoot)
+function Get-VersionFromPackagesPath {
+    param([string]$Path)
 
-    [xml]$versions = Get-Content -Raw (Join-Path $RepoRoot "eng\Versions.props")
-    return "$($versions.Project.PropertyGroup.EasyUseVersion)$($versions.Project.PropertyGroup.EasyUsePrereleaseSuffix)"
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    $leafName = Split-Path -Path $Path -Leaf
+    if ([string]::IsNullOrWhiteSpace($leafName)) {
+        return $null
+    }
+
+    try {
+        return Assert-AppAutomationVersion -Version $leafName
+    }
+    catch {
+        return $null
+    }
 }
 
 function Invoke-Dotnet {
@@ -39,10 +51,24 @@ function Invoke-Dotnet {
 }
 
 $repoRoot = Get-RepoRoot
-$version = Get-FullVersion -RepoRoot $repoRoot
+$resolvedVersion = if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    Resolve-AppAutomationVersion -RepoRoot $repoRoot -Version $Version
+}
+elseif (-not [string]::IsNullOrWhiteSpace($PackagesPath)) {
+    $inferredVersion = Get-VersionFromPackagesPath -Path $PackagesPath
+    if ([string]::IsNullOrWhiteSpace($inferredVersion)) {
+        Resolve-AppAutomationVersion -RepoRoot $repoRoot
+    }
+    else {
+        $inferredVersion
+    }
+}
+else {
+    Resolve-AppAutomationVersion -RepoRoot $repoRoot
+}
 
 if ([string]::IsNullOrWhiteSpace($PackagesPath)) {
-    $PackagesPath = Join-Path $repoRoot "artifacts\packages\$version"
+    $PackagesPath = Join-Path $repoRoot "artifacts\packages\$resolvedVersion"
 }
 
 if (-not (Test-Path $PackagesPath)) {
@@ -51,7 +77,7 @@ if (-not (Test-Path $PackagesPath)) {
     }
 
     Write-Host "Packages were not found at $PackagesPath. Running eng/pack.ps1 first."
-    & (Join-Path $PSScriptRoot "pack.ps1") -Configuration $Configuration
+    & (Join-Path $PSScriptRoot "pack.ps1") -Configuration $Configuration -Version $resolvedVersion
     if ($LASTEXITCODE -ne 0) {
         throw "eng/pack.ps1 failed while preparing smoke packages."
     }
@@ -98,9 +124,9 @@ Copy-Item -Path (Join-Path $repoRoot "global.json") -Destination $globalJsonPath
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="$version" />
-    <PackageReference Include="AppAutomation.Authoring" Version="$version" />
-    <PackageReference Include="AppAutomation.TUnit" Version="$version" />
+    <PackageReference Include="AppAutomation.Abstractions" Version="$resolvedVersion" />
+    <PackageReference Include="AppAutomation.Authoring" Version="$resolvedVersion" />
+    <PackageReference Include="AppAutomation.TUnit" Version="$resolvedVersion" />
     <PackageReference Include="TUnit.Assertions" Version="1.12.111" />
     <PackageReference Include="TUnit.Core" Version="1.12.111" />
   </ItemGroup>
@@ -118,9 +144,9 @@ Copy-Item -Path (Join-Path $repoRoot "global.json") -Destination $globalJsonPath
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="$version" />
-    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="$version" />
-    <PackageReference Include="AppAutomation.TUnit" Version="$version" />
+    <PackageReference Include="AppAutomation.Abstractions" Version="$resolvedVersion" />
+    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="$resolvedVersion" />
+    <PackageReference Include="AppAutomation.TUnit" Version="$resolvedVersion" />
     <PackageReference Include="TUnit" Version="1.12.111" />
   </ItemGroup>
 

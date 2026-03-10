@@ -1,3 +1,4 @@
+using System.IO;
 using AppAutomation.Session.Contracts;
 using DotnetDebug.AppAutomation.TestHost;
 using TUnit.Assertions;
@@ -33,6 +34,21 @@ public class LaunchOptionsDefaultsTests
             await Assert.That(options.EnvironmentVariables.Count).IsEqualTo(0);
             await Assert.That(options.MainWindowTimeout).IsEqualTo(TimeSpan.FromSeconds(20));
             await Assert.That(options.PollInterval).IsEqualTo(TimeSpan.FromMilliseconds(200));
+        }
+    }
+
+    [Test]
+    public async Task DotnetDebugDesktopLaunchOptions_ResolveCurrentRepositoryLayout()
+    {
+        var options = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
+            buildConfiguration: "Release",
+            buildBeforeLaunch: false);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Path.GetFileName(options.ExecutablePath)).IsEqualTo("DotnetDebug.Avalonia.exe");
+            await Assert.That(File.Exists(options.ExecutablePath)).IsEqualTo(true);
+            await Assert.That(Directory.Exists(options.WorkingDirectory!)).IsEqualTo(true);
         }
     }
 }

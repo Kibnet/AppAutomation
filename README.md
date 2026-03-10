@@ -43,11 +43,11 @@
 | `src/AppAutomation.TUnit` | Test base/helpers |
 | `src/AppAutomation.Avalonia.Headless` | Headless runtime |
 | `src/AppAutomation.FlaUI` | FlaUI runtime |
-| `src/DotnetDebug.Avalonia` | Demo AUT |
-| `src/DotnetDebug.AppAutomation.TestHost` | Repo-only launch/bootstrap layer |
-| `tests/DotnetDebug.AppAutomation.Authoring` | Shared authoring project |
-| `tests/DotnetDebug.AppAutomation.Avalonia.Headless.Tests` | Headless consumer example |
-| `tests/DotnetDebug.AppAutomation.FlaUI.Tests` | FlaUI consumer example |
+| `sample/DotnetDebug.Avalonia` | Demo AUT |
+| `sample/DotnetDebug.AppAutomation.TestHost` | Repo-only launch/bootstrap layer |
+| `sample/DotnetDebug.AppAutomation.Authoring` | Shared authoring project |
+| `sample/DotnetDebug.AppAutomation.Avalonia.Headless.Tests` | Headless consumer example |
+| `sample/DotnetDebug.AppAutomation.FlaUI.Tests` | FlaUI consumer example |
 
 ## Требования
 
@@ -79,18 +79,13 @@ pwsh -File eng/publish-nuget.ps1 -Source https://api.nuget.org/v3/index.json -Ap
 
 - workflow: `.github/workflows/publish-packages.yml`;
 - ручной запуск: `workflow_dispatch`;
-- tag-based release: `appautomation-v<version>`.
+- автоматическая публикация: GitHub Release с tag `appautomation-v<version>`;
+- версия пакетов в CI берётся из release tag.
 
 ## Demo AUT
-
-CLI:
-
-```powershell
-dotnet run --project src/DotnetDebug/DotnetDebug.csproj -- 48 18 30
-```
 
 Avalonia UI:
 
 ```powershell
-dotnet run --project src/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj
+dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj
 ```

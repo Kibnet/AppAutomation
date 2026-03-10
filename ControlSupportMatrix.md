@@ -10,7 +10,7 @@
 - Автоматическое связывание `UiControlAttribute -> свойство` генерируется
   `src/AppAutomation.Authoring/UiControlSourceGenerator.cs`
 - Реальные контролы страницы тестового приложения в
-  `tests/DotnetDebug.AppAutomation.Authoring/Pages/MainWindowPage.cs`
+  `sample/DotnetDebug.AppAutomation.Authoring/Pages/MainWindowPage.cs`
 - Реальные действия/ожидания в `src/AppAutomation.FlaUI/Extensions/*`
 
 ## Что сейчас покрыто в demo (готово для сценариев в тестах)
@@ -59,5 +59,5 @@
 4. Для каждого нового контрола:
    - добавить `UiControl` в `MainWindowPage`,
    - методы/ожидания в `UiPageExtensions` + `AutomationElementWaitExtensions` только при необходимости,
-   - хотя бы 1-2 бизнес-сценария и связанные тесты в `...EasyUseTests`.
+   - хотя бы 1-2 бизнес-сценария и связанные тесты в runtime-specific test projects.
 5. Для контролов без надёжного UIA паттерна в `FlaUI.Core` фиксировать статус как `Fallback/Нестабильный` и покрывать только устойчивые проверки (`Name`/`Text`, `Availability`, `Enable/Selection`).

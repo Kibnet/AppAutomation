@@ -1,8 +1,15 @@
 name: publish-packages
 
 on:
+  release:
+    types:
+      - published
   workflow_dispatch:
     inputs:
+      version:
+        description: Package version
+        required: true
+        type: string
       publish:
         description: Publish packages after validation
         required: true
@@ -16,9 +23,6 @@ on:
         required: false
         default: https://api.nuget.org/v3/index.json
         type: string
-  push:
-    tags:
-      - "appautomation-v*"
 
 jobs:
   pack-and-publish:
@@ -38,41 +42,59 @@ jobs:
       - name: Resolve version
         id: version
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          [xml]$versions = Get-Content -Raw eng/Versions.props
-          $value = "$($versions.Project.PropertyGroup.EasyUseVersion)$($versions.Project.PropertyGroup.EasyUsePrereleaseSuffix)"
+          $arguments = @{}
+          if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
+            $arguments.Tag = $env:RELEASE_TAG
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($env:INPUT_VERSION)) {
+            $arguments.Version = $env:INPUT_VERSION
+          }
+          else {
+            throw "Version input is required for workflow_dispatch."
+          }
+
+          $value = & pwsh -NoLogo -NoProfile -File eng/resolve-package-version.ps1 @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to resolve package version."
+          }
+
           "full=$value" >> $env:GITHUB_OUTPUT
+          "packages_path=artifacts/packages/$value" >> $env:GITHUB_OUTPUT
 
       - name: Restore
         run: dotnet restore AppAutomation.sln
 
       - name: Build
-        run: dotnet build AppAutomation.sln -c Release --no-restore
+        run: dotnet build AppAutomation.sln -c Release --no-restore /p:AppAutomationVersion=${{ steps.version.outputs.full }}
 
       - name: Test
         run: dotnet test --solution AppAutomation.sln -c Release --no-build
 
       - name: Pack
         shell: pwsh
-        run: pwsh -File eng/pack.ps1 -Configuration Release
+        run: pwsh -File eng/pack.ps1 -Configuration Release -Version '${{ steps.version.outputs.full }}'
 
       - name: Smoke consumer
         shell: pwsh
-        run: pwsh -File eng/smoke-consumer.ps1 -Configuration Release -SkipPack
+        run: pwsh -File eng/smoke-consumer.ps1 -Configuration Release -Version '${{ steps.version.outputs.full }}' -SkipPack
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
           name: appautomation-packages-${{ steps.version.outputs.full }}
-          path: artifacts/packages/${{ steps.version.outputs.full }}
+          path: ${{ steps.version.outputs.packages_path }}
           if-no-files-found: error
 
       - name: Publish packages
-        if: startsWith(github.ref, 'refs/tags/appautomation-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         shell: pwsh
         env:
           NUGET_SOURCE: ${{ github.event.inputs.nuget_source || 'https://api.nuget.org/v3/index.json' }}
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
           NUGET_SYMBOL_SOURCE: https://api.nuget.org/v3/index.json
           NUGET_SYMBOL_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        run: pwsh -File eng/publish-nuget.ps1
+        run: pwsh -File eng/publish-nuget.ps1 -Version '${{ steps.version.outputs.full }}'

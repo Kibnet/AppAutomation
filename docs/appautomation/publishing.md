@@ -4,12 +4,17 @@
 
 ## Источник версии
 
-Lockstep-versioning живёт в [eng/Versions.props](../../eng/Versions.props):
+Локальный fallback version живёт в [eng/Versions.props](../../eng/Versions.props):
 
-- `EasyUseVersion`
-- `EasyUsePrereleaseSuffix`
+- `AppAutomationVersion`
 
-Все publishable пакеты читают версию оттуда.
+Локальные pack/publish сценарии используют это значение по умолчанию.
+
+В GitHub Actions production source of truth другой:
+
+- GitHub Release tag `appautomation-v<version>`
+
+При публикации через `release.published` package version берётся из tag релиза и явно прокидывается в scripts.
 
 ## Локальная упаковка
 
@@ -32,7 +37,7 @@ artifacts/packages/2.1.0/
 Можно переопределить prerelease suffix на время упаковки:
 
 ```powershell
-pwsh -File eng/pack.ps1 -Configuration Release -VersionSuffix preview.1
+pwsh -File eng/pack.ps1 -Configuration Release -Version 2.1.0-preview.1
 ```
 
 ## Локальный smoke consumer
@@ -54,6 +59,7 @@ pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 
 ```powershell
 pwsh -File eng/publish-nuget.ps1 `
+  -Version 2.1.0 `
   -Source https://api.nuget.org/v3/index.json `
   -ApiKey <api-key>
 ```
@@ -81,17 +87,18 @@ artifacts/packages/<version>
 
 Trigger-ы:
 
+- `release.published`
 - `workflow_dispatch`
-- push tag `appautomation-v<version>`
 
 Pipeline делает:
 
 1. `dotnet restore`
 2. `dotnet build`
 3. `dotnet test`
-4. `pwsh -File eng/pack.ps1`
-5. `pwsh -File eng/smoke-consumer.ps1`
-6. `pwsh -File eng/publish-nuget.ps1`
+4. извлекает package version из release tag или manual input
+5. `pwsh -File eng/pack.ps1 -Version <version>`
+6. `pwsh -File eng/smoke-consumer.ps1 -Version <version>`
+7. `pwsh -File eng/publish-nuget.ps1 -Version <version>`
 
 ## Минимальный release checklist
 
@@ -103,4 +110,4 @@ pwsh -File eng/pack.ps1 -Configuration Release
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Только после этого есть смысл пушить теги или запускать publish workflow.
+Только после этого есть смысл публиковать GitHub Release с tag `appautomation-v<version>` или запускать manual publish workflow с явным `version`.

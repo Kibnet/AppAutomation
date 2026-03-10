@@ -2,44 +2,19 @@
 param(
     [string]$Configuration = "Release",
     [string]$OutputRoot,
-    [string]$VersionSuffix,
+    [string]$Version,
     [switch]$NoBuild
 )
 
 $ErrorActionPreference = "Stop"
 
-function Get-RepoRoot {
-    return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-}
-
-function Get-VersionInfo {
-    param(
-        [string]$RepoRoot,
-        [string]$OverrideSuffix
-    )
-
-    [xml]$versions = Get-Content -Raw (Join-Path $RepoRoot "eng\Versions.props")
-    $baseVersion = $versions.Project.PropertyGroup.EasyUseVersion
-    $configuredSuffix = $versions.Project.PropertyGroup.EasyUsePrereleaseSuffix
-    $resolvedSuffix = if ($PSBoundParameters.ContainsKey("OverrideSuffix") -and $null -ne $OverrideSuffix -and $OverrideSuffix -ne "") {
-        if ($OverrideSuffix.StartsWith("-")) { $OverrideSuffix } else { "-$OverrideSuffix" }
-    }
-    else {
-        $configuredSuffix
-    }
-
-    return [pscustomobject]@{
-        BaseVersion = $baseVersion
-        Suffix = $resolvedSuffix
-        FullVersion = "$baseVersion$resolvedSuffix"
-    }
-}
+. (Join-Path $PSScriptRoot "versioning.ps1")
 
 $repoRoot = Get-RepoRoot
-$version = Get-VersionInfo -RepoRoot $repoRoot -OverrideSuffix $VersionSuffix
+$resolvedVersion = Resolve-AppAutomationVersion -RepoRoot $repoRoot -Version $Version
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $repoRoot "artifacts\packages\$($version.FullVersion)"
+    $OutputRoot = Join-Path $repoRoot "artifacts\packages\$resolvedVersion"
 }
 
 $projects = @(
@@ -60,7 +35,7 @@ foreach ($project in $projects) {
         $projectPath,
         "-c", $Configuration,
         "--output", $OutputRoot,
-        "/p:EasyUsePrereleaseSuffix=$($version.Suffix)"
+        "/p:AppAutomationVersion=$resolvedVersion"
     )
 
     if ($NoBuild) {
@@ -74,4 +49,4 @@ foreach ($project in $projects) {
     }
 }
 
-Write-Host "Packed AppAutomation version $($version.FullVersion) into $OutputRoot"
+Write-Host "Packed AppAutomation version $resolvedVersion into $OutputRoot"

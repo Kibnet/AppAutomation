@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$PackagesPath,
+    [string]$Version,
     [string]$Source = $env:NUGET_SOURCE,
     [string]$ApiKey = $env:NUGET_API_KEY,
     [string]$SymbolSource = $env:NUGET_SYMBOL_SOURCE,
@@ -10,21 +11,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Get-RepoRoot {
-    return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-}
-
-function Get-FullVersion {
-    param([string]$RepoRoot)
-
-    [xml]$versions = Get-Content -Raw (Join-Path $RepoRoot "eng\Versions.props")
-    return "$($versions.Project.PropertyGroup.EasyUseVersion)$($versions.Project.PropertyGroup.EasyUsePrereleaseSuffix)"
-}
+. (Join-Path $PSScriptRoot "versioning.ps1")
 
 $repoRoot = Get-RepoRoot
+$resolvedVersion = $null
+
+if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    $resolvedVersion = Resolve-AppAutomationVersion -RepoRoot $repoRoot -Version $Version
+}
 
 if ([string]::IsNullOrWhiteSpace($PackagesPath)) {
-    $PackagesPath = Join-Path $repoRoot "artifacts\packages\$(Get-FullVersion -RepoRoot $repoRoot)"
+    if ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
+        $resolvedVersion = Resolve-AppAutomationVersion -RepoRoot $repoRoot
+    }
+
+    $PackagesPath = Join-Path $repoRoot "artifacts\packages\$resolvedVersion"
 }
 
 if ([string]::IsNullOrWhiteSpace($Source)) {
