@@ -390,21 +390,68 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
 
         public IReadOnlyList<IListBoxItem> Items =>
-            Inner.Items.Select(item => (IListBoxItem)new FlaUiListBoxItem(item)).ToArray();
+            ReadItems();
+
+        private IReadOnlyList<IListBoxItem> ReadItems()
+        {
+            try
+            {
+                var directItems = Inner.Items
+                    .Select(item => (IListBoxItem)new FlaUiListBoxItem(item.Text, item.Name))
+                    .ToArray();
+                if (directItems.Length > 0)
+                {
+                    return directItems;
+                }
+            }
+            catch
+            {
+                // fallback to descendant scan
+            }
+
+            var descendants = Inner
+                .FindAllDescendants()
+                .Where(node => node != Inner)
+                .ToArray();
+
+            var listItemElements = descendants
+                .Where(node => node.ControlType == ControlType.ListItem)
+                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
+                .ToArray();
+            if (listItemElements.Length > 0)
+            {
+                return listItemElements;
+            }
+
+            var textElements = descendants
+                .Where(node => node.ControlType == ControlType.Text)
+                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
+                .ToArray();
+            if (textElements.Length > 0)
+            {
+                return textElements;
+            }
+
+            return descendants
+                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
+                .ToArray();
+        }
     }
 
     private sealed class FlaUiListBoxItem : IListBoxItem
     {
-        private readonly ListBoxItem _inner;
-
-        public FlaUiListBoxItem(ListBoxItem inner)
+        public FlaUiListBoxItem(string? text, string? name)
         {
-            _inner = inner;
+            Text = text;
+            Name = name;
         }
 
-        public string? Text => _inner.Text;
+        public string? Text { get; }
 
-        public string? Name => _inner.Name;
+        public string? Name { get; }
     }
 
     private sealed class FlaUiCheckBoxControl : FlaUiControlBase<CheckBox>, ICheckBoxControl

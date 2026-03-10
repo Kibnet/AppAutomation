@@ -152,6 +152,9 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     [NotInParallel(DesktopUiConstraint)]
     public async Task ControlMix_SliderSpinnerRadioToggle_BuildsSeriesAndShowsProgress()
     {
+        const int timeoutMs = 15000;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+
         Page
             .SelectTabItem(p => p.ControlMixTabItem)
             .SelectComboItem(p => p.MixModeCombo, "Fibonacci")
@@ -172,19 +175,20 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
             .WaitUntilIsSelected(p => p.MixDirectionAscendingRadio, true)
             .WaitUntilIsSelected(p => p.MixDirectionDescendingRadio, false)
             .ClickButton(p => p.MixRunButton)
-            .WaitUntilProgressAtLeast(p => p.SeriesProgressBar, 100);
+            .WaitUntilProgressAtLeast(p => p.SeriesProgressBar, 100, timeoutMs)
+            .WaitUntilNameContains(p => p.SeriesResult, "Series[Fibonacci]", timeoutMs);
 
         Page
-            .WaitUntilListBoxContains(p => p.SeriesList, "v1:")
-            .WaitUntilListBoxContains(p => p.SeriesList, "v3:");
+            .WaitUntilListBoxContains(p => p.SeriesList, "v1:", timeoutMs)
+            .WaitUntilListBoxContains(p => p.SeriesList, "v3:", timeoutMs);
 
         await Assert.That(Page.SeriesResult.Text).Contains("Series[Fibonacci]");
         await Assert.That(Page.SeriesResult.Text).Contains("count=10");
 
         using (Assert.Multiple())
         {
-            await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "Series[Fibonacci]");
-            await UiAssert.TextContainsAsync(() => Page.SeriesList.Items.FirstOrDefault()?.Text ?? string.Empty, "Advanced mode on");
+            await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "Series[Fibonacci]", timeout);
+            await UiAssert.TextContainsAsync(() => Page.SeriesList.Items.FirstOrDefault()?.Text ?? string.Empty, "Advanced mode on", timeout);
         }
     }
 
