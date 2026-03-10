@@ -178,17 +178,17 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
             .WaitUntilProgressAtLeast(p => p.SeriesProgressBar, 100, timeoutMs)
             .WaitUntilNameContains(p => p.SeriesResult, "Series[Fibonacci]", timeoutMs);
 
-        Page
-            .WaitUntilListBoxContains(p => p.SeriesList, "v1:", timeoutMs)
-            .WaitUntilListBoxContains(p => p.SeriesList, "v3:", timeoutMs);
-
         await Assert.That(Page.SeriesResult.Text).Contains("Series[Fibonacci]");
         await Assert.That(Page.SeriesResult.Text).Contains("count=10");
+        await Assert.That(Page.SeriesResult.Text).Contains("max=305");
+        await Assert.That(Page.SeriesResult.Text).Contains("min=1");
 
         using (Assert.Multiple())
         {
             await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "Series[Fibonacci]", timeout);
-            await UiAssert.TextContainsAsync(() => Page.SeriesList.Items.FirstOrDefault()?.Text ?? string.Empty, "Advanced mode on", timeout);
+            await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "count=10", timeout);
+            await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "max=305", timeout);
+            await UiAssert.TextContainsAsync(() => Page.SeriesResult.Text, "min=1", timeout);
         }
     }
 
