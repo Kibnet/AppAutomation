@@ -28,7 +28,8 @@ jobs:
   pack-and-publish:
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
@@ -98,3 +99,20 @@ jobs:
           NUGET_SYMBOL_SOURCE: https://api.nuget.org/v3/index.json
           NUGET_SYMBOL_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: pwsh -File eng/publish-nuget.ps1 -Version '${{ steps.version.outputs.full }}'
+
+      - name: Publish packages to GitHub Packages
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        shell: pwsh
+        env:
+          NUGET_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          NUGET_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          NUGET_SYMBOL_SOURCE: ''
+        run: pwsh -File eng/publish-nuget.ps1 -Version '${{ steps.version.outputs.full }}'
+
+      - name: Attach NuGet packages to GitHub release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.version.outputs.packages_path }}/*.nupkg
+            ${{ steps.version.outputs.packages_path }}/*.snupkg
