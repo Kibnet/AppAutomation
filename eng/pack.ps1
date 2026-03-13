@@ -23,7 +23,10 @@ $projects = @(
     "src\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj",
     "src\AppAutomation.TUnit\AppAutomation.TUnit.csproj",
     "src\AppAutomation.FlaUI\AppAutomation.FlaUI.csproj",
-    "src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj"
+    "src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj",
+    "src\AppAutomation.TestHost.Avalonia\AppAutomation.TestHost.Avalonia.csproj",
+    "src\AppAutomation.Tooling\AppAutomation.Tooling.csproj",
+    "src\AppAutomation.Templates\AppAutomation.Templates.csproj"
 )
 
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null

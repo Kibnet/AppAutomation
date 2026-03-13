@@ -1,6 +1,7 @@
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
+using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
 using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
@@ -18,7 +19,14 @@ public sealed class MainWindowFlaUiRuntimeTests : MainWindowScenariosBase<MainWi
 
     protected override MainWindowPage CreatePage(FlaUiRuntimeSession session)
     {
-        return new MainWindowPage(new FlaUiControlResolver(session.Inner.MainWindow, session.Inner.ConditionFactory));
+        return new MainWindowPage(
+            new FlaUiControlResolver(session.Inner.MainWindow, session.Inner.ConditionFactory)
+                .WithSearchPicker(
+                    "HistoryOperationPicker",
+                    SearchPickerParts.ByAutomationIds(
+                        "HistoryFilterInput",
+                        "OperationCombo",
+                        applyButtonAutomationId: "ApplyFilterButton")));
     }
 
     public sealed class FlaUiRuntimeSession : IUiTestSession

@@ -1,5 +1,6 @@
 using AppAutomation.Abstractions;
 using System.Diagnostics;
+using AppAutomation.FlaUI.Extensions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
@@ -358,7 +359,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void Enter(string value)
         {
-            Inner.Enter(value);
+            Inner.EnterText(value);
         }
     }
 

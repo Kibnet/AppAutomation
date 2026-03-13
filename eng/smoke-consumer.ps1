@@ -50,6 +50,51 @@ function Invoke-Dotnet {
     }
 }
 
+function Write-NuGetConfig {
+    param(
+        [string]$Path,
+        [string]$PackagesPath
+    )
+
+    $configDirectory = Split-Path -Path $Path -Parent
+    $globalPackagesFolder = Join-Path $configDirectory ".packages"
+
+@"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <config>
+    <add key="globalPackagesFolder" value="$globalPackagesFolder" />
+  </config>
+  <packageSources>
+    <clear />
+    <add key="local-appautomation" value="$PackagesPath" />
+    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+  </packageSources>
+</configuration>
+"@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Write-WorkspaceGlobalJson {
+    param([string]$Path)
+
+    $sdkVersion = (& dotnet --version).Trim()
+    if ([string]::IsNullOrWhiteSpace($sdkVersion)) {
+        throw "Unable to resolve current dotnet SDK version for smoke workspace."
+    }
+
+@"
+{
+  "sdk": {
+    "version": "$sdkVersion",
+    "rollForward": "latestFeature"
+  },
+  "test": {
+    "runner": "Microsoft.Testing.Platform"
+  }
+}
+"@ | Set-Content -Path $Path -Encoding UTF8
+}
+
 $repoRoot = Get-RepoRoot
 $resolvedVersion = if (-not [string]::IsNullOrWhiteSpace($Version)) {
     Resolve-AppAutomationVersion -RepoRoot $repoRoot -Version $Version
@@ -100,24 +145,13 @@ $globalJsonPath = Join-Path $WorkspaceRoot "global.json"
 $solutionPath = Join-Path $WorkspaceRoot "Smoke.AppAutomation.sln"
 $authoringProjectPath = Join-Path $authoringProjectDir "Smoke.Authoring.csproj"
 $runtimeProjectPath = Join-Path $runtimeProjectDir "Smoke.Headless.Tests.csproj"
-
-@"
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="local-appautomation" value="$PackagesPath" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-  </packageSources>
-</configuration>
-"@ | Set-Content -Path $nugetConfig -Encoding UTF8
-
-Copy-Item -Path (Join-Path $repoRoot "global.json") -Destination $globalJsonPath -Force
+Write-NuGetConfig -Path $nugetConfig -PackagesPath $PackagesPath
+Write-WorkspaceGlobalJson -Path $globalJsonPath
 
 @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -136,7 +170,7 @@ Copy-Item -Path (Join-Path $repoRoot "global.json") -Destination $globalJsonPath
 @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -300,18 +334,69 @@ Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("sln", $solutionPath
 Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("restore", $solutionPath)
 Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("build", $solutionPath, "-c", $Configuration, "--no-restore")
 
+$templateWorkspace = Join-Path $WorkspaceRoot "TemplateConsumer"
+$templateHive = Join-Path $WorkspaceRoot ".template-hive"
+$toolInstallPath = Join-Path $WorkspaceRoot ".tools"
+$templatePackagePath = Join-Path $PackagesPath "AppAutomation.Templates.$resolvedVersion.nupkg"
+
+New-Item -ItemType Directory -Path $templateWorkspace -Force | Out-Null
+Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesPath $PackagesPath
+Write-WorkspaceGlobalJson -Path (Join-Path $templateWorkspace "global.json")
+
+Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @(
+    "tool", "install",
+    "--tool-path", $toolInstallPath,
+    "--add-source", $PackagesPath,
+    "AppAutomation.Tooling",
+    "--version", $resolvedVersion)
+
+Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @(
+    "new", "install",
+    $templatePackagePath,
+    "--debug:custom-hive", $templateHive)
+
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
+    "new", "appauto-avalonia",
+    "--name", "TemplateConsumer",
+    "--AppAutomationVersion", $resolvedVersion,
+    "--debug:custom-hive", $templateHive)
+
+$templateHeadlessProject = Join-Path $templateWorkspace "tests\TemplateConsumer.UiTests.Headless\TemplateConsumer.UiTests.Headless.csproj"
+$templateFlaUiProject = Join-Path $templateWorkspace "tests\TemplateConsumer.UiTests.FlaUI\TemplateConsumer.UiTests.FlaUI.csproj"
+
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateHeadlessProject)
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateHeadlessProject, "-c", $Configuration, "--no-restore")
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateFlaUiProject)
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateFlaUiProject, "-c", $Configuration, "--no-restore")
+
+& (Join-Path $toolInstallPath "appautomation.exe") "doctor" "--repo-root" $templateWorkspace "--strict"
+if ($LASTEXITCODE -ne 0) {
+    throw "appautomation doctor failed for generated template consumer."
+}
+
 Write-Host "Consumer smoke succeeded. Workspace: $WorkspaceRoot"
 
 if (-not $KeepWorkspace) {
+    try {
+        Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("build-server", "shutdown")
+    }
+    catch {
+        # Best effort. Cleanup fallback below will still run.
+    }
+
     $removed = $false
     for ($attempt = 0; $attempt -lt 3 -and -not $removed; $attempt++) {
         Start-Sleep -Seconds 2
         try {
-            Remove-Item -Path $WorkspaceRoot -Recurse -Force
-            $removed = $true
+            if (Test-Path $WorkspaceRoot) {
+                Remove-Item -Path $WorkspaceRoot -Recurse -Force -ErrorAction Stop
+            }
         }
         catch {
+            cmd /c "rd /s /q `"$WorkspaceRoot`"" | Out-Null
         }
+
+        $removed = -not (Test-Path $WorkspaceRoot)
     }
 
     if (-not $removed) {

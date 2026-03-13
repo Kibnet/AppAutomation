@@ -1,35 +1,15 @@
 # AppAutomation
 
-`AppAutomation` это .NET framework для UI automation desktop-приложений. Основной сценарий использования такой:
+`AppAutomation` это .NET framework для UI automation desktop-приложений на Avalonia. Его целевой consumer flow такой:
 
-1. вы добавляете в свой Avalonia solution несколько test-проектов;
-2. один раз описываете page objects и общие сценарии;
-3. запускаете те же самые тесты в `Headless` и в `FlaUI`.
+1. вы подключаете framework через NuGet, а не через скачивание исходников;
+2. одной командой создаёте canonical test topology;
+3. пишете page objects и shared scenarios один раз;
+4. запускаете те же самые сценарии и в `Headless`, и в `FlaUI`.
 
-Итоговая цель этого `README`: с нуля прийти к структуре, где shared tests лежат в одном проекте и выполняются из двух runtime-обёрток.
-
-## Что должно получиться в конце
-
-- `MyApp.UiTests.Authoring` содержит page objects и общие тестовые сценарии;
-- `MyApp.UiTests.Headless` запускает эти сценарии внутри `Avalonia Headless`;
-- `MyApp.UiTests.FlaUI` запускает те же сценарии через `FlaUI`;
-- `MyApp.AppAutomation.TestHost` хранит repo-specific launch/bootstrap логику;
-- в приложении есть стабильные `AutomationId`;
-- вы пишете тест один раз и запускаете его в двух режимах.
-
-## Требования
-
-- `.NET SDK 10`;
-- `Windows` для `FlaUI`;
-- Avalonia-приложение, у которого есть `MainWindow` или другой root window для тестов.
-
-## Итоговая структура solution
-
-Рекомендуемая структура consumer-репозитория:
+Итоговая структура consumer-репозитория должна выглядеть так:
 
 ```text
-src/
-  MyApp.Desktop/
 tests/
   MyApp.UiTests.Authoring/
   MyApp.UiTests.Headless/
@@ -37,464 +17,202 @@ tests/
   MyApp.AppAutomation.TestHost/
 ```
 
-Минимальный набор для dual-runtime сценария:
+`Authoring` владеет page objects и shared tests. `Headless` и `FlaUI` только запускают эти же сценарии через разные runtime adapters.
 
-- `MyApp.UiTests.Authoring`
-- `MyApp.UiTests.Headless`
-- `MyApp.UiTests.FlaUI`
-- `MyApp.AppAutomation.TestHost`
+## Compatibility
 
-## Шаг 1. Создайте проекты
+Поддерживаемый базовый путь:
 
-Ниже пример с нуля. Команды можно запускать из корня вашего репозитория:
+| Компонент | Поддержка |
+| --- | --- |
+| `AppAutomation.Abstractions` | `net8.0+` |
+| `AppAutomation.Session.Contracts` | `net8.0+` |
+| `AppAutomation.TUnit` | `net8.0+` |
+| `AppAutomation.TestHost.Avalonia` | `net8.0+` |
+| `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` |
+| `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` |
+| `FlaUI` runtime | только Windows |
+| Template package | `dotnet new` |
+| CLI tool | `.NET tool`, команда `appautomation` |
+
+Полная матрица: [docs/appautomation/compatibility.md](docs/appautomation/compatibility.md)
+
+## Fast Path
+
+Замените `1.1.0` на нужную версию пакетов.
+
+### 1. Установите template package
 
 ```powershell
-dotnet new classlib -n MyApp.UiTests.Authoring -o tests/MyApp.UiTests.Authoring
-dotnet new classlib -n MyApp.UiTests.Headless -o tests/MyApp.UiTests.Headless
-dotnet new classlib -n MyApp.UiTests.FlaUI -o tests/MyApp.UiTests.FlaUI
-dotnet new classlib -n MyApp.AppAutomation.TestHost -o tests/MyApp.AppAutomation.TestHost
-
-dotnet sln add tests/MyApp.UiTests.Authoring/MyApp.UiTests.Authoring.csproj
-dotnet sln add tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
-dotnet sln add tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj
-dotnet sln add tests/MyApp.AppAutomation.TestHost/MyApp.AppAutomation.TestHost.csproj
+dotnet new install AppAutomation.Templates::1.1.0
 ```
 
-После этого удалите из новых проектов шаблонные `Class1.cs`.
+### 2. Установите CLI tool
 
-## Шаг 2. Подключите NuGet и ссылки между проектами
-
-Ниже самый прямой стартовый вариант. Во всех примерах замените `x.y.z` на одну и ту же версию `AppAutomation.*`.
-
-### `tests/MyApp.UiTests.Authoring/MyApp.UiTests.Authoring.csproj`
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.Authoring" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-    <PackageReference Include="TUnit.Assertions" Version="1.12.111" />
-    <PackageReference Include="TUnit.Core" Version="1.12.111" />
-  </ItemGroup>
-</Project>
-```
-
-### `tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj`
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsTestProject>true</IsTestProject>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-    <PackageReference Include="Avalonia.Headless" Version="11.3.7" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
-    <PackageReference Include="TUnit" Version="1.12.111" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\MyApp.UiTests.Authoring\MyApp.UiTests.Authoring.csproj" />
-    <ProjectReference Include="..\MyApp.AppAutomation.TestHost\MyApp.AppAutomation.TestHost.csproj" />
-    <ProjectReference Include="..\..\src\MyApp.Desktop\MyApp.Desktop.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-### `tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj`
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0-windows7.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsTestProject>true</IsTestProject>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.FlaUI" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-    <PackageReference Include="FlaUI.Core" Version="5.0.0" />
-    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
-    <PackageReference Include="TUnit" Version="1.12.111" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\MyApp.UiTests.Authoring\MyApp.UiTests.Authoring.csproj" />
-    <ProjectReference Include="..\MyApp.AppAutomation.TestHost\MyApp.AppAutomation.TestHost.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-### `tests/MyApp.AppAutomation.TestHost/MyApp.AppAutomation.TestHost.csproj`
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Session.Contracts" Version="x.y.z" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\MyApp.Desktop\MyApp.Desktop.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-`AppAutomation.Authoring` подключается обычным `PackageReference`. Для NuGet-пакета не нужен отдельный `Analyzer`-режим через `OutputItemType="Analyzer"`.
-
-## Шаг 3. Проставьте `AutomationId` в приложении
-
-Фреймворк опирается на стабильные селекторы. Для Avalonia это обычно:
-
-```xml
-<Window
-    xmlns="https://github.com/avaloniaui"
-    xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls">
-
-  <TabControl automation:AutomationProperties.AutomationId="MainTabs">
-    <TabItem Header="Login"
-             automation:AutomationProperties.AutomationId="LoginTabItem">
-      <StackPanel>
-        <TextBox automation:AutomationProperties.AutomationId="UserNameInput" />
-        <Button automation:AutomationProperties.AutomationId="LoginButton"
-                Content="Login" />
-        <TextBlock automation:AutomationProperties.AutomationId="StatusLabel" />
-      </StackPanel>
-    </TabItem>
-  </TabControl>
-</Window>
-```
-
-Правила:
-
-- ставьте `AutomationId` на controls, с которыми реально будет работать тест;
-- `AutomationId` должен быть стабильным, а не привязанным к видимому тексту;
-- сначала размечайте критичный пользовательский путь, потом расширяйте покрытие;
-- сегодня page object layer описывается вручную через `[UiControl(...)]`, автоматического scaffold tool в релизном flow пока нет.
-
-## Шаг 4. Создайте `TestHost`
-
-`TestHost` хранит всё, что относится к вашему репозиторию: как создать окно для `Headless`, где лежит `.exe`, какой `WorkingDirectory`, какие аргументы и переменные окружения нужны приложению.
-
-`tests/MyApp.AppAutomation.TestHost/MyAppLaunchHost.cs`:
-
-```csharp
-using AppAutomation.Session.Contracts;
-using MyApp.Desktop;
-
-namespace MyApp.AppAutomation.TestHost;
-
-public static class MyAppLaunchHost
-{
-    public static HeadlessAppLaunchOptions CreateHeadlessLaunchOptions()
-    {
-        return new HeadlessAppLaunchOptions
-        {
-            CreateMainWindow = static () => new MainWindow()
-        };
-    }
-
-    public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(string configuration = "Debug")
-    {
-        var executablePath = Path.GetFullPath(
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "..",
-                "..",
-                "..",
-                "..",
-                "..",
-                "..",
-                "src",
-                "MyApp.Desktop",
-                "bin",
-                configuration,
-                "net10.0",
-                "MyApp.Desktop.exe"));
-
-        return new DesktopAppLaunchOptions
-        {
-            ExecutablePath = executablePath,
-            WorkingDirectory = Path.GetDirectoryName(executablePath),
-            MainWindowTimeout = TimeSpan.FromSeconds(20),
-            PollInterval = TimeSpan.FromMilliseconds(200)
-        };
-    }
-}
-```
-
-Если приложению нужны startup args или env vars, добавьте их здесь же:
-
-```csharp
-return new DesktopAppLaunchOptions
-{
-    ExecutablePath = executablePath,
-    WorkingDirectory = Path.GetDirectoryName(executablePath),
-    Arguments = ["--automation"],
-    EnvironmentVariables = new Dictionary<string, string?>
-    {
-        ["MYAPP_ENV"] = "Test"
-    }
-};
-```
-
-Если headless-режим требует сброса static-state или async bootstrap, используйте `BeforeLaunchAsync` и `CreateMainWindowAsync`.
-
-## Шаг 5. Опишите page object в `Authoring`
-
-`tests/MyApp.UiTests.Authoring/Pages/MainWindowPage.cs`:
-
-```csharp
-using AppAutomation.Abstractions;
-
-namespace MyApp.UiTests.Authoring.Pages;
-
-[UiControl("MainTabs", UiControlType.Tab, "MainTabs")]
-[UiControl("LoginTabItem", UiControlType.TabItem, "LoginTabItem")]
-[UiControl("UserNameInput", UiControlType.TextBox, "UserNameInput")]
-[UiControl("LoginButton", UiControlType.Button, "LoginButton")]
-[UiControl("StatusLabel", UiControlType.Label, "StatusLabel")]
-public sealed partial class MainWindowPage : UiPage
-{
-    public MainWindowPage(IUiControlResolver resolver) : base(resolver)
-    {
-    }
-}
-```
-
-После сборки `AppAutomation.Authoring` сгенерирует strongly typed свойства для этих контролов.
-
-## Шаг 6. Напишите общие тесты один раз
-
-Именно здесь лежит ваш общий сценарий, который потом выполняется и в `Headless`, и в `FlaUI`.
-
-`tests/MyApp.UiTests.Authoring/Tests/MainWindowScenariosBase.cs`:
-
-```csharp
-using AppAutomation.Abstractions;
-using AppAutomation.TUnit;
-using MyApp.UiTests.Authoring.Pages;
-using TUnit.Assertions;
-using TUnit.Core;
-
-namespace MyApp.UiTests.Authoring.Tests;
-
-public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
-    where TSession : class, IUiTestSession
-{
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
-    public async Task Login_flow_is_reachable()
-    {
-        Page
-            .SelectTabItem(static page => page.LoginTabItem)
-            .EnterText(static page => page.UserNameInput, "alice")
-            .ClickButton(static page => page.LoginButton)
-            .WaitUntilNameContains(static page => page.StatusLabel, "alice");
-
-        await Assert.That(Page.LoginTabItem.IsSelected).IsEqualTo(true);
-    }
-}
-```
-
-Это и есть главный принцип фреймворка: сценарии общие, runtime-specific только запуск и resolver.
-
-## Шаг 7. Подключите `Headless`
-
-Сначала создайте TUnit hooks, которые поднимут `Avalonia.Headless` session.
-
-`tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs`:
-
-```csharp
-using Avalonia.Headless;
-using AppAutomation.Avalonia.Headless.Session;
-using MyApp.Desktop;
-using TUnit.Core;
-
-namespace MyApp.UiTests.Headless.Infrastructure;
-
-public static class HeadlessSessionHooks
-{
-    private static HeadlessUnitTestSession? _session;
-
-    [Before(TestSession)]
-    public static void SetupSession()
-    {
-        _session = HeadlessUnitTestSession.StartNew(typeof(App));
-        HeadlessRuntime.SetSession(_session);
-    }
-
-    [After(TestSession)]
-    public static void CleanupSession()
-    {
-        HeadlessRuntime.SetSession(null);
-        _session?.Dispose();
-        _session = null;
-    }
-}
-```
-
-Потом добавьте runtime-обёртку:
-
-`tests/MyApp.UiTests.Headless/Tests/MainWindowHeadlessTests.cs`:
-
-```csharp
-using AppAutomation.Avalonia.Headless.Automation;
-using AppAutomation.Avalonia.Headless.Session;
-using AppAutomation.TUnit;
-using MyApp.AppAutomation.TestHost;
-using MyApp.UiTests.Authoring.Pages;
-using MyApp.UiTests.Authoring.Tests;
-using TUnit.Core;
-
-namespace MyApp.UiTests.Headless.Tests;
-
-[InheritsTests]
-public sealed class MainWindowHeadlessTests
-    : MainWindowScenariosBase<MainWindowHeadlessTests.HeadlessRuntimeSession>
-{
-    protected override HeadlessRuntimeSession LaunchSession()
-    {
-        return new HeadlessRuntimeSession(
-            DesktopAppSession.Launch(MyAppLaunchHost.CreateHeadlessLaunchOptions()));
-    }
-
-    protected override MainWindowPage CreatePage(HeadlessRuntimeSession session)
-    {
-        return new MainWindowPage(new HeadlessControlResolver(session.Inner.MainWindow));
-    }
-
-    public sealed class HeadlessRuntimeSession : IUiTestSession
-    {
-        public HeadlessRuntimeSession(DesktopAppSession inner)
-        {
-            Inner = inner;
-        }
-
-        public DesktopAppSession Inner { get; }
-
-        public void Dispose()
-        {
-            Inner.Dispose();
-        }
-    }
-}
-```
-
-## Шаг 8. Подключите `FlaUI`
-
-`tests/MyApp.UiTests.FlaUI/Tests/MainWindowFlaUiTests.cs`:
-
-```csharp
-using AppAutomation.FlaUI.Automation;
-using AppAutomation.FlaUI.Session;
-using AppAutomation.TUnit;
-using MyApp.AppAutomation.TestHost;
-using MyApp.UiTests.Authoring.Pages;
-using MyApp.UiTests.Authoring.Tests;
-using TUnit.Core;
-
-namespace MyApp.UiTests.FlaUI.Tests;
-
-[InheritsTests]
-public sealed class MainWindowFlaUiTests
-    : MainWindowScenariosBase<MainWindowFlaUiTests.FlaUiRuntimeSession>
-{
-    protected override FlaUiRuntimeSession LaunchSession()
-    {
-        return new FlaUiRuntimeSession(
-            DesktopAppSession.Launch(MyAppLaunchHost.CreateDesktopLaunchOptions()));
-    }
-
-    protected override MainWindowPage CreatePage(FlaUiRuntimeSession session)
-    {
-        return new MainWindowPage(
-            new FlaUiControlResolver(session.Inner.MainWindow, session.Inner.ConditionFactory));
-    }
-
-    public sealed class FlaUiRuntimeSession : IUiTestSession
-    {
-        public FlaUiRuntimeSession(DesktopAppSession inner)
-        {
-            Inner = inner;
-        }
-
-        public DesktopAppSession Inner { get; }
-
-        public void Dispose()
-        {
-            Inner.Dispose();
-        }
-    }
-}
-```
-
-На этом этапе у вас уже есть один общий тестовый класс и две тонкие runtime-обёртки.
-
-## Шаг 9. Соберите и запустите
-
-Из корня consumer-репозитория:
+Локально в repo:
 
 ```powershell
-dotnet restore
-dotnet build
+dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 1.1.0
+```
+
+Или глобально:
+
+```powershell
+dotnet tool install --global AppAutomation.Tooling --version 1.1.0
+```
+
+### 3. Сгенерируйте canonical topology
+
+Из корня вашего consumer-репозитория:
+
+```powershell
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 1.1.0
+```
+
+Шаблон создаст:
+
+- `tests/MyApp.UiTests.Authoring`
+- `tests/MyApp.UiTests.Headless`
+- `tests/MyApp.UiTests.FlaUI`
+- `tests/MyApp.AppAutomation.TestHost`
+- `APPAUTOMATION_NEXT_STEPS.md`
+
+### 4. Сразу прогоните doctor
+
+Если tool установлен в локальную папку:
+
+```powershell
+.\.tools\appautomation doctor --repo-root .
+```
+
+Если tool установлен глобально:
+
+```powershell
+appautomation doctor --repo-root .
+```
+
+`doctor` проверяет:
+
+- есть ли canonical topology;
+- не ушли ли вы в source dependency вместо `PackageReference`;
+- совместимы ли `TargetFramework`;
+- есть ли `NuGet.Config`;
+- закреплён ли SDK через `global.json`.
+
+## Что сделать в consumer repo после генерации
+
+Шаблон создаёт правильную topology, но не может знать ваш AUT-specific bootstrap. Дальше нужно сделать ровно следующие вещи.
+
+### 1. Вписать реальный launch/bootstrap в `TestHost`
+
+Файл:
+
+```text
+tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
+```
+
+Нужно заменить placeholder values:
+
+- solution file name;
+- relative path до desktop `.csproj`;
+- `TargetFramework` AUT;
+- имя desktop executable;
+- `CreateHeadlessLaunchOptions()` с реальным созданием `Window`.
+
+Framework helpers, которые для этого уже есть из коробки:
+
+- `AppAutomation.TestHost.Avalonia.AvaloniaDesktopLaunchHost`
+- `AppAutomation.TestHost.Avalonia.AvaloniaHeadlessLaunchHost`
+- `AppAutomation.TestHost.Avalonia.TemporaryDirectory`
+
+### 2. Проставить `AutomationId` в приложении
+
+Минимум для первой итерации:
+
+- root window;
+- main tabs / navigation anchors;
+- критичные input/button/result controls;
+- ключевые child controls у composite widgets.
+
+Пример:
+
+```xml
+<TabControl automation:AutomationProperties.AutomationId="MainTabs">
+  <TabItem automation:AutomationProperties.AutomationId="SmokeTabItem" />
+</TabControl>
+```
+
+### 3. Подключить Headless session hooks
+
+Файл:
+
+```text
+tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
+```
+
+Там нужно запустить ваш `Avalonia.Headless` session и зарегистрировать его через `HeadlessRuntime.SetSession(...)`.
+
+### 4. Описать page objects и shared scenarios
+
+В `Authoring` проекте вы:
+
+- объявляете `[UiControl(...)]` для простых controls;
+- при необходимости вручную добавляете composite abstractions;
+- пишете shared scenarios один раз.
+
+### 5. Сначала стабилизировать `Headless`, потом включать `FlaUI`
+
+Команды:
+
+```powershell
 dotnet test tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
 dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
 
-Если `FlaUI` не поднимает приложение:
+## Что уже есть из коробки
 
-- проверьте путь к `.exe` в `MyAppLaunchHost.CreateDesktopLaunchOptions`;
-- проверьте, что desktop-приложение реально собрано под нужный `TargetFramework`;
-- проверьте `WorkingDirectory`, startup args и env vars;
-- убедитесь, что у нужных элементов есть `AutomationId`.
+`AppAutomation` теперь закрывает типовые integration gaps, которые раньше consumer писал вручную:
 
-## Что считать правильным результатом
+- `dotnet new` template для canonical Avalonia topology;
+- `appautomation doctor`;
+- reusable `AppAutomation.TestHost.Avalonia`;
+- desktop launch helpers с repo-root / project-path / build-before-launch;
+- headless launch helpers поверх `BeforeLaunchAsync`, `CreateMainWindow`, `CreateMainWindowAsync`;
+- adapter registration API через `WithAdapters(...)`;
+- built-in composite abstraction `ISearchPickerControl` и `WithSearchPicker(...)`;
+- package-based smoke path через `eng/smoke-consumer.ps1`.
 
-После выполнения шагов выше у вас должно быть именно это:
+## Что остаётся consumer responsibility
 
-- page objects и сценарии живут только в `MyApp.UiTests.Authoring`;
-- `Headless` и `FlaUI` не дублируют тестовую логику, а только запускают один и тот же `MainWindowScenariosBase<TSession>`;
-- один и тот же сценарий можно вызвать двумя командами: `dotnet test tests/MyApp.UiTests.Headless/...` и `dotnet test tests/MyApp.UiTests.FlaUI/...`.
+Framework не может автоматизировать это честно и полностью, поэтому эти вещи остаются на стороне consumer-а:
 
-## Живой пример в этом репозитории
+- domain-specific test data и permissions;
+- auth bypass / login story;
+- точная startup semantics AUT;
+- решение, какие secondary controls лучше упростить данными;
+- добавление `AutomationId` в самом AUT.
 
-Если нужен working reference, смотри готовую реализацию в этом repo:
+## Do Not
+
+- Не тяните `src/AppAutomation.*` в consumer repo как source dependency, если нет совсем крайней причины.
+- Не дублируйте tests из `Authoring` в runtime projects.
+- Не начинайте со сложного end-to-end path. Сначала один критичный smoke scenario.
+- Не автоматизируйте все controls подряд до того, как стабилизирован login / startup / settings path.
+- Не прячьте repo-specific bootstrap внутрь reusable framework package.
+
+## Reference Implementation
+
+Working reference в этом репозитории:
 
 - [sample/DotnetDebug.AppAutomation.Authoring](sample/DotnetDebug.AppAutomation.Authoring)
 - [sample/DotnetDebug.AppAutomation.Avalonia.Headless.Tests](sample/DotnetDebug.AppAutomation.Avalonia.Headless.Tests)
 - [sample/DotnetDebug.AppAutomation.FlaUI.Tests](sample/DotnetDebug.AppAutomation.FlaUI.Tests)
 - [sample/DotnetDebug.AppAutomation.TestHost](sample/DotnetDebug.AppAutomation.TestHost)
-- [sample/DotnetDebug.Avalonia](sample/DotnetDebug.Avalonia)
 
-## Если нужен следующий уровень
+## Дальше
 
-- Более подробный старт: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
-- Схема проектов: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
-- Сложные интеграции и troubleshooting: [docs/appautomation/advanced-integration.md](docs/appautomation/advanced-integration.md)
-- Сборка и публикация NuGet-пакетов: [docs/appautomation/publishing.md](docs/appautomation/publishing.md)
+- Пошаговый consumer flow: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
+- Pre-flight checklist: [docs/appautomation/adoption-checklist.md](docs/appautomation/adoption-checklist.md)
+- Canonical project responsibilities: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
+- Advanced bootstrap and composite controls: [docs/appautomation/advanced-integration.md](docs/appautomation/advanced-integration.md)
+- Packaging and release flow: [docs/appautomation/publishing.md](docs/appautomation/publishing.md)

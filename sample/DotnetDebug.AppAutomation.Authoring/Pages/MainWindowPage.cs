@@ -64,7 +64,12 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("HierarchyClearSelectionButton", UiControlType.Button, "HierarchyClearSelectionButton")]
 public sealed partial class MainWindowPage : UiPage
 {
+    private static UiControlDefinition HistoryOperationPickerDefinition { get; } =
+        new("HistoryOperationPicker", UiControlType.AutomationElement, "HistoryOperationPicker", UiLocatorKind.AutomationId, FallbackToName: false);
+
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
     {
     }
+
+    public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(HistoryOperationPickerDefinition);
 }

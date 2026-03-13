@@ -8,6 +8,9 @@
     <PackageProjectUrl>https://github.com/Kibnet/AppAutomation</PackageProjectUrl>
     <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsPackable)' == 'true' and '$(PackageType)' != 'Template'">
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>

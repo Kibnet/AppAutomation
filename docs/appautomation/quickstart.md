@@ -1,67 +1,98 @@
 # AppAutomation Quickstart
 
-Этот quickstart показывает минимальный working setup для внешнего solution, который хочет подключить `AppAutomation` через NuGet и начать писать UI-тесты.
+Этот quickstart описывает opinionated consumer flow с нуля для существующего Avalonia-приложения.
 
-Для nested solution, repo-specific bootstrap, stateful headless apps и troubleshooting смотрите [advanced-integration.md](advanced-integration.md).
+## 1. Не начинайте с тестов
 
-## 1. Рекомендуемая topology
+Сначала подготовьте deterministic prerequisites:
 
-Минимальный practical layout:
+- test account / auth path;
+- test data / permissions path;
+- isolated settings file;
+- фиксированный startup screen;
+- отключённые update/background jobs.
+
+Если это не стабилизировано, не переходите к page objects.
+
+## 2. Установите template и tool
+
+```powershell
+dotnet new install AppAutomation.Templates::2.1.0
+dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 2.1.0
+```
+
+## 3. Сгенерируйте canonical topology
+
+```powershell
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
+```
+
+Шаблон создаст:
 
 ```text
-src/
-  MyApp/
 tests/
   MyApp.UiTests.Authoring/
   MyApp.UiTests.Headless/
-  MyApp.UiTests.FlaUI/          # optional, Windows only
-  MyApp.AppAutomation.TestHost/ # optional, repo-specific launch/bootstrap
+  MyApp.UiTests.FlaUI/
+  MyApp.AppAutomation.TestHost/
 ```
 
-Обязательный минимум:
+## 4. Проверьте repo через doctor
 
-- `MyApp.UiTests.Authoring`
-- один runtime-specific test project: `MyApp.UiTests.Headless` или `MyApp.UiTests.FlaUI`
-
-## 2. Package matrix
-
-| Проект | Пакеты |
-| --- | --- |
-| `MyApp.UiTests.Authoring` | `AppAutomation.Abstractions`, `AppAutomation.Authoring`, `AppAutomation.TUnit`, `TUnit.Assertions`, `TUnit.Core` |
-| `MyApp.UiTests.Headless` | `AppAutomation.Abstractions`, `AppAutomation.Avalonia.Headless`, `AppAutomation.TUnit`, `TUnit` + `ProjectReference` на `MyApp.UiTests.Authoring` |
-| `MyApp.UiTests.FlaUI` | `AppAutomation.Abstractions`, `AppAutomation.FlaUI`, `AppAutomation.TUnit`, `TUnit` + `ProjectReference` на `MyApp.UiTests.Authoring` |
-| `MyApp.AppAutomation.TestHost` | обычно `AppAutomation.Session.Contracts`, иногда runtime package, если нужен repo-specific bootstrap |
-
-Все `AppAutomation.*` пакеты держите в одной версии.
-
-## 3. Создайте authoring project
-
-`tests/MyApp.UiTests.Authoring/MyApp.UiTests.Authoring.csproj`:
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.Authoring" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-    <PackageReference Include="TUnit.Assertions" Version="1.12.111" />
-    <PackageReference Include="TUnit.Core" Version="1.12.111" />
-  </ItemGroup>
-</Project>
+```powershell
+.\.tools\appautomation doctor --repo-root .
 ```
 
-`AppAutomation.Authoring` подключается обычным `PackageReference`. Дополнительный `OutputItemType="Analyzer"` для NuGet-пакета не нужен.
+Если `doctor` предупреждает про source dependency, исправьте это до начала authoring.
 
-## 4. Опишите page object
+## 5. Допишите `TestHost`
 
-`tests/MyApp.UiTests.Authoring/Pages/MainWindowPage.cs`:
+Файл:
+
+```text
+tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
+```
+
+Используйте built-in helpers:
+
+- `AvaloniaDesktopLaunchHost`
+- `AvaloniaHeadlessLaunchHost`
+- `TemporaryDirectory`
+
+Типовой desktop path:
+
+```csharp
+return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+    desktopAppDescriptor,
+    new AvaloniaDesktopLaunchOptions
+    {
+        BuildConfiguration = BuildConfigurationDefaults.ForAssembly(typeof(MyAppAppLaunchHost).Assembly)
+    });
+```
+
+Типовой headless path:
+
+```csharp
+return AvaloniaHeadlessLaunchHost.Create(
+    static () => MyAppBootstrap.CreateMainWindow());
+```
+
+## 6. Проставьте minimum `AutomationId` contract
+
+Первая итерация должна покрыть только controls из critical smoke path:
+
+- window root;
+- main tabs / navigation anchors;
+- важные text boxes;
+- важные buttons;
+- labels/results;
+- child anchors inside composite widgets.
+
+Не пытайтесь сразу размечать всё приложение.
+
+## 7. Опишите page object
+
+Простые controls описываются через `[UiControl(...)]`:
 
 ```csharp
 using AppAutomation.Abstractions;
@@ -81,17 +112,27 @@ public sealed partial class MainWindowPage : UiPage
 }
 ```
 
-После сборки generator создаст:
+## 8. Для composite controls сначала используйте built-in adapter path
 
-- `MainWindowPageDefinitions`
-- strongly typed properties `MainTabs`, `LoginTabItem`, `UserNameInput`, `LoginButton`, `StatusLabel`
-- generated locator manifest provider в namespace `<AssemblyName>.Generated`
+Если control не укладывается в простые `[UiControl(...)]`, не переписывайте resolver целиком. Сначала используйте:
 
-Для production-grade navigation предпочитайте stable controls с `AutomationId`, например `LoginTabItem`, а не выбор tab-а только по тексту header-а.
+- `IUiControlResolver.WithAdapters(...)`
+- `IUiControlResolver.WithSearchPicker(...)`
+- `ISearchPickerControl`
 
-## 5. Вынесите shared scenarios
+Пример:
 
-`tests/MyApp.UiTests.Authoring/Tests/MainWindowScenariosBase.cs`:
+```csharp
+var resolver = new HeadlessControlResolver(session.Inner.MainWindow)
+    .WithSearchPicker(
+        "HistoryOperationPicker",
+        SearchPickerParts.ByAutomationIds(
+            "HistoryFilterInput",
+            "OperationCombo",
+            applyButtonAutomationId: "ApplyFilterButton"));
+```
+
+## 9. Shared scenarios пишутся только в `Authoring`
 
 ```csharp
 using AppAutomation.Abstractions;
@@ -106,200 +147,50 @@ public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, M
     where TSession : class, IUiTestSession
 {
     [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task Login_flow_is_reachable()
     {
         Page
-            .SelectTabItem(static candidate => candidate.LoginTabItem)
-            .EnterText(static candidate => candidate.UserNameInput, "alice")
-            .ClickButton(static candidate => candidate.LoginButton)
-            .WaitUntilNameContains(static candidate => candidate.StatusLabel, "alice");
+            .SelectTabItem(static page => page.LoginTabItem)
+            .EnterText(static page => page.UserNameInput, "alice")
+            .ClickButton(static page => page.LoginButton)
+            .WaitUntilNameContains(static page => page.StatusLabel, "alice");
 
         await Assert.That(Page.LoginTabItem.IsSelected).IsEqualTo(true);
     }
 }
 ```
 
-Именно этот проект должен быть owner-ом page objects и shared scenarios. Не дублируйте их через `Compile Include` в runtime test projects.
+Runtime projects не должны дублировать эти методы.
 
-## 6. Создайте headless runtime test project
+## 10. Runtime projects остаются thin wrappers
 
-`tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj`:
+`Headless` и `FlaUI` должны только:
 
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
-  </PropertyGroup>
+- поднять runtime session;
+- создать runtime resolver;
+- отдать shared page object;
+- унаследовать tests через `[InheritsTests]`.
 
-  <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="x.y.z" />
-    <PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-    <PackageReference Include="TUnit" Version="1.12.111" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\\MyApp.UiTests.Authoring\\MyApp.UiTests.Authoring.csproj" />
-    <ProjectReference Include="..\\MyApp.AppAutomation.TestHost\\MyApp.AppAutomation.TestHost.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-Минимальный runtime wrapper:
-
-```csharp
-using AppAutomation.Avalonia.Headless.Automation;
-using AppAutomation.Avalonia.Headless.Session;
-using AppAutomation.TUnit;
-using MyApp.AppAutomation.TestHost;
-using MyApp.UiTests.Authoring.Pages;
-using MyApp.UiTests.Authoring.Tests;
-using TUnit.Core;
-
-namespace MyApp.UiTests.Headless;
-
-[InheritsTests]
-public sealed class MainWindowHeadlessTests : MainWindowScenariosBase<MainWindowHeadlessTests.HeadlessSession>
-{
-    protected override HeadlessSession LaunchSession() => HeadlessSession.Start();
-
-    protected override MainWindowPage CreatePage(HeadlessSession session)
-    {
-        return new MainWindowPage(new HeadlessControlResolver(session.Session.MainWindow));
-    }
-
-    public sealed class HeadlessSession : IUiTestSession
-    {
-        private HeadlessSession(DesktopAppSession session)
-        {
-            Session = session;
-        }
-
-        public DesktopAppSession Session { get; }
-
-        public static HeadlessSession Start()
-        {
-            return new HeadlessSession(DesktopAppSession.Launch(MyAppLaunchHost.CreateHeadlessLaunchOptions()));
-        }
-
-        public void Dispose()
-        {
-            Session.Dispose();
-        }
-    }
-}
-```
-
-## 7. Добавьте Windows runtime при необходимости
-
-`MyApp.UiTests.FlaUI` нужен, если вы тестируете настоящий desktop executable под Windows.
-
-Базовый набор:
-
-```xml
-<PackageReference Include="AppAutomation.Abstractions" Version="x.y.z" />
-<PackageReference Include="AppAutomation.FlaUI" Version="x.y.z" />
-<PackageReference Include="AppAutomation.TUnit" Version="x.y.z" />
-<PackageReference Include="TUnit" Version="1.12.111" />
-```
-
-и `ProjectReference` на `MyApp.UiTests.Authoring` и `MyApp.AppAutomation.TestHost`.
-
-## 8. Когда нужен repo-specific TestHost
-
-Если ваш runtime test project должен:
-
-- искать `.sln` или repo root;
-- собирать AUT перед запуском;
-- вычислять пути в `bin/<Configuration>/<TFM>`;
-- формировать `DesktopAppLaunchOptions` / `HeadlessAppLaunchOptions`;
-- подготавливать temp dirs, test data или isolated settings;
-
-выносите это в отдельный repo-only project, аналогичный `src/AppAutomation.AppAutomation.TestHost`.
-
-### Пример desktop launch options с аргументами и env vars
-
-```csharp
-using AppAutomation.Session.Contracts;
-
-return new DesktopAppLaunchOptions
-{
-    ExecutablePath = executablePath,
-    WorkingDirectory = appWorkingDirectory,
-    Arguments = ["--automation", "--profile", "smoke"],
-    EnvironmentVariables = new Dictionary<string, string?>
-    {
-        ["MYAPP_ENV"] = "Test",
-        ["MYAPP_SETTINGS_PATH"] = settingsPath
-    }
-};
-```
-
-### Пример advanced headless bootstrap
-
-```csharp
-using AppAutomation.Session.Contracts;
-
-return new HeadlessAppLaunchOptions
-{
-    BeforeLaunchAsync = async cancellationToken =>
-    {
-        await ResetStaticStateAsync(cancellationToken);
-        PrepareIsolatedFiles();
-    },
-    CreateMainWindowAsync = cancellationToken =>
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<object>(MyAppBootstrap.CreateMainWindowForAutomation());
-    }
-};
-```
-
-`BeforeLaunchAsync` используйте для repo/app-specific reset logic. `CreateMainWindowAsync` используйте, когда создание окна требует async/bootstrap шага. Для простых приложений достаточно старого `CreateMainWindow`.
-
-## 9. Readiness и retry helpers
-
-`UiTestBase` теперь даёт framework-level helpers для readiness logic:
-
-- `WaitUntil(...)`
-- `WaitUntil<T>(...)`
-- `WaitUntilAsync<T>(...)`
-- `RetryUntil(...)`
-
-Пример:
-
-```csharp
-protected override MainWindowPage CreatePage(HeadlessSession session)
-{
-    var page = new MainWindowPage(new HeadlessControlResolver(session.Session.MainWindow));
-
-    WaitUntil(
-        () => page.LoginButton.IsEnabled,
-        timeout: TimeSpan.FromSeconds(10),
-        because: "Main window should become interactive before tests continue.");
-
-    return page;
-}
-```
-
-Используйте эти helpers для readiness и transient transitions. Если без retry нельзя даже стабильно найти control, сначала улучшайте locator strategy и `AutomationId`.
-
-## 10. Запуск
+## 11. Сначала стабилизируйте `Headless`
 
 ```powershell
-dotnet restore
-dotnet build
-dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
-dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj
+dotnet test tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
 ```
 
-Если хотите проверить именно package install story, используйте локальный smoke path из этого репозитория:
+Когда `Headless` стабилен, подключайте desktop runtime:
 
 ```powershell
-pwsh -File eng/pack.ps1 -Configuration Release
-pwsh -File eng/smoke-consumer.ps1 -Configuration Release
+dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
+
+## 12. Что делать, если integration снова разрастается
+
+Остановитесь и проверьте:
+
+- не ушёл ли bootstrap code из `TestHost` в test projects;
+- не пытаетесь ли вы автоматизировать secondary control вместо упрощения test data;
+- не ушли ли вы в source dependency;
+- не дублируются ли tests между runtime projects.
+
+Подробнее: [advanced-integration.md](advanced-integration.md)

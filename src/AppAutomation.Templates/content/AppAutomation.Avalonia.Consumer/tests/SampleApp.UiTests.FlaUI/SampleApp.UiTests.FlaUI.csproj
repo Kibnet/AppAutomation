@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows7.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AppAutomation.Abstractions" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.FlaUI" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.TUnit" Version="2.1.0" />
+    <PackageReference Include="TUnit" Version="1.12.111" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SampleApp.UiTests.Authoring\SampleApp.UiTests.Authoring.csproj" />
+    <ProjectReference Include="..\SampleApp.AppAutomation.TestHost\SampleApp.AppAutomation.TestHost.csproj" />
+  </ItemGroup>
+</Project>

@@ -1009,7 +1009,7 @@ public static class UiPageExtensions
         var expected = value.ToString(CultureInfo.InvariantCulture);
         try
         {
-            textBox.Enter(expected);
+            textBox.EnterText(expected);
         }
         catch
         {

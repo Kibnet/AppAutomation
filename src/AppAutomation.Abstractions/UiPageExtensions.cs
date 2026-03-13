@@ -249,6 +249,46 @@ public static class UiPageExtensions
         return page;
     }
 
+    public static TSelf SearchAndSelect<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ISearchPickerControl>> selector,
+        string searchText,
+        string itemText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchText);
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        var searchPicker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => searchPicker.IsEnabled,
+            timeoutMs,
+            $"Search picker '{searchPicker.AutomationId}' is not enabled.",
+            () => searchPicker.IsEnabled.ToString(CultureInfo.InvariantCulture));
+
+        searchPicker.Search(searchText);
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(searchPicker.SearchText, searchText, StringComparison.Ordinal),
+            timeoutMs,
+            $"Search picker '{searchPicker.AutomationId}' did not accept search text '{searchText}'.",
+            () => searchPicker.SearchText);
+
+        searchPicker.Select(itemText);
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(searchPicker.SelectedItemText, itemText, StringComparison.OrdinalIgnoreCase),
+            timeoutMs,
+            $"Search picker '{searchPicker.AutomationId}' did not select '{itemText}'.",
+            () => searchPicker.SelectedItemText);
+        return page;
+    }
+
     public static TSelf SelectTabItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITabItemControl>> selector,

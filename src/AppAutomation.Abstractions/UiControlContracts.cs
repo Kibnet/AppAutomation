@@ -63,6 +63,21 @@ public interface IComboBoxControl : IUiControl
     void Expand();
 }
 
+public interface ISearchPickerControl : IUiControl
+{
+    string SearchText { get; }
+
+    string? SelectedItemText { get; }
+
+    IReadOnlyList<string> Items { get; }
+
+    void Search(string value);
+
+    void Expand();
+
+    void Select(string itemText);
+}
+
 public interface IRadioButtonControl : IUiControl
 {
     bool? IsChecked { get; set; }

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>AppAutomation.TestHost.Avalonia</PackageId>
+    <Description>Reusable Avalonia test-host helpers for AppAutomation consumers.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
+  </ItemGroup>
+</Project>

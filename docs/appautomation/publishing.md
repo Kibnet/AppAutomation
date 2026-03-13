@@ -1,61 +1,56 @@
 # AppAutomation Publishing
 
-Этот репозиторий публикует только packable `AppAutomation.*` packages.
+Этот repo публикует не только runtime libraries, но и consumer-adoption assets.
 
-## Источник версии
+## Packaged Artifacts
 
-Локальный fallback version живёт в [eng/Versions.props](../../eng/Versions.props):
+В локальный package folder попадают:
 
-- `AppAutomationVersion`
+- `AppAutomation.Abstractions`
+- `AppAutomation.Authoring`
+- `AppAutomation.Session.Contracts`
+- `AppAutomation.TUnit`
+- `AppAutomation.Avalonia.Headless`
+- `AppAutomation.FlaUI`
+- `AppAutomation.TestHost.Avalonia`
+- `AppAutomation.Tooling`
+- `AppAutomation.Templates`
 
-Локальные pack/publish сценарии используют это значение по умолчанию.
+## Version Source
 
-В GitHub Actions production source of truth другой:
+Локальный source of truth:
 
-- GitHub Release tag `<version>` или `appautomation-v<version>`
+- [eng/Versions.props](../../eng/Versions.props)
 
-При публикации через `release.published` package version берётся из tag релиза и явно прокидывается в scripts.
+GitHub release path:
 
-## Локальная упаковка
+- tag `<version>` или `appautomation-v<version>`
+
+## Local Pack
 
 ```powershell
 pwsh -File eng/pack.ps1 -Configuration Release
 ```
 
-По умолчанию пакеты складываются в:
+Artifacts:
 
 ```text
 artifacts/packages/<version>/
 ```
 
-Пример:
-
-```text
-artifacts/packages/2.1.0/
-```
-
-Можно переопределить prerelease suffix на время упаковки:
-
-```powershell
-pwsh -File eng/pack.ps1 -Configuration Release -Version 2.1.0-preview.1
-```
-
-## Локальный smoke consumer
-
-Перед публикацией стоит подтвердить, что пакетами реально можно пользоваться извне:
+## Consumer Smoke
 
 ```powershell
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Этот скрипт:
+Smoke now validates three things:
 
-- берёт пакеты из локального `artifacts/packages/<version>`;
-- поднимает временный consumer workspace;
-- собирает authoring project через `PackageReference` на `AppAutomation.Authoring`;
-- проверяет, что source generator действительно сработал из NuGet package.
+1. package-only authoring/runtime consumer can restore/build;
+2. template package installs and generates canonical topology;
+3. `appautomation doctor` succeeds against generated consumer repo.
 
-## Публикация в feed
+## Publish
 
 ```powershell
 pwsh -File eng/publish-nuget.ps1 `
@@ -64,50 +59,28 @@ pwsh -File eng/publish-nuget.ps1 `
   -ApiKey <api-key>
 ```
 
-Можно использовать environment variables:
+Optional environment variables:
 
 - `NUGET_SOURCE`
 - `NUGET_API_KEY`
 - `NUGET_SYMBOL_SOURCE`
 - `NUGET_SYMBOL_API_KEY`
 
-Если `PackagesPath` не указан, скрипт берёт:
+## Enterprise Feed Guidance
 
-```text
-artifacts/packages/<version>
-```
+Если consumer organisation использует internal mirror:
 
-## GitHub workflow
+- публикуйте packages в корпоративный feed;
+- на consumer side настраивайте `NuGet.Config` / `packageSourceMapping`;
+- не переходите на source dependency как основной delivery path.
 
-Файл workflow:
-
-```text
-.github/workflows/publish-packages.yml
-```
-
-Trigger-ы:
-
-- `release.published`
-- `workflow_dispatch`
-
-Pipeline делает:
-
-1. `dotnet restore`
-2. `dotnet build`
-3. `dotnet test`
-4. извлекает package version из release tag или manual input
-5. `pwsh -File eng/pack.ps1 -Version <version>`
-6. `pwsh -File eng/smoke-consumer.ps1 -Version <version>`
-7. `pwsh -File eng/publish-nuget.ps1 -Version <version>`
-
-## Минимальный release checklist
+## Release Checklist
 
 ```powershell
-dotnet restore
 dotnet build AppAutomation.sln -c Release
-dotnet test --solution AppAutomation.sln -c Release
+dotnet test AppAutomation.sln -c Release
 pwsh -File eng/pack.ps1 -Configuration Release
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Только после этого есть смысл публиковать GitHub Release с tag `<version>` или `appautomation-v<version>`, либо запускать manual publish workflow с явным `version`.
+Публикация без этих шагов не считается validated.

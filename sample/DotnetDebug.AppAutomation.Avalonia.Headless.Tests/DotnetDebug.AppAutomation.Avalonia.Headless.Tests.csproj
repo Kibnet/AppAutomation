@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\src\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
     <ProjectReference Include="..\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.TestHost.Avalonia\AppAutomation.TestHost.Avalonia.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.TUnit\AppAutomation.TUnit.csproj" />
     <ProjectReference Include="..\DotnetDebug.Avalonia\DotnetDebug.Avalonia.csproj" />
   </ItemGroup>

@@ -1,4 +1,5 @@
 using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.Abstractions;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
@@ -18,7 +19,14 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
 
     protected override MainWindowPage CreatePage(HeadlessRuntimeSession session)
     {
-        return new MainWindowPage(new HeadlessControlResolver(session.Inner.MainWindow));
+        return new MainWindowPage(
+            new HeadlessControlResolver(session.Inner.MainWindow)
+                .WithSearchPicker(
+                    "HistoryOperationPicker",
+                    SearchPickerParts.ByAutomationIds(
+                        "HistoryFilterInput",
+                        "OperationCombo",
+                        applyButtonAutomationId: "ApplyFilterButton")));
     }
 
     public sealed class HeadlessRuntimeSession : IUiTestSession
