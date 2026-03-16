@@ -1,5 +1,7 @@
 # AppAutomation
 
+[![NuGet Version](https://img.shields.io/nuget/v/AppAutomation.Abstractions?label=NuGet%20(AppAutomation.Abstractions))](https://www.nuget.org/packages/AppAutomation.Abstractions)
+
 `AppAutomation` это .NET framework для UI automation desktop-приложений на Avalonia. Его целевой consumer flow такой:
 
 1. вы подключаете framework через NuGet, а не через скачивание исходников;
