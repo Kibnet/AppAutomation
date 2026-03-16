@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Session.Contracts" Version="2.1.0" />
-    <PackageReference Include="AppAutomation.TestHost.Avalonia" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.Session.Contracts" Version="__APPAUTOMATION_VERSION__" />
+    <PackageReference Include="AppAutomation.TestHost.Avalonia" Version="__APPAUTOMATION_VERSION__" />
   </ItemGroup>
 </Project>
