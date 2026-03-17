@@ -201,7 +201,9 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             _results.Expand();
         }
 
-        public void Select(string itemText)
+        public void Select(string itemText) => SelectItem(itemText);
+
+        public void SelectItem(string itemText)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
@@ -221,7 +223,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
                 throw new InvalidOperationException($"Search picker item '{itemText}' was not found.");
             }
 
-            _results.Select(index.Value);
+            _results.SelectByIndex(index.Value);
         }
 
         private static string Normalize(string? value)

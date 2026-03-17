@@ -104,7 +104,7 @@ public interface ICalendarControl : IUiControl
 {
     IReadOnlyList<DateTime> SelectedDates { get; }
 
-    void SelectDate(DateTime date);
+    void SelectDate(DateTime selectedDate);
 }
 
 public interface IDateTimePickerControl : IUiControl
@@ -141,7 +141,7 @@ public interface ITreeItemControl : IUiControl
 
     void Expand();
 
-    void Select();
+    void SelectNode();
 }
 
 public interface ITreeControl : IUiControl

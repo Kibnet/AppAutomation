@@ -159,7 +159,7 @@ public static class UiPageExtensions
             throw new InvalidOperationException($"ComboBox item '{itemText}' was not found.");
         }
 
-        comboBox.Select(index.Value);
+        comboBox.SelectByIndex(index.Value);
         WaitUntil(
             page,
             selector,
@@ -278,7 +278,7 @@ public static class UiPageExtensions
             $"Search picker '{searchPicker.AutomationId}' did not accept search text '{searchText}'.",
             () => searchPicker.SearchText);
 
-        searchPicker.Select(itemText);
+        searchPicker.SelectItem(itemText);
         WaitUntil(
             page,
             selector,
@@ -303,7 +303,7 @@ public static class UiPageExtensions
             timeoutMs,
             $"Tab item '{tabItem.AutomationId}' is not enabled.",
             () => tabItem.IsEnabled.ToString(CultureInfo.InvariantCulture));
-        tabItem.Select();
+        tabItem.SelectTab();
         WaitUntil(
             page,
             selector,
@@ -338,7 +338,7 @@ public static class UiPageExtensions
             throw new InvalidOperationException($"Tree item '{itemText}' was not found.");
         }
 
-        target.Select();
+        target.SelectNode();
         WaitUntil(
             page,
             selector,

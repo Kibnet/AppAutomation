@@ -1,0 +1,64 @@
+<Project>
+  <!--
+    AppAutomation Topology Validation
+    
+    This MSBuild target validates compile-time project topology for AppAutomation consumers.
+    Enable validation by setting EnableAppAutomationTopologyValidation=true in your project.
+    
+    Validates:
+    - Projects referencing AppAutomation.Abstractions should also reference AppAutomation.Authoring
+    - Test projects should reference an Authoring project
+  -->
+
+  <Target Name="ValidateAppAutomationTopology"
+          AfterTargets="ResolveProjectReferences"
+          Condition="'$(EnableAppAutomationTopologyValidation)' == 'true'">
+
+    <!-- Detect if this project references AppAutomation.Abstractions (package or project) -->
+    <PropertyGroup>
+      <_HasAbstractionsPackage>false</_HasAbstractionsPackage>
+      <_HasAuthoringPackage>false</_HasAuthoringPackage>
+      <_HasAbstractionsProject>false</_HasAbstractionsProject>
+      <_HasAuthoringProject>false</_HasAuthoringProject>
+      <_IsTestProject>false</_IsTestProject>
+      <_HasAuthoringReference>false</_HasAuthoringReference>
+    </PropertyGroup>
+
+    <!-- Check PackageReferences -->
+    <PropertyGroup Condition="@(PackageReference->AnyHaveMetadataValue('Identity', 'AppAutomation.Abstractions'))">
+      <_HasAbstractionsPackage>true</_HasAbstractionsPackage>
+    </PropertyGroup>
+    <PropertyGroup Condition="@(PackageReference->AnyHaveMetadataValue('Identity', 'AppAutomation.Authoring'))">
+      <_HasAuthoringPackage>true</_HasAuthoringPackage>
+    </PropertyGroup>
+
+    <!-- Check ProjectReferences for Abstractions and Authoring -->
+    <PropertyGroup Condition="'@(ProjectReference)' != ''">
+      <_HasAbstractionsProject Condition="$([System.String]::new('%(ProjectReference.Identity)').Contains('Abstractions'))">true</_HasAbstractionsProject>
+      <_HasAuthoringProject Condition="$([System.String]::new('%(ProjectReference.Identity)').Contains('Authoring'))">true</_HasAuthoringProject>
+    </PropertyGroup>
+
+    <!-- Determine if this is a test project (heuristic: name contains Tests or OutputType is Exe with test framework) -->
+    <PropertyGroup Condition="$(MSBuildProjectName.Contains('Tests')) or $(MSBuildProjectName.Contains('Test'))">
+      <_IsTestProject>true</_IsTestProject>
+    </PropertyGroup>
+
+    <!-- Aggregate: has any Authoring reference -->
+    <PropertyGroup Condition="'$(_HasAuthoringPackage)' == 'true' or '$(_HasAuthoringProject)' == 'true'">
+      <_HasAuthoringReference>true</_HasAuthoringReference>
+    </PropertyGroup>
+
+    <!-- Warning: Project references Abstractions but not Authoring -->
+    <Warning
+      Condition="('$(_HasAbstractionsPackage)' == 'true' or '$(_HasAbstractionsProject)' == 'true') and '$(_HasAuthoringReference)' != 'true'"
+      Code="APPAUTO001"
+      Text="Project '$(MSBuildProjectName)' references AppAutomation.Abstractions but not AppAutomation.Authoring. The Authoring package provides essential source generators and analyzers for page object compilation. Add a PackageReference or ProjectReference to AppAutomation.Authoring." />
+
+    <!-- Warning: Test project should reference Authoring for shared scenarios and page objects -->
+    <Warning
+      Condition="'$(_IsTestProject)' == 'true' and '$(_HasAuthoringReference)' != 'true' and ('$(_HasAbstractionsPackage)' == 'true' or '$(_HasAbstractionsProject)' == 'true')"
+      Code="APPAUTO002"
+      Text="Test project '$(MSBuildProjectName)' does not reference an Authoring project. Per AppAutomation topology, test projects should reference Authoring for shared scenarios and page objects. See docs/appautomation/project-topology.md for canonical layout guidance." />
+
+  </Target>
+</Project>

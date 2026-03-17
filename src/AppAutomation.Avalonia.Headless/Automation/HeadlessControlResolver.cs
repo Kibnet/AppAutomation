@@ -352,7 +352,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             set => Inner.SelectedIndex = value;
         }
 
-        public void Select(int index)
+        public void SelectByIndex(int index)
         {
             Inner.Select(index);
         }
@@ -436,9 +436,9 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         public IReadOnlyList<DateTime> SelectedDates => Inner.SelectedDates ?? Array.Empty<DateTime>();
 
-        public void SelectDate(DateTime date)
+        public void SelectDate(DateTime selectedDate)
         {
-            Inner.SelectDate(date);
+            Inner.SelectDate(selectedDate);
         }
     }
 
@@ -491,7 +491,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         public bool IsSelected => Inner.IsSelected;
 
-        public void Select()
+        public void SelectTab()
         {
             Inner.Select();
         }
@@ -533,7 +533,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             Inner.Expand();
         }
 
-        public void Select()
+        public void SelectNode()
         {
             Inner.Select();
         }

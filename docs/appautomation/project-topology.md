@@ -1,5 +1,7 @@
 # AppAutomation Project Topology
 
+**English** | [Русский](#русская-версия)
+
 ## Canonical Layout
 
 ```text
@@ -10,7 +12,7 @@ tests/
   MyApp.AppAutomation.TestHost/
 ```
 
-Это layout, который создаёт template `appauto-avalonia`.
+This is the layout that the `appauto-avalonia` template creates.
 
 ## Responsibility Split
 
@@ -39,7 +41,74 @@ Composite controls:
 
 ## Nested Solution Layout
 
-Если solution lives below repo root, that does not change topology. Меняется только `TestHost` implementation.
+If solution lives below repo root, that does not change topology. Only the `TestHost` implementation changes.
+
+Typical layout:
+
+```text
+repo/
+  src/
+    MyApp.sln
+    MyApp.Desktop/
+  tests/
+    ...
+```
+
+In this case, `TestHost` is responsible for:
+
+- finding solution root;
+- path to AUT project/exe;
+- build-before-launch;
+- isolated files/settings.
+
+---
+
+<a id="русская-версия"></a>
+
+## Русская версия
+
+[English](#appautomation-project-topology) | **Русский**
+
+## Canonical Layout
+
+```text
+tests/
+  MyApp.UiTests.Authoring/
+  MyApp.UiTests.Headless/
+  MyApp.UiTests.FlaUI/
+  MyApp.AppAutomation.TestHost/
+```
+
+Это layout, который создаёт template `appauto-avalonia`.
+
+## Responsibility Split
+
+| Проект | Владеет | Не должен владеть |
+| --- | --- | --- |
+| `*.UiTests.Authoring` | page objects, `[UiControl(...)]`, shared scenarios, manual composite control properties | build-on-launch, repo discovery, app bootstrap |
+| `*.UiTests.Headless` | headless session hooks, headless resolver, thin runtime wrappers | duplicated scenarios, duplicated page objects |
+| `*.UiTests.FlaUI` | FlaUI session wiring, thin runtime wrappers | duplicated scenarios, duplicated page objects |
+| `*.AppAutomation.TestHost` | repo-specific launch/bootstrap, temp settings, temp dirs, app paths | reusable framework code |
+
+## Обязательные правила
+
+- Shared scenarios живут только в `Authoring`.
+- Runtime projects используют `ProjectReference` на `Authoring`, а не `Compile Include`.
+- `TestHost` хранит repo-specific knowledge вне reusable packages.
+- `FlaUI` проект опционален только если вам действительно не нужно desktop runtime coverage.
+
+## Composite Controls
+
+Простые controls остаются в generated `[UiControl(...)]` path.
+
+Composite controls:
+
+- могут быть объявлены вручную как page properties;
+- должны использовать `WithAdapters(...)` или `WithSearchPicker(...)` до создания consumer-specific resolver forks.
+
+## Nested Solution Layout
+
+Если solution лежит ниже repo root, это не меняет topology. Меняется только `TestHost` implementation.
 
 Типовой layout:
 

@@ -1,5 +1,7 @@
 # AppAutomation Compatibility
 
+**English** | [Русский](#русская-версия)
+
 ## Package Matrix
 
 | Package | Target frameworks | Notes |
@@ -38,3 +40,50 @@
 - `FlaUI` runtime always requires Windows.
 - `AppAutomation.Authoring` stays `netstandard2.0`, because it is consumed as analyzer/source-generator package.
 - If your repo is not yet on `net8.0+`, treat migration as a prerequisite before framework adoption.
+
+---
+
+<a id="русская-версия"></a>
+
+## Русская версия
+
+[English](#appautomation-compatibility) | **Русский**
+
+## Матрица пакетов
+
+| Пакет | Целевые frameworks | Примечания |
+| --- | --- | --- |
+| `AppAutomation.Abstractions` | `net8.0+` | базовые UI контракты, page model, расширения |
+| `AppAutomation.Authoring` | `netstandard2.0` | analyzer/source generator |
+| `AppAutomation.Session.Contracts` | `net8.0+` | launch контракты |
+| `AppAutomation.TUnit` | `net8.0+` | общий базовый класс для UI тестов |
+| `AppAutomation.TestHost.Avalonia` | `net8.0`, `net10.0` | переиспользуемые Avalonia test-host helpers |
+| `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` | Avalonia headless runtime |
+| `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` | Windows desktop runtime |
+| `AppAutomation.Tooling` | `.NET tool`, `net8.0` | команда `appautomation` |
+| `AppAutomation.Templates` | `dotnet new` template package | canonical consumer topology |
+
+## Ожидания от consumer runtime
+
+| Область | Требование |
+| --- | --- |
+| Headless | Avalonia приложение с детерминированным путём создания `Window` |
+| FlaUI | только Windows, доступен desktop executable |
+| Test runner | `TUnit` + `Microsoft.Testing.Platform` |
+| SDK | рекомендуется закреплённый SDK `8+`; примеры в repo валидируются на текущем доступном SDK и закреплённом `global.json` |
+| Установка пакетов | `NuGet-first` path является основным; source dependency — только fallback |
+
+## Рекомендуемые TFM для consumer
+
+| Тип проекта | Рекомендуемый TFM |
+| --- | --- |
+| `*.UiTests.Authoring` | `net8.0` или `net10.0` |
+| `*.UiTests.Headless` | `net8.0` или `net10.0` |
+| `*.UiTests.FlaUI` | `net8.0-windows7.0` или `net10.0-windows7.0` |
+| `*.AppAutomation.TestHost` | `net8.0` или `net10.0` |
+
+## Примечания
+
+- `FlaUI` runtime всегда требует Windows.
+- `AppAutomation.Authoring` остаётся на `netstandard2.0`, так как потребляется как analyzer/source-generator package.
+- Если ваш repo ещё не на `net8.0+`, рассматривайте миграцию как prerequisite перед adoption framework.
