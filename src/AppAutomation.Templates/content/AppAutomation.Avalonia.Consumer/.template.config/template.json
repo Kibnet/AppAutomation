@@ -17,7 +17,7 @@
       "type": "parameter",
       "datatype": "text",
       "defaultValue": "1.1.0",
-      "replaces": "1.1.0"
+      "replaces": "__APPAUTOMATION_VERSION__"
     },
     "TestTargetFramework": {
       "type": "parameter",

@@ -8,9 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="2.1.0" />
-    <PackageReference Include="AppAutomation.FlaUI" Version="2.1.0" />
-    <PackageReference Include="AppAutomation.TUnit" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.Abstractions" Version="__APPAUTOMATION_VERSION__" />
+    <PackageReference Include="AppAutomation.FlaUI" Version="__APPAUTOMATION_VERSION__" />
+    <PackageReference Include="AppAutomation.TUnit" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="TUnit" Version="1.12.111" />
   </ItemGroup>
 

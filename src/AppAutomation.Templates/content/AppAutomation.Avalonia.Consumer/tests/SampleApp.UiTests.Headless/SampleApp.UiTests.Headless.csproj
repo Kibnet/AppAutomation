@@ -8,9 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="2.1.0" />
-    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="2.1.0" />
-    <PackageReference Include="AppAutomation.TUnit" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.Abstractions" Version="__APPAUTOMATION_VERSION__" />
+    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="__APPAUTOMATION_VERSION__" />
+    <PackageReference Include="AppAutomation.TUnit" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="Avalonia.Headless" Version="11.3.7" />
     <PackageReference Include="TUnit" Version="1.12.111" />
   </ItemGroup>
