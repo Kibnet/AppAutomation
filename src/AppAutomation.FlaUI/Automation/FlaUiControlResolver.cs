@@ -514,8 +514,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
                 return -1;
             }
-            set => Select(value);
+            set => SelectByIndex(value);
         }
+
+        public void SelectByIndex(int index) => Select(index);
 
         public void Select(int index)
         {

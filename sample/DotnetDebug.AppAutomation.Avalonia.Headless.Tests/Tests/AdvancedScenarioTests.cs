@@ -218,7 +218,7 @@ public sealed class AdvancedScenarioTests
         // Assert: Verify the wait was successful and got the expected value
         await Assert.That(result.Success).IsTrue();
         await Assert.That(result.Value).IsEqualTo("GCD = 5");
-        await Assert.That(result.ElapsedTime).IsLessThan(waitOptions.Timeout);
+        await Assert.That(result.Elapsed).IsLessThan(waitOptions.Timeout);
     }
 
     /// <summary>

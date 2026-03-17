@@ -284,7 +284,7 @@ public sealed class UiPageExtensionsTests
 
         public int SelectedIndex { get; set; } = -1;
 
-        public void Select(int index)
+        public void SelectByIndex(int index)
         {
             if (index < 0 || index >= _items.Count)
             {
@@ -308,7 +308,7 @@ public sealed class UiPageExtensionsTests
 
         public bool IsSelected { get; private set; }
 
-        public void Select()
+        public void SelectTab()
         {
             IsSelected = true;
         }
