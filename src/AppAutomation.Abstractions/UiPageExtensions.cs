@@ -5,8 +5,40 @@ using System.Runtime.CompilerServices;
 
 namespace AppAutomation.Abstractions;
 
+/// <summary>
+/// Provides fluent extension methods for interacting with UI controls on page objects.
+/// </summary>
+/// <remarks>
+/// <para>
+/// All methods in this class follow a fluent pattern, returning the page instance
+/// to enable method chaining. Each method waits for the control to be enabled
+/// before performing the action, and validates the result afterward.
+/// </para>
+/// <para>
+/// If an operation fails or times out, a <see cref="UiOperationException"/> is thrown
+/// containing detailed diagnostic information including expected/actual values and failure artifacts.
+/// </para>
+/// </remarks>
+/// <example>
+/// <code>
+/// page.EnterText(p => p.UserName, "testuser")
+///     .EnterText(p => p.Password, "secret")
+///     .ClickButton(p => p.LoginButton)
+///     .WaitUntilNameContains(p => p.StatusLabel, "Welcome");
+/// </code>
+/// </example>
 public static class UiPageExtensions
 {
+    /// <summary>
+    /// Enters text into a text box control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the text box control.</param>
+    /// <param name="value">The text to enter.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the text box is not enabled or the text was not entered successfully.</exception>
     public static TSelf EnterText<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITextBoxControl>> selector,
@@ -27,6 +59,15 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Clicks a button control after waiting for it to be enabled.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the button control.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the button to be enabled.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the button is not enabled within the timeout.</exception>
     public static TSelf ClickButton<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IButtonControl>> selector,
@@ -46,6 +87,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the checked state of a check box control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the check box control.</param>
+    /// <param name="isChecked">The desired checked state.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the check box is not enabled or the state was not changed successfully.</exception>
     public static TSelf SetChecked<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ICheckBoxControl>> selector,
@@ -74,6 +125,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the checked state of a radio button control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the radio button control.</param>
+    /// <param name="isChecked">The desired checked state.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the radio button is not enabled or the state was not changed successfully.</exception>
     public static TSelf SetChecked<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IRadioButtonControl>> selector,
@@ -102,6 +163,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the toggled state of a toggle button control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the toggle button control.</param>
+    /// <param name="isToggled">The desired toggled state.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the toggle button is not enabled or the state was not changed successfully.</exception>
     public static TSelf SetToggled<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IToggleButtonControl>> selector,
@@ -134,6 +205,18 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Selects an item in a combo box by its display text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the combo box control.</param>
+    /// <param name="itemText">The text of the item to select (matched case-insensitively).</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="itemText"/> is null or whitespace.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the specified item is not found in the combo box.</exception>
+    /// <exception cref="UiOperationException">Thrown when the combo box is not enabled or the item was not selected successfully.</exception>
     public static TSelf SelectComboItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IComboBoxControl>> selector,
@@ -182,6 +265,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the value of a slider control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the slider control.</param>
+    /// <param name="value">The value to set.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the slider is not enabled or the value was not set successfully.</exception>
     public static TSelf SetSliderValue<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ISliderControl>> selector,
@@ -210,6 +303,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets a numeric value in a spinner-like text box control by entering the value as text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the text box control used as a spinner.</param>
+    /// <param name="value">The numeric value to set.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control is not enabled or the value was not set successfully.</exception>
     public static TSelf SetSpinnerValue<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITextBoxControl>> selector,
@@ -231,6 +334,17 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Selects a tab item within a tab control by its display text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the tab control.</param>
+    /// <param name="itemText">The text of the tab to select.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="itemText"/> is null or whitespace.</exception>
+    /// <exception cref="UiOperationException">Thrown when the tab control is not enabled or the tab was not selected successfully.</exception>
     public static TSelf SelectTabItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITabControl>> selector,
@@ -264,6 +378,18 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Searches for and selects an item in a search picker control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the search picker control.</param>
+    /// <param name="searchText">The text to enter in the search field.</param>
+    /// <param name="itemText">The text of the item to select from the results.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="searchText"/> or <paramref name="itemText"/> is null or whitespace.</exception>
+    /// <exception cref="UiOperationException">Thrown when the control is not enabled or the search/selection failed.</exception>
     public static TSelf SearchAndSelect<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ISearchPickerControl>> selector,
@@ -307,6 +433,15 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Selects a specific tab item control directly.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the tab item control.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the tab item is not enabled or was not selected successfully.</exception>
     public static TSelf SelectTabItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITabItemControl>> selector,
@@ -334,6 +469,18 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Selects a tree item within a tree control by its display text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the tree control.</param>
+    /// <param name="itemText">The text of the tree item to select (searches recursively).</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="itemText"/> is null or whitespace.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the specified item is not found in the tree.</exception>
+    /// <exception cref="UiOperationException">Thrown when the tree is not enabled or the item was not selected successfully.</exception>
     public static TSelf SelectTreeItem<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITreeControl>> selector,
@@ -373,6 +520,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the selected date on a date-time picker control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the date-time picker control.</param>
+    /// <param name="date">The date to select.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the date picker is not enabled or the date was not set successfully.</exception>
     public static TSelf SetDate<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IDateTimePickerControl>> selector,
@@ -401,6 +558,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Sets the selected date on a calendar control.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the calendar control.</param>
+    /// <param name="date">The date to select.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the calendar is not enabled or the date was not set successfully.</exception>
     public static TSelf SetDate<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ICalendarControl>> selector,
@@ -431,6 +598,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until the progress bar value reaches at least the specified minimum.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the progress bar control.</param>
+    /// <param name="expectedMin">The minimum value the progress bar should reach.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the progress bar does not reach the minimum value within the timeout.</exception>
     public static TSelf WaitUntilProgressAtLeast<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IProgressBarControl>> selector,
@@ -450,6 +627,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a radio button reaches the expected checked state.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the radio button control.</param>
+    /// <param name="expected">The expected checked state.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the radio button does not reach the expected state within the timeout.</exception>
     public static TSelf WaitUntilIsSelected<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IRadioButtonControl>> selector,
@@ -469,6 +656,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a tab item reaches the expected selected state.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the tab item control.</param>
+    /// <param name="expected">The expected selected state. Defaults to <see langword="true"/>.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the tab item does not reach the expected state within the timeout.</exception>
     public static TSelf WaitUntilIsSelected<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, ITabItemControl>> selector,
@@ -488,6 +685,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a toggle button reaches the expected toggled state.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the toggle button control.</param>
+    /// <param name="expected">The expected toggled state.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the toggle button does not reach the expected state within the timeout.</exception>
     public static TSelf WaitUntilIsToggled<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IToggleButtonControl>> selector,
@@ -507,6 +714,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a list box contains an item with the specified text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the list box control.</param>
+    /// <param name="expectedText">The text that should appear in one of the items.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when no item containing the expected text is found within the timeout.</exception>
     public static TSelf WaitUntilListBoxContains<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IListBoxControl>> selector,
@@ -527,6 +744,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a control's Name property equals the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the UI control.</param>
+    /// <param name="expectedText">The expected Name value.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control's Name does not equal the expected text within the timeout.</exception>
     public static TSelf WaitUntilNameEquals<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IUiControl>> selector,
@@ -546,6 +773,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a control's Name property contains the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the UI control.</param>
+    /// <param name="expectedPart">The text that should appear in the Name property.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control's Name does not contain the expected text within the timeout.</exception>
     public static TSelf WaitUntilNameContains<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IUiControl>> selector,
@@ -565,6 +802,16 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a list box contains at least the specified number of items.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the list box control.</param>
+    /// <param name="minCount">The minimum number of items expected.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the list box does not contain the minimum number of items within the timeout.</exception>
     public static TSelf WaitUntilHasItemsAtLeast<TSelf>(
         this TSelf page,
         Expression<Func<TSelf, IListBoxControl>> selector,
