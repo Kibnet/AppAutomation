@@ -21,8 +21,9 @@ public static class UiPageExtensions
             selector,
             () => string.Equals(textBox.Text, value, StringComparison.Ordinal),
             timeoutMs,
-            $"TextBox '{textBox.AutomationId}' did not reach '{value}'.",
-            () => textBox.Text);
+            $"TextBox '{textBox.AutomationId}' did not reach expected value.",
+            expectedValue: value,
+            lastObservedValueFactory: () => textBox.Text);
         return page;
     }
 
@@ -39,7 +40,8 @@ public static class UiPageExtensions
             () => button.IsEnabled,
             timeoutMs,
             $"Button '{button.AutomationId}' is not enabled.",
-            () => button.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={button.IsEnabled}");
         button.Invoke();
         return page;
     }
@@ -58,15 +60,17 @@ public static class UiPageExtensions
             () => checkBox.IsEnabled,
             timeoutMs,
             $"CheckBox '{checkBox.AutomationId}' is not enabled.",
-            () => checkBox.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={checkBox.IsEnabled}");
         checkBox.IsChecked = isChecked;
         WaitUntil(
             page,
             selector,
             () => checkBox.IsChecked == isChecked,
             timeoutMs,
-            $"CheckBox '{checkBox.AutomationId}' did not become '{isChecked}'.",
-            () => checkBox.IsChecked?.ToString());
+            $"CheckBox '{checkBox.AutomationId}' did not reach expected checked state.",
+            expectedValue: $"IsChecked={isChecked}",
+            lastObservedValueFactory: () => $"IsChecked={checkBox.IsChecked}");
         return page;
     }
 
@@ -84,15 +88,17 @@ public static class UiPageExtensions
             () => radioButton.IsEnabled,
             timeoutMs,
             $"RadioButton '{radioButton.AutomationId}' is not enabled.",
-            () => radioButton.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={radioButton.IsEnabled}");
         radioButton.IsChecked = isChecked;
         WaitUntil(
             page,
             selector,
             () => radioButton.IsChecked == isChecked,
             timeoutMs,
-            $"RadioButton '{radioButton.AutomationId}' did not become '{isChecked}'.",
-            () => radioButton.IsChecked?.ToString());
+            $"RadioButton '{radioButton.AutomationId}' did not reach expected checked state.",
+            expectedValue: $"IsChecked={isChecked}",
+            lastObservedValueFactory: () => $"IsChecked={radioButton.IsChecked}");
         return page;
     }
 
@@ -110,7 +116,8 @@ public static class UiPageExtensions
             () => toggle.IsEnabled,
             timeoutMs,
             $"Toggle '{toggle.AutomationId}' is not enabled.",
-            () => toggle.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={toggle.IsEnabled}");
         if (toggle.IsToggled != isToggled)
         {
             toggle.Toggle();
@@ -121,8 +128,9 @@ public static class UiPageExtensions
             selector,
             () => toggle.IsToggled == isToggled,
             timeoutMs,
-            $"Toggle '{toggle.AutomationId}' did not become '{isToggled}'.",
-            () => toggle.IsToggled.ToString(CultureInfo.InvariantCulture));
+            $"Toggle '{toggle.AutomationId}' did not reach expected toggled state.",
+            expectedValue: $"IsToggled={isToggled}",
+            lastObservedValueFactory: () => $"IsToggled={toggle.IsToggled}");
         return page;
     }
 
@@ -142,7 +150,8 @@ public static class UiPageExtensions
             () => comboBox.IsEnabled,
             timeoutMs,
             $"ComboBox '{comboBox.AutomationId}' is not enabled.",
-            () => comboBox.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={comboBox.IsEnabled}");
         comboBox.Expand();
 
         var target = NormalizeLookupText(itemText);
@@ -156,7 +165,7 @@ public static class UiPageExtensions
 
         if (index is null)
         {
-            throw new InvalidOperationException($"ComboBox item '{itemText}' was not found.");
+            throw new InvalidOperationException($"ComboBox '{comboBox.AutomationId}' item '{itemText}' was not found. Available items: [{string.Join(", ", comboBox.Items.Select(i => i.Text ?? i.Name))}].");
         }
 
         comboBox.SelectByIndex(index.Value);
@@ -167,8 +176,9 @@ public static class UiPageExtensions
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Text), target, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Name), target, StringComparison.OrdinalIgnoreCase),
             timeoutMs,
-            $"ComboBox '{comboBox.AutomationId}' did not select '{itemText}'.",
-            () => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name ?? comboBox.SelectedIndex.ToString(CultureInfo.InvariantCulture));
+            $"ComboBox '{comboBox.AutomationId}' failed to select item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name ?? $"SelectedIndex={comboBox.SelectedIndex}");
         return page;
     }
 
@@ -186,15 +196,17 @@ public static class UiPageExtensions
             () => slider.IsEnabled,
             timeoutMs,
             $"Slider '{slider.AutomationId}' is not enabled.",
-            () => slider.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={slider.IsEnabled}");
         slider.Value = value;
         WaitUntil(
             page,
             selector,
             () => Math.Abs(slider.Value - value) < 0.001,
             timeoutMs,
-            $"Slider '{slider.AutomationId}' did not reach '{value}'.",
-            () => slider.Value.ToString(CultureInfo.InvariantCulture));
+            $"Slider '{slider.AutomationId}' did not reach expected value.",
+            expectedValue: value.ToString(CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => slider.Value.ToString(CultureInfo.InvariantCulture));
         return page;
     }
 
@@ -213,8 +225,9 @@ public static class UiPageExtensions
             selector,
             () => string.Equals(textBox.Text?.Trim(), expected, StringComparison.Ordinal),
             timeoutMs,
-            $"Spinner-like text box '{textBox.AutomationId}' did not reach '{expected}'.",
-            () => textBox.Text);
+            $"Spinner-like text box '{textBox.AutomationId}' did not reach expected value.",
+            expectedValue: expected,
+            lastObservedValueFactory: () => textBox.Text);
         return page;
     }
 
@@ -234,7 +247,8 @@ public static class UiPageExtensions
             () => tab.IsEnabled,
             timeoutMs,
             $"Tab '{tab.AutomationId}' is not enabled.",
-            () => tab.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={tab.IsEnabled}");
         tab.SelectTabItem(itemText);
 
         WaitUntil(
@@ -244,8 +258,9 @@ public static class UiPageExtensions
                 item.IsSelected &&
                 TextMatches(item.Name, itemText)),
             timeoutMs,
-            $"Tab '{tab.AutomationId}' did not select '{itemText}'.",
-            () => tab.Items.FirstOrDefault(static item => item.IsSelected)?.Name);
+            $"Tab '{tab.AutomationId}' failed to select tab item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => tab.Items.FirstOrDefault(static item => item.IsSelected)?.Name ?? "<none selected>");
         return page;
     }
 
@@ -267,7 +282,8 @@ public static class UiPageExtensions
             () => searchPicker.IsEnabled,
             timeoutMs,
             $"Search picker '{searchPicker.AutomationId}' is not enabled.",
-            () => searchPicker.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={searchPicker.IsEnabled}");
 
         searchPicker.Search(searchText);
         WaitUntil(
@@ -275,8 +291,9 @@ public static class UiPageExtensions
             selector,
             () => string.Equals(searchPicker.SearchText, searchText, StringComparison.Ordinal),
             timeoutMs,
-            $"Search picker '{searchPicker.AutomationId}' did not accept search text '{searchText}'.",
-            () => searchPicker.SearchText);
+            $"Search picker '{searchPicker.AutomationId}' did not accept search text.",
+            expectedValue: searchText,
+            lastObservedValueFactory: () => searchPicker.SearchText);
 
         searchPicker.SelectItem(itemText);
         WaitUntil(
@@ -284,8 +301,9 @@ public static class UiPageExtensions
             selector,
             () => string.Equals(searchPicker.SelectedItemText, itemText, StringComparison.OrdinalIgnoreCase),
             timeoutMs,
-            $"Search picker '{searchPicker.AutomationId}' did not select '{itemText}'.",
-            () => searchPicker.SelectedItemText);
+            $"Search picker '{searchPicker.AutomationId}' failed to select item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => searchPicker.SelectedItemText);
         return page;
     }
 
@@ -302,7 +320,8 @@ public static class UiPageExtensions
             () => tabItem.IsEnabled,
             timeoutMs,
             $"Tab item '{tabItem.AutomationId}' is not enabled.",
-            () => tabItem.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={tabItem.IsEnabled}");
         tabItem.SelectTab();
         WaitUntil(
             page,
@@ -310,7 +329,8 @@ public static class UiPageExtensions
             () => tabItem.IsSelected,
             timeoutMs,
             $"Tab item '{tabItem.AutomationId}' was not selected.",
-            () => tabItem.IsSelected.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsSelected=true",
+            lastObservedValueFactory: () => $"IsSelected={tabItem.IsSelected}");
         return page;
     }
 
@@ -330,12 +350,13 @@ public static class UiPageExtensions
             () => tree.IsEnabled,
             timeoutMs,
             $"Tree '{tree.AutomationId}' is not enabled.",
-            () => tree.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={tree.IsEnabled}");
 
         var target = FindTreeItem(tree.Items, itemText);
         if (target is null)
         {
-            throw new InvalidOperationException($"Tree item '{itemText}' was not found.");
+            throw new InvalidOperationException($"Tree '{tree.AutomationId}' item '{itemText}' was not found.");
         }
 
         target.SelectNode();
@@ -346,8 +367,9 @@ public static class UiPageExtensions
                 || TextMatches(tree.SelectedTreeItem?.Text, itemText)
                 || TextMatches(tree.SelectedTreeItem?.Name, itemText),
             timeoutMs,
-            $"Tree item '{itemText}' was not selected.",
-            () => tree.SelectedTreeItem?.Text ?? tree.SelectedTreeItem?.Name ?? target.Text);
+            $"Tree '{tree.AutomationId}' failed to select item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => tree.SelectedTreeItem?.Text ?? tree.SelectedTreeItem?.Name ?? target.Text);
         return page;
     }
 
@@ -365,15 +387,17 @@ public static class UiPageExtensions
             () => datePicker.IsEnabled,
             timeoutMs,
             $"Date picker '{datePicker.AutomationId}' is not enabled.",
-            () => datePicker.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={datePicker.IsEnabled}");
         datePicker.SelectedDate = date.Date;
         WaitUntil(
             page,
             selector,
             () => datePicker.SelectedDate?.Date == date.Date,
             timeoutMs,
-            $"Date picker '{datePicker.AutomationId}' did not reach '{date:yyyy-MM-dd}'.",
-            () => datePicker.SelectedDate?.ToString("O", CultureInfo.InvariantCulture));
+            $"Date picker '{datePicker.AutomationId}' did not reach expected date.",
+            expectedValue: date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => datePicker.SelectedDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "<null>");
         return page;
     }
 
@@ -391,15 +415,19 @@ public static class UiPageExtensions
             () => calendar.IsEnabled,
             timeoutMs,
             $"Calendar '{calendar.AutomationId}' is not enabled.",
-            () => calendar.IsEnabled.ToString(CultureInfo.InvariantCulture));
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={calendar.IsEnabled}");
         calendar.SelectDate(date.Date);
         WaitUntil(
             page,
             selector,
             () => calendar.SelectedDates.Any(candidate => candidate.Date == date.Date),
             timeoutMs,
-            $"Calendar '{calendar.AutomationId}' did not reach '{date:yyyy-MM-dd}'.",
-            () => string.Join(", ", calendar.SelectedDates.Select(static candidate => candidate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+            $"Calendar '{calendar.AutomationId}' did not reach expected date.",
+            expectedValue: date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => calendar.SelectedDates.Any()
+                ? string.Join(", ", calendar.SelectedDates.Select(static candidate => candidate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)))
+                : "<none selected>");
         return page;
     }
 
@@ -416,8 +444,9 @@ public static class UiPageExtensions
             selector,
             () => progressBar.Value >= expectedMin,
             timeoutMs,
-            $"Progress bar '{progressBar.AutomationId}' did not reach '{expectedMin}'.",
-            () => progressBar.Value.ToString(CultureInfo.InvariantCulture));
+            $"Progress bar '{progressBar.AutomationId}' did not reach minimum value.",
+            expectedValue: $">={expectedMin.ToString(CultureInfo.InvariantCulture)}",
+            lastObservedValueFactory: () => progressBar.Value.ToString(CultureInfo.InvariantCulture));
         return page;
     }
 
@@ -434,8 +463,9 @@ public static class UiPageExtensions
             selector,
             () => radioButton.IsChecked == expected,
             timeoutMs,
-            $"Radio button '{radioButton.AutomationId}' did not become '{expected}'.",
-            () => radioButton.IsChecked?.ToString());
+            $"Radio button '{radioButton.AutomationId}' did not reach expected checked state.",
+            expectedValue: $"IsChecked={expected}",
+            lastObservedValueFactory: () => $"IsChecked={radioButton.IsChecked}");
         return page;
     }
 
@@ -452,8 +482,9 @@ public static class UiPageExtensions
             selector,
             () => tabItem.IsSelected == expected,
             timeoutMs,
-            $"Tab item '{tabItem.AutomationId}' did not become '{expected}'.",
-            () => tabItem.IsSelected.ToString(CultureInfo.InvariantCulture));
+            $"Tab item '{tabItem.AutomationId}' did not reach expected selected state.",
+            expectedValue: $"IsSelected={expected}",
+            lastObservedValueFactory: () => $"IsSelected={tabItem.IsSelected}");
         return page;
     }
 
@@ -470,8 +501,9 @@ public static class UiPageExtensions
             selector,
             () => toggle.IsToggled == expected,
             timeoutMs,
-            $"Toggle '{toggle.AutomationId}' did not become '{expected}'.",
-            () => toggle.IsToggled.ToString(CultureInfo.InvariantCulture));
+            $"Toggle '{toggle.AutomationId}' did not reach expected toggled state.",
+            expectedValue: $"IsToggled={expected}",
+            lastObservedValueFactory: () => $"IsToggled={toggle.IsToggled}");
         return page;
     }
 
@@ -489,8 +521,9 @@ public static class UiPageExtensions
             () => listBox.Items.Any(item =>
                 (item.Text ?? item.Name ?? string.Empty).Contains(expectedText, StringComparison.Ordinal)),
             timeoutMs,
-            $"ListBox '{listBox.AutomationId}' did not contain '{expectedText}'.",
-            () => string.Join(", ", listBox.Items.Select(static item => item.Text ?? item.Name ?? string.Empty)));
+            $"ListBox '{listBox.AutomationId}' did not contain expected item.",
+            expectedValue: $"Contains '{expectedText}'",
+            lastObservedValueFactory: () => $"Items: [{string.Join(", ", listBox.Items.Select(static item => item.Text ?? item.Name ?? string.Empty))}]");
         return page;
     }
 
@@ -507,8 +540,9 @@ public static class UiPageExtensions
             selector,
             () => string.Equals(control.Name, expectedText, StringComparison.Ordinal),
             timeoutMs,
-            $"Control '{control.AutomationId}' did not reach '{expectedText}'.",
-            () => control.Name);
+            $"Control '{control.AutomationId}' did not reach expected name.",
+            expectedValue: expectedText,
+            lastObservedValueFactory: () => control.Name);
         return page;
     }
 
@@ -525,8 +559,9 @@ public static class UiPageExtensions
             selector,
             () => control.Name.Contains(expectedPart, StringComparison.Ordinal),
             timeoutMs,
-            $"Control '{control.AutomationId}' did not contain '{expectedPart}'.",
-            () => control.Name);
+            $"Control '{control.AutomationId}' did not contain expected text in name.",
+            expectedValue: $"Contains '{expectedPart}'",
+            lastObservedValueFactory: () => control.Name);
         return page;
     }
 
@@ -543,8 +578,9 @@ public static class UiPageExtensions
             selector,
             () => listBox.Items.Count >= minCount,
             timeoutMs,
-            $"ListBox '{listBox.AutomationId}' did not reach '{minCount}' items.",
-            () => listBox.Items.Count.ToString(CultureInfo.InvariantCulture));
+            $"ListBox '{listBox.AutomationId}' did not reach minimum item count.",
+            expectedValue: $">={minCount} items",
+            lastObservedValueFactory: () => $"{listBox.Items.Count} items");
         return page;
     }
 
@@ -569,6 +605,7 @@ public static class UiPageExtensions
         Func<bool> condition,
         int timeoutMs,
         string timeoutMessage,
+        string? expectedValue = null,
         Func<string?>? lastObservedValueFactory = null,
         [CallerMemberName] string operationName = "")
         where TSelf : UiPage
@@ -597,6 +634,7 @@ public static class UiPageExtensions
                 timeout,
                 startedAtUtc,
                 timeoutMessage,
+                expectedValue,
                 lastObservedValueFactory,
                 operationName,
                 ex);
@@ -609,6 +647,7 @@ public static class UiPageExtensions
                 timeout,
                 startedAtUtc,
                 timeoutMessage,
+                expectedValue,
                 lastObservedValueFactory,
                 operationName,
                 ex);
@@ -621,38 +660,72 @@ public static class UiPageExtensions
         TimeSpan timeout,
         DateTimeOffset startedAtUtc,
         string failureMessage,
+        string? expectedValue,
         Func<string?>? lastObservedValueFactory,
         string operationName,
         Exception exception)
         where TSelf : UiPage
     {
+        var finishedAtUtc = DateTimeOffset.UtcNow;
         var propertyName = TryGetPropertyName(selector);
         var definition = TryGetControlDefinition(page.GetType(), propertyName);
+        var lastObservedValue = TryReadLastObservedValue(lastObservedValueFactory);
         var failureContext = new UiFailureContext(
             OperationName: string.IsNullOrWhiteSpace(operationName) ? "UiOperation" : operationName,
             AdapterId: page.Capabilities.AdapterId,
             Timeout: timeout,
             StartedAtUtc: startedAtUtc,
-            FinishedAtUtc: DateTimeOffset.UtcNow,
+            FinishedAtUtc: finishedAtUtc,
             Capabilities: page.Capabilities,
             Artifacts: Array.Empty<UiFailureArtifact>(),
             PageTypeFullName: page.GetType().FullName,
             ControlPropertyName: propertyName,
             LocatorValue: definition?.LocatorValue,
             LocatorKind: definition?.LocatorKind,
-            LastObservedValue: TryReadLastObservedValue(lastObservedValueFactory));
+            ExpectedValue: expectedValue,
+            LastObservedValue: lastObservedValue);
         failureContext = AttachArtifacts(page, failureContext);
+        var elapsed = finishedAtUtc - startedAtUtc;
         return new UiOperationException(
-            CreateUiOperationMessage(failureMessage, exception),
+            CreateUiOperationMessage(failureMessage, timeout, elapsed, expectedValue, lastObservedValue, exception),
             failureContext,
             exception);
     }
 
-    private static string CreateUiOperationMessage(string failureMessage, Exception exception)
+    private static string CreateUiOperationMessage(
+        string failureMessage,
+        TimeSpan timeout,
+        TimeSpan elapsed,
+        string? expectedValue,
+        string? lastObservedValue,
+        Exception exception)
     {
-        return exception is TimeoutException
-            ? failureMessage
-            : $"{failureMessage} Operation failed before timeout: {exception.Message}";
+        var timeoutMs = (int)timeout.TotalMilliseconds;
+        var elapsedMs = (int)elapsed.TotalMilliseconds;
+
+        var details = new List<string>();
+
+        if (expectedValue is not null)
+        {
+            details.Add($"Expected: '{expectedValue}'");
+        }
+
+        if (lastObservedValue is not null)
+        {
+            details.Add($"Actual: '{lastObservedValue}'");
+        }
+
+        details.Add($"Timeout: {timeoutMs}ms");
+        details.Add($"Elapsed: {elapsedMs}ms");
+
+        var detailsText = string.Join(". ", details);
+
+        if (exception is TimeoutException)
+        {
+            return $"{failureMessage} {detailsText}.";
+        }
+
+        return $"{failureMessage} Operation failed before timeout: {exception.Message}. {detailsText}.";
     }
 
     private static UiFailureContext AttachArtifacts(UiPage page, UiFailureContext failureContext)

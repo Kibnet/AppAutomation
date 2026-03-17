@@ -20,6 +20,7 @@ public sealed record UiFailureContext(
     string? ControlPropertyName = null,
     string? LocatorValue = null,
     UiLocatorKind? LocatorKind = null,
+    string? ExpectedValue = null,
     string? LastObservedValue = null);
 
 public sealed class UiOperationException : Exception
