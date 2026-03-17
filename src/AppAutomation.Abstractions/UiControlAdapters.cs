@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace AppAutomation.Abstractions;
 
 public interface IUiControlAdapter
@@ -55,6 +57,32 @@ public static class UiControlResolverExtensions
         ArgumentNullException.ThrowIfNull(parts);
 
         return innerResolver.WithAdapters(new SearchPickerControlAdapter(propertyName, parts));
+    }
+
+    public static IUiControlResolver WithAdaptersFromAssembly(
+        this IUiControlResolver resolver,
+        Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        var adapterTypes = assembly.GetTypes()
+            .Where(static t => !t.IsAbstract && !t.IsInterface && typeof(IUiControlAdapter).IsAssignableFrom(t));
+
+        var adapters = adapterTypes
+            .Select(static t => (IUiControlAdapter?)Activator.CreateInstance(t))
+            .Where(static adapter => adapter is not null)
+            .Cast<IUiControlAdapter>()
+            .ToArray();
+
+        return resolver.WithAdapters(adapters);
+    }
+
+    public static IUiControlResolver WithDefaultAdapters(this IUiControlResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        return resolver.WithAdaptersFromAssembly(typeof(IUiControlAdapter).Assembly);
     }
 
     private sealed class AdapterAwareUiControlResolver : IUiControlResolver
