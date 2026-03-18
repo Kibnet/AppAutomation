@@ -86,6 +86,16 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task WithAdaptersFromAssembly_SkipsAdaptersWithoutParameterlessConstructors()
+    {
+        var resolver = new MinimalResolver()
+            .WithAdaptersFromAssembly(typeof(ParameterizedAdapter).Assembly);
+
+        await Assert.That(resolver).IsNotNull();
+        await Assert.That(resolver.Capabilities.AdapterId).IsEqualTo("minimal-runtime");
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_ThrowsOnNullResolver()
     {
         IUiControlResolver? nullResolver = null;
@@ -266,5 +276,22 @@ public sealed class UiControlAdapterTests
         public abstract bool CanResolve(Type requestedType, UiControlDefinition definition);
 
         public abstract object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver);
+    }
+
+    public sealed class ParameterizedAdapter : IUiControlAdapter
+    {
+        public ParameterizedAdapter(string propertyName)
+        {
+            PropertyName = propertyName;
+        }
+
+        public string PropertyName { get; }
+
+        public bool CanResolve(Type requestedType, UiControlDefinition definition) => false;
+
+        public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

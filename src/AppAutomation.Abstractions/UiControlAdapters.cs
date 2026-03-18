@@ -156,7 +156,11 @@ public static class UiControlResolverExtensions
         ArgumentNullException.ThrowIfNull(assembly);
 
         var adapterTypes = assembly.GetTypes()
-            .Where(static t => !t.IsAbstract && !t.IsInterface && typeof(IUiControlAdapter).IsAssignableFrom(t));
+            .Where(static t =>
+                !t.IsAbstract
+                && !t.IsInterface
+                && typeof(IUiControlAdapter).IsAssignableFrom(t)
+                && t.GetConstructor(Type.EmptyTypes) is not null);
 
         var adapters = adapterTypes
             .Select(static t => (IUiControlAdapter?)Activator.CreateInstance(t))
