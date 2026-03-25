@@ -38,21 +38,31 @@ function Convert-AppAutomationReleaseTagToVersion {
     param([string]$Tag)
 
     $releasePrefix = "appautomation-v"
+    $vPrefix = "v"
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         throw "Release tag is required."
     }
 
     $normalizedTag = $Tag.Trim()
+    
+    # Handle 'appautomation-v<version>' format (e.g., appautomation-v1.2.0 or appautomation-v1.2.0-preview.1)
     if ($normalizedTag.StartsWith($releasePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         $resolvedVersion = $normalizedTag.Substring($releasePrefix.Length)
         return Assert-AppAutomationVersion -Version $resolvedVersion
     }
 
+    # Handle 'v<version>' format (e.g., v1.2.0 or v1.2.0-preview.1)
+    if ($normalizedTag.StartsWith($vPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $resolvedVersion = $normalizedTag.Substring($vPrefix.Length)
+        return Assert-AppAutomationVersion -Version $resolvedVersion
+    }
+
+    # Handle plain version format (e.g., 1.2.0 or 1.2.0-preview.1)
     try {
         return Assert-AppAutomationVersion -Version $normalizedTag
     }
     catch {
-        throw "Release tag '$normalizedTag' must be '<version>' or '$releasePrefix<version>'."
+        throw "Release tag '$normalizedTag' must be '<version>', '$vPrefix<version>', or '$releasePrefix<version>'."
     }
 }
 

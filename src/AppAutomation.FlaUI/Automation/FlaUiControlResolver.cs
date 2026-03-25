@@ -514,8 +514,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
                 return -1;
             }
-            set => Select(value);
+            set => SelectByIndex(value);
         }
+
+        public void SelectByIndex(int index) => Select(index);
 
         public void Select(int index)
         {
@@ -773,9 +775,9 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public IReadOnlyList<DateTime> SelectedDates => Inner.SelectedDates ?? Array.Empty<DateTime>();
 
-        public void SelectDate(DateTime date)
+        public void SelectDate(DateTime selectedDate)
         {
-            Inner.SelectDate(date);
+            Inner.SelectDate(selectedDate);
         }
     }
 
@@ -935,7 +937,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public bool IsSelected => TryRead(() => Inner.IsSelected) == true;
 
-        public void Select()
+        public void SelectTab()
         {
             Inner.Select();
         }
@@ -996,7 +998,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             {
                 if (value)
                 {
-                    Select();
+                    SelectNode();
                     return;
                 }
 
@@ -1030,7 +1032,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
-        public void Select()
+        public void SelectNode()
         {
             try
             {

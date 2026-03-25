@@ -63,7 +63,7 @@ public sealed class VersioningScriptsTests
         using (Assert.Multiple())
         {
             await Assert.That(result.ExitCode == 0).IsEqualTo(false);
-            await Assert.That(result.CombinedOutput).Contains("must be '<version>' or 'appautomation-v<version>'");
+            await Assert.That(result.CombinedOutput).Contains("must be '<version>', 'v<version>', or 'appautomation-v<version>'");
         }
     }
 

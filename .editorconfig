@@ -15,3 +15,21 @@ dotnet_style_qualification_for_event = false:suggestion
 csharp_style_var_when_type_is_apparent = false:suggestion
 csharp_style_var_elsewhere = false:suggestion
 csharp_prefer_braces = true:suggestion
+
+# Test project-specific rules
+# Suppress intentional warnings that are acceptable in test code
+[tests/**/*.cs]
+# CA1707: Identifiers should not contain underscores (test methods commonly use underscores)
+dotnet_diagnostic.CA1707.severity = none
+# CA1050: Declare types in namespaces (acceptable in test projects)
+dotnet_diagnostic.CA1050.severity = none
+# CA1822: Mark members as static (acceptable in tests)
+dotnet_diagnostic.CA1822.severity = none
+
+[sample/**/*Tests*/**/*.cs]
+# CA1707: Identifiers should not contain underscores (test methods commonly use underscores)
+dotnet_diagnostic.CA1707.severity = none
+# CA1050: Declare types in namespaces (acceptable in test projects)
+dotnet_diagnostic.CA1050.severity = none
+# CA1822: Mark members as static (acceptable in tests)
+dotnet_diagnostic.CA1822.severity = none

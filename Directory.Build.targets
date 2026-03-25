@@ -22,4 +22,5 @@
           Link="PACKAGE_README.md"
           Visible="false" />
   </ItemGroup>
+  <Import Project="eng/AppAutomation.Topology.targets" Condition="Exists('$(MSBuildThisFileDirectory)eng/AppAutomation.Topology.targets')" />
 </Project>
