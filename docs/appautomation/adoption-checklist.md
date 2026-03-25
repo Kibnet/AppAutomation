@@ -46,38 +46,38 @@ Complete this checklist before your first real scenario.
 
 [English](#appautomation-adoption-checklist) | **Русский**
 
-Пройдите этот checklist до первого реального сценария.
+Пройдите этот контрольный список до первого реального сценария.
 
-## Prerequisites
+## Предварительные условия
 
 - SDK закреплён через `global.json`.
-- `NuGet.Config` настроен для `nuget.org` или корпоративного mirror.
+- `NuGet.Config` настроен для `nuget.org` или корпоративного зеркала.
 - `appautomation doctor --repo-root .` отрабатывает без ошибок.
-- выбрана одна критичная smoke-flow для первой итерации.
+- для первой итерации выбран один критичный сценарий быстрой проверки.
 
-## Topology
+## Структура проектов
 
 - созданы `Authoring`, `Headless`, `FlaUI`, `TestHost`.
-- runtime projects ссылаются на `Authoring`, а не копируют test code.
-- `TestHost` хранит только repo-specific bootstrap.
+- проекты выполнения ссылаются на `Authoring`, а не копируют код тестов.
+- `TestHost` хранит только логику запуска, специфичную для репозитория.
 
-## AUT Readiness
+## Готовность AUT
 
-- есть deterministic login / auth story;
-- есть deterministic test data / permissions story;
-- есть isolated settings path;
-- отключены auto-update и другие background side effects;
-- определён стабильный startup screen.
+- есть детерминированный сценарий входа и аутентификации;
+- есть детерминированный сценарий с тестовыми данными и правами доступа;
+- есть изолированный путь для настроек;
+- отключены автообновление и другие фоновые побочные эффекты;
+- определён стабильный стартовый экран.
 
-## Selectors
+## Селекторы
 
-- есть `AutomationId` для root window;
-- есть `AutomationId` для main navigation / tabs;
-- есть `AutomationId` для критичных input/button/result controls;
-- для composite widget размечены child anchors, а не только outer container.
+- есть `AutomationId` для корневого окна;
+- есть `AutomationId` для основной навигации и вкладок;
+- есть `AutomationId` для критичных полей ввода, кнопок и элементов с результатами;
+- для составных виджетов размечены дочерние опорные элементы, а не только внешний контейнер.
 
-## Execution
+## Выполнение
 
-- сначала проходит `Headless`;
-- только потом добавлен `FlaUI`;
-- shared scenarios живут только в `Authoring`.
+- сначала проходят тесты `Headless`;
+- только потом добавляется `FlaUI`;
+- общие сценарии живут только в `Authoring`.

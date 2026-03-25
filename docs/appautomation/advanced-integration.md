@@ -124,11 +124,11 @@ If the application is hard to reset in-process, a normal strategy is:
 
 [English](#appautomation-advanced-integration) | **Русский**
 
-Этот документ покрывает cases, которые выходят за пределы quickstart.
+Этот документ описывает случаи, которые выходят за рамки краткого руководства.
 
-## 1. Nested solution и repo-root discovery
+## 1. Вложенное решение и поиск корня репозитория
 
-Если solution лежит под `src/`, не встраивайте knowledge о layout в reusable packages. Держите это в `*.AppAutomation.TestHost`.
+Если решение лежит в `src/`, не встраивайте сведения о структуре каталогов в переиспользуемые пакеты. Храните это в `*.AppAutomation.TestHost`.
 
 Используйте `AvaloniaDesktopAppDescriptor` + `AvaloniaDesktopLaunchHost`:
 
@@ -140,13 +140,13 @@ private static readonly AvaloniaDesktopAppDescriptor DesktopApp = new(
     executableName: "MyApp.Desktop.exe");
 ```
 
-## 2. Repeated headless launches
+## 2. Повторные запуски `Headless`
 
-Если AUT держит static state, используйте:
+Если AUT хранит статическое состояние, используйте:
 
-- `BeforeLaunchAsync` для reset;
-- `CreateMainWindowAsync` для async bootstrap;
-- `TemporaryDirectory` для isolated files.
+- `BeforeLaunchAsync` для сброса;
+- `CreateMainWindowAsync` для асинхронной инициализации;
+- `TemporaryDirectory` для изолированных файлов.
 
 Пример:
 
@@ -164,13 +164,13 @@ return AvaloniaHeadlessLaunchHost.Create(
     });
 ```
 
-## 3. Isolated settings и temp files
+## 3. Изолированные настройки и временные файлы
 
 `TemporaryDirectory` нужен для:
 
-- temporary settings json;
-- transient database/filesystem state;
-- per-run artifacts.
+- временного файла настроек JSON;
+- временного состояния базы данных и файловой системы;
+- артефактов отдельного запуска.
 
 Пример:
 
@@ -179,17 +179,17 @@ using var temp = TemporaryDirectory.Create("MyAppAutomation");
 var settingsPath = temp.WriteTextFile("settings\\Settings.json", json);
 ```
 
-## 4. Composite controls
+## 4. Составные элементы управления
 
-Если виджет не укладывается в built-in `UiControlType`, не переписывайте runtime resolver целиком.
+Если виджет не укладывается во встроенный `UiControlType`, не переписывайте весь резолвер среды выполнения.
 
 Правильный порядок:
 
 1. попробовать решить сценарий упрощением данных;
 2. если нельзя, использовать `WithAdapters(...)`;
-3. если сценарий похож на search + select, сначала использовать `WithSearchPicker(...)`.
+3. если сценарий похож на поиск с выбором, сначала использовать `WithSearchPicker(...)`.
 
-Пример built-in path:
+Пример встроенного пути:
 
 ```csharp
 var resolver = new FlaUiControlResolver(window, conditionFactory)
@@ -201,7 +201,7 @@ var resolver = new FlaUiControlResolver(window, conditionFactory)
             applyButtonAutomationId: "ServerPickerApply"));
 ```
 
-Пример page property:
+Пример свойства страницы:
 
 ```csharp
 private static UiControlDefinition ServerPickerDefinition { get; } =
@@ -210,30 +210,30 @@ private static UiControlDefinition ServerPickerDefinition { get; } =
 public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(ServerPickerDefinition);
 ```
 
-## 5. Internal feeds и package-source strategy
+## 5. Внутренние источники пакетов и стратегия выбора источников
 
 Если в организации запрещён прямой `nuget.org`:
 
-- настройте internal mirror в `NuGet.Config`;
+- настройте внутреннее зеркало в `NuGet.Config`;
 - держите `PackageReference` на `AppAutomation.*`;
-- не переходите на source dependency только потому, что feed не настроен.
+- не переходите на зависимость через исходный код только потому, что источник пакетов не настроен.
 
-`appautomation doctor` должен видеть валидный `NuGet.Config` до начала integration work.
+`appautomation doctor` должен видеть корректный `NuGet.Config` до начала работ по интеграции.
 
-## 6. Readiness и retry
+## 6. Готовность и повторные попытки
 
-Используйте framework helpers:
+Используйте вспомогательные методы фреймворка:
 
 - `WaitUntil(...)`
 - `WaitUntilAsync(...)`
 - `RetryUntil(...)`
 
-Но не подменяйте ими плохие selectors. Если control стабильно ищется только через retry, сначала чините `AutomationId`.
+Но не подменяйте ими плохие селекторы. Если элемент стабильно находится только через повторные попытки, сначала исправьте `AutomationId`.
 
-## 7. Когда headless не должен покрывать всё
+## 7. Когда `Headless` не должен покрывать всё
 
-Если приложение трудно ресетить in-process, нормальная стратегия такая:
+Если приложение трудно сбрасывать внутри процесса, нормальная стратегия такая:
 
-- `Headless` покрывает smoke + critical deterministic flows;
-- desktop-only unstable paths остаются в `FlaUI`;
-- after every added headless scenario re-check repeated launch stability.
+- `Headless` покрывает сценарии быстрой проверки и критичные детерминированные сценарии;
+- нестабильные пути, доступные только в настольном режиме, остаются в `FlaUI`;
+- после каждого добавленного сценария `Headless` заново проверяйте стабильность повторных запусков.

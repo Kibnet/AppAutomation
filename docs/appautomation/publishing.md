@@ -95,11 +95,11 @@ Publishing without these steps is not considered validated.
 
 [English](#appautomation-publishing) | **Русский**
 
-Этот repo публикует не только runtime libraries, но и consumer-adoption assets.
+Этот репозиторий публикует не только библиотеки среды выполнения, но и материалы для подключения проекта-потребителя.
 
-## Packaged Artifacts
+## Публикуемые артефакты
 
-В локальный package folder попадают:
+В локальный каталог пакетов попадают:
 
 - `AppAutomation.Abstractions`
 - `AppAutomation.Authoring`
@@ -111,41 +111,41 @@ Publishing without these steps is not considered validated.
 - `AppAutomation.Tooling`
 - `AppAutomation.Templates`
 
-## Version Source
+## Источник версии
 
-Локальный source of truth:
+Локальный источник истины:
 
 - [eng/Versions.props](../../eng/Versions.props)
 
-GitHub release path:
+Тег релиза в GitHub:
 
-- tag `<version>` или `appautomation-v<version>`
+- тег `<version>` или `appautomation-v<version>`
 
-## Local Pack
+## Локальная упаковка
 
 ```powershell
 pwsh -File eng/pack.ps1 -Configuration Release
 ```
 
-Artifacts:
+Артефакты:
 
 ```text
 artifacts/packages/<version>/
 ```
 
-## Consumer Smoke
+## Быстрая проверка потребителя
 
 ```powershell
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Smoke now validates three things:
+Текущая быстрая проверка подтверждает три вещи:
 
-1. package-only authoring/runtime consumer can restore/build;
-2. template package installs and generates canonical topology;
-3. `appautomation doctor` succeeds against generated consumer repo.
+1. потребитель, работающий только через пакеты для `Authoring` и сред выполнения, может восстановить зависимости и собрать решение;
+2. пакет шаблонов устанавливается и создаёт стандартную структуру;
+3. `appautomation doctor` успешно проходит на сгенерированном репозитории-потребителе.
 
-## Publish
+## Публикация
 
 ```powershell
 pwsh -File eng/publish-nuget.ps1 `
@@ -154,22 +154,22 @@ pwsh -File eng/publish-nuget.ps1 `
   -ApiKey <api-key>
 ```
 
-Optional environment variables:
+Необязательные переменные окружения:
 
 - `NUGET_SOURCE`
 - `NUGET_API_KEY`
 - `NUGET_SYMBOL_SOURCE`
 - `NUGET_SYMBOL_API_KEY`
 
-## Enterprise Feed Guidance
+## Рекомендации для корпоративного источника пакетов
 
-Если consumer organisation использует internal mirror:
+Если организация-потребитель использует внутреннее зеркало:
 
-- публикуйте packages в корпоративный feed;
-- на consumer side настраивайте `NuGet.Config` / `packageSourceMapping`;
-- не переходите на source dependency как основной delivery path.
+- публикуйте пакеты в корпоративный источник;
+- на стороне потребителя настраивайте `NuGet.Config` / `packageSourceMapping`;
+- не переходите на зависимость через исходный код как на основной способ поставки.
 
-## Release Checklist
+## Проверочный список перед выпуском
 
 ```powershell
 dotnet build AppAutomation.sln -c Release
@@ -178,4 +178,4 @@ pwsh -File eng/pack.ps1 -Configuration Release
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Публикация без этих шагов не считается validated.
+Публикация без этих шагов не считается подтверждённой.

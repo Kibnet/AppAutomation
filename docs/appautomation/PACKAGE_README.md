@@ -32,24 +32,24 @@ Full setup guide:
 
 [English](#appautomation) | **Русский**
 
-`AppAutomation` — это переиспользуемый desktop UI automation framework, извлечённый из этого репозитория.
+`AppAutomation` — это переиспользуемый фреймворк автоматизации пользовательского интерфейса настольных приложений, выделенный из этого репозитория.
 
 Пакеты:
 
-- `AppAutomation.Abstractions`: контракты автоматизации, примитивы page model, ожидания и диагностика.
-- `AppAutomation.Authoring`: source generator/analyzers для page objects на основе `[UiControl]`.
-- `AppAutomation.TUnit`: `UiTestBase` и общие test helpers для `TUnit`.
-- `AppAutomation.Avalonia.Headless`: in-process Avalonia Headless runtime.
-- `AppAutomation.FlaUI`: Windows desktop runtime поверх FlaUI.
+- `AppAutomation.Abstractions`: контракты автоматизации, примитивы модели страниц, ожидания и диагностика.
+- `AppAutomation.Authoring`: анализатор и генератор исходного кода для объектов страниц на основе `[UiControl]`.
+- `AppAutomation.TUnit`: `UiTestBase` и общие вспомогательные средства тестирования для `TUnit`.
+- `AppAutomation.Avalonia.Headless`: встроенная в процесс среда выполнения Avalonia Headless.
+- `AppAutomation.FlaUI`: настольная среда выполнения Windows поверх FlaUI.
 
-Рекомендуемая топология test-solution:
+Рекомендуемая структура тестового решения:
 
-- `<MyApp>.UiTests.Authoring`: page objects и shared scenarios.
-- `<MyApp>.UiTests.Headless`: опциональные headless runtime tests.
-- `<MyApp>.UiTests.FlaUI`: опциональные Windows desktop runtime tests.
+- `<MyApp>.UiTests.Authoring`: объекты страниц и общие сценарии.
+- `<MyApp>.UiTests.Headless`: необязательные тесты в режиме `Headless`.
+- `<MyApp>.UiTests.FlaUI`: необязательные тесты настольного приложения под Windows.
 
 Полное руководство по настройке:
 
-- Quickstart: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/quickstart.md
-- Project topology: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/project-topology.md
-- Publishing: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/publishing.md
+- Краткое руководство: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/quickstart.md
+- Структура проектов: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/project-topology.md
+- Публикация: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/publishing.md

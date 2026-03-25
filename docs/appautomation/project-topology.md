@@ -69,7 +69,7 @@ In this case, `TestHost` is responsible for:
 
 [English](#appautomation-project-topology) | **Русский**
 
-## Canonical Layout
+## Стандартная структура
 
 ```text
 tests/
@@ -79,38 +79,38 @@ tests/
   MyApp.AppAutomation.TestHost/
 ```
 
-Это layout, который создаёт template `appauto-avalonia`.
+Это структура, которую создаёт шаблон `appauto-avalonia`.
 
-## Responsibility Split
+## Разделение ответственности
 
 | Проект | Владеет | Не должен владеть |
 | --- | --- | --- |
-| `*.UiTests.Authoring` | page objects, `[UiControl(...)]`, shared scenarios, manual composite control properties | build-on-launch, repo discovery, app bootstrap |
-| `*.UiTests.Headless` | headless session hooks, headless resolver, thin runtime wrappers | duplicated scenarios, duplicated page objects |
-| `*.UiTests.FlaUI` | FlaUI session wiring, thin runtime wrappers | duplicated scenarios, duplicated page objects |
-| `*.AppAutomation.TestHost` | repo-specific launch/bootstrap, temp settings, temp dirs, app paths | reusable framework code |
+| `*.UiTests.Authoring` | объекты страниц, `[UiControl(...)]`, общие сценарии, вручную описанные свойства составных элементов управления | сборка перед запуском, поиск корня репозитория, инициализация приложения |
+| `*.UiTests.Headless` | обработчики сеанса `Headless`, резолвер `Headless`, тонкие обёртки среды выполнения | дублирование сценариев, дублирование объектов страниц |
+| `*.UiTests.FlaUI` | подключение сеанса `FlaUI`, тонкие обёртки среды выполнения | дублирование сценариев, дублирование объектов страниц |
+| `*.AppAutomation.TestHost` | логика запуска, специфичная для репозитория, временные настройки, временные каталоги, пути к приложению | переиспользуемый код фреймворка |
 
 ## Обязательные правила
 
-- Shared scenarios живут только в `Authoring`.
-- Runtime projects используют `ProjectReference` на `Authoring`, а не `Compile Include`.
-- `TestHost` хранит repo-specific knowledge вне reusable packages.
-- `FlaUI` проект опционален только если вам действительно не нужно desktop runtime coverage.
+- Общие сценарии живут только в `Authoring`.
+- Проекты выполнения используют `ProjectReference` на `Authoring`, а не `Compile Include`.
+- `TestHost` хранит знания, специфичные для репозитория, вне переиспользуемых пакетов.
+- Проект `FlaUI` опционален только если вам действительно не нужно покрытие настольной среды выполнения.
 
-## Composite Controls
+## Составные элементы управления
 
-Простые controls остаются в generated `[UiControl(...)]` path.
+Простые элементы управления остаются в сгенерированном пути `[UiControl(...)]`.
 
-Composite controls:
+Составные элементы управления:
 
-- могут быть объявлены вручную как page properties;
-- должны использовать `WithAdapters(...)` или `WithSearchPicker(...)` до создания consumer-specific resolver forks.
+- могут быть объявлены вручную как свойства страницы;
+- должны использовать `WithAdapters(...)` или `WithSearchPicker(...)` до создания собственных форков резолвера.
 
-## Nested Solution Layout
+## Вложенная структура решения
 
-Если solution лежит ниже repo root, это не меняет topology. Меняется только `TestHost` implementation.
+Если решение лежит ниже корня репозитория, это не меняет структуру. Меняется только реализация `TestHost`.
 
-Типовой layout:
+Типовая структура:
 
 ```text
 repo/
@@ -123,7 +123,7 @@ repo/
 
 В этом случае именно `TestHost` отвечает за:
 
-- поиск solution root;
-- путь до AUT project/exe;
-- build-before-launch;
-- isolated files/settings.
+- поиск корня решения;
+- путь к проекту или исполняемому файлу AUT;
+- сборку перед запуском;
+- изолированные файлы и настройки.
