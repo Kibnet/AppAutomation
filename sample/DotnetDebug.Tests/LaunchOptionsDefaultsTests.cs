@@ -51,4 +51,25 @@ public class LaunchOptionsDefaultsTests
             await Assert.That(Directory.Exists(options.WorkingDirectory!)).IsEqualTo(true);
         }
     }
+
+    [Test]
+    public async Task DotnetDebugDesktopLaunchOptions_UseIsolatedBuildOutput_OnlyWhenBuilding()
+    {
+        var buildOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
+            buildConfiguration: "Debug",
+            buildBeforeLaunch: true,
+            buildOncePerProcess: false);
+        var noBuildOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
+            buildConfiguration: "Debug",
+            buildBeforeLaunch: false);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(buildOptions.DisposeCallback is not null).IsEqualTo(true);
+            await Assert.That(buildOptions.ExecutablePath.Contains("AppAutomationDesktopBuild-", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(noBuildOptions.ExecutablePath.Contains("AppAutomationDesktopBuild-", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+
+        buildOptions.DisposeCallback!.Invoke();
+    }
 }

@@ -13,10 +13,39 @@ public static class AvaloniaDesktopLaunchHost
         AvaloniaDesktopLaunchOptions? launchOptions = null,
         string? repositoryRoot = null)
     {
+        return CreateLaunchOptionsCore(descriptor, launchOptions, repositoryRoot, scenarioTransport: null);
+    }
+
+    public static DesktopAppLaunchOptions CreateLaunchOptions<TPayload>(
+        AvaloniaDesktopAppDescriptor descriptor,
+        AutomationLaunchScenario<TPayload> scenario,
+        AvaloniaDesktopLaunchOptions? launchOptions = null,
+        string? repositoryRoot = null)
+    {
+        var scenarioTransport = AutomationLaunchScenarioTransport.Create(scenario);
+        try
+        {
+            return CreateLaunchOptionsCore(descriptor, launchOptions, repositoryRoot, scenarioTransport);
+        }
+        catch
+        {
+            scenarioTransport.Dispose();
+            throw;
+        }
+    }
+
+    private static DesktopAppLaunchOptions CreateLaunchOptionsCore(
+        AvaloniaDesktopAppDescriptor descriptor,
+        AvaloniaDesktopLaunchOptions? launchOptions,
+        string? repositoryRoot,
+        AutomationLaunchScenarioTransport.ScenarioTransport? scenarioTransport)
+    {
         ArgumentNullException.ThrowIfNull(descriptor);
 
         launchOptions ??= new AvaloniaDesktopLaunchOptions();
         var buildConfiguration = ValidateValue(launchOptions.BuildConfiguration, nameof(launchOptions.BuildConfiguration));
+        var isolatedBuildArtifacts = PrepareIsolatedBuildArtifacts(launchOptions);
+        var buildOutputRoot = isolatedBuildArtifacts?.RootPath;
 
         var resolvedRepositoryRoot = string.IsNullOrWhiteSpace(repositoryRoot)
             ? FindRepositoryRoot(descriptor)
@@ -31,10 +60,11 @@ public static class AvaloniaDesktopLaunchHost
                 descriptor,
                 buildConfiguration,
                 launchOptions.BuildTimeout,
-                launchOptions.BuildOncePerProcess);
+                launchOptions.BuildOncePerProcess,
+                buildOutputRoot);
         }
 
-        var executablePath = ResolveExecutablePath(projectPath, descriptor, buildConfiguration);
+        var executablePath = ResolveExecutablePath(projectPath, descriptor, buildConfiguration, buildOutputRoot);
         return new DesktopAppLaunchOptions
         {
             ExecutablePath = executablePath,
@@ -42,7 +72,12 @@ public static class AvaloniaDesktopLaunchHost
             MainWindowTimeout = launchOptions.MainWindowTimeout,
             PollInterval = launchOptions.PollInterval,
             Arguments = launchOptions.Arguments,
-            EnvironmentVariables = launchOptions.EnvironmentVariables
+            EnvironmentVariables = MergeEnvironmentVariables(
+                launchOptions.EnvironmentVariables,
+                scenarioTransport?.Context.ToEnvironmentVariables()),
+            DisposeCallback = AutomationLaunchScenarioTransport.CombineCallbacks(
+                scenarioTransport is null ? null : scenarioTransport.Dispose,
+                isolatedBuildArtifacts is null ? null : isolatedBuildArtifacts.Dispose)
         };
     }
 
@@ -128,9 +163,10 @@ public static class AvaloniaDesktopLaunchHost
         AvaloniaDesktopAppDescriptor descriptor,
         string buildConfiguration,
         TimeSpan buildTimeout,
-        bool buildOncePerProcess)
+        bool buildOncePerProcess,
+        string? buildOutputRoot)
     {
-        var buildKey = $"{projectPath}|{buildConfiguration}|{descriptor.DesktopTargetFramework}";
+        var buildKey = $"{projectPath}|{buildConfiguration}|{descriptor.DesktopTargetFramework}|{buildOutputRoot}";
 
         lock (BuildLock)
         {
@@ -139,7 +175,7 @@ public static class AvaloniaDesktopLaunchHost
                 return;
             }
 
-            RunBuild(solutionRoot, projectPath, descriptor.DesktopTargetFramework, buildConfiguration, buildTimeout);
+            RunBuild(solutionRoot, projectPath, descriptor.DesktopTargetFramework, buildConfiguration, buildTimeout, buildOutputRoot);
             if (buildOncePerProcess)
             {
                 BuiltProjectKeys.Add(buildKey);
@@ -152,7 +188,8 @@ public static class AvaloniaDesktopLaunchHost
         string projectPath,
         string targetFramework,
         string buildConfiguration,
-        TimeSpan buildTimeout)
+        TimeSpan buildTimeout,
+        string? buildOutputRoot)
     {
         var processInfo = new ProcessStartInfo
         {
@@ -170,6 +207,13 @@ public static class AvaloniaDesktopLaunchHost
         processInfo.ArgumentList.Add(buildConfiguration);
         processInfo.ArgumentList.Add("-f");
         processInfo.ArgumentList.Add(targetFramework);
+
+        if (!string.IsNullOrWhiteSpace(buildOutputRoot))
+        {
+            Directory.CreateDirectory(buildOutputRoot);
+            processInfo.ArgumentList.Add("--artifacts-path");
+            processInfo.ArgumentList.Add(buildOutputRoot);
+        }
 
         using var process = Process.Start(processInfo)
             ?? throw new InvalidOperationException("Unable to start dotnet build process.");
@@ -200,16 +244,18 @@ public static class AvaloniaDesktopLaunchHost
     private static string ResolveExecutablePath(
         string projectPath,
         AvaloniaDesktopAppDescriptor descriptor,
-        string buildConfiguration)
+        string buildConfiguration,
+        string? buildOutputRoot)
     {
+        if (!string.IsNullOrWhiteSpace(buildOutputRoot))
+        {
+            return ResolveExecutablePathFromArtifacts(buildOutputRoot, projectPath, descriptor, buildConfiguration);
+        }
+
         var projectDirectory = Path.GetDirectoryName(projectPath)
             ?? throw new InvalidOperationException($"Could not determine project directory for '{projectPath}'.");
-        var executablePath = Path.Combine(
-            projectDirectory,
-            "bin",
-            buildConfiguration,
-            descriptor.DesktopTargetFramework,
-            descriptor.ExecutableName);
+        var executableBasePath = Path.Combine(projectDirectory, "bin");
+        var executablePath = Path.Combine(executableBasePath, buildConfiguration, descriptor.DesktopTargetFramework, descriptor.ExecutableName);
 
         if (!File.Exists(executablePath))
         {
@@ -221,6 +267,42 @@ public static class AvaloniaDesktopLaunchHost
         return executablePath;
     }
 
+    private static IsolatedBuildArtifacts? PrepareIsolatedBuildArtifacts(AvaloniaDesktopLaunchOptions launchOptions)
+    {
+        if (!launchOptions.UseIsolatedBuildOutput)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(launchOptions.IsolatedBuildRoot))
+        {
+            var temporaryDirectory = TemporaryDirectory.Create("AppAutomationDesktopBuild");
+            return new IsolatedBuildArtifacts(temporaryDirectory.FullPath, temporaryDirectory.Dispose);
+        }
+
+        var rootPath = Path.GetFullPath(launchOptions.IsolatedBuildRoot);
+        Directory.CreateDirectory(rootPath);
+        return new IsolatedBuildArtifacts(rootPath, Dispose: null);
+    }
+
+    private static IReadOnlyDictionary<string, string?> MergeEnvironmentVariables(
+        IReadOnlyDictionary<string, string?> existingVariables,
+        IReadOnlyDictionary<string, string?>? additionalVariables)
+    {
+        if (additionalVariables is null || additionalVariables.Count == 0)
+        {
+            return existingVariables;
+        }
+
+        var merged = new Dictionary<string, string?>(existingVariables, StringComparer.Ordinal);
+        foreach (var entry in additionalVariables)
+        {
+            merged[entry.Key] = entry.Value;
+        }
+
+        return merged;
+    }
+
     private static string ValidateValue(string value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -229,6 +311,51 @@ public static class AvaloniaDesktopLaunchHost
         }
 
         return value.Trim();
+    }
+
+    private static string ResolveExecutablePathFromArtifacts(
+        string artifactsRoot,
+        string projectPath,
+        AvaloniaDesktopAppDescriptor descriptor,
+        string buildConfiguration)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+        var searchRoot = Path.Combine(Path.GetFullPath(artifactsRoot), "bin", projectName);
+        if (!Directory.Exists(searchRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Artifacts output root was not found for project '{projectName}'. Expected '{searchRoot}'.");
+        }
+
+        var candidates = Directory.EnumerateFiles(searchRoot, descriptor.ExecutableName, SearchOption.AllDirectories)
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            throw new FileNotFoundException(
+                "Desktop app executable was not found in artifacts output.",
+                Path.Combine(searchRoot, descriptor.ExecutableName));
+        }
+
+        var configurationSegment = buildConfiguration.ToLowerInvariant();
+        var preferredCandidates = candidates
+            .Where(path => path.Contains($"{Path.DirectorySeparatorChar}{configurationSegment}{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                || path.Contains($"{Path.AltDirectorySeparatorChar}{configurationSegment}{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (preferredCandidates.Length == 1)
+        {
+            return preferredCandidates[0];
+        }
+
+        if (candidates.Length == 1)
+        {
+            return candidates[0];
+        }
+
+        throw new InvalidOperationException(
+            $"Multiple artifacts outputs matched '{descriptor.ExecutableName}':{Environment.NewLine}{string.Join(Environment.NewLine, candidates)}");
     }
 
     private static void TryKillProcess(Process process)
@@ -245,4 +372,7 @@ public static class AvaloniaDesktopLaunchHost
             // Best effort cleanup for timed-out build.
         }
     }
+
+    private sealed record IsolatedBuildArtifacts(string RootPath, Action? Dispose);
+
 }

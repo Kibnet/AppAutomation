@@ -35,7 +35,8 @@ public static class DotnetDebugAppLaunchHost
                 BuildOncePerProcess = buildOncePerProcess,
                 BuildTimeout = buildTimeout ?? TimeSpan.FromMinutes(5),
                 MainWindowTimeout = mainWindowTimeout ?? TimeSpan.FromSeconds(20),
-                PollInterval = pollInterval ?? TimeSpan.FromMilliseconds(200)
+                PollInterval = pollInterval ?? TimeSpan.FromMilliseconds(200),
+                UseIsolatedBuildOutput = buildBeforeLaunch
             });
     }
 

@@ -57,7 +57,40 @@ using var temp = TemporaryDirectory.Create("MyAppAutomation");
 var settingsPath = temp.WriteTextFile("settings\\Settings.json", json);
 ```
 
-## 4. Composite controls
+## 4. Launch scenarios and preflight
+
+If your smoke path needs deterministic signed-in or server-backed state, use `AutomationLaunchScenario<TPayload>` and read it via `AutomationLaunchContext`.
+
+Desktop example:
+
+```csharp
+var scenario = new AutomationLaunchScenario<MyLaunchState>("SignedInSmoke", state);
+return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+    desktopAppDescriptor,
+    scenario,
+    new AvaloniaDesktopLaunchOptions());
+```
+
+Headless example:
+
+```csharp
+var scenario = new AutomationLaunchScenario<MyLaunchState>("SignedInSmoke", state);
+return AvaloniaHeadlessLaunchHost.Create(
+    static () => MyAppBootstrap.CreateMainWindow(),
+    scenario);
+```
+
+For required inputs, aggregate diagnostics before launch:
+
+```csharp
+AutomationPreflight.Create("MyApp login smoke")
+    .RequireEnvironmentVariable("MYAPP_TEST_SERVER_URL")
+    .RequireEnvironmentVariable("MYAPP_TEST_LOGIN", secret: true)
+    .RequireEnvironmentVariable("MYAPP_TEST_PASSWORD", secret: true)
+    .ThrowIfInvalid();
+```
+
+## 5. Composite controls
 
 If a widget doesn't fit into built-in `UiControlType`, don't rewrite the runtime resolver entirely.
 
@@ -88,7 +121,17 @@ private static UiControlDefinition ServerPickerDefinition { get; } =
 public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(ServerPickerDefinition);
 ```
 
-## 5. Internal feeds and package-source strategy
+## 6. Dynamic selectors and selector contract
+
+Keep one selector contract for both runtimes:
+
+- `AutomationId` is mandatory for primary controls;
+- `AutomationProperties.Name` is required for `WaitUntilName*`;
+- repeated entities should use parameterized ids such as `MessageItem_{id}` or `Row_{key}`.
+
+Full contract: [selector-contract.md](selector-contract.md)
+
+## 7. Internal feeds and package-source strategy
 
 If direct `nuget.org` is prohibited in your organization:
 
@@ -98,7 +141,7 @@ If direct `nuget.org` is prohibited in your organization:
 
 `appautomation doctor` should see a valid `NuGet.Config` before starting integration work.
 
-## 6. Readiness and retry
+## 8. Readiness and retry
 
 Use framework helpers:
 
@@ -108,7 +151,22 @@ Use framework helpers:
 
 But don't substitute them for bad selectors. If a control is consistently found only through retry, fix the `AutomationId` first.
 
-## 7. When headless shouldn't cover everything
+## 9. Isolated desktop build output
+
+If design-time tools or parallel runners lock the AUT output directory, opt into isolated desktop build output:
+
+```csharp
+return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+    desktopAppDescriptor,
+    new AvaloniaDesktopLaunchOptions
+    {
+        UseIsolatedBuildOutput = true
+    });
+```
+
+The isolated mode is opt-in and should be used only when the default in-place build path is operationally noisy.
+
+## 10. When headless shouldn't cover everything
 
 If the application is hard to reset in-process, a normal strategy is:
 
@@ -179,7 +237,40 @@ using var temp = TemporaryDirectory.Create("MyAppAutomation");
 var settingsPath = temp.WriteTextFile("settings\\Settings.json", json);
 ```
 
-## 4. Составные элементы управления
+## 4. Launch scenarios и preflight
+
+Если вашему smoke-сценарию нужен детерминированный signed-in или server-backed state, используйте `AutomationLaunchScenario<TPayload>` и читайте его через `AutomationLaunchContext`.
+
+Пример для desktop:
+
+```csharp
+var scenario = new AutomationLaunchScenario<MyLaunchState>("SignedInSmoke", state);
+return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+    desktopAppDescriptor,
+    scenario,
+    new AvaloniaDesktopLaunchOptions());
+```
+
+Пример для headless:
+
+```csharp
+var scenario = new AutomationLaunchScenario<MyLaunchState>("SignedInSmoke", state);
+return AvaloniaHeadlessLaunchHost.Create(
+    static () => MyAppBootstrap.CreateMainWindow(),
+    scenario);
+```
+
+Для обязательных входов собирайте одну агрегированную диагностику до запуска:
+
+```csharp
+AutomationPreflight.Create("MyApp login smoke")
+    .RequireEnvironmentVariable("MYAPP_TEST_SERVER_URL")
+    .RequireEnvironmentVariable("MYAPP_TEST_LOGIN", secret: true)
+    .RequireEnvironmentVariable("MYAPP_TEST_PASSWORD", secret: true)
+    .ThrowIfInvalid();
+```
+
+## 5. Составные элементы управления
 
 Если виджет не укладывается во встроенный `UiControlType`, не переписывайте весь резолвер среды выполнения.
 
@@ -210,7 +301,17 @@ private static UiControlDefinition ServerPickerDefinition { get; } =
 public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(ServerPickerDefinition);
 ```
 
-## 5. Внутренние источники пакетов и стратегия выбора источников
+## 6. Динамические селекторы и selector contract
+
+Держите один selector contract для обоих runtime:
+
+- `AutomationId` обязателен для primary controls;
+- `AutomationProperties.Name` нужен для `WaitUntilName*`;
+- повторяющиеся сущности должны использовать параметризованные id вроде `MessageItem_{id}` или `Row_{key}`.
+
+Полный контракт: [selector-contract.md](selector-contract.md)
+
+## 7. Внутренние источники пакетов и стратегия выбора источников
 
 Если в организации запрещён прямой `nuget.org`:
 
@@ -220,7 +321,7 @@ public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(Server
 
 `appautomation doctor` должен видеть корректный `NuGet.Config` до начала работ по интеграции.
 
-## 6. Готовность и повторные попытки
+## 8. Готовность и повторные попытки
 
 Используйте вспомогательные методы фреймворка:
 
@@ -230,7 +331,22 @@ public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(Server
 
 Но не подменяйте ими плохие селекторы. Если элемент стабильно находится только через повторные попытки, сначала исправьте `AutomationId`.
 
-## 7. Когда `Headless` не должен покрывать всё
+## 9. Изолированный desktop build output
+
+Если design-time tooling или параллельные раннеры блокируют каталог вывода AUT, включайте isolated desktop build output:
+
+```csharp
+return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+    desktopAppDescriptor,
+    new AvaloniaDesktopLaunchOptions
+    {
+        UseIsolatedBuildOutput = true
+    });
+```
+
+Этот режим opt-in и нужен только там, где стандартная in-place сборка создаёт операционный шум.
+
+## 10. Когда `Headless` не должен покрывать всё
 
 Если приложение трудно сбрасывать внутри процесса, нормальная стратегия такая:
 

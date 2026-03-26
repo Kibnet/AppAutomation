@@ -43,26 +43,27 @@ Full matrix: [docs/appautomation/compatibility.md](docs/appautomation/compatibil
 
 ## Fast Path
 
-Replace `1.1.0` with the desired package version.
+Replace `2.1.0` with the desired package version.
 
 ### 1. Install template package
 
 ```powershell
-dotnet new install AppAutomation.Templates::1.1.0
+dotnet new install AppAutomation.Templates@2.1.0
 ```
 
 ### 2. Install CLI tool
 
-Locally in repo:
+Recommended local tool manifest in the consumer repo:
 
 ```powershell
-dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 1.1.0
+dotnet new tool-manifest
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 ```
 
-Or globally:
+Fallback global install:
 
 ```powershell
-dotnet tool install --global AppAutomation.Tooling --version 1.1.0
+dotnet tool install --global AppAutomation.Tooling --version 2.1.0
 ```
 
 ### 3. Generate canonical topology
@@ -70,7 +71,7 @@ dotnet tool install --global AppAutomation.Tooling --version 1.1.0
 From the root of your consumer repository:
 
 ```powershell
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 1.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
 ```
 
 The template will create:
@@ -83,10 +84,10 @@ The template will create:
 
 ### 4. Run doctor immediately
 
-If the tool is installed locally:
+If the tool is installed via local manifest:
 
 ```powershell
-.\.tools\appautomation doctor --repo-root .
+dotnet tool run appautomation doctor --repo-root .
 ```
 
 If the tool is installed globally:
@@ -99,8 +100,9 @@ appautomation doctor --repo-root .
 
 - whether canonical topology exists;
 - whether you've switched to source dependency instead of `PackageReference`;
+- whether generated scaffold still contains placeholder values;
 - whether `TargetFramework` is compatible;
-- whether `NuGet.Config` exists;
+- whether `NuGet.Config` exists anywhere under the repository root;
 - whether SDK is pinned via `global.json`.
 
 ## What to do in consumer repo after generation
@@ -121,6 +123,7 @@ You need to replace placeholder values:
 - relative path to desktop `.csproj`;
 - `TargetFramework` of AUT;
 - desktop executable name;
+- `AvaloniaAppType` used by generated headless hooks;
 - `CreateHeadlessLaunchOptions()` with real `Window` creation.
 
 Framework helpers that are already available out of the box:
@@ -137,6 +140,7 @@ Minimum for the first iteration:
 - main tabs / navigation anchors;
 - critical input/button/result controls;
 - key child controls for composite widgets.
+- explicit `AutomationProperties.Name` for controls you assert via `WaitUntilName*`.
 
 Example:
 
@@ -154,7 +158,7 @@ File:
 tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 ```
 
-There you need to start your `Avalonia.Headless` session and register it via `HeadlessRuntime.SetSession(...)`.
+The generated hooks already call `HeadlessRuntime.SetSession(...)` through `MyAppAppLaunchHost.AvaloniaAppType`. Replace the placeholder app type in `TestHost`, then keep the generated hooks as-is unless your AUT needs custom session lifetime handling.
 
 ### 4. Describe page objects and shared scenarios
 
@@ -218,6 +222,7 @@ Working reference in this repository:
 - Step-by-step consumer flow: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
 - Pre-flight checklist: [docs/appautomation/adoption-checklist.md](docs/appautomation/adoption-checklist.md)
 - Canonical project responsibilities: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
+- Selector contract for both runtimes: [docs/appautomation/selector-contract.md](docs/appautomation/selector-contract.md)
 - Advanced bootstrap and composite controls: [docs/appautomation/advanced-integration.md](docs/appautomation/advanced-integration.md)
 - Packaging and release flow: [docs/appautomation/publishing.md](docs/appautomation/publishing.md)
 
@@ -266,26 +271,27 @@ tests/
 
 ## Быстрый старт
 
-Замените `1.1.0` на нужную версию пакетов.
+Замените `2.1.0` на нужную версию пакетов.
 
 ### 1. Установите пакет шаблонов
 
 ```powershell
-dotnet new install AppAutomation.Templates::1.1.0
+dotnet new install AppAutomation.Templates@2.1.0
 ```
 
 ### 2. Установите инструмент командной строки
 
-Локально в репозитории:
+Рекомендуемый локальный tool manifest в репозитории-потребителе:
 
 ```powershell
-dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 1.1.0
+dotnet new tool-manifest
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 ```
 
-Или глобально:
+Резервный глобальный вариант:
 
 ```powershell
-dotnet tool install --global AppAutomation.Tooling --version 1.1.0
+dotnet tool install --global AppAutomation.Tooling --version 2.1.0
 ```
 
 ### 3. Сгенерируйте стандартную структуру тестов
@@ -293,7 +299,7 @@ dotnet tool install --global AppAutomation.Tooling --version 1.1.0
 Из корня вашего репозитория-потребителя:
 
 ```powershell
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 1.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
 ```
 
 Шаблон создаст:
@@ -306,10 +312,10 @@ dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 1.1.0
 
 ### 4. Сразу запустите `doctor`
 
-Если инструмент установлен в локальную папку:
+Если инструмент установлен через локальный manifest:
 
 ```powershell
-.\.tools\appautomation doctor --repo-root .
+dotnet tool run appautomation doctor --repo-root .
 ```
 
 Если инструмент установлен глобально:
@@ -322,8 +328,9 @@ appautomation doctor --repo-root .
 
 - существует ли стандартная структура тестов;
 - не перешли ли вы на зависимость в виде исходного кода вместо `PackageReference`;
+- содержит ли сгенерированный scaffold ещё неубранные placeholder-значения;
 - совместимы ли `TargetFramework`;
-- есть ли `NuGet.Config`;
+- есть ли `NuGet.Config` где-либо под корнем репозитория;
 - закреплён ли SDK через `global.json`.
 
 ## Что сделать в репозитории-потребителе после генерации
@@ -344,6 +351,7 @@ tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
 - относительный путь к настольному `.csproj`;
 - `TargetFramework` для AUT;
 - имя исполняемого файла настольного приложения;
+- `AvaloniaAppType`, который используют сгенерированные headless hooks;
 - `CreateHeadlessLaunchOptions()` с реальным созданием `Window`.
 
 Вспомогательные классы фреймворка, которые уже доступны:
@@ -360,6 +368,7 @@ tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
 - основные вкладки и опорные элементы навигации;
 - критичные поля ввода, кнопки и элементы с результатами;
 - ключевые дочерние элементы в составных элементах интерфейса.
+- явный `AutomationProperties.Name` для тех элементов, которые будут участвовать в `WaitUntilName*`.
 
 Пример:
 
@@ -377,7 +386,7 @@ tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
 tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 ```
 
-Там нужно запустить сеанс `Avalonia.Headless` и зарегистрировать его через `HeadlessRuntime.SetSession(...)`.
+Сгенерированные hooks уже вызывают `HeadlessRuntime.SetSession(...)` через `MyAppAppLaunchHost.AvaloniaAppType`. Обычно достаточно заменить placeholder-типа приложения в `TestHost` и оставить hooks без изменений, если AUT не требует особого жизненного цикла сеанса.
 
 ### 4. Описать объекты страниц и общие сценарии
 
@@ -441,5 +450,6 @@ dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 - Пошаговый сценарий подключения: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
 - Проверочный список перед стартом: [docs/appautomation/adoption-checklist.md](docs/appautomation/adoption-checklist.md)
 - Роли проектов в стандартной структуре: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
+- Контракт селекторов для обоих рантаймов: [docs/appautomation/selector-contract.md](docs/appautomation/selector-contract.md)
 - Расширенная инициализация и составные элементы управления: [docs/appautomation/advanced-integration.md](docs/appautomation/advanced-integration.md)
 - Упаковка и процесс выпуска: [docs/appautomation/publishing.md](docs/appautomation/publishing.md)

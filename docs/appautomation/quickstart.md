@@ -19,8 +19,9 @@ If this is not stabilized, do not proceed to page objects.
 ## 2. Install template and tool
 
 ```powershell
-dotnet new install AppAutomation.Templates::2.1.0
-dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 2.1.0
+dotnet new install AppAutomation.Templates@2.1.0
+dotnet new tool-manifest
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 ```
 
 ## 3. Generate canonical topology
@@ -42,10 +43,11 @@ tests/
 ## 4. Check repo via doctor
 
 ```powershell
-.\.tools\appautomation doctor --repo-root .
+dotnet tool run appautomation doctor --repo-root .
 ```
 
 If `doctor` warns about source dependency, fix it before starting authoring.
+If `doctor --strict` warns about unfinished scaffold markers, replace the generated placeholders before writing real scenarios.
 
 ## 5. Complete `TestHost`
 
@@ -60,6 +62,8 @@ Use built-in helpers:
 - `AvaloniaDesktopLaunchHost`
 - `AvaloniaHeadlessLaunchHost`
 - `TemporaryDirectory`
+
+Replace all generated placeholders in `SampleAppAppLaunchHost`, including `AvaloniaAppType`. The generated `HeadlessSessionHooks` already use that property and should not require manual reverse engineering.
 
 Typical desktop path:
 
@@ -89,8 +93,10 @@ The first iteration should cover only controls from the critical smoke path:
 - important buttons;
 - labels/results;
 - child anchors inside composite widgets.
+- explicit `AutomationProperties.Name` for any control you assert through `WaitUntilName*`.
 
 Don't try to mark up the entire application at once.
+Selector contract details: [selector-contract.md](selector-contract.md)
 
 ## 7. Describe page object
 
@@ -222,8 +228,9 @@ More details: [advanced-integration.md](advanced-integration.md)
 ## 2. Установите шаблон и инструмент
 
 ```powershell
-dotnet new install AppAutomation.Templates::2.1.0
-dotnet tool install --tool-path .\.tools AppAutomation.Tooling --version 2.1.0
+dotnet new install AppAutomation.Templates@2.1.0
+dotnet new tool-manifest
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 ```
 
 ## 3. Сгенерируйте стандартную структуру проектов
@@ -245,10 +252,11 @@ tests/
 ## 4. Проверьте репозиторий через `doctor`
 
 ```powershell
-.\.tools\appautomation doctor --repo-root .
+dotnet tool run appautomation doctor --repo-root .
 ```
 
 Если `doctor` предупреждает о зависимости через исходный код, исправьте это до начала работы с `Authoring`.
+Если `doctor --strict` показывает неубранные маркеры scaffold, сначала замените placeholder-значения, а уже потом пишите реальные сценарии.
 
 ## 5. Допишите `TestHost`
 
@@ -263,6 +271,8 @@ tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
 - `AvaloniaDesktopLaunchHost`
 - `AvaloniaHeadlessLaunchHost`
 - `TemporaryDirectory`
+
+Замените все placeholder-значения в `SampleAppAppLaunchHost`, включая `AvaloniaAppType`. Сгенерированные `HeadlessSessionHooks` уже используют это свойство и не требуют ручного поиска правильного pair API.
 
 Типовой путь запуска настольного приложения:
 
@@ -292,8 +302,10 @@ return AvaloniaHeadlessLaunchHost.Create(
 - важные кнопки;
 - подписи и результаты;
 - дочерние опорные элементы внутри составных виджетов.
+- явный `AutomationProperties.Name` для тех элементов, которые будут участвовать в `WaitUntilName*`.
 
 Не пытайтесь сразу размечать всё приложение.
+Подробный контракт селекторов: [selector-contract.md](selector-contract.md)
 
 ## 7. Опишите объект страницы
 

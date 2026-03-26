@@ -12,12 +12,19 @@ public sealed class DesktopAppSession : IDisposable
 {
     private readonly Application _application;
     private readonly UIA3Automation _automation;
+    private readonly Action? _disposeCallback;
     private bool _disposed;
 
-    private DesktopAppSession(Application application, UIA3Automation automation, Window mainWindow, ConditionFactory conditionFactory)
+    private DesktopAppSession(
+        Application application,
+        UIA3Automation automation,
+        Window mainWindow,
+        ConditionFactory conditionFactory,
+        Action? disposeCallback)
     {
         _application = application;
         _automation = automation;
+        _disposeCallback = disposeCallback;
         MainWindow = mainWindow;
         ConditionFactory = conditionFactory;
     }
@@ -78,13 +85,14 @@ public sealed class DesktopAppSession : IDisposable
             WaitForAutomationTree(mainWindowResult.Result, options.MainWindowTimeout, options.PollInterval);
 
             var conditionFactory = new ConditionFactory(new UIA3PropertyLibrary());
-            return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory);
+            return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory, options.DisposeCallback);
         }
         catch
         {
             automation.Dispose();
             TryTerminateApplication(application);
             application.Dispose();
+            options.DisposeCallback?.Invoke();
             throw;
         }
     }
@@ -97,10 +105,23 @@ public sealed class DesktopAppSession : IDisposable
         }
 
         _disposed = true;
-        _automation.Dispose();
-        TryTerminateApplication(_application);
-        _application.Dispose();
-        GC.SuppressFinalize(this);
+        try
+        {
+            _automation.Dispose();
+            TryTerminateApplication(_application);
+            _application.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                _disposeCallback?.Invoke();
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
+        }
     }
 
     internal static ProcessStartInfo CreateProcessStartInfo(

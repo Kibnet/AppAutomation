@@ -42,6 +42,11 @@ public sealed class HeadlessAppLaunchOptions
     public Func<CancellationToken, ValueTask>? BeforeLaunchAsync { get; init; }
 
     /// <summary>
+    /// Gets a callback invoked when the launched session is disposed or launch fails before the session is created.
+    /// </summary>
+    public Action? DisposeCallback { get; init; }
+
+    /// <summary>
     /// Gets a factory function that creates the main window asynchronously.
     /// </summary>
     /// <value>An async function returning the main window instance, or <see langword="null"/> if using sync creation.</value>
