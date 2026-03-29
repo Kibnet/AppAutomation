@@ -1,3 +1,4 @@
+using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
 using TUnit.Assertions;
@@ -148,6 +149,86 @@ public sealed class LaunchContractTests
     }
 
     [Test]
+    public async Task AutomationLaunchContext_ParallelHeadlessLaunchCallbacks_DoNotLeakAcrossTasks()
+    {
+        using var barrier = new Barrier(2);
+        var scenarioA = new AutomationLaunchScenario<LaunchPayload>("ScenarioA", new LaunchPayload("alice@example.com"));
+        var scenarioB = new AutomationLaunchScenario<LaunchPayload>("ScenarioB", new LaunchPayload("bob@example.com"));
+        string? observedScenarioA = null;
+        string? observedScenarioB = null;
+
+        var optionsA = AvaloniaHeadlessLaunchHost.Create(
+            static () => throw new NotSupportedException("Window factory is not used in this test."),
+            scenarioA,
+            beforeLaunchAsync: _ =>
+            {
+                barrier.SignalAndWait();
+                observedScenarioA = AutomationLaunchContext.GetRequired().ScenarioName;
+                return ValueTask.CompletedTask;
+            });
+
+        var optionsB = AvaloniaHeadlessLaunchHost.Create(
+            static () => throw new NotSupportedException("Window factory is not used in this test."),
+            scenarioB,
+            beforeLaunchAsync: _ =>
+            {
+                barrier.SignalAndWait();
+                observedScenarioB = AutomationLaunchContext.GetRequired().ScenarioName;
+                return ValueTask.CompletedTask;
+            });
+
+        try
+        {
+            await Task.WhenAll(
+                Task.Run(() => optionsA.BeforeLaunchAsync!(CancellationToken.None).AsTask()),
+                Task.Run(() => optionsB.BeforeLaunchAsync!(CancellationToken.None).AsTask()));
+        }
+        finally
+        {
+            optionsA.DisposeCallback!.Invoke();
+            optionsB.DisposeCallback!.Invoke();
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(observedScenarioA).IsEqualTo("ScenarioA");
+            await Assert.That(observedScenarioB).IsEqualTo("ScenarioB");
+            await Assert.That(AutomationLaunchContext.TryGetCurrent(static _ => null)).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task HeadlessDesktopSession_LaunchPreservesPrimaryException_WhenCleanupFails()
+    {
+        Exception? exception = null;
+
+        try
+        {
+            _ = DesktopAppSession.Launch(new HeadlessAppLaunchOptions
+            {
+                BeforeLaunchAsync = _ => throw new InvalidOperationException("BeforeLaunch failed."),
+                CreateMainWindow = static () => throw new NotSupportedException("CreateMainWindow should not run."),
+                DisposeCallback = () => throw new ApplicationException("Dispose cleanup failed.")
+            });
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+        }
+
+        var cleanupException = exception?.Data["AppAutomation.CleanupException"] as ApplicationException;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception is InvalidOperationException).IsEqualTo(true);
+            await Assert.That(exception!.Message).Contains("BeforeLaunch failed.");
+            await Assert.That(cleanupException).IsNotNull();
+            await Assert.That(cleanupException!.Message).Contains("Dispose cleanup failed.");
+        }
+    }
+
+    [Test]
     public async Task AvaloniaDesktopLaunchHost_CreateLaunchOptions_WithScenario_AddsEnvironmentVariables_AndCleansUp()
     {
         using var workspace = TemporaryWorkspace.Create();
@@ -186,6 +267,68 @@ public sealed class LaunchContractTests
 
         options.DisposeCallback!.Invoke();
         await Assert.That(File.Exists(payloadPath)).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task AvaloniaDesktopLaunchHost_IsolatedBuildOutput_PreservesBuildOnceSemantics_AcrossLaunches()
+    {
+        using var workspace = TemporaryWorkspace.Create();
+        WriteFakeDesktopRepo(workspace.FullPath, includeExecutable: false, includeSource: true);
+
+        var descriptor = new AvaloniaDesktopAppDescriptor(
+            solutionFileNames: ["FakeDesktop.sln"],
+            desktopProjectRelativePaths: ["src\\FakeDesktop\\FakeDesktop.csproj"],
+            desktopTargetFramework: "net8.0",
+            executableName: "FakeDesktop.exe");
+        var projectSourcePath = Path.Combine(workspace.FullPath, "src", "FakeDesktop", "Program.cs");
+
+        var firstOptions = AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+            descriptor,
+            new AvaloniaDesktopLaunchOptions
+            {
+                UseIsolatedBuildOutput = true,
+                BuildConfiguration = "Debug",
+                BuildBeforeLaunch = true,
+                BuildOncePerProcess = true
+            },
+            repositoryRoot: workspace.FullPath);
+
+        var firstIsolatedRoot = Path.GetFullPath(Path.Combine(firstOptions.ExecutablePath, "..", "..", ".."));
+        firstOptions.DisposeCallback!.Invoke();
+
+        File.WriteAllText(projectSourcePath, "this is not valid csharp");
+
+        DesktopAppLaunchOptions? secondOptions = null;
+        try
+        {
+            secondOptions = AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+                descriptor,
+                new AvaloniaDesktopLaunchOptions
+                {
+                    UseIsolatedBuildOutput = true,
+                    BuildConfiguration = "Debug",
+                    BuildBeforeLaunch = true,
+                    BuildOncePerProcess = true
+                },
+                repositoryRoot: workspace.FullPath);
+
+            var secondIsolatedRoot = Path.GetFullPath(Path.Combine(secondOptions.ExecutablePath, "..", "..", ".."));
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(File.Exists(secondOptions.ExecutablePath)).IsEqualTo(true);
+                await Assert.That(secondIsolatedRoot).IsEqualTo(firstIsolatedRoot);
+                await Assert.That(Directory.Exists(firstIsolatedRoot)).IsEqualTo(true);
+            }
+        }
+        finally
+        {
+            secondOptions?.DisposeCallback?.Invoke();
+            if (Directory.Exists(firstIsolatedRoot))
+            {
+                Directory.Delete(firstIsolatedRoot, recursive: true);
+            }
+        }
     }
 
     [Test]

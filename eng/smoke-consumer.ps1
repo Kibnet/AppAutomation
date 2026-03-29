@@ -4,6 +4,7 @@ param(
     [string]$PackagesPath,
     [string]$Version,
     [string]$WorkspaceRoot,
+    [string]$PackagesCacheRoot,
     [switch]$SkipPack,
     [switch]$KeepWorkspace
 )
@@ -53,11 +54,9 @@ function Invoke-Dotnet {
 function Write-NuGetConfig {
     param(
         [string]$Path,
-        [string]$PackagesPath
+        [string]$PackagesPath,
+        [string]$GlobalPackagesFolder
     )
-
-    $configDirectory = Split-Path -Path $Path -Parent
-    $globalPackagesFolder = Join-Path $configDirectory "p"
 
 @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -72,6 +71,34 @@ function Write-NuGetConfig {
   </packageSources>
 </configuration>
 "@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Remove-DirectoryWithRetry {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $removed = $false
+    for ($attempt = 0; $attempt -lt 12 -and -not $removed; $attempt++) {
+        if ($attempt -gt 0) {
+            Start-Sleep -Seconds 5
+        }
+
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            }
+        }
+        catch {
+            cmd /c "rd /s /q `"$Path`"" 2>$null | Out-Null
+        }
+
+        $removed = -not (Test-Path -LiteralPath $Path)
+    }
+
+    return $removed
 }
 
 function Write-WorkspaceGlobalJson {
@@ -95,7 +122,7 @@ function Write-WorkspaceGlobalJson {
 "@ | Set-Content -Path $Path -Encoding UTF8
 }
 
-function Set-GeneratedTestHostScaffold {
+function Complete-GeneratedTestHostScaffoldForStrictVerification {
     param(
         [string]$WorkspaceRoot,
         [string]$ConsumerName
@@ -177,7 +204,12 @@ if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
     $WorkspaceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-smoke-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
 }
 
+if ([string]::IsNullOrWhiteSpace($PackagesCacheRoot)) {
+    $PackagesCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-smoke-packages-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
+}
+
 New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $PackagesCacheRoot -Force | Out-Null
 
 $authoringProjectDir = Join-Path $WorkspaceRoot "Smoke.Authoring"
 $runtimeProjectDir = Join-Path $WorkspaceRoot "Smoke.Headless.Tests"
@@ -190,7 +222,7 @@ $globalJsonPath = Join-Path $WorkspaceRoot "global.json"
 $solutionPath = Join-Path $WorkspaceRoot "Smoke.AppAutomation.sln"
 $authoringProjectPath = Join-Path $authoringProjectDir "Smoke.Authoring.csproj"
 $runtimeProjectPath = Join-Path $runtimeProjectDir "Smoke.Headless.Tests.csproj"
-Write-NuGetConfig -Path $nugetConfig -PackagesPath $PackagesPath
+Write-NuGetConfig -Path $nugetConfig -PackagesPath $PackagesPath -GlobalPackagesFolder $PackagesCacheRoot
 Write-WorkspaceGlobalJson -Path $globalJsonPath
 
 @"
@@ -383,7 +415,7 @@ $templateConsumerName = "TemplateConsumer"
 $templateWorkspace = Join-Path $WorkspaceRoot "tc"
 $templateHive = Join-Path $WorkspaceRoot "h"
 New-Item -ItemType Directory -Path $templateWorkspace -Force | Out-Null
-Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesPath $PackagesPath
+Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesPath $PackagesPath -GlobalPackagesFolder $PackagesCacheRoot
 Write-WorkspaceGlobalJson -Path (Join-Path $templateWorkspace "global.json")
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
@@ -408,7 +440,8 @@ Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
     "--AppAutomationVersion", $resolvedVersion,
     "--debug:custom-hive", $templateHive)
 
-Set-GeneratedTestHostScaffold -WorkspaceRoot $templateWorkspace -ConsumerName $templateConsumerName
+Write-Host "Completing generated TestHost placeholders before strict doctor verification."
+Complete-GeneratedTestHostScaffoldForStrictVerification -WorkspaceRoot $templateWorkspace -ConsumerName $templateConsumerName
 
 $templateHeadlessProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.Headless\$templateConsumerName.UiTests.Headless.csproj"
 $templateFlaUiProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.FlaUI\$templateConsumerName.UiTests.FlaUI.csproj"
@@ -430,22 +463,14 @@ if (-not $KeepWorkspace) {
         # Best effort. Cleanup fallback below will still run.
     }
 
-    $removed = $false
-    for ($attempt = 0; $attempt -lt 3 -and -not $removed; $attempt++) {
-        Start-Sleep -Seconds 2
-        try {
-            if (Test-Path $WorkspaceRoot) {
-                Remove-Item -Path $WorkspaceRoot -Recurse -Force -ErrorAction Stop
-            }
-        }
-        catch {
-            cmd /c "rd /s /q `"$WorkspaceRoot`"" | Out-Null
-        }
+    $workspaceRemoved = Remove-DirectoryWithRetry -Path $WorkspaceRoot
+    $packagesRemoved = Remove-DirectoryWithRetry -Path $PackagesCacheRoot
 
-        $removed = -not (Test-Path $WorkspaceRoot)
+    if (-not $workspaceRemoved) {
+        Write-Host "Temporary smoke workspace was left on disk: $WorkspaceRoot"
     }
 
-    if (-not $removed) {
-        Write-Host "Temporary smoke workspace was left on disk: $WorkspaceRoot"
+    if (-not $packagesRemoved) {
+        Write-Host "Temporary smoke NuGet cache was left on disk: $PackagesCacheRoot"
     }
 }

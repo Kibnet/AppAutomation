@@ -10,6 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Session.Contracts\AppAutomation.Session.Contracts.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.TestHost.Avalonia\AppAutomation.TestHost.Avalonia.csproj" />
   </ItemGroup>

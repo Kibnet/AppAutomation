@@ -59,7 +59,6 @@ internal static class AutomationLaunchScenarioTransport
     internal sealed class ScenarioTransport : IDisposable
     {
         private readonly TemporaryDirectory _directory;
-        private IDisposable? _ambientOverride;
         private bool _disposed;
 
         public ScenarioTransport(AutomationLaunchContext context, TemporaryDirectory directory)
@@ -70,10 +69,10 @@ internal static class AutomationLaunchScenarioTransport
 
         public AutomationLaunchContext Context { get; }
 
-        public void EnsureAmbientOverride()
+        public IDisposable PushAmbientOverride()
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _ambientOverride ??= AutomationLaunchContext.PushAmbientOverride(Context);
+            return AutomationLaunchContext.PushAmbientOverride(Context);
         }
 
         public void Dispose()
@@ -84,7 +83,6 @@ internal static class AutomationLaunchScenarioTransport
             }
 
             _disposed = true;
-            _ambientOverride?.Dispose();
             _directory.Dispose();
         }
     }

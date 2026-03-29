@@ -52,7 +52,7 @@ Smoke now validates four things:
 1. package-only authoring/runtime consumer can restore/build;
 2. template package installs through the documented `package@version` path and generates canonical topology;
 3. the CLI tool installs through a local tool manifest;
-4. `dotnet tool run appautomation doctor --strict` succeeds against generated consumer repo.
+4. `dotnet tool run appautomation doctor --strict` succeeds after smoke applies scripted completion of generated `TestHost` placeholders; untouched `dotnet new` output is expected to remain non-strict until the consumer replaces placeholders.
 
 ## Publish
 
@@ -160,7 +160,7 @@ pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 1. потребитель, работающий только через пакеты для `Authoring` и сред выполнения, может восстановить зависимости и собрать решение;
 2. пакет шаблонов устанавливается по документированному пути `package@version` и создаёт стандартную структуру;
 3. CLI-инструмент устанавливается через локальный tool manifest;
-4. `dotnet tool run appautomation doctor --strict` успешно проходит на сгенерированном репозитории-потребителе.
+4. `dotnet tool run appautomation doctor --strict` успешно проходит после scripted completion placeholder-значений в generated `TestHost`; untouched результат `dotnet new` по-прежнему должен оставаться non-strict, пока потребитель не заменит заглушки.
 
 ## Публикация
 

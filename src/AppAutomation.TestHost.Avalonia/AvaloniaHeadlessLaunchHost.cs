@@ -63,7 +63,7 @@ public static class AvaloniaHeadlessLaunchHost
         {
             BeforeLaunchAsync = async cancellationToken =>
             {
-                scenarioTransport.EnsureAmbientOverride();
+                using var ambientOverride = scenarioTransport.PushAmbientOverride();
                 if (beforeLaunchAsync is not null)
                 {
                     await beforeLaunchAsync(cancellationToken);
@@ -71,7 +71,7 @@ public static class AvaloniaHeadlessLaunchHost
             },
             CreateMainWindow = () =>
             {
-                scenarioTransport.EnsureAmbientOverride();
+                using var ambientOverride = scenarioTransport.PushAmbientOverride();
                 return createMainWindow();
             },
             DisposeCallback = scenarioTransport.Dispose
@@ -90,7 +90,7 @@ public static class AvaloniaHeadlessLaunchHost
         {
             BeforeLaunchAsync = async cancellationToken =>
             {
-                scenarioTransport.EnsureAmbientOverride();
+                using var ambientOverride = scenarioTransport.PushAmbientOverride();
                 if (beforeLaunchAsync is not null)
                 {
                     await beforeLaunchAsync(cancellationToken);
@@ -98,7 +98,7 @@ public static class AvaloniaHeadlessLaunchHost
             },
             CreateMainWindowAsync = async cancellationToken =>
             {
-                scenarioTransport.EnsureAmbientOverride();
+                using var ambientOverride = scenarioTransport.PushAmbientOverride();
                 return await createMainWindowAsync(cancellationToken);
             },
             DisposeCallback = scenarioTransport.Dispose

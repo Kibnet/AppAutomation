@@ -80,6 +80,8 @@ return AvaloniaHeadlessLaunchHost.Create(
     scenario);
 ```
 
+Read `AutomationLaunchContext` inside `BeforeLaunchAsync`, `CreateMainWindow`, or `CreateMainWindowAsync`. In headless mode the ambient override is scoped to launch callbacks so parallel scenarios do not leak into each other.
+
 For required inputs, aggregate diagnostics before launch:
 
 ```csharp
@@ -89,6 +91,8 @@ AutomationPreflight.Create("MyApp login smoke")
     .RequireEnvironmentVariable("MYAPP_TEST_PASSWORD", secret: true)
     .ThrowIfInvalid();
 ```
+
+If launch fails, AppAutomation rethrows the original launch exception. If cleanup also fails, the secondary failure is attached via `exception.Data["AppAutomation.CleanupException"]`.
 
 ## 5. Composite controls
 
@@ -260,6 +264,8 @@ return AvaloniaHeadlessLaunchHost.Create(
     scenario);
 ```
 
+Читайте `AutomationLaunchContext` внутри `BeforeLaunchAsync`, `CreateMainWindow` или `CreateMainWindowAsync`. В headless-режиме ambient override ограничен launch-callback'ами, чтобы параллельные сценарии не перетекали друг в друга.
+
 Для обязательных входов собирайте одну агрегированную диагностику до запуска:
 
 ```csharp
@@ -269,6 +275,8 @@ AutomationPreflight.Create("MyApp login smoke")
     .RequireEnvironmentVariable("MYAPP_TEST_PASSWORD", secret: true)
     .ThrowIfInvalid();
 ```
+
+Если запуск падает, AppAutomation повторно выбрасывает исходное исключение запуска. Если cleanup тоже падает, вторичная ошибка прикрепляется через `exception.Data["AppAutomation.CleanupException"]`.
 
 ## 5. Составные элементы управления
 

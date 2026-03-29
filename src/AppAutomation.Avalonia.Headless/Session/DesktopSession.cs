@@ -1,5 +1,6 @@
 using AvaloniaWindow = Avalonia.Controls.Window;
 using AppAutomation.Session.Contracts;
+using System.Runtime.ExceptionServices;
 
 namespace AppAutomation.Avalonia.Headless.Session;
 
@@ -47,9 +48,12 @@ public sealed class DesktopAppSession : IDisposable
 
             return new DesktopAppSession(window, options.DisposeCallback);
         }
-        catch
+        catch (Exception launchException)
         {
-            options.DisposeCallback?.Invoke();
+            List<Exception>? cleanupExceptions = null;
+            TryCleanup(options.DisposeCallback, cleanupExceptions ??= []);
+            AttachCleanupExceptions(launchException, cleanupExceptions);
+            ExceptionDispatchInfo.Capture(launchException).Throw();
             throw;
         }
     }
@@ -70,5 +74,34 @@ public sealed class DesktopAppSession : IDisposable
         {
             GC.SuppressFinalize(this);
         }
+    }
+
+    private static void TryCleanup(Action? cleanupAction, List<Exception> exceptions)
+    {
+        if (cleanupAction is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cleanupAction();
+        }
+        catch (Exception ex)
+        {
+            exceptions.Add(ex);
+        }
+    }
+
+    private static void AttachCleanupExceptions(Exception launchException, List<Exception>? cleanupExceptions)
+    {
+        if (cleanupExceptions is null || cleanupExceptions.Count == 0)
+        {
+            return;
+        }
+
+        launchException.Data["AppAutomation.CleanupException"] = cleanupExceptions.Count == 1
+            ? cleanupExceptions[0]
+            : new AggregateException(cleanupExceptions);
     }
 }

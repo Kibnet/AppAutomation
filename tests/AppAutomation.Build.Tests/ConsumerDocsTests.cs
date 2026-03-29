@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -8,7 +9,7 @@ namespace AppAutomation.Build.Tests;
 public sealed class ConsumerDocsTests
 {
     [Test]
-    public async Task ConsumerDocs_UseConfiguredVersion_AndManifestPath()
+    public async Task ConsumerDocs_UseLatestByDefaultForOnboarding_AndPinnedVersionsForRelease()
     {
         var repoRoot = GetRepoRoot();
         var configuredVersion = ReadConfiguredVersion(repoRoot);
@@ -18,16 +19,35 @@ public sealed class ConsumerDocsTests
 
         using (Assert.Multiple())
         {
+            await Assert.That(ContainsStandaloneCommand(readme, "dotnet new install AppAutomation.Templates")).IsEqualTo(true);
+            await Assert.That(ContainsStandaloneCommand(quickstart, "dotnet new install AppAutomation.Templates")).IsEqualTo(true);
             await Assert.That(readme).Contains($"AppAutomation.Templates@{configuredVersion}");
             await Assert.That(quickstart).Contains($"AppAutomation.Templates@{configuredVersion}");
             await Assert.That(readme).DoesNotContain("AppAutomation.Templates::");
             await Assert.That(quickstart).DoesNotContain("AppAutomation.Templates::");
             await Assert.That(readme).Contains("dotnet new tool-manifest");
             await Assert.That(quickstart).Contains("dotnet new tool-manifest");
+            await Assert.That(ContainsStandaloneCommand(readme, "dotnet tool install AppAutomation.Tooling")).IsEqualTo(true);
+            await Assert.That(ContainsStandaloneCommand(quickstart, "dotnet tool install AppAutomation.Tooling")).IsEqualTo(true);
+            await Assert.That(readme).Contains($"dotnet tool install AppAutomation.Tooling --version {configuredVersion}");
+            await Assert.That(quickstart).Contains($"dotnet tool install AppAutomation.Tooling --version {configuredVersion}");
+            await Assert.That(ContainsStandaloneCommand(readme, "dotnet new appauto-avalonia --name MyApp")).IsEqualTo(true);
+            await Assert.That(ContainsStandaloneCommand(quickstart, "dotnet new appauto-avalonia --name MyApp")).IsEqualTo(true);
+            await Assert.That(readme).Contains($"--AppAutomationVersion {configuredVersion}");
+            await Assert.That(quickstart).Contains($"--AppAutomationVersion {configuredVersion}");
             await Assert.That(readme).Contains("dotnet tool run appautomation doctor --repo-root .");
             await Assert.That(quickstart).Contains("dotnet tool run appautomation doctor --repo-root .");
+            await Assert.That(readme).Contains("dotnet test --project");
+            await Assert.That(quickstart).Contains("dotnet test --project");
+            await Assert.That(readme).Contains("dotnet test --solution");
+            await Assert.That(quickstart).Contains("dotnet test --solution");
+            await Assert.That(readme).Contains("Headless session is not initialized");
+            await Assert.That(quickstart).Contains("Headless session is not initialized");
             await Assert.That(publishing).Contains("eng/sync-consumer-assets.ps1");
             await Assert.That(publishing).Contains("eng/verify-published-consumer.ps1");
+            await Assert.That(publishing).Contains($"-Version {configuredVersion}");
+            await Assert.That(publishing).Contains("scripted completion");
+            await Assert.That(publishing).Contains("untouched `dotnet new` output");
             await Assert.That(publishing).Contains("dotnet tool run appautomation doctor --strict");
         }
     }
@@ -118,5 +138,11 @@ public sealed class ConsumerDocsTests
         var versionElement = propertyGroup.Element("AppAutomationVersion")
             ?? throw new InvalidOperationException("AppAutomationVersion was not found in eng/Versions.props.");
         return versionElement.Value.Trim();
+    }
+
+    private static bool ContainsStandaloneCommand(string content, string command)
+    {
+        var escapedCommand = Regex.Escape(command);
+        return Regex.IsMatch(content, $@"(?m)^\s*{escapedCommand}\s*$");
     }
 }

@@ -5,6 +5,7 @@ param(
     [int]$TimeoutSeconds = 300,
     [int]$RetryIntervalSeconds = 15,
     [string]$WorkspaceRoot,
+    [string]$PackagesCacheRoot,
     [switch]$KeepWorkspace
 )
 
@@ -33,11 +34,10 @@ function Invoke-Dotnet {
 function Write-NuGetConfig {
     param(
         [string]$Path,
-        [string]$PrimarySource
+        [string]$PrimarySource,
+        [string]$GlobalPackagesFolder
     )
 
-    $configDirectory = Split-Path -Path $Path -Parent
-    $globalPackagesFolder = Join-Path $configDirectory "p"
     $nugetOrg = "https://api.nuget.org/v3/index.json"
     $secondarySources = @()
 
@@ -66,6 +66,34 @@ function Write-NuGetConfig {
 "@ | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Remove-DirectoryWithRetry {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $removed = $false
+    for ($attempt = 0; $attempt -lt 12 -and -not $removed; $attempt++) {
+        if ($attempt -gt 0) {
+            Start-Sleep -Seconds 5
+        }
+
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            }
+        }
+        catch {
+            cmd /c "rd /s /q `"$Path`"" 2>$null | Out-Null
+        }
+
+        $removed = -not (Test-Path -LiteralPath $Path)
+    }
+
+    return $removed
+}
+
 function Write-WorkspaceGlobalJson {
     param([string]$Path)
 
@@ -87,7 +115,7 @@ function Write-WorkspaceGlobalJson {
 "@ | Set-Content -Path $Path -Encoding UTF8
 }
 
-function Set-GeneratedTestHostScaffold {
+function Complete-GeneratedTestHostScaffoldForStrictVerification {
     param(
         [string]$WorkspaceRoot,
         [string]$ConsumerName
@@ -163,7 +191,12 @@ if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
     $WorkspaceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-verify-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
 }
 
+if ([string]::IsNullOrWhiteSpace($PackagesCacheRoot)) {
+    $PackagesCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-verify-packages-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
+}
+
 New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $PackagesCacheRoot -Force | Out-Null
 
 $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
 $attempt = 0
@@ -179,7 +212,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline -and -not $success) {
 
     try {
         New-Item -ItemType Directory -Path $templateWorkspace -Force | Out-Null
-        Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PrimarySource $Source
+        Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PrimarySource $Source -GlobalPackagesFolder $PackagesCacheRoot
         Write-WorkspaceGlobalJson -Path (Join-Path $templateWorkspace "global.json")
 
         Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("new", "tool-manifest")
@@ -202,7 +235,8 @@ while ([DateTimeOffset]::UtcNow -lt $deadline -and -not $success) {
             "--AppAutomationVersion", $resolvedVersion,
             "--debug:custom-hive", $templateHive)
 
-        Set-GeneratedTestHostScaffold -WorkspaceRoot $templateWorkspace -ConsumerName $templateConsumerName
+        Write-Host "Completing generated TestHost placeholders before strict doctor verification."
+        Complete-GeneratedTestHostScaffoldForStrictVerification -WorkspaceRoot $templateWorkspace -ConsumerName $templateConsumerName
 
         $templateHeadlessProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.Headless\$templateConsumerName.UiTests.Headless.csproj"
         $templateFlaUiProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.FlaUI\$templateConsumerName.UiTests.FlaUI.csproj"
@@ -242,7 +276,14 @@ if (-not $KeepWorkspace) {
         # Best effort.
     }
 
-    if (Test-Path $WorkspaceRoot) {
-        Remove-Item -Path $WorkspaceRoot -Recurse -Force -ErrorAction SilentlyContinue
+    $workspaceRemoved = Remove-DirectoryWithRetry -Path $WorkspaceRoot
+    $packagesRemoved = Remove-DirectoryWithRetry -Path $PackagesCacheRoot
+
+    if (-not $workspaceRemoved) {
+        Write-Host "Temporary verification workspace was left on disk: $WorkspaceRoot"
+    }
+
+    if (-not $packagesRemoved) {
+        Write-Host "Temporary verification NuGet cache was left on disk: $PackagesCacheRoot"
     }
 }

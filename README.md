@@ -43,12 +43,13 @@ Full matrix: [docs/appautomation/compatibility.md](docs/appautomation/compatibil
 
 ## Fast Path
 
-Replace `2.1.0` with the desired package version.
+The commands below use the latest version available from your configured feed.
+If you need a reproducible install for a specific release, use the pinned example further below.
 
 ### 1. Install template package
 
 ```powershell
-dotnet new install AppAutomation.Templates@2.1.0
+dotnet new install AppAutomation.Templates
 ```
 
 ### 2. Install CLI tool
@@ -57,13 +58,13 @@ Recommended local tool manifest in the consumer repo:
 
 ```powershell
 dotnet new tool-manifest
-dotnet tool install AppAutomation.Tooling --version 2.1.0
+dotnet tool install AppAutomation.Tooling
 ```
 
 Fallback global install:
 
 ```powershell
-dotnet tool install --global AppAutomation.Tooling --version 2.1.0
+dotnet tool install --global AppAutomation.Tooling
 ```
 
 ### 3. Generate canonical topology
@@ -71,6 +72,14 @@ dotnet tool install --global AppAutomation.Tooling --version 2.1.0
 From the root of your consumer repository:
 
 ```powershell
+dotnet new appauto-avalonia --name MyApp
+```
+
+Pinned example for a specific release:
+
+```powershell
+dotnet new install AppAutomation.Templates@2.1.0
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
 ```
 
@@ -173,9 +182,22 @@ In the `Authoring` project you:
 Commands:
 
 ```powershell
-dotnet test tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
-dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
+dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
+dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
+
+To run the whole generated solution from the repo root:
+
+```powershell
+dotnet test --solution MyApp.sln -c Debug
+```
+
+If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession from test hooks.`, verify:
+
+- `tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs` is still active in your test runner hooks;
+- the hooks call `HeadlessRuntime.SetSession(...)` before tests and clear it afterwards;
+- `MyAppAppLaunchHost.AvaloniaAppType` is no longer a placeholder;
+- you're running the intended target with `dotnet test --project ...` or `dotnet test --solution MyApp.sln -c Debug`.
 
 ## What's already available out of the box
 
@@ -271,12 +293,13 @@ tests/
 
 ## Быстрый старт
 
-Замените `2.1.0` на нужную версию пакетов.
+Команды ниже используют последнюю доступную версию из настроенного feed.
+Если нужна воспроизводимая установка конкретного релиза, используйте pinned-пример ниже.
 
 ### 1. Установите пакет шаблонов
 
 ```powershell
-dotnet new install AppAutomation.Templates@2.1.0
+dotnet new install AppAutomation.Templates
 ```
 
 ### 2. Установите инструмент командной строки
@@ -285,13 +308,13 @@ dotnet new install AppAutomation.Templates@2.1.0
 
 ```powershell
 dotnet new tool-manifest
-dotnet tool install AppAutomation.Tooling --version 2.1.0
+dotnet tool install AppAutomation.Tooling
 ```
 
 Резервный глобальный вариант:
 
 ```powershell
-dotnet tool install --global AppAutomation.Tooling --version 2.1.0
+dotnet tool install --global AppAutomation.Tooling
 ```
 
 ### 3. Сгенерируйте стандартную структуру тестов
@@ -299,6 +322,14 @@ dotnet tool install --global AppAutomation.Tooling --version 2.1.0
 Из корня вашего репозитория-потребителя:
 
 ```powershell
+dotnet new appauto-avalonia --name MyApp
+```
+
+Pinned-пример для конкретного релиза:
+
+```powershell
+dotnet new install AppAutomation.Templates@2.1.0
+dotnet tool install AppAutomation.Tooling --version 2.1.0
 dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
 ```
 
@@ -401,9 +432,22 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 Команды:
 
 ```powershell
-dotnet test tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
-dotnet test tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
+dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj -c Debug
+dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
+
+Чтобы запустить всё сгенерированное решение из корня репозитория:
+
+```powershell
+dotnet test --solution MyApp.sln -c Debug
+```
+
+Если вы видите `Headless session is not initialized. Call HeadlessRuntime.SetSession from test hooks.`, проверьте:
+
+- что `tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs` по-прежнему подключён в hooks тестового раннера;
+- что hooks вызывают `HeadlessRuntime.SetSession(...)` до тестов и очищают его после завершения;
+- что `MyAppAppLaunchHost.AvaloniaAppType` уже не содержит placeholder;
+- что вы запускаете нужную цель через `dotnet test --project ...` или `dotnet test --solution MyApp.sln -c Debug`.
 
 ## Что уже доступно
 

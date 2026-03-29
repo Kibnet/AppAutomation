@@ -7,8 +7,7 @@ public sealed class AutomationLaunchContext
     public const string ScenarioNameEnvironmentVariable = "APPAUTOMATION_SCENARIO_NAME";
     public const string ScenarioPayloadPathEnvironmentVariable = "APPAUTOMATION_SCENARIO_PAYLOAD_PATH";
 
-    private static readonly object AmbientSync = new();
-    private static AutomationLaunchContext? _ambientOverride;
+    private static readonly AsyncLocal<AmbientOverrideEntry?> AmbientOverride = new();
 
     public AutomationLaunchContext(string scenarioName, string? payloadPath = null, string source = "manual")
     {
@@ -83,12 +82,9 @@ public sealed class AutomationLaunchContext
 
     public static AutomationLaunchContext? TryGetCurrent(Func<string, string?>? environmentReader = null)
     {
-        lock (AmbientSync)
+        if (AmbientOverride.Value?.Context is { } ambientOverride)
         {
-            if (_ambientOverride is not null)
-            {
-                return _ambientOverride;
-            }
+            return ambientOverride;
         }
 
         environmentReader ??= Environment.GetEnvironmentVariable;
@@ -113,20 +109,18 @@ public sealed class AutomationLaunchContext
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        lock (AmbientSync)
-        {
-            var previous = _ambientOverride;
-            _ambientOverride = context;
-            return new AmbientOverrideScope(previous);
-        }
+        var previous = AmbientOverride.Value;
+        var current = new AmbientOverrideEntry(context, previous);
+        AmbientOverride.Value = current;
+        return new AmbientOverrideScope(previous);
     }
 
     private sealed class AmbientOverrideScope : IDisposable
     {
-        private readonly AutomationLaunchContext? _previous;
+        private readonly AmbientOverrideEntry? _previous;
         private bool _disposed;
 
-        public AmbientOverrideScope(AutomationLaunchContext? previous)
+        public AmbientOverrideScope(AmbientOverrideEntry? previous)
         {
             _previous = previous;
         }
@@ -139,11 +133,9 @@ public sealed class AutomationLaunchContext
             }
 
             _disposed = true;
-
-            lock (AmbientSync)
-            {
-                _ambientOverride = _previous;
-            }
+            AmbientOverride.Value = _previous;
         }
     }
+
+    private sealed record AmbientOverrideEntry(AutomationLaunchContext Context, AmbientOverrideEntry? Previous);
 }
