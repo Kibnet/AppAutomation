@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Security;
+using System.Text;
 using AppAutomation.Session.Contracts;
 
 namespace AppAutomation.TestHost.Avalonia;
@@ -6,12 +9,43 @@ namespace AppAutomation.TestHost.Avalonia;
 public static class AvaloniaDesktopLaunchHost
 {
     private static readonly object BuildLock = new();
+    private static readonly object IsolatedBuildArtifactsLock = new();
     private static readonly HashSet<string> BuiltProjectKeys = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, SharedIsolatedBuildArtifacts> SharedIsolatedBuildArtifactsByKey =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static bool _isolatedBuildCleanupRegistered;
 
     public static DesktopAppLaunchOptions CreateLaunchOptions(
         AvaloniaDesktopAppDescriptor descriptor,
         AvaloniaDesktopLaunchOptions? launchOptions = null,
         string? repositoryRoot = null)
+    {
+        return CreateLaunchOptionsCore(descriptor, launchOptions, repositoryRoot, scenarioTransport: null);
+    }
+
+    public static DesktopAppLaunchOptions CreateLaunchOptions<TPayload>(
+        AvaloniaDesktopAppDescriptor descriptor,
+        AutomationLaunchScenario<TPayload> scenario,
+        AvaloniaDesktopLaunchOptions? launchOptions = null,
+        string? repositoryRoot = null)
+    {
+        var scenarioTransport = AutomationLaunchScenarioTransport.Create(scenario);
+        try
+        {
+            return CreateLaunchOptionsCore(descriptor, launchOptions, repositoryRoot, scenarioTransport);
+        }
+        catch
+        {
+            scenarioTransport.Dispose();
+            throw;
+        }
+    }
+
+    private static DesktopAppLaunchOptions CreateLaunchOptionsCore(
+        AvaloniaDesktopAppDescriptor descriptor,
+        AvaloniaDesktopLaunchOptions? launchOptions,
+        string? repositoryRoot,
+        AutomationLaunchScenarioTransport.ScenarioTransport? scenarioTransport)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
@@ -22,6 +56,12 @@ public static class AvaloniaDesktopLaunchHost
             ? FindRepositoryRoot(descriptor)
             : Path.GetFullPath(repositoryRoot);
         var projectPath = ResolveDesktopProjectPath(resolvedRepositoryRoot, descriptor);
+        var isolatedBuildArtifacts = PrepareIsolatedBuildArtifacts(
+            launchOptions,
+            projectPath,
+            descriptor.DesktopTargetFramework,
+            buildConfiguration);
+        var buildOutputRoot = isolatedBuildArtifacts?.RootPath;
 
         if (launchOptions.BuildBeforeLaunch)
         {
@@ -31,10 +71,11 @@ public static class AvaloniaDesktopLaunchHost
                 descriptor,
                 buildConfiguration,
                 launchOptions.BuildTimeout,
-                launchOptions.BuildOncePerProcess);
+                launchOptions.BuildOncePerProcess,
+                buildOutputRoot);
         }
 
-        var executablePath = ResolveExecutablePath(projectPath, descriptor, buildConfiguration);
+        var executablePath = ResolveExecutablePath(projectPath, descriptor, buildConfiguration, buildOutputRoot);
         return new DesktopAppLaunchOptions
         {
             ExecutablePath = executablePath,
@@ -42,7 +83,12 @@ public static class AvaloniaDesktopLaunchHost
             MainWindowTimeout = launchOptions.MainWindowTimeout,
             PollInterval = launchOptions.PollInterval,
             Arguments = launchOptions.Arguments,
-            EnvironmentVariables = launchOptions.EnvironmentVariables
+            EnvironmentVariables = MergeEnvironmentVariables(
+                launchOptions.EnvironmentVariables,
+                scenarioTransport?.Context.ToEnvironmentVariables()),
+            DisposeCallback = AutomationLaunchScenarioTransport.CombineCallbacks(
+                scenarioTransport is null ? null : scenarioTransport.Dispose,
+                isolatedBuildArtifacts is null ? null : isolatedBuildArtifacts.Dispose)
         };
     }
 
@@ -128,9 +174,10 @@ public static class AvaloniaDesktopLaunchHost
         AvaloniaDesktopAppDescriptor descriptor,
         string buildConfiguration,
         TimeSpan buildTimeout,
-        bool buildOncePerProcess)
+        bool buildOncePerProcess,
+        string? buildOutputRoot)
     {
-        var buildKey = $"{projectPath}|{buildConfiguration}|{descriptor.DesktopTargetFramework}";
+        var buildKey = $"{projectPath}|{buildConfiguration}|{descriptor.DesktopTargetFramework}|{buildOutputRoot}";
 
         lock (BuildLock)
         {
@@ -139,7 +186,7 @@ public static class AvaloniaDesktopLaunchHost
                 return;
             }
 
-            RunBuild(solutionRoot, projectPath, descriptor.DesktopTargetFramework, buildConfiguration, buildTimeout);
+            RunBuild(solutionRoot, projectPath, descriptor.DesktopTargetFramework, buildConfiguration, buildTimeout, buildOutputRoot);
             if (buildOncePerProcess)
             {
                 BuiltProjectKeys.Add(buildKey);
@@ -152,7 +199,8 @@ public static class AvaloniaDesktopLaunchHost
         string projectPath,
         string targetFramework,
         string buildConfiguration,
-        TimeSpan buildTimeout)
+        TimeSpan buildTimeout,
+        string? buildOutputRoot)
     {
         var processInfo = new ProcessStartInfo
         {
@@ -170,6 +218,13 @@ public static class AvaloniaDesktopLaunchHost
         processInfo.ArgumentList.Add(buildConfiguration);
         processInfo.ArgumentList.Add("-f");
         processInfo.ArgumentList.Add(targetFramework);
+
+        if (!string.IsNullOrWhiteSpace(buildOutputRoot))
+        {
+            Directory.CreateDirectory(buildOutputRoot);
+            var isolatedBuildPropsPath = EnsureIsolatedBuildPropsFile(solutionRoot, buildOutputRoot);
+            processInfo.ArgumentList.Add($"-p:DirectoryBuildPropsPath={isolatedBuildPropsPath}");
+        }
 
         using var process = Process.Start(processInfo)
             ?? throw new InvalidOperationException("Unable to start dotnet build process.");
@@ -200,16 +255,18 @@ public static class AvaloniaDesktopLaunchHost
     private static string ResolveExecutablePath(
         string projectPath,
         AvaloniaDesktopAppDescriptor descriptor,
-        string buildConfiguration)
+        string buildConfiguration,
+        string? buildOutputRoot)
     {
+        if (!string.IsNullOrWhiteSpace(buildOutputRoot))
+        {
+            return ResolveExecutablePathFromArtifacts(buildOutputRoot, projectPath, descriptor, buildConfiguration);
+        }
+
         var projectDirectory = Path.GetDirectoryName(projectPath)
             ?? throw new InvalidOperationException($"Could not determine project directory for '{projectPath}'.");
-        var executablePath = Path.Combine(
-            projectDirectory,
-            "bin",
-            buildConfiguration,
-            descriptor.DesktopTargetFramework,
-            descriptor.ExecutableName);
+        var executableBasePath = Path.Combine(projectDirectory, "bin");
+        var executablePath = Path.Combine(executableBasePath, buildConfiguration, descriptor.DesktopTargetFramework, descriptor.ExecutableName);
 
         if (!File.Exists(executablePath))
         {
@@ -221,6 +278,49 @@ public static class AvaloniaDesktopLaunchHost
         return executablePath;
     }
 
+    private static IsolatedBuildArtifacts? PrepareIsolatedBuildArtifacts(
+        AvaloniaDesktopLaunchOptions launchOptions,
+        string projectPath,
+        string targetFramework,
+        string buildConfiguration)
+    {
+        if (!launchOptions.UseIsolatedBuildOutput)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(launchOptions.IsolatedBuildRoot))
+        {
+            return AcquireSharedIsolatedBuildArtifacts(
+                projectPath,
+                targetFramework,
+                buildConfiguration,
+                keepAlive: launchOptions.BuildOncePerProcess);
+        }
+
+        var rootPath = Path.GetFullPath(launchOptions.IsolatedBuildRoot);
+        Directory.CreateDirectory(rootPath);
+        return new IsolatedBuildArtifacts(rootPath, Dispose: null);
+    }
+
+    private static IReadOnlyDictionary<string, string?> MergeEnvironmentVariables(
+        IReadOnlyDictionary<string, string?> existingVariables,
+        IReadOnlyDictionary<string, string?>? additionalVariables)
+    {
+        if (additionalVariables is null || additionalVariables.Count == 0)
+        {
+            return existingVariables;
+        }
+
+        var merged = new Dictionary<string, string?>(existingVariables, StringComparer.Ordinal);
+        foreach (var entry in additionalVariables)
+        {
+            merged[entry.Key] = entry.Value;
+        }
+
+        return merged;
+    }
+
     private static string ValidateValue(string value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -229,6 +329,51 @@ public static class AvaloniaDesktopLaunchHost
         }
 
         return value.Trim();
+    }
+
+    private static string ResolveExecutablePathFromArtifacts(
+        string artifactsRoot,
+        string projectPath,
+        AvaloniaDesktopAppDescriptor descriptor,
+        string buildConfiguration)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+        var searchRoot = Path.Combine(Path.GetFullPath(artifactsRoot), "bin", projectName);
+        if (!Directory.Exists(searchRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Artifacts output root was not found for project '{projectName}'. Expected '{searchRoot}'.");
+        }
+
+        var candidates = Directory.EnumerateFiles(searchRoot, descriptor.ExecutableName, SearchOption.AllDirectories)
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            throw new FileNotFoundException(
+                "Desktop app executable was not found in artifacts output.",
+                Path.Combine(searchRoot, descriptor.ExecutableName));
+        }
+
+        var configurationSegment = buildConfiguration.ToLowerInvariant();
+        var preferredCandidates = candidates
+            .Where(path => path.Contains($"{Path.DirectorySeparatorChar}{configurationSegment}{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                || path.Contains($"{Path.AltDirectorySeparatorChar}{configurationSegment}{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (preferredCandidates.Length == 1)
+        {
+            return preferredCandidates[0];
+        }
+
+        if (candidates.Length == 1)
+        {
+            return candidates[0];
+        }
+
+        throw new InvalidOperationException(
+            $"Multiple artifacts outputs matched '{descriptor.ExecutableName}':{Environment.NewLine}{string.Join(Environment.NewLine, candidates)}");
     }
 
     private static void TryKillProcess(Process process)
@@ -245,4 +390,179 @@ public static class AvaloniaDesktopLaunchHost
             // Best effort cleanup for timed-out build.
         }
     }
+
+    private static IsolatedBuildArtifacts AcquireSharedIsolatedBuildArtifacts(
+        string projectPath,
+        string targetFramework,
+        string buildConfiguration,
+        bool keepAlive)
+    {
+        lock (IsolatedBuildArtifactsLock)
+        {
+            EnsureIsolatedBuildCleanupRegistered();
+
+            var normalizedProjectPath = Path.GetFullPath(projectPath);
+            var registryKey = $"{normalizedProjectPath}|{targetFramework}|{buildConfiguration}";
+            if (!SharedIsolatedBuildArtifactsByKey.TryGetValue(registryKey, out var sharedArtifacts))
+            {
+                sharedArtifacts = new SharedIsolatedBuildArtifacts(
+                    registryKey,
+                    CreateSharedIsolatedBuildRoot(registryKey));
+                SharedIsolatedBuildArtifactsByKey.Add(registryKey, sharedArtifacts);
+            }
+
+            if (keepAlive)
+            {
+                sharedArtifacts.MarkKeepAlive();
+            }
+
+            sharedArtifacts.LeaseCount++;
+            return new IsolatedBuildArtifacts(
+                sharedArtifacts.RootPath,
+                () => ReleaseSharedIsolatedBuildArtifacts(sharedArtifacts.RegistryKey));
+        }
+    }
+
+    private static string CreateSharedIsolatedBuildRoot(string registryKey)
+    {
+        var processQualifiedKey = $"{Environment.ProcessId}|{registryKey}";
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(processQualifiedKey))).Substring(0, 12);
+        var rootPath = Path.Combine(Path.GetTempPath(), $"AppAutomationDesktopBuild-p{Environment.ProcessId}-{hash}");
+        Directory.CreateDirectory(rootPath);
+        return rootPath;
+    }
+
+    private static void ReleaseSharedIsolatedBuildArtifacts(string registryKey)
+    {
+        SharedIsolatedBuildArtifacts? releasedArtifacts = null;
+
+        lock (IsolatedBuildArtifactsLock)
+        {
+            if (!SharedIsolatedBuildArtifactsByKey.TryGetValue(registryKey, out var sharedArtifacts))
+            {
+                return;
+            }
+
+            if (sharedArtifacts.LeaseCount > 0)
+            {
+                sharedArtifacts.LeaseCount--;
+            }
+
+            if (sharedArtifacts.KeepAlive || sharedArtifacts.LeaseCount > 0)
+            {
+                return;
+            }
+
+            SharedIsolatedBuildArtifactsByKey.Remove(registryKey);
+            releasedArtifacts = sharedArtifacts;
+        }
+
+        if (releasedArtifacts is not null)
+        {
+            TryDeleteDirectory(releasedArtifacts.RootPath);
+        }
+    }
+
+    private static void EnsureIsolatedBuildCleanupRegistered()
+    {
+        if (_isolatedBuildCleanupRegistered)
+        {
+            return;
+        }
+
+        AppDomain.CurrentDomain.ProcessExit += static (_, _) => CleanupSharedIsolatedBuildArtifacts();
+        _isolatedBuildCleanupRegistered = true;
+    }
+
+    private static void CleanupSharedIsolatedBuildArtifacts()
+    {
+        SharedIsolatedBuildArtifacts[] artifactsToCleanup;
+        lock (IsolatedBuildArtifactsLock)
+        {
+            artifactsToCleanup = SharedIsolatedBuildArtifactsByKey.Values.ToArray();
+            SharedIsolatedBuildArtifactsByKey.Clear();
+        }
+
+        foreach (var artifacts in artifactsToCleanup)
+        {
+            TryDeleteDirectory(artifacts.RootPath);
+        }
+    }
+
+    private static void TryDeleteDirectory(string rootPath)
+    {
+        try
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup for auto-created isolated build roots.
+        }
+    }
+
+    private static string EnsureIsolatedBuildPropsFile(string solutionRoot, string buildOutputRoot)
+    {
+        var normalizedBuildRoot = Path.GetFullPath(buildOutputRoot);
+        Directory.CreateDirectory(normalizedBuildRoot);
+
+        var buildPropsPath = Path.Combine(normalizedBuildRoot, "AppAutomation.IsolatedBuild.props");
+        var repositoryBuildPropsPath = Path.Combine(solutionRoot, "Directory.Build.props");
+        var baseOutputRoot = EscapeBuildPath(Path.Combine(normalizedBuildRoot, "bin")) + @"\";
+        var baseIntermediateRoot = EscapeBuildPath(Path.Combine(normalizedBuildRoot, "obj")) + @"\";
+        var importLine = File.Exists(repositoryBuildPropsPath)
+            ? $"  <Import Project=\"{EscapeBuildPath(repositoryBuildPropsPath)}\" />{Environment.NewLine}"
+            : string.Empty;
+
+        var content = $$"""
+<Project>
+{{importLine}}  <PropertyGroup>
+    <BaseOutputPath>{{baseOutputRoot}}$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath>{{baseIntermediateRoot}}$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>{{baseIntermediateRoot}}$(MSBuildProjectName)\</MSBuildProjectExtensionsPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\bin\**;$(MSBuildProjectDirectory)\obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>
+""";
+
+        if (!File.Exists(buildPropsPath) || !string.Equals(File.ReadAllText(buildPropsPath), content, StringComparison.Ordinal))
+        {
+            File.WriteAllText(buildPropsPath, content);
+        }
+
+        return buildPropsPath;
+    }
+
+    private static string EscapeBuildPath(string path)
+    {
+        return SecurityElement.Escape(Path.GetFullPath(path)) ?? Path.GetFullPath(path);
+    }
+
+    private sealed record IsolatedBuildArtifacts(string RootPath, Action? Dispose);
+
+    private sealed class SharedIsolatedBuildArtifacts
+    {
+        public SharedIsolatedBuildArtifacts(string registryKey, string rootPath)
+        {
+            RegistryKey = registryKey;
+            RootPath = rootPath;
+        }
+
+        public string RegistryKey { get; }
+
+        public string RootPath { get; }
+
+        public int LeaseCount { get; set; }
+
+        public bool KeepAlive { get; private set; }
+
+        public void MarkKeepAlive()
+        {
+            KeepAlive = true;
+        }
+    }
+
 }

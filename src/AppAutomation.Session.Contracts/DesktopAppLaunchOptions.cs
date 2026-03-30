@@ -51,6 +51,11 @@ public sealed class DesktopAppLaunchOptions
         new Dictionary<string, string?>(StringComparer.Ordinal);
 
     /// <summary>
+    /// Gets a callback invoked when the launched session is disposed or launch fails before the session is created.
+    /// </summary>
+    public Action? DisposeCallback { get; init; }
+
+    /// <summary>
     /// Gets the maximum time to wait for the main window to appear.
     /// </summary>
     /// <value>The timeout duration. Defaults to 20 seconds.</value>

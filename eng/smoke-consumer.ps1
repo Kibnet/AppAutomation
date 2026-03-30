@@ -4,6 +4,7 @@ param(
     [string]$PackagesPath,
     [string]$Version,
     [string]$WorkspaceRoot,
+    [string]$PackagesCacheRoot,
     [switch]$SkipPack,
     [switch]$KeepWorkspace
 )
@@ -53,11 +54,9 @@ function Invoke-Dotnet {
 function Write-NuGetConfig {
     param(
         [string]$Path,
-        [string]$PackagesPath
+        [string]$PackagesPath,
+        [string]$GlobalPackagesFolder
     )
-
-    $configDirectory = Split-Path -Path $Path -Parent
-    $globalPackagesFolder = Join-Path $configDirectory ".packages"
 
 @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -72,6 +71,34 @@ function Write-NuGetConfig {
   </packageSources>
 </configuration>
 "@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Remove-DirectoryWithRetry {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $removed = $false
+    for ($attempt = 0; $attempt -lt 12 -and -not $removed; $attempt++) {
+        if ($attempt -gt 0) {
+            Start-Sleep -Seconds 5
+        }
+
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            }
+        }
+        catch {
+            cmd /c "rd /s /q `"$Path`"" 2>$null | Out-Null
+        }
+
+        $removed = -not (Test-Path -LiteralPath $Path)
+    }
+
+    return $removed
 }
 
 function Write-WorkspaceGlobalJson {
@@ -93,6 +120,51 @@ function Write-WorkspaceGlobalJson {
   }
 }
 "@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Complete-GeneratedTestHostScaffoldForStrictVerification {
+    param(
+        [string]$WorkspaceRoot,
+        [string]$ConsumerName
+    )
+
+    $launchHostPath = Join-Path $WorkspaceRoot "tests\$ConsumerName.AppAutomation.TestHost\${ConsumerName}AppLaunchHost.cs"
+    if (-not (Test-Path $launchHostPath)) {
+        throw "Generated TestHost scaffold was not found: $launchHostPath"
+    }
+
+    $contents = Get-Content -Path $launchHostPath -Raw
+    $updated = $contents
+
+    $updated = $updated.Replace(
+@"
+public static Type AvaloniaAppType => throw new NotImplementedException(
+        "Reference your Avalonia App type here, for example typeof(MyApp.Desktop.App).");
+"@,
+@"
+public static Type AvaloniaAppType => typeof(${ConsumerName}AppLaunchHost);
+"@)
+
+    $updated = $updated.Replace("REPLACE_WITH_YOUR_SOLUTION.sln", "$ConsumerName.sln")
+    $updated = $updated.Replace("src\\REPLACE_WITH_YOUR_DESKTOP_PROJECT\\REPLACE_WITH_YOUR_DESKTOP_PROJECT.csproj", "src\\$ConsumerName\\$ConsumerName.csproj")
+    $updated = $updated.Replace("REPLACE_WITH_YOUR_DESKTOP_EXE.exe", "$ConsumerName.exe")
+    $updated = $updated.Replace(
+@"
+        return AvaloniaHeadlessLaunchHost.Create(
+            static () => throw new NotImplementedException(
+                "Reference your Avalonia app and return the root Window instance here."));
+"@,
+@"
+        return AvaloniaHeadlessLaunchHost.Create(
+            static () => throw new NotSupportedException(
+                "Replace the generated headless bootstrap with your AUT bootstrap before running UI sessions."));
+"@)
+
+    if ($updated -eq $contents) {
+        throw "Generated TestHost scaffold did not contain the expected placeholders: $launchHostPath"
+    }
+
+    Set-Content -Path $launchHostPath -Value $updated -Encoding UTF8
 }
 
 $repoRoot = Get-RepoRoot
@@ -129,10 +201,15 @@ if (-not (Test-Path $PackagesPath)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
-    $WorkspaceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AppAutomationSmoke-" + [System.Guid]::NewGuid().ToString("N"))
+    $WorkspaceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-smoke-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
+}
+
+if ([string]::IsNullOrWhiteSpace($PackagesCacheRoot)) {
+    $PackagesCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("aa-smoke-packages-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
 }
 
 New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $PackagesCacheRoot -Force | Out-Null
 
 $authoringProjectDir = Join-Path $WorkspaceRoot "Smoke.Authoring"
 $runtimeProjectDir = Join-Path $WorkspaceRoot "Smoke.Headless.Tests"
@@ -145,7 +222,7 @@ $globalJsonPath = Join-Path $WorkspaceRoot "global.json"
 $solutionPath = Join-Path $WorkspaceRoot "Smoke.AppAutomation.sln"
 $authoringProjectPath = Join-Path $authoringProjectDir "Smoke.Authoring.csproj"
 $runtimeProjectPath = Join-Path $runtimeProjectDir "Smoke.Headless.Tests.csproj"
-Write-NuGetConfig -Path $nugetConfig -PackagesPath $PackagesPath
+Write-NuGetConfig -Path $nugetConfig -PackagesPath $PackagesPath -GlobalPackagesFolder $PackagesCacheRoot
 Write-WorkspaceGlobalJson -Path $globalJsonPath
 
 @"
@@ -334,45 +411,47 @@ Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("sln", $solutionPath
 Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("restore", $solutionPath)
 Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @("build", $solutionPath, "-c", $Configuration, "--no-restore")
 
-$templateWorkspace = Join-Path $WorkspaceRoot "TemplateConsumer"
-$templateHive = Join-Path $WorkspaceRoot ".template-hive"
-$toolInstallPath = Join-Path $WorkspaceRoot ".tools"
-$templatePackagePath = Join-Path $PackagesPath "AppAutomation.Templates.$resolvedVersion.nupkg"
-
+$templateConsumerName = "TemplateConsumer"
+$templateWorkspace = Join-Path $WorkspaceRoot "tc"
+$templateHive = Join-Path $WorkspaceRoot "h"
 New-Item -ItemType Directory -Path $templateWorkspace -Force | Out-Null
-Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesPath $PackagesPath
+Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesPath $PackagesPath -GlobalPackagesFolder $PackagesCacheRoot
 Write-WorkspaceGlobalJson -Path (Join-Path $templateWorkspace "global.json")
 
-Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @(
-    "tool", "install",
-    "--tool-path", $toolInstallPath,
-    "--add-source", $PackagesPath,
-    "AppAutomation.Tooling",
-    "--version", $resolvedVersion)
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
+    "new", "tool-manifest")
 
-Invoke-Dotnet -WorkingDirectory $WorkspaceRoot -Arguments @(
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
+    "tool", "install",
+    "AppAutomation.Tooling",
+    "--version", $resolvedVersion,
+    "--add-source", $PackagesPath)
+
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
     "new", "install",
-    $templatePackagePath,
-    "--debug:custom-hive", $templateHive)
+    "AppAutomation.Templates@$resolvedVersion",
+    "--add-source", $PackagesPath,
+    "--debug:custom-hive", $templateHive,
+    "--force")
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
     "new", "appauto-avalonia",
-    "--name", "TemplateConsumer",
+    "--name", $templateConsumerName,
     "--AppAutomationVersion", $resolvedVersion,
     "--debug:custom-hive", $templateHive)
 
-$templateHeadlessProject = Join-Path $templateWorkspace "tests\TemplateConsumer.UiTests.Headless\TemplateConsumer.UiTests.Headless.csproj"
-$templateFlaUiProject = Join-Path $templateWorkspace "tests\TemplateConsumer.UiTests.FlaUI\TemplateConsumer.UiTests.FlaUI.csproj"
+Write-Host "Completing generated TestHost placeholders before strict doctor verification."
+Complete-GeneratedTestHostScaffoldForStrictVerification -WorkspaceRoot $templateWorkspace -ConsumerName $templateConsumerName
+
+$templateHeadlessProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.Headless\$templateConsumerName.UiTests.Headless.csproj"
+$templateFlaUiProject = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.FlaUI\$templateConsumerName.UiTests.FlaUI.csproj"
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateHeadlessProject)
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateHeadlessProject, "-c", $Configuration, "--no-restore")
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateFlaUiProject)
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateFlaUiProject, "-c", $Configuration, "--no-restore")
 
-& (Join-Path $toolInstallPath "appautomation.exe") "doctor" "--repo-root" $templateWorkspace "--strict"
-if ($LASTEXITCODE -ne 0) {
-    throw "appautomation doctor failed for generated template consumer."
-}
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("tool", "run", "appautomation", "--", "doctor", "--repo-root", ".", "--strict")
 
 Write-Host "Consumer smoke succeeded. Workspace: $WorkspaceRoot"
 
@@ -384,22 +463,14 @@ if (-not $KeepWorkspace) {
         # Best effort. Cleanup fallback below will still run.
     }
 
-    $removed = $false
-    for ($attempt = 0; $attempt -lt 3 -and -not $removed; $attempt++) {
-        Start-Sleep -Seconds 2
-        try {
-            if (Test-Path $WorkspaceRoot) {
-                Remove-Item -Path $WorkspaceRoot -Recurse -Force -ErrorAction Stop
-            }
-        }
-        catch {
-            cmd /c "rd /s /q `"$WorkspaceRoot`"" | Out-Null
-        }
+    $workspaceRemoved = Remove-DirectoryWithRetry -Path $WorkspaceRoot
+    $packagesRemoved = Remove-DirectoryWithRetry -Path $PackagesCacheRoot
 
-        $removed = -not (Test-Path $WorkspaceRoot)
+    if (-not $workspaceRemoved) {
+        Write-Host "Temporary smoke workspace was left on disk: $WorkspaceRoot"
     }
 
-    if (-not $removed) {
-        Write-Host "Temporary smoke workspace was left on disk: $WorkspaceRoot"
+    if (-not $packagesRemoved) {
+        Write-Host "Temporary smoke NuGet cache was left on disk: $PackagesCacheRoot"
     }
 }

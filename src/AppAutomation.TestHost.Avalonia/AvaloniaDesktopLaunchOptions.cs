@@ -18,4 +18,8 @@ public sealed class AvaloniaDesktopLaunchOptions
 
     public IReadOnlyDictionary<string, string?> EnvironmentVariables { get; init; } =
         new Dictionary<string, string?>(StringComparer.Ordinal);
+
+    public bool UseIsolatedBuildOutput { get; init; }
+
+    public string? IsolatedBuildRoot { get; init; }
 }

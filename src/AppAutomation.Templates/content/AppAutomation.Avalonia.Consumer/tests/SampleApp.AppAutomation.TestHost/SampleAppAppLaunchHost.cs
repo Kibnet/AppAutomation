@@ -5,6 +5,9 @@ namespace SampleApp.AppAutomation.TestHost;
 
 public static class SampleAppAppLaunchHost
 {
+    public static Type AvaloniaAppType => throw new NotImplementedException(
+        "Reference your Avalonia App type here, for example typeof(MyApp.Desktop.App).");
+
     private static readonly AvaloniaDesktopAppDescriptor DesktopApp = new(
         solutionFileNames: new[]
         {

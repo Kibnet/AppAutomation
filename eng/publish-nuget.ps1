@@ -91,3 +91,10 @@ if (-not [string]::IsNullOrWhiteSpace($SymbolSource) -and $symbolPackages.Count 
 elseif ($symbolPackages.Count -gt 0) {
     Write-Host "Symbol packages were found but SymbolSource was not provided. Skipping .snupkg publish."
 }
+
+$verifyScriptPath = Join-Path $PSScriptRoot "verify-published-consumer.ps1"
+Write-Host "Verifying published consumer flow for version $resolvedVersion -> $Source"
+& $verifyScriptPath -Version $resolvedVersion -Source $Source
+if ($LASTEXITCODE -ne 0) {
+    throw "verify-published-consumer.ps1 failed for version $resolvedVersion."
+}

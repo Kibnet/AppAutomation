@@ -16,7 +16,7 @@
     "AppAutomationVersion": {
       "type": "parameter",
       "datatype": "text",
-      "defaultValue": "1.1.0",
+      "defaultValue": "2.1.0",
       "replaces": "__APPAUTOMATION_VERSION__"
     },
     "TestTargetFramework": {

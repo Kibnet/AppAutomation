@@ -31,6 +31,7 @@ GitHub release path:
 ## Local Pack
 
 ```powershell
+pwsh -File eng/sync-consumer-assets.ps1
 pwsh -File eng/pack.ps1 -Configuration Release
 ```
 
@@ -46,11 +47,12 @@ artifacts/packages/<version>/
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Smoke now validates three things:
+Smoke now validates four things:
 
 1. package-only authoring/runtime consumer can restore/build;
-2. template package installs and generates canonical topology;
-3. `appautomation doctor` succeeds against generated consumer repo.
+2. template package installs through the documented `package@version` path and generates canonical topology;
+3. the CLI tool installs through a local tool manifest;
+4. `dotnet tool run appautomation doctor --strict` succeeds after smoke applies scripted completion of generated `TestHost` placeholders; untouched `dotnet new` output is expected to remain non-strict until the consumer replaces placeholders.
 
 ## Publish
 
@@ -59,6 +61,18 @@ pwsh -File eng/publish-nuget.ps1 `
   -Version 2.1.0 `
   -Source https://api.nuget.org/v3/index.json `
   -ApiKey <api-key>
+```
+
+`publish-nuget.ps1` now runs post-publish consumer verification automatically and fails the release if the published template/tool are not yet consumable from the target feed.
+
+## Published Consumer Verification
+
+Run this explicitly when you need to validate feed propagation or troubleshoot a release:
+
+```powershell
+pwsh -File eng/verify-published-consumer.ps1 `
+  -Version 2.1.0 `
+  -Source https://api.nuget.org/v3/index.json
 ```
 
 Optional environment variables:
@@ -79,6 +93,7 @@ If the consumer organization uses an internal mirror:
 ## Release Checklist
 
 ```powershell
+pwsh -File eng/sync-consumer-assets.ps1
 dotnet build AppAutomation.sln -c Release
 dotnet test AppAutomation.sln -c Release
 pwsh -File eng/pack.ps1 -Configuration Release
@@ -124,6 +139,7 @@ Publishing without these steps is not considered validated.
 ## Локальная упаковка
 
 ```powershell
+pwsh -File eng/sync-consumer-assets.ps1
 pwsh -File eng/pack.ps1 -Configuration Release
 ```
 
@@ -139,11 +155,12 @@ artifacts/packages/<version>/
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
 ```
 
-Текущая быстрая проверка подтверждает три вещи:
+Текущая быстрая проверка подтверждает четыре вещи:
 
 1. потребитель, работающий только через пакеты для `Authoring` и сред выполнения, может восстановить зависимости и собрать решение;
-2. пакет шаблонов устанавливается и создаёт стандартную структуру;
-3. `appautomation doctor` успешно проходит на сгенерированном репозитории-потребителе.
+2. пакет шаблонов устанавливается по документированному пути `package@version` и создаёт стандартную структуру;
+3. CLI-инструмент устанавливается через локальный tool manifest;
+4. `dotnet tool run appautomation doctor --strict` успешно проходит после scripted completion placeholder-значений в generated `TestHost`; untouched результат `dotnet new` по-прежнему должен оставаться non-strict, пока потребитель не заменит заглушки.
 
 ## Публикация
 
@@ -152,6 +169,18 @@ pwsh -File eng/publish-nuget.ps1 `
   -Version 2.1.0 `
   -Source https://api.nuget.org/v3/index.json `
   -ApiKey <api-key>
+```
+
+`publish-nuget.ps1` теперь автоматически запускает post-publish проверку consumer flow и считает релиз неподтверждённым, если опубликованные template/tool ещё нельзя установить из целевого feed.
+
+## Проверка опубликованного consumer flow
+
+Запускайте этот скрипт отдельно, если нужно проверить распространение пакетов по feed или локализовать проблему релиза:
+
+```powershell
+pwsh -File eng/verify-published-consumer.ps1 `
+  -Version 2.1.0 `
+  -Source https://api.nuget.org/v3/index.json
 ```
 
 Необязательные переменные окружения:
@@ -172,6 +201,7 @@ pwsh -File eng/publish-nuget.ps1 `
 ## Проверочный список перед выпуском
 
 ```powershell
+pwsh -File eng/sync-consumer-assets.ps1
 dotnet build AppAutomation.sln -c Release
 dotnet test AppAutomation.sln -c Release
 pwsh -File eng/pack.ps1 -Configuration Release

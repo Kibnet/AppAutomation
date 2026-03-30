@@ -5,6 +5,7 @@ using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Tools;
 using FlaUI.UIA3;
+using System.Runtime.ExceptionServices;
 
 namespace AppAutomation.FlaUI.Session;
 
@@ -12,12 +13,19 @@ public sealed class DesktopAppSession : IDisposable
 {
     private readonly Application _application;
     private readonly UIA3Automation _automation;
+    private readonly Action? _disposeCallback;
     private bool _disposed;
 
-    private DesktopAppSession(Application application, UIA3Automation automation, Window mainWindow, ConditionFactory conditionFactory)
+    private DesktopAppSession(
+        Application application,
+        UIA3Automation automation,
+        Window mainWindow,
+        ConditionFactory conditionFactory,
+        Action? disposeCallback)
     {
         _application = application;
         _automation = automation;
+        _disposeCallback = disposeCallback;
         MainWindow = mainWindow;
         ConditionFactory = conditionFactory;
     }
@@ -78,13 +86,17 @@ public sealed class DesktopAppSession : IDisposable
             WaitForAutomationTree(mainWindowResult.Result, options.MainWindowTimeout, options.PollInterval);
 
             var conditionFactory = new ConditionFactory(new UIA3PropertyLibrary());
-            return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory);
+            return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory, options.DisposeCallback);
         }
-        catch
+        catch (Exception launchException)
         {
-            automation.Dispose();
-            TryTerminateApplication(application);
-            application.Dispose();
+            List<Exception>? cleanupExceptions = null;
+            TryCleanup(automation.Dispose, cleanupExceptions ??= []);
+            TryCleanup(() => TryTerminateApplication(application), cleanupExceptions ??= []);
+            TryCleanup(application.Dispose, cleanupExceptions ??= []);
+            TryCleanup(options.DisposeCallback, cleanupExceptions ??= []);
+            AttachCleanupExceptions(launchException, cleanupExceptions);
+            ExceptionDispatchInfo.Capture(launchException).Throw();
             throw;
         }
     }
@@ -97,10 +109,23 @@ public sealed class DesktopAppSession : IDisposable
         }
 
         _disposed = true;
-        _automation.Dispose();
-        TryTerminateApplication(_application);
-        _application.Dispose();
-        GC.SuppressFinalize(this);
+        try
+        {
+            _automation.Dispose();
+            TryTerminateApplication(_application);
+            _application.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                _disposeCallback?.Invoke();
+            }
+            finally
+            {
+                GC.SuppressFinalize(this);
+            }
+        }
     }
 
     internal static ProcessStartInfo CreateProcessStartInfo(
@@ -199,5 +224,34 @@ public sealed class DesktopAppSession : IDisposable
         {
             // Best effort kill.
         }
+    }
+
+    private static void TryCleanup(Action? cleanupAction, List<Exception> exceptions)
+    {
+        if (cleanupAction is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cleanupAction();
+        }
+        catch (Exception ex)
+        {
+            exceptions.Add(ex);
+        }
+    }
+
+    private static void AttachCleanupExceptions(Exception launchException, List<Exception>? cleanupExceptions)
+    {
+        if (cleanupExceptions is null || cleanupExceptions.Count == 0)
+        {
+            return;
+        }
+
+        launchException.Data["AppAutomation.CleanupException"] = cleanupExceptions.Count == 1
+            ? cleanupExceptions[0]
+            : new AggregateException(cleanupExceptions);
     }
 }

@@ -40,6 +40,16 @@ next to cover the widest possible set of `ControlType`.
 |---|---|---|
 | Spinner (`MixCountSpinner` visually TextBox) | currently as `UiControlType.TextBox` | In the current template this is a text field, not a full Spinner control; DSL supports both paths (`Spinner` and `TextBox`). |
 
+## Recommended mapping for less obvious Avalonia controls
+
+| Avalonia control | Recommended `UiControlType` | Notes |
+|---|---|---|
+| `ToggleSwitch` | `ToggleButton` | Prefer boolean state checks and explicit `AutomationId`. |
+| `ItemsControl` | `AutomationElement` | Mark child anchors with deterministic ids; don't wait on container text. |
+| `ScrollViewer` | `AutomationElement` | Treat as container/root anchor, not as primary assertion target. |
+| overlay / dialog root | `AutomationElement` | Give overlay root and action buttons separate ids. |
+| visible/invisible action pair | `Button` for each state | Use separate ids per concrete control, not one shared selector. |
+
 ## What is declared in enum but not fully covered by showcase
 
 | Control | Status | What's missing |
@@ -109,6 +119,16 @@ Not added: separate scenarios for `Calendar`, `DataGrid`, `CalendarDatePicker` s
 | Контрол | Avalonia в MainWindow | Причина |
 |---|---|---|
 | Spinner (`MixCountSpinner` визуально TextBox) | пока как `UiControlType.TextBox` | В текущем шаблоне это текстовое поле, а не полноценный Spinner control; DSL поддерживает оба пути (`Spinner` и `TextBox`). |
+
+## Рекомендуемое соответствие для менее очевидных Avalonia-контролов
+
+| Avalonia control | Рекомендуемый `UiControlType` | Комментарий |
+|---|---|---|
+| `ToggleSwitch` | `ToggleButton` | Предпочитайте проверки boolean-state и явный `AutomationId`. |
+| `ItemsControl` | `AutomationElement` | Размечайте дочерние anchors детерминированными id и не стройте assert'ы на тексте контейнера. |
+| `ScrollViewer` | `AutomationElement` | Рассматривайте как container/root anchor, а не как primary assertion target. |
+| overlay / dialog root | `AutomationElement` | Давайте отдельные ids для overlay root и action-button'ов. |
+| visible/invisible action pair | `Button` для каждого состояния | Используйте отдельные ids для каждого concrete control, а не один общий selector. |
 
 ## Что объявлено в enum, но не полноценно охвачено showcase
 

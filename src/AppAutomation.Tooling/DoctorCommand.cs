@@ -118,6 +118,7 @@ internal static class DoctorCommand
 
         ValidateTopology(appAutomationConsumers, issues);
         ValidateTargetFrameworks(appAutomationConsumers, issues);
+        ValidateGeneratedScaffold(options.RepositoryRoot, appAutomationConsumers, issues);
         ValidateNuGetConfiguration(options.RepositoryRoot, issues);
         ValidateGlobalJson(options.RepositoryRoot, issues);
 
@@ -170,6 +171,57 @@ internal static class DoctorCommand
                 }
             }
         }
+    }
+
+    private static void ValidateGeneratedScaffold(
+        string repositoryRoot,
+        IEnumerable<ProjectInspection> inspections,
+        List<DoctorIssue> issues)
+    {
+        var markers = new[]
+        {
+            new ScaffoldMarker("REPLACE_WITH_YOUR_", "replace the generated REPLACE_WITH_YOUR_* placeholders"),
+            new ScaffoldMarker("Reference your Avalonia App type here", "set AvaloniaAppType in the generated TestHost"),
+            new ScaffoldMarker("Reference your Avalonia app and return the root Window instance here", "replace the headless launch placeholder in TestHost"),
+            new ScaffoldMarker("TODO: Start your Avalonia Headless session and register it via HeadlessRuntime.SetSession(...).", "replace the generated HeadlessSessionHooks TODO"),
+            new ScaffoldMarker("TODO: Dispose the Avalonia Headless session and clear HeadlessRuntime.SetSession(null).", "replace the generated HeadlessSessionHooks cleanup TODO")
+        };
+
+        var inspectedFiles = inspections
+            .Select(static inspection => Path.GetDirectoryName(inspection.Path))
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .SelectMany(static path => Directory.EnumerateFiles(path!, "*", SearchOption.AllDirectories))
+            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(static path => Path.GetExtension(path) is ".cs" or ".csproj" or ".md" or ".json")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var hits = new List<string>();
+        foreach (var filePath in inspectedFiles)
+        {
+            var contents = File.ReadAllText(filePath);
+            foreach (var marker in markers)
+            {
+                if (contents.Contains(marker.Token, StringComparison.Ordinal))
+                {
+                    hits.Add($"{Path.GetRelativePath(repositoryRoot, filePath)} ({marker.Description})");
+                    break;
+                }
+            }
+        }
+
+        if (hits.Count == 0)
+        {
+            return;
+        }
+
+        issues.Add(new DoctorIssue(
+            DoctorIssueSeverity.Warning,
+            "Generated scaffold still contains placeholder markers:" + Environment.NewLine + string.Join(
+                Environment.NewLine,
+                hits.Select(static hit => $"  - {hit}"))));
     }
 
     private static void ValidateNuGetConfiguration(string repositoryRoot, List<DoctorIssue> issues)
@@ -259,4 +311,6 @@ internal static class DoctorCommand
     }
 
     private sealed record DoctorOptions(string RepositoryRoot, bool Strict);
+
+    private sealed record ScaffoldMarker(string Token, string Description);
 }
