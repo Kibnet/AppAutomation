@@ -177,6 +177,24 @@ In the `Authoring` project you:
 - manually add composite abstractions if necessary;
 - write shared scenarios once.
 
+### Optional: bootstrap scenarios with the Avalonia recorder
+
+If you want to reduce the first manual authoring pass, attach `AppAutomation.Recorder.Avalonia` to your AUT and let it generate `Authoring` partials instead of runtime-specific tests.
+
+- Keep page classes `partial`.
+- Keep the shared scenario base class `partial` too, because recorder output is emitted as an extra partial with `[Test]` methods.
+- Prefer stable `AutomationId`; `Name` locators are opt-in and intentionally treated as a weaker fallback.
+
+Reference smoke path in this repository:
+
+```powershell
+$env:APPAUTOMATION_RECORDER='1'
+$env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
+dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
+```
+
+The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, clear steps, save partials, and show the last AppAutomation DSL statement or diagnostics when a control cannot be recorded honestly.
+
 ### 5. Stabilize `Headless` first, then enable `FlaUI`
 
 Commands:
@@ -426,6 +444,24 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - объявляете `[UiControl(...)]` для простых элементов управления;
 - при необходимости вручную добавляете составные абстракции;
 - один раз пишете общие сценарии.
+
+### Опционально: ускорить старт через Avalonia recorder
+
+Если не хочется вручную проходить весь первый цикл authoring-кода, можно подключить `AppAutomation.Recorder.Avalonia` к AUT и генерировать partial-файлы прямо в `Authoring`, а не отдельные runtime-specific тесты.
+
+- Классы страниц должны оставаться `partial`.
+- Общий scenario base class тоже должен быть `partial`, потому что recorder добавляет новые `[Test]`-методы в отдельный partial.
+- Основной контракт селекторов для recorder-а это `AutomationId`; `Name` включается только осознанно и считается более слабым fallback.
+
+Референсный smoke path в этом репозитории:
+
+```powershell
+$env:APPAUTOMATION_RECORDER='1'
+$env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
+dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
+```
+
+Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, чистить шаги, сохранять partials и сразу видеть последний AppAutomation DSL-вызов или причину, почему конкретный контрол нельзя честно записать.
 
 ### 5. Сначала стабилизировать `Headless`, потом включать `FlaUI`
 

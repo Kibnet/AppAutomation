@@ -15,4 +15,8 @@
     <ProjectReference Include="..\..\src\AppAutomation.TUnit\AppAutomation.TUnit.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Authoring\AppAutomation.Authoring.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Recorded\" />
+  </ItemGroup>
 </Project>

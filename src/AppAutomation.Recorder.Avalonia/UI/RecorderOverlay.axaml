@@ -1,0 +1,86 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AppAutomation.Recorder.Avalonia.UI.RecorderOverlay">
+    <UserControl.Styles>
+        <Style Selector="UserControl">
+            <Setter Property="Background" Value="{DynamicResource RecorderOverlayBackground}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource RecorderOverlayBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <Style Selector="UserControl">
+            <Style.Resources>
+                <SolidColorBrush x:Key="RecorderOverlayBackground">#F4F6F8</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderOverlayBorder">#CBD5E1</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderText">#0F172A</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderAccent">#0F766E</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderMuted">#475569</SolidColorBrush>
+            </Style.Resources>
+        </Style>
+
+        <Style Selector="UserControl.dark-theme">
+            <Style.Resources>
+                <SolidColorBrush x:Key="RecorderOverlayBackground">#18212B</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderOverlayBorder">#334155</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderText">#E2E8F0</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderAccent">#2DD4BF</SolidColorBrush>
+                <SolidColorBrush x:Key="RecorderMuted">#CBD5E1</SolidColorBrush>
+            </Style.Resources>
+        </Style>
+    </UserControl.Styles>
+
+    <Border Padding="10">
+        <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*">
+            <Button x:Name="RecordButton"
+                    Grid.Row="0"
+                    Grid.Column="0"
+                    Padding="10,4"
+                    MinWidth="72"
+                    Content="Record" />
+            <Button x:Name="ClearButton"
+                    Grid.Row="0"
+                    Grid.Column="1"
+                    Margin="8,0,0,0"
+                    Padding="10,4"
+                    Content="Clear" />
+            <Button x:Name="SaveButton"
+                    Grid.Row="0"
+                    Grid.Column="2"
+                    Margin="8,0,0,0"
+                    Padding="10,4"
+                    Content="Save" />
+            <Button x:Name="MinimizeButton"
+                    Grid.Row="0"
+                    Grid.Column="3"
+                    Margin="8,0,0,0"
+                    Padding="10,4"
+                    Content="Hide" />
+            <TextBlock x:Name="StepCounter"
+                       Grid.Row="0"
+                       Grid.Column="4"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource RecorderAccent}"
+                       FontWeight="SemiBold"
+                       Text="0 steps" />
+            <TextBlock x:Name="StatusText"
+                       Grid.Row="0"
+                       Grid.Column="5"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource RecorderMuted}"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="540" />
+
+            <TextBlock x:Name="PreviewText"
+                       Grid.Row="1"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="6"
+                       Margin="0,8,0,0"
+                       FontFamily="Cascadia Mono, Consolas"
+                       Foreground="{DynamicResource RecorderText}"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="720" />
+        </Grid>
+    </Border>
+</UserControl>

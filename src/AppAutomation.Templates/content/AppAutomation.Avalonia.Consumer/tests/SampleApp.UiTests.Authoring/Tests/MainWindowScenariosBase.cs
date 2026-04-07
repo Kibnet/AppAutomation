@@ -6,7 +6,7 @@ using TUnit.Core;
 
 namespace SampleApp.UiTests.Authoring.Tests;
 
-public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
+public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
     where TSession : class, IUiTestSession
 {
     [Test]

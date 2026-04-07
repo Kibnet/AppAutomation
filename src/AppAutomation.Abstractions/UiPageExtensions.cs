@@ -628,6 +628,64 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Waits until a control reaches the expected enabled state.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the UI control.</param>
+    /// <param name="expected">The expected enabled state. Defaults to <see langword="true"/>.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control does not reach the expected state within the timeout.</exception>
+    public static TSelf WaitUntilIsEnabled<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IUiControl>> selector,
+        bool expected = true,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var control = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => control.IsEnabled == expected,
+            timeoutMs,
+            $"Control '{control.AutomationId}' did not reach expected enabled state.",
+            expectedValue: $"IsEnabled={expected}",
+            lastObservedValueFactory: () => $"IsEnabled={control.IsEnabled}");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a check box reaches the expected checked state.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the check box control.</param>
+    /// <param name="expected">The expected checked state. Defaults to <see langword="true"/>.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the check box does not reach the expected state within the timeout.</exception>
+    public static TSelf WaitUntilIsChecked<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ICheckBoxControl>> selector,
+        bool expected = true,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var checkBox = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => checkBox.IsChecked == expected,
+            timeoutMs,
+            $"CheckBox '{checkBox.AutomationId}' did not reach expected checked state.",
+            expectedValue: $"IsChecked={expected}",
+            lastObservedValueFactory: () => $"IsChecked={checkBox.IsChecked}");
+        return page;
+    }
+
+    /// <summary>
     /// Waits until a radio button reaches the expected checked state.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -712,6 +770,114 @@ public static class UiPageExtensions
             expectedValue: $"IsToggled={expected}",
             lastObservedValueFactory: () => $"IsToggled={toggle.IsToggled}");
         return page;
+    }
+
+    /// <summary>
+    /// Waits until a label's text equals the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the label control.</param>
+    /// <param name="expectedText">The expected text value.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the label does not reach the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ILabelControl>> selector,
+        string expectedText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            static control => control.Text,
+            text => string.Equals(text, expectedText, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            expectedText);
+    }
+
+    /// <summary>
+    /// Waits until a text box's text equals the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the text box control.</param>
+    /// <param name="expectedText">The expected text value.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the text box does not reach the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITextBoxControl>> selector,
+        string expectedText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            static control => control.Text,
+            text => string.Equals(text, expectedText, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            expectedText);
+    }
+
+    /// <summary>
+    /// Waits until a label's text contains the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the label control.</param>
+    /// <param name="expectedPart">The text that should appear in the label.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the label does not contain the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextContains<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ILabelControl>> selector,
+        string expectedPart,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            static control => control.Text,
+            text => text.Contains(expectedPart, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            $"Contains '{expectedPart}'");
+    }
+
+    /// <summary>
+    /// Waits until a text box's text contains the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the text box control.</param>
+    /// <param name="expectedPart">The text that should appear in the text box.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the text box does not contain the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextContains<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITextBoxControl>> selector,
+        string expectedPart,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            static control => control.Text,
+            text => text.Contains(expectedPart, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            $"Contains '{expectedPart}'");
     }
 
     /// <summary>
@@ -844,6 +1010,29 @@ public static class UiPageExtensions
         }
 
         return control;
+    }
+
+    private static TSelf WaitUntilText<TSelf, TControl>(
+        TSelf page,
+        Expression<Func<TSelf, TControl>> selector,
+        Func<TControl, string> textAccessor,
+        Func<string, bool> predicate,
+        int timeoutMs,
+        string valueLabel,
+        string expectedValue)
+        where TSelf : UiPage
+        where TControl : IUiControl
+    {
+        var control = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => predicate(textAccessor(control)),
+            timeoutMs,
+            $"Control '{control.AutomationId}' did not reach expected {valueLabel}.",
+            expectedValue: expectedValue,
+            lastObservedValueFactory: () => textAccessor(control));
+        return page;
     }
 
     private static void WaitUntil<TSelf, TControl>(
