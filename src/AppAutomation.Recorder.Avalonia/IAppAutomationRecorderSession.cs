@@ -6,9 +6,13 @@ public interface IAppAutomationRecorderSession : IDisposable
 
     int StepCount { get; }
 
+    int PersistableStepCount { get; }
+
     string LatestPreview { get; }
 
     string LatestStatus { get; }
+
+    RecorderValidationStatus LatestValidationStatus { get; }
 
     void Start();
 

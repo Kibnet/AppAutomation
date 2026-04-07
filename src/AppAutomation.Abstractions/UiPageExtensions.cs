@@ -881,6 +881,56 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Selects an item in a list box by its display text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the list box control.</param>
+    /// <param name="itemText">The text of the item to select.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the selection to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    public static TSelf SelectListBoxItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IListBoxControl>> selector,
+        string itemText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        var listBox = Resolve(selector, page);
+        if (listBox is not ISelectableListBoxControl selectableListBox)
+        {
+            throw new InvalidOperationException(
+                $"ListBox '{listBox.AutomationId}' does not support interactive selection in the current runtime.");
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => listBox.IsEnabled,
+            timeoutMs,
+            $"ListBox '{listBox.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={listBox.IsEnabled}");
+
+        selectableListBox.SelectItem(itemText);
+        var expected = NormalizeLookupText(itemText);
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(
+                NormalizeLookupText(selectableListBox.SelectedItemText),
+                expected,
+                StringComparison.OrdinalIgnoreCase),
+            timeoutMs,
+            $"ListBox '{listBox.AutomationId}' failed to select item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => selectableListBox.SelectedItemText);
+        return page;
+    }
+
+    /// <summary>
     /// Waits until a list box contains an item with the specified text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>

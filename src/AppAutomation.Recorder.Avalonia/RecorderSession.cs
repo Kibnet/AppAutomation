@@ -25,6 +25,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
     private readonly DispatcherTimer _textDebounceTimer;
     private readonly DispatcherTimer _sliderDebounceTimer;
     private readonly AppAutomationRecorderOptions _options;
+    private readonly RecorderHotkeyMap _hotkeyMap;
 
     private RecorderSessionState _state;
     private TextBox? _pendingTextBox;
@@ -42,7 +43,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = options.Logger ?? NullLogger.Instance;
-        _stepFactory = new RecorderStepFactory(options);
+        _hotkeyMap = RecorderHotkeyMap.Create(options.Hotkeys);
+        _stepFactory = new RecorderStepFactory(options, window);
         _codeGenerator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), _logger);
 
         _textDebounceTimer = new DispatcherTimer
@@ -57,29 +59,37 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         };
         _sliderDebounceTimer.Tick += (_, _) => FlushPendingSlider();
 
-        LatestStatus = "Recorder attached. Press Ctrl+Shift+R to start.";
+        LatestStatus = "Recorder attached. Use configured hotkeys or overlay controls to start.";
         AttachHandlers();
     }
+
+    internal event EventHandler? OverlayToggleRequested;
+
+    internal event EventHandler? ExportRequested;
 
     public RecorderSessionState State => _state;
 
     public int StepCount => _steps.Count;
 
+    public int PersistableStepCount => _steps.Count(static step => step.CanPersist);
+
     public string LatestPreview { get; private set; } = string.Empty;
 
     public string LatestStatus { get; private set; } = string.Empty;
 
+    public RecorderValidationStatus LatestValidationStatus { get; private set; } = RecorderValidationStatus.Valid;
+
     public void Start()
     {
         _state = RecorderSessionState.Recording;
-        SetStatus("Recording.");
+        SetStatus("Recording.", RecorderValidationStatus.Valid);
     }
 
     public void Stop()
     {
         FlushPendingState();
         _state = RecorderSessionState.Off;
-        SetStatus("Recording stopped.");
+        SetStatus("Recording stopped.", RecorderValidationStatus.Valid);
     }
 
     public void Clear()
@@ -87,7 +97,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         FlushPendingState();
         _steps.Clear();
         LatestPreview = string.Empty;
-        SetStatus("Recorded steps cleared.");
+        SetStatus("Recorded steps cleared.", RecorderValidationStatus.Valid);
     }
 
     public string ExportPreview()
@@ -100,12 +110,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
     {
         FlushPendingState();
         var result = await _codeGenerator.SaveAsync(_window, _options, _steps, outputDirectoryOverride: null, cancellationToken);
-        SetStatus(result.Message);
-        if (result.Success && result.ScenarioFilePath is not null)
-        {
-            LatestPreview = $"Saved: {Path.GetFileName(result.ScenarioFilePath)}";
-        }
-
+        ApplySaveResult(result);
         return result;
     }
 
@@ -113,7 +118,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
     {
         FlushPendingState();
         var result = await _codeGenerator.SaveAsync(_window, _options, _steps, outputDirectory, cancellationToken);
-        SetStatus(result.Message);
+        ApplySaveResult(result);
         return result;
     }
 
@@ -128,6 +133,22 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         }
 
         _detachActions.Clear();
+    }
+
+    private void ApplySaveResult(RecorderSaveResult result)
+    {
+        var status = !result.Success
+            ? RecorderValidationStatus.Invalid
+            : result.SkippedStepCount > 0
+                ? RecorderValidationStatus.Warning
+                : RecorderValidationStatus.Valid;
+        SetStatus(result.Message, status);
+        if (result.Success && result.ScenarioFilePath is not null)
+        {
+            LatestPreview = result.SkippedStepCount > 0
+                ? $"Saved: {Path.GetFileName(result.ScenarioFilePath)} ({result.PersistedStepCount} persisted, {result.SkippedStepCount} skipped)"
+                : $"Saved: {Path.GetFileName(result.ScenarioFilePath)}";
+        }
     }
 
     private void AttachHandlers()
@@ -166,6 +187,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
                 case ComboBox comboBox:
                     comboBox.SelectionChanged += OnComboBoxSelectionChanged;
                     _detachActions.Add(() => comboBox.SelectionChanged -= OnComboBoxSelectionChanged);
+                    break;
+                case ListBox listBox:
+                    listBox.SelectionChanged += OnListBoxSelectionChanged;
+                    _detachActions.Add(() => listBox.SelectionChanged -= OnListBoxSelectionChanged);
                     break;
                 case TabControl tabControl:
                     tabControl.SelectionChanged += OnTabControlSelectionChanged;
@@ -228,47 +253,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        if (_hotkeyMap.TryGetCommand(e.Key, e.KeyModifiers, out var command))
         {
-            switch (e.Key)
-            {
-                case Key.R:
-                    if (_state == RecorderSessionState.Recording)
-                    {
-                        Stop();
-                    }
-                    else
-                    {
-                        Start();
-                    }
-
-                    e.Handled = true;
-                    return;
-                case Key.S:
-                    _ = SaveAsync();
-                    e.Handled = true;
-                    return;
-                case Key.C:
-                    Clear();
-                    e.Handled = true;
-                    return;
-                case Key.A:
-                    CaptureAssertion(RecorderAssertionMode.Auto);
-                    e.Handled = true;
-                    return;
-                case Key.T:
-                    CaptureAssertion(RecorderAssertionMode.Text);
-                    e.Handled = true;
-                    return;
-                case Key.E:
-                    CaptureAssertion(RecorderAssertionMode.Enabled);
-                    e.Handled = true;
-                    return;
-                case Key.K:
-                    CaptureAssertion(RecorderAssertionMode.Checked);
-                    e.Handled = true;
-                    return;
-            }
+            HandleRecorderCommand(command);
+            e.Handled = true;
+            return;
         }
 
         if (_state != RecorderSessionState.Recording)
@@ -280,6 +269,47 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         if (focused is not null)
         {
             RegisterKeyboardInput(focused);
+        }
+    }
+
+    private void HandleRecorderCommand(RecorderCommandKind command)
+    {
+        switch (command)
+        {
+            case RecorderCommandKind.StartStop:
+                if (_state == RecorderSessionState.Recording)
+                {
+                    Stop();
+                }
+                else
+                {
+                    Start();
+                }
+                break;
+            case RecorderCommandKind.Save:
+                _ = SaveAsync();
+                break;
+            case RecorderCommandKind.Export:
+                ExportRequested?.Invoke(this, EventArgs.Empty);
+                break;
+            case RecorderCommandKind.Clear:
+                Clear();
+                break;
+            case RecorderCommandKind.CaptureAssertAuto:
+                CaptureAssertion(RecorderAssertionMode.Auto);
+                break;
+            case RecorderCommandKind.CaptureAssertText:
+                CaptureAssertion(RecorderAssertionMode.Text);
+                break;
+            case RecorderCommandKind.CaptureAssertEnabled:
+                CaptureAssertion(RecorderAssertionMode.Enabled);
+                break;
+            case RecorderCommandKind.CaptureAssertChecked:
+                CaptureAssertion(RecorderAssertionMode.Checked);
+                break;
+            case RecorderCommandKind.ToggleOverlayMinimize:
+                OverlayToggleRequested?.Invoke(this, EventArgs.Empty);
+                break;
         }
     }
 
@@ -301,6 +331,16 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         }
 
         AddStep(_stepFactory.TryCreateComboBoxStep(comboBox));
+    }
+
+    private void OnListBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording || sender is not ListBox listBox || !WasRecentlyTriggeredByUser(listBox))
+        {
+            return;
+        }
+
+        AddStep(_stepFactory.TryCreateListBoxStep(listBox));
     }
 
     private void OnTabControlSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -378,9 +418,21 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         {
             if (!string.IsNullOrWhiteSpace(result.Message))
             {
-                SetStatus(result.Message);
+                SetStatus(result.Message, RecorderValidationStatus.Invalid);
             }
 
+            return;
+        }
+
+        var preview = _codeGenerator.GeneratePreview(result.Step);
+        if (!result.Step.CanPersist && !_options.Validation.CaptureInvalidSteps)
+        {
+            LatestPreview = preview;
+            SetStatus(
+                string.IsNullOrWhiteSpace(result.Step.ValidationMessage)
+                    ? "Invalid recorder step was skipped."
+                    : result.Step.ValidationMessage,
+                RecorderValidationStatus.Invalid);
             return;
         }
 
@@ -395,8 +447,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         _steps.Add(result.Step);
         _lastFingerprint = fingerprint;
         _lastRecordedAt = now;
-        LatestPreview = _codeGenerator.GeneratePreview(result.Step);
-        SetStatus(string.IsNullOrWhiteSpace(result.Message) ? "Step recorded." : result.Message);
+        LatestPreview = preview;
+        SetStatus(ResolveStepStatusMessage(result), result.Step.ValidationStatus);
     }
 
     private static string CreateFingerprint(RecordedStep step)
@@ -409,7 +461,33 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
             step.StringValue ?? string.Empty,
             step.BoolValue?.ToString() ?? string.Empty,
             step.DoubleValue?.ToString() ?? string.Empty,
-            step.DateValue?.ToString("O") ?? string.Empty);
+            step.DateValue?.ToString("O") ?? string.Empty,
+            step.CanPersist);
+    }
+
+    private static string ResolveStepStatusMessage(StepCreationResult result)
+    {
+        if (result.Step is null)
+        {
+            return result.Message;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Step.ValidationMessage))
+        {
+            return result.Step.ValidationMessage!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            return result.Message;
+        }
+
+        return result.Step.ValidationStatus switch
+        {
+            RecorderValidationStatus.Warning => "Step recorded with warning.",
+            RecorderValidationStatus.Invalid => "Invalid step recorded for review only.",
+            _ => "Step recorded."
+        };
     }
 
     private void FlushPendingState()
@@ -520,9 +598,22 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession
         return null;
     }
 
-    private void SetStatus(string message)
+    private void SetStatus(string message, RecorderValidationStatus validationStatus)
     {
         LatestStatus = message;
-        _logger.LogInformation("{Message}", message);
+        LatestValidationStatus = validationStatus;
+
+        switch (validationStatus)
+        {
+            case RecorderValidationStatus.Invalid:
+                _logger.LogWarning("{Message}", message);
+                break;
+            case RecorderValidationStatus.Warning:
+                _logger.LogWarning("{Message}", message);
+                break;
+            default:
+                _logger.LogInformation("{Message}", message);
+                break;
+        }
     }
 }

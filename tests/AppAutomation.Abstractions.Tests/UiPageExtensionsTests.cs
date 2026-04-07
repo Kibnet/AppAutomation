@@ -36,6 +36,54 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task SelectListBoxItem_SelectsItem_WhenRuntimeSupportsCapability()
+    {
+        var listBox = new FakeSelectableListBoxControl(
+            "HierarchySelectionList",
+            [
+                new FakeListBoxItem("Prime", "Prime"),
+                new FakeListBoxItem("Fibonacci", "Fibonacci")
+            ]);
+        var page = new ListPage(new FakeResolver(("HierarchySelectionList", listBox)));
+
+        var returnedPage = page.SelectListBoxItem(static candidate => candidate.HierarchySelectionList, "Fibonacci");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Fibonacci");
+        }
+    }
+
+    [Test]
+    public async Task SelectListBoxItem_Throws_WhenRuntimeDoesNotSupportCapability()
+    {
+        var listBox = new FakeListBoxControl(
+            "HierarchySelectionList",
+            [
+                new FakeListBoxItem("Prime", "Prime"),
+                new FakeListBoxItem("Fibonacci", "Fibonacci")
+            ]);
+        var page = new ListPage(new FakeResolver(("HierarchySelectionList", listBox)));
+
+        Exception? exception = null;
+        try
+        {
+            page.SelectListBoxItem(static candidate => candidate.HierarchySelectionList, "Fibonacci");
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception is InvalidOperationException).IsEqualTo(true);
+            await Assert.That(exception!.Message).Contains("does not support interactive selection");
+        }
+    }
+
+    [Test]
     public async Task WaitUntilNameEquals_ThrowsUiOperationException_WithFailureContext()
     {
         var label = new FakeLabelControl("ResultLabel", "Actual");
@@ -251,6 +299,14 @@ public sealed class UiPageExtensionsTests
             "SaveButton");
     }
 
+    public static class ListPageDefinitions
+    {
+        public static UiControlDefinition HierarchySelectionList { get; } = new(
+            "HierarchySelectionList",
+            UiControlType.ListBox,
+            "HierarchySelectionList");
+    }
+
     private sealed class ComboPage : UiPage
     {
         public ComboPage(IUiControlResolver resolver)
@@ -301,6 +357,16 @@ public sealed class UiPageExtensionsTests
         public ICheckBoxControl AgreeCheck => Resolve<ICheckBoxControl>(StatePageDefinitions.AgreeCheck);
 
         public IButtonControl SaveButton => Resolve<IButtonControl>(StatePageDefinitions.SaveButton);
+    }
+
+    private sealed class ListPage : UiPage
+    {
+        public ListPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IListBoxControl HierarchySelectionList => Resolve<IListBoxControl>(ListPageDefinitions.HierarchySelectionList);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -472,5 +538,40 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    private class FakeListBoxControl : FakeControlBase, IListBoxControl
+    {
+        public FakeListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId, automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<IListBoxItem> Items { get; }
+    }
+
+    private sealed class FakeSelectableListBoxControl : FakeListBoxControl, ISelectableListBoxControl
+    {
+        public FakeSelectableListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId, items)
+        {
+        }
+
+        public string? SelectedItemText { get; private set; }
+
+        public void SelectItem(string itemText)
+        {
+            var match = Items.FirstOrDefault(candidate =>
+                string.Equals(candidate.Text, itemText, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            SelectedItemText = match.Text;
+        }
+    }
+
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
+
+    private sealed record FakeListBoxItem(string Text, string Name) : IListBoxItem;
 }

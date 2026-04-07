@@ -55,12 +55,29 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var diagnostics = new List<string>();
+        var persistableSteps = steps.Where(static step => step.CanPersist).ToArray();
+        var skippedSteps = steps.Where(static step => !step.CanPersist).ToArray();
+        foreach (var skippedStep in skippedSteps)
+        {
+            diagnostics.Add(
+                string.IsNullOrWhiteSpace(skippedStep.ValidationMessage)
+                    ? $"Skipped invalid step '{skippedStep.ActionKind}'."
+                    : skippedStep.ValidationMessage!);
+        }
+
+        if (persistableSteps.Length == 0)
+        {
+            return RecorderSaveResult.Failed(
+                "Recorder has no valid steps to save.",
+                diagnostics.ToArray());
+        }
+
         var reservedPropertyNames = new HashSet<string>(snapshot.ExistingControlPropertyNames, StringComparer.Ordinal);
         var generatedControlsByKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
         var generatedControls = new List<ExistingControlInfo>();
-        var renderedStatements = new List<string>(steps.Count);
+        var renderedStatements = new List<string>(persistableSteps.Length);
 
-        foreach (var step in steps)
+        foreach (var step in persistableSteps)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -123,10 +140,16 @@ internal sealed class AuthoringCodeGenerator
             scenarioFilePath,
             generatedControls.Count);
 
+        var message = skippedSteps.Length == 0
+            ? $"Recorded scenario '{target.ScenarioName}' was saved."
+            : $"Recorded scenario '{target.ScenarioName}' was saved. {skippedSteps.Length} invalid step(s) were skipped.";
+
         return RecorderSaveResult.Completed(
-            $"Recorded scenario '{target.ScenarioName}' was saved.",
+            message,
             pageFilePath,
             scenarioFilePath,
+            persistedStepCount: persistableSteps.Length,
+            skippedStepCount: skippedSteps.Length,
             diagnostics);
     }
 
@@ -296,6 +319,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SetChecked => $"Page.SetChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SetToggled => $"Page.SetToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SelectComboItem => $"Page.SelectComboItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.SelectListBoxItem => $"Page.SelectListBoxItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetSliderValue => $"Page.SetSliderValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SetSpinnerValue => $"Page.SetSpinnerValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SelectTabItem => $"Page.SelectTabItem(static page => page.{propertyName});",
@@ -310,9 +334,21 @@ internal sealed class AuthoringCodeGenerator
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
-        return string.IsNullOrWhiteSpace(step.Warning)
+        var commentParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(step.Warning))
+        {
+            commentParts.Add(step.Warning!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(step.ValidationMessage)
+            && !commentParts.Contains(step.ValidationMessage!, StringComparer.Ordinal))
+        {
+            commentParts.Add(step.ValidationMessage!);
+        }
+
+        return commentParts.Count == 0
             ? statement
-            : $"{statement} // {step.Warning}";
+            : $"{statement} // {string.Join(" | ", commentParts)}";
     }
 
     private static string EscapeString(string value)

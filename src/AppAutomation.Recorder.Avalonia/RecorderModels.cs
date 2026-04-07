@@ -3,7 +3,7 @@ using Avalonia.Controls;
 
 namespace AppAutomation.Recorder.Avalonia;
 
-internal enum RecordedActionKind
+public enum RecordedActionKind
 {
     EnterText = 0,
     ClickButton = 1,
@@ -20,15 +20,23 @@ internal enum RecordedActionKind
     WaitUntilIsChecked = 12,
     WaitUntilIsToggled = 13,
     WaitUntilIsSelected = 14,
-    WaitUntilIsEnabled = 15
+    WaitUntilIsEnabled = 15,
+    SelectListBoxItem = 16
 }
 
-internal enum RecorderAssertionMode
+public enum RecorderAssertionMode
 {
     Auto = 0,
     Text = 1,
     Enabled = 2,
     Checked = 3
+}
+
+public enum RecorderValidationStatus
+{
+    Valid = 0,
+    Warning = 1,
+    Invalid = 2
 }
 
 internal sealed record RecordedControlDescriptor(
@@ -47,7 +55,10 @@ internal sealed record RecordedStep(
     bool? BoolValue = null,
     double? DoubleValue = null,
     DateTime? DateValue = null,
-    string? Warning = null);
+    string? Warning = null,
+    RecorderValidationStatus ValidationStatus = RecorderValidationStatus.Valid,
+    string? ValidationMessage = null,
+    bool CanPersist = true);
 
 internal sealed record StepCreationResult(bool Success, RecordedStep? Step, string Message)
 {
@@ -56,6 +67,42 @@ internal sealed record StepCreationResult(bool Success, RecordedStep? Step, stri
     public static StepCreationResult Created(RecordedStep step, string? message = null)
     {
         return new StepCreationResult(true, step, message ?? string.Empty);
+    }
+}
+
+internal sealed record ResolvedControlResult(
+    bool Success,
+    RecordedControlDescriptor? Control,
+    string Message,
+    RecorderValidationStatus ValidationStatus,
+    string? ValidationMessage,
+    bool CanPersist)
+{
+    public static ResolvedControlResult Unsupported(string message)
+    {
+        return new ResolvedControlResult(
+            false,
+            null,
+            message,
+            RecorderValidationStatus.Invalid,
+            message,
+            false);
+    }
+
+    public static ResolvedControlResult Created(
+        RecordedControlDescriptor control,
+        string? message = null,
+        RecorderValidationStatus validationStatus = RecorderValidationStatus.Valid,
+        string? validationMessage = null,
+        bool canPersist = true)
+    {
+        return new ResolvedControlResult(
+            true,
+            control,
+            message ?? string.Empty,
+            validationStatus,
+            validationMessage,
+            canPersist);
     }
 }
 

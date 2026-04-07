@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -48,7 +49,7 @@ public static class AppAutomationRecorder
     private static void AttachOverlay(Window owner, IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
     {
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, options.OverlayTheme);
+        overlay.Attach(session, options);
 
         var overlayWindow = new Window
         {
@@ -63,7 +64,40 @@ public static class AppAutomationRecorder
             Title = "AppAutomation Recorder"
         };
 
-        overlay.MinimizeRequested += (_, _) => overlayWindow.IsVisible = false;
+        async Task ExportAsync()
+        {
+            if (!options.Overlay.EnableExportButton)
+            {
+                return;
+            }
+
+            var folders = await overlayWindow.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Export AppAutomation Recorder Output",
+                AllowMultiple = false
+            });
+            var selectedFolder = folders.FirstOrDefault()?.Path.LocalPath;
+            if (string.IsNullOrWhiteSpace(selectedFolder))
+            {
+                return;
+            }
+
+            _ = await session.SaveToDirectoryAsync(selectedFolder);
+        }
+
+        overlay.ExportRequested += async (_, _) => await ExportAsync();
+        overlay.MinimizeRequested += (_, _) => RepositionOverlay();
+        overlay.RestoreRequested += (_, _) => RepositionOverlay();
+
+        if (session is RecorderSession recorderSession)
+        {
+            recorderSession.ExportRequested += async (_, _) => await ExportAsync();
+            recorderSession.OverlayToggleRequested += (_, _) =>
+            {
+                overlay.ToggleMinimized();
+                RepositionOverlay();
+            };
+        }
 
         void RepositionOverlay()
         {

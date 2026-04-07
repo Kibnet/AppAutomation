@@ -9,11 +9,15 @@ internal sealed class RecorderStepFactory
 {
     private readonly AppAutomationRecorderOptions _options;
     private readonly RecorderSelectorResolver _selectorResolver;
+    private readonly RecorderStepValidator _stepValidator;
+    private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
 
-    public RecorderStepFactory(AppAutomationRecorderOptions options)
+    public RecorderStepFactory(AppAutomationRecorderOptions options, Window? validationWindow = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _selectorResolver = new RecorderSelectorResolver(options);
+        _selectorResolver = new RecorderSelectorResolver(options, validationWindow);
+        _stepValidator = new RecorderStepValidator();
+        _assertionExtractors = CreateAssertionExtractors(options);
     }
 
     public StepCreationResult TryCreateButtonStep(Control? source)
@@ -33,23 +37,48 @@ internal sealed class RecorderStepFactory
         }
 
         var locatorResult = _selectorResolver.Resolve(control, ClassifyControlType(control));
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        var descriptor = locatorResult.Step.Control;
-
-        return control switch
+        var descriptor = locatorResult.Control;
+        var step = control switch
         {
-            CheckBox checkBox => StepCreationResult.Created(
-                new RecordedStep(RecordedActionKind.SetChecked, descriptor, BoolValue: checkBox.IsChecked == true, Warning: descriptor.Warning)),
-            RadioButton radioButton => StepCreationResult.Created(
-                new RecordedStep(RecordedActionKind.SetChecked, descriptor, BoolValue: radioButton.IsChecked == true, Warning: descriptor.Warning)),
-            ToggleButton toggleButton and not CheckBox and not RadioButton => StepCreationResult.Created(
-                new RecordedStep(RecordedActionKind.SetToggled, descriptor, BoolValue: toggleButton.IsChecked == true, Warning: descriptor.Warning)),
-            _ => StepCreationResult.Created(new RecordedStep(RecordedActionKind.ClickButton, descriptor, Warning: descriptor.Warning))
+            CheckBox checkBox => new RecordedStep(
+                RecordedActionKind.SetChecked,
+                descriptor,
+                BoolValue: checkBox.IsChecked == true,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            RadioButton radioButton => new RecordedStep(
+                RecordedActionKind.SetChecked,
+                descriptor,
+                BoolValue: radioButton.IsChecked == true,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            ToggleButton toggleButton when control is not CheckBox && control is not RadioButton => new RecordedStep(
+                RecordedActionKind.SetToggled,
+                descriptor,
+                BoolValue: toggleButton.IsChecked == true,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            _ => new RecordedStep(
+                RecordedActionKind.ClickButton,
+                descriptor,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist)
         };
+
+        return CreateStep(control, step, locatorResult.Message);
     }
 
     public StepCreationResult TryCreateTextEntryStep(TextBox textBox)
@@ -57,22 +86,40 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(textBox);
 
         var locatorResult = _selectorResolver.Resolve(textBox, UiControlType.TextBox);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        var descriptor = locatorResult.Step.Control;
+        var descriptor = locatorResult.Control;
         var text = textBox.Text ?? string.Empty;
         if (TryResolveActionHint(textBox, descriptor.LocatorValue) == RecorderActionHint.SpinnerTextBox
             && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var numericValue))
         {
-            return StepCreationResult.Created(
-                new RecordedStep(RecordedActionKind.SetSpinnerValue, descriptor, DoubleValue: numericValue, Warning: descriptor.Warning));
+            return CreateStep(
+                textBox,
+                new RecordedStep(
+                    RecordedActionKind.SetSpinnerValue,
+                    descriptor,
+                    DoubleValue: numericValue,
+                    Warning: descriptor.Warning,
+                    ValidationStatus: locatorResult.ValidationStatus,
+                    ValidationMessage: locatorResult.ValidationMessage,
+                    CanPersist: locatorResult.CanPersist),
+                locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.EnterText, descriptor, StringValue: text, Warning: descriptor.Warning));
+        return CreateStep(
+            textBox,
+            new RecordedStep(
+                RecordedActionKind.EnterText,
+                descriptor,
+                StringValue: text,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateComboBoxStep(ComboBox comboBox)
@@ -86,13 +133,51 @@ internal sealed class RecorderStepFactory
         }
 
         var locatorResult = _selectorResolver.Resolve(comboBox, UiControlType.ComboBox);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SelectComboItem, locatorResult.Step.Control, StringValue: selectedText.Trim(), Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            comboBox,
+            new RecordedStep(
+                RecordedActionKind.SelectComboItem,
+                locatorResult.Control,
+                StringValue: selectedText.Trim(),
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
+    }
+
+    public StepCreationResult TryCreateListBoxStep(ListBox listBox)
+    {
+        ArgumentNullException.ThrowIfNull(listBox);
+
+        var selectedText = listBox.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return StepCreationResult.Unsupported("ListBox does not have a selected item to record.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(listBox, UiControlType.ListBox);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        return CreateStep(
+            listBox,
+            new RecordedStep(
+                RecordedActionKind.SelectListBoxItem,
+                locatorResult.Control,
+                StringValue: selectedText.Trim(),
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateTabSelectionStep(TabControl tabControl)
@@ -105,13 +190,21 @@ internal sealed class RecorderStepFactory
         }
 
         var locatorResult = _selectorResolver.Resolve(selectedItem, UiControlType.TabItem);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SelectTabItem, locatorResult.Step.Control, Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            selectedItem,
+            new RecordedStep(
+                RecordedActionKind.SelectTabItem,
+                locatorResult.Control,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateTreeSelectionStep(TreeView treeView)
@@ -119,9 +212,9 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(treeView);
 
         var locatorResult = _selectorResolver.Resolve(treeView, UiControlType.Tree);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
         var selectedText = ExtractTreeSelectionText(treeView.SelectedItem);
@@ -130,8 +223,17 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("TreeView selection does not expose a stable item text.");
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SelectTreeItem, locatorResult.Step.Control, StringValue: selectedText, Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            treeView,
+            new RecordedStep(
+                RecordedActionKind.SelectTreeItem,
+                locatorResult.Control,
+                StringValue: selectedText,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateSliderStep(Slider slider)
@@ -139,13 +241,22 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(slider);
 
         var locatorResult = _selectorResolver.Resolve(slider, UiControlType.Slider);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SetSliderValue, locatorResult.Step.Control, DoubleValue: slider.Value, Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            slider,
+            new RecordedStep(
+                RecordedActionKind.SetSliderValue,
+                locatorResult.Control,
+                DoubleValue: slider.Value,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateDatePickerStep(DatePicker datePicker)
@@ -158,13 +269,22 @@ internal sealed class RecorderStepFactory
         }
 
         var locatorResult = _selectorResolver.Resolve(datePicker, UiControlType.DateTimePicker);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SetDate, locatorResult.Step.Control, DateValue: selectedDate.Date, Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            datePicker,
+            new RecordedStep(
+                RecordedActionKind.SetDate,
+                locatorResult.Control,
+                DateValue: selectedDate.Date,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateCalendarStep(Calendar calendar)
@@ -177,13 +297,22 @@ internal sealed class RecorderStepFactory
         }
 
         var locatorResult = _selectorResolver.Resolve(calendar, UiControlType.Calendar);
-        if (!locatorResult.Success || locatorResult.Step is null)
+        if (!locatorResult.Success || locatorResult.Control is null)
         {
-            return locatorResult;
+            return StepCreationResult.Unsupported(locatorResult.Message);
         }
 
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.SetDate, locatorResult.Step.Control, DateValue: selectedDate.Date, Warning: locatorResult.Step.Control.Warning));
+        return CreateStep(
+            calendar,
+            new RecordedStep(
+                RecordedActionKind.SetDate,
+                locatorResult.Control,
+                DateValue: selectedDate.Date,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
     }
 
     public StepCreationResult TryCreateAssertionStep(Control? source, RecorderAssertionMode mode)
@@ -193,119 +322,36 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("No control is available for assertion capture.");
         }
 
-        if (mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Text)
+        foreach (var extractor in _assertionExtractors)
         {
-            var textResult = TryCreateTextAssertion(source);
-            if (textResult.Success || mode == RecorderAssertionMode.Text)
+            if (!extractor.TryCreate(source, mode, out var candidate) || candidate is null)
             {
-                return textResult;
+                continue;
             }
-        }
 
-        if (mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Checked)
-        {
-            var checkedResult = TryCreateCheckedAssertion(source);
-            if (checkedResult.Success || mode == RecorderAssertionMode.Checked)
+            var locatorResult = _selectorResolver.Resolve(source, candidate.ControlType);
+            if (!locatorResult.Success || locatorResult.Control is null)
             {
-                return checkedResult;
+                return StepCreationResult.Unsupported(locatorResult.Message);
             }
-        }
 
-        if (mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Enabled)
-        {
-            return TryCreateEnabledAssertion(source);
+            return CreateStep(
+                source,
+                new RecordedStep(
+                    candidate.ActionKind,
+                    locatorResult.Control,
+                    StringValue: candidate.StringValue,
+                    BoolValue: candidate.BoolValue,
+                    DoubleValue: candidate.DoubleValue,
+                    DateValue: candidate.DateValue,
+                    Warning: CombineMessage(locatorResult.Control.Warning, candidate.Warning),
+                    ValidationStatus: locatorResult.ValidationStatus,
+                    ValidationMessage: locatorResult.ValidationMessage,
+                    CanPersist: locatorResult.CanPersist),
+                locatorResult.Message);
         }
 
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
-    }
-
-    private StepCreationResult TryCreateTextAssertion(Control source)
-    {
-        var controlType = ClassifyTextAssertionType(source);
-        if (controlType is null)
-        {
-            return StepCreationResult.Unsupported("Control does not expose recordable text.");
-        }
-
-        var text = ExtractTextValue(source);
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return StepCreationResult.Unsupported("Control text is empty, so a text assertion would not add value.");
-        }
-
-        var locatorResult = _selectorResolver.Resolve(source, controlType.Value);
-        if (!locatorResult.Success || locatorResult.Step is null)
-        {
-            return locatorResult;
-        }
-
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.WaitUntilTextEquals, locatorResult.Step.Control, StringValue: text.Trim(), Warning: locatorResult.Step.Control.Warning));
-    }
-
-    private StepCreationResult TryCreateCheckedAssertion(Control source)
-    {
-        switch (source)
-        {
-            case CheckBox checkBox:
-            {
-                var locatorResult = _selectorResolver.Resolve(checkBox, UiControlType.CheckBox);
-                if (!locatorResult.Success || locatorResult.Step is null)
-                {
-                    return locatorResult;
-                }
-
-                return StepCreationResult.Created(
-                    new RecordedStep(RecordedActionKind.WaitUntilIsChecked, locatorResult.Step.Control, BoolValue: checkBox.IsChecked == true, Warning: locatorResult.Step.Control.Warning));
-            }
-            case RadioButton radioButton:
-            {
-                var locatorResult = _selectorResolver.Resolve(radioButton, UiControlType.RadioButton);
-                if (!locatorResult.Success || locatorResult.Step is null)
-                {
-                    return locatorResult;
-                }
-
-                return StepCreationResult.Created(
-                    new RecordedStep(RecordedActionKind.WaitUntilIsSelected, locatorResult.Step.Control, BoolValue: radioButton.IsChecked == true, Warning: locatorResult.Step.Control.Warning));
-            }
-            case ToggleButton toggleButton:
-            {
-                var locatorResult = _selectorResolver.Resolve(toggleButton, UiControlType.ToggleButton);
-                if (!locatorResult.Success || locatorResult.Step is null)
-                {
-                    return locatorResult;
-                }
-
-                return StepCreationResult.Created(
-                    new RecordedStep(RecordedActionKind.WaitUntilIsToggled, locatorResult.Step.Control, BoolValue: toggleButton.IsChecked == true, Warning: locatorResult.Step.Control.Warning));
-            }
-            case TabItem tabItem:
-            {
-                var locatorResult = _selectorResolver.Resolve(tabItem, UiControlType.TabItem);
-                if (!locatorResult.Success || locatorResult.Step is null)
-                {
-                    return locatorResult;
-                }
-
-                return StepCreationResult.Created(
-                    new RecordedStep(RecordedActionKind.WaitUntilIsSelected, locatorResult.Step.Control, BoolValue: tabItem.IsSelected, Warning: locatorResult.Step.Control.Warning));
-            }
-            default:
-                return StepCreationResult.Unsupported("Checked assertion is not supported for this control.");
-        }
-    }
-
-    private StepCreationResult TryCreateEnabledAssertion(Control source)
-    {
-        var locatorResult = _selectorResolver.Resolve(source, ClassifyControlType(source));
-        if (!locatorResult.Success || locatorResult.Step is null)
-        {
-            return locatorResult;
-        }
-
-        return StepCreationResult.Created(
-            new RecordedStep(RecordedActionKind.WaitUntilIsEnabled, locatorResult.Step.Control, BoolValue: source.IsEnabled, Warning: locatorResult.Step.Control.Warning));
     }
 
     private RecorderActionHint TryResolveActionHint(Control control, string locatorValue)
@@ -344,6 +390,7 @@ internal sealed class RecorderStepFactory
             Button => UiControlType.Button,
             TextBox => UiControlType.TextBox,
             ComboBox => UiControlType.ComboBox,
+            ListBox => UiControlType.ListBox,
             Slider => UiControlType.Slider,
             DatePicker => UiControlType.DateTimePicker,
             Calendar => UiControlType.Calendar,
@@ -376,5 +423,114 @@ internal sealed class RecorderStepFactory
             Control control when !string.IsNullOrWhiteSpace(AutomationProperties.GetName(control)) => AutomationProperties.GetName(control),
             _ => selectedItem?.ToString()
         };
+    }
+
+    private StepCreationResult CreateStep(Control source, RecordedStep step, string? message = null)
+    {
+        return StepCreationResult.Created(_stepValidator.Validate(step, source), message);
+    }
+
+    private static string? CombineMessage(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left))
+        {
+            return string.IsNullOrWhiteSpace(right) ? null : right;
+        }
+
+        if (string.IsNullOrWhiteSpace(right) || string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return left;
+        }
+
+        return $"{left} {right}";
+    }
+
+    private static IReadOnlyList<IRecorderAssertionExtractor> CreateAssertionExtractors(AppAutomationRecorderOptions options)
+    {
+        return
+        [
+            new TextAssertionExtractor(),
+            new CheckedAssertionExtractor(),
+            new EnabledAssertionExtractor(),
+            .. options.AssertionExtractors
+        ];
+    }
+
+    private sealed class TextAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+            {
+                return false;
+            }
+
+            var controlType = ClassifyTextAssertionType(control);
+            if (controlType is null)
+            {
+                return false;
+            }
+
+            var text = ExtractTextValue(control);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                controlType.Value,
+                RecordedActionKind.WaitUntilTextEquals,
+                StringValue: text.Trim());
+            return true;
+        }
+    }
+
+    private sealed class CheckedAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = control switch
+            {
+                _ when mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Checked) => null,
+                CheckBox checkBox => new RecorderAssertionCandidate(
+                    UiControlType.CheckBox,
+                    RecordedActionKind.WaitUntilIsChecked,
+                    BoolValue: checkBox.IsChecked == true),
+                RadioButton radioButton => new RecorderAssertionCandidate(
+                    UiControlType.RadioButton,
+                    RecordedActionKind.WaitUntilIsSelected,
+                    BoolValue: radioButton.IsChecked == true),
+                ToggleButton toggleButton when control is not CheckBox && control is not RadioButton => new RecorderAssertionCandidate(
+                    UiControlType.ToggleButton,
+                    RecordedActionKind.WaitUntilIsToggled,
+                    BoolValue: toggleButton.IsChecked == true),
+                TabItem tabItem => new RecorderAssertionCandidate(
+                    UiControlType.TabItem,
+                    RecordedActionKind.WaitUntilIsSelected,
+                    BoolValue: tabItem.IsSelected),
+                _ => null
+            };
+
+            return candidate is not null;
+        }
+    }
+
+    private sealed class EnabledAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Enabled))
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                ClassifyControlType(control),
+                RecordedActionKind.WaitUntilIsEnabled,
+                BoolValue: control.IsEnabled);
+            return true;
+        }
     }
 }

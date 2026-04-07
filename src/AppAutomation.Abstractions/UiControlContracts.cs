@@ -101,6 +101,23 @@ public interface IListBoxControl : IUiControl
 }
 
 /// <summary>
+/// Represents a list box control that supports interactive item selection.
+/// </summary>
+public interface ISelectableListBoxControl : IListBoxControl
+{
+    /// <summary>
+    /// Gets the text of the currently selected item, if any.
+    /// </summary>
+    string? SelectedItemText { get; }
+
+    /// <summary>
+    /// Selects an item by its display text.
+    /// </summary>
+    /// <param name="itemText">The text of the item to select.</param>
+    void SelectItem(string itemText);
+}
+
+/// <summary>
 /// Represents a check box control with a tri-state checked value.
 /// </summary>
 public interface ICheckBoxControl : IUiControl

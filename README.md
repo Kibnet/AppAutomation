@@ -184,6 +184,9 @@ If you want to reduce the first manual authoring pass, attach `AppAutomation.Rec
 - Keep page classes `partial`.
 - Keep the shared scenario base class `partial` too, because recorder output is emitted as an extra partial with `[Test]` methods.
 - Prefer stable `AutomationId`; `Name` locators are opt-in and intentionally treated as a weaker fallback.
+- `Save` writes into the canonical `Authoring` target, while `Export...` writes the same generated pair into a folder you pick from the overlay.
+- Invalid or ambiguous steps can stay visible in overlay preview for debugging, but they are skipped on save and reported as `persisted/skipped`.
+- Hotkeys, overlay behavior, selector validation, and custom assertion capture are configurable through `AppAutomationRecorderOptions`.
 
 Reference smoke path in this repository:
 
@@ -193,7 +196,15 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, clear steps, save partials, and show the last AppAutomation DSL statement or diagnostics when a control cannot be recorded honestly.
+The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, minimize or restore itself, save canonical partials, export the same output to another folder, and show the last AppAutomation DSL statement or diagnostics when a control cannot be recorded honestly.
+
+Custom assertion capture can be extended without forking the recorder:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions();
+recorderOptions.AssertionExtractors.Add(new MyStatusBadgeAssertionExtractor());
+AppAutomationRecorder.Attach(mainWindow, recorderOptions);
+```
 
 ### 5. Stabilize `Headless` first, then enable `FlaUI`
 
@@ -452,6 +463,9 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - Классы страниц должны оставаться `partial`.
 - Общий scenario base class тоже должен быть `partial`, потому что recorder добавляет новые `[Test]`-методы в отдельный partial.
 - Основной контракт селекторов для recorder-а это `AutomationId`; `Name` включается только осознанно и считается более слабым fallback.
+- `Save` пишет в каноническую директорию `Authoring`, а `Export...` сохраняет ту же пару generated partials в выбранную папку.
+- Невалидные или неоднозначные шаги можно оставить в preview для отладки, но при сохранении они пропускаются и попадают в статус как `persisted/skipped`.
+- Hotkeys, поведение overlay, selector validation и кастомный assertion capture настраиваются через `AppAutomationRecorderOptions`.
 
 Референсный smoke path в этом репозитории:
 
@@ -461,7 +475,15 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, чистить шаги, сохранять partials и сразу видеть последний AppAutomation DSL-вызов или причину, почему конкретный контрол нельзя честно записать.
+Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, сворачиваться и восстанавливаться, сохранять канонические partials, экспортировать тот же output в другую директорию и сразу видеть последний AppAutomation DSL-вызов или причину, почему конкретный контрол нельзя честно записать.
+
+Кастомный assertion capture можно подключить без форка recorder-а:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions();
+recorderOptions.AssertionExtractors.Add(new MyStatusBadgeAssertionExtractor());
+AppAutomationRecorder.Attach(mainWindow, recorderOptions);
+```
 
 ### 5. Сначала стабилизировать `Headless`, потом включать `FlaUI`
 
