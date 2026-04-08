@@ -13,9 +13,18 @@ internal sealed class RecorderStepFactory
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
 
     public RecorderStepFactory(AppAutomationRecorderOptions options, Window? validationWindow = null)
+        : this(
+            options,
+            validationWindow is null
+                ? null
+                : () => validationWindow.Content as Control)
+    {
+    }
+
+    internal RecorderStepFactory(AppAutomationRecorderOptions options, Func<Control?>? validationRootProvider)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _selectorResolver = new RecorderSelectorResolver(options, validationWindow);
+        _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
         _stepValidator = new RecorderStepValidator();
         _assertionExtractors = CreateAssertionExtractors(options);
     }
@@ -427,7 +436,18 @@ internal sealed class RecorderStepFactory
 
     private StepCreationResult CreateStep(Control source, RecordedStep step, string? message = null)
     {
-        return StepCreationResult.Created(_stepValidator.Validate(step, source), message);
+        var validated = _stepValidator.Validate(step, source) with
+        {
+            StepId = step.StepId == Guid.Empty ? Guid.NewGuid() : step.StepId,
+            LastValidationAt = DateTimeOffset.UtcNow
+        };
+        validated = validated with
+        {
+            ReviewState = ResolveReviewState(validated),
+            FailureCode = ResolveFailureCode(validated),
+            LastValidationAt = DateTimeOffset.UtcNow
+        };
+        return StepCreationResult.Created(validated, message);
     }
 
     private static string? CombineMessage(string? left, string? right)
@@ -454,6 +474,28 @@ internal sealed class RecorderStepFactory
             new EnabledAssertionExtractor(),
             .. options.AssertionExtractors
         ];
+    }
+
+    private static RecorderStepReviewState ResolveReviewState(RecordedStep step)
+    {
+        if (step.IsIgnored)
+        {
+            return RecorderStepReviewState.Ignored;
+        }
+
+        return step.ValidationStatus == RecorderValidationStatus.Valid && step.CanPersist
+            ? RecorderStepReviewState.Active
+            : RecorderStepReviewState.NeedsReview;
+    }
+
+    private static string? ResolveFailureCode(RecordedStep step)
+    {
+        return step.ValidationStatus switch
+        {
+            RecorderValidationStatus.Invalid when !step.CanPersist => "validation-invalid",
+            RecorderValidationStatus.Warning => "validation-warning",
+            _ => null
+        };
     }
 
     private sealed class TextAssertionExtractor : IRecorderAssertionExtractor

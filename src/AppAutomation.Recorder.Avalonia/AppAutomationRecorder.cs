@@ -1,9 +1,9 @@
 using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -48,26 +48,28 @@ public static class AppAutomationRecorder
 
     private static void AttachOverlay(Window owner, IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
     {
-        var overlay = new RecorderOverlay();
-        overlay.Attach(session, options);
-
-        var overlayWindow = new Window
-        {
-            CanResize = false,
-            SizeToContent = SizeToContent.WidthAndHeight,
-            ShowInTaskbar = false,
-            SystemDecorations = SystemDecorations.None,
-            TransparencyLevelHint = [WindowTransparencyLevel.Transparent],
-            Background = Brushes.Transparent,
-            Content = overlay,
-            Topmost = true,
-            Title = "AppAutomation Recorder"
-        };
+        var overlayWindow = CreateOverlayWindow(session, options);
+        var overlay = (RecorderOverlay)overlayWindow.Content!;
 
         async Task ExportAsync()
         {
             if (!options.Overlay.EnableExportButton)
             {
+                return;
+            }
+
+            if (session is RecorderSession recorderSession)
+            {
+                _ = await recorderSession.ExportWithDirectoryPickerAsync(async cancellationToken =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var folders = await overlayWindow.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+                    {
+                        Title = "Export AppAutomation Recorder Output",
+                        AllowMultiple = false
+                    });
+                    return folders.FirstOrDefault()?.Path.LocalPath;
+                });
                 return;
             }
 
@@ -86,46 +88,86 @@ public static class AppAutomationRecorder
         }
 
         overlay.ExportRequested += async (_, _) => await ExportAsync();
-        overlay.MinimizeRequested += (_, _) => RepositionOverlay();
-        overlay.RestoreRequested += (_, _) => RepositionOverlay();
 
         if (session is RecorderSession recorderSession)
         {
             recorderSession.ExportRequested += async (_, _) => await ExportAsync();
-            recorderSession.OverlayToggleRequested += (_, _) =>
-            {
-                overlay.ToggleMinimized();
-                RepositionOverlay();
-            };
+            recorderSession.OverlayToggleRequested += (_, _) => overlay.ToggleMinimized();
         }
 
-        void RepositionOverlay()
+        overlayWindow.Closed += (_, _) =>
         {
-            if (owner.WindowState == WindowState.Minimized)
+            if (OverlayWindows.TryGetValue(owner, out var registeredWindow)
+                && ReferenceEquals(registeredWindow, overlayWindow))
             {
-                overlayWindow.IsVisible = false;
-                return;
-            }
-
-            overlayWindow.IsVisible = true;
-            var x = owner.Position.X + Math.Max(0, (int)((owner.Width - overlayWindow.Width) / 2));
-            var y = owner.Position.Y;
-            overlayWindow.Position = new PixelPoint(x, y);
-        }
-
-        owner.PositionChanged += (_, _) => RepositionOverlay();
-        owner.PropertyChanged += (_, e) =>
-        {
-            if (string.Equals(e.Property.Name, nameof(Window.WindowState), StringComparison.Ordinal))
-            {
-                RepositionOverlay();
+                OverlayWindows.Remove(owner);
             }
         };
-        owner.Opened += (_, _) => RepositionOverlay();
-        owner.Activated += (_, _) => RepositionOverlay();
 
         overlayWindow.Show();
-        RepositionOverlay();
         OverlayWindows[owner] = overlayWindow;
     }
+
+    internal static Window CreateOverlayWindow(IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
+    {
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, options);
+        var configuration = GetOverlayWindowConfiguration(options);
+
+        return new Window
+        {
+            CanResize = configuration.CanResize,
+            SizeToContent = configuration.SizeToContent,
+            Width = configuration.Width,
+            Height = configuration.Height,
+            MinWidth = configuration.MinWidth,
+            MinHeight = configuration.MinHeight,
+            ShowInTaskbar = configuration.ShowInTaskbar,
+            SystemDecorations = configuration.SystemDecorations,
+            Background = new SolidColorBrush(configuration.BackgroundColor),
+            Content = overlay,
+            Topmost = configuration.Topmost,
+            Title = configuration.Title,
+            RequestedThemeVariant = configuration.ThemeVariant,
+            WindowStartupLocation = configuration.WindowStartupLocation
+        };
+    }
+
+    internal static OverlayWindowConfiguration GetOverlayWindowConfiguration(AppAutomationRecorderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var theme = RecorderOverlay.ResolveOverlayTheme(options.OverlayTheme);
+        var palette = RecorderOverlay.GetPalette(theme);
+
+        return
+        new(
+            CanResize: true,
+            SizeToContent: SizeToContent.Manual,
+            Width: 1080,
+            Height: 760,
+            MinWidth: 760,
+            MinHeight: 420,
+            ShowInTaskbar: true,
+            SystemDecorations: SystemDecorations.Full,
+            BackgroundColor: palette.OverlayBackground,
+            Topmost: false,
+            Title: "AppAutomation Recorder",
+            ThemeVariant: theme == RecorderOverlayTheme.Dark ? ThemeVariant.Dark : ThemeVariant.Light,
+            WindowStartupLocation: WindowStartupLocation.CenterScreen);
+    }
+
+    internal readonly record struct OverlayWindowConfiguration(
+        bool CanResize,
+        SizeToContent SizeToContent,
+        double Width,
+        double Height,
+        double MinWidth,
+        double MinHeight,
+        bool ShowInTaskbar,
+        SystemDecorations SystemDecorations,
+        Color BackgroundColor,
+        bool Topmost,
+        string Title,
+        ThemeVariant ThemeVariant,
+        WindowStartupLocation WindowStartupLocation);
 }

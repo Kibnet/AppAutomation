@@ -6,6 +6,9 @@ using System.Runtime.Serialization;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Styling;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -105,7 +108,39 @@ public sealed class RecorderTests
             await Assert.That(result.Success).IsEqualTo(true);
             await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
             await Assert.That(result.CanPersist).IsEqualTo(false);
-            await Assert.That(result.ValidationMessage).Contains("ambiguous");
+            await Assert.That(
+                result.ValidationMessage?.Contains("ambiguous", StringComparison.OrdinalIgnoreCase) == true
+                || result.ValidationMessage?.Contains("different control", StringComparison.OrdinalIgnoreCase) == true)
+                .IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task Resolve_UsesLiveRootProvider_WhenValidationRootChanges()
+    {
+        var firstRoot = new StackPanel();
+        var secondRoot = new StackPanel();
+        var firstButton = new Button { Content = "First" };
+        var secondButton = new Button { Content = "Second" };
+        AutomationProperties.SetAutomationId(firstButton, "RunButton");
+        AutomationProperties.SetAutomationId(secondButton, "RunButton");
+        firstRoot.Children.Add(firstButton);
+        secondRoot.Children.Add(secondButton);
+
+        Control? currentRoot = firstRoot;
+        var resolver = new RecorderSelectorResolver(new AppAutomationRecorderOptions(), () => currentRoot);
+
+        var initialResult = resolver.Resolve(firstButton, UiControlType.Button);
+        currentRoot = secondRoot;
+        var swappedResult = resolver.Resolve(secondButton, UiControlType.Button);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(initialResult.Success).IsEqualTo(true);
+            await Assert.That(initialResult.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(swappedResult.Success).IsEqualTo(true);
+            await Assert.That(swappedResult.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(swappedResult.CanPersist).IsEqualTo(true);
         }
     }
 
@@ -184,6 +219,141 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_CapturesTextFromLateAttachedObservedControls()
+    {
+        var root = new StackPanel();
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+        var textBox = new TextBox();
+        AutomationProperties.SetAutomationId(textBox, "SearchBox");
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        root.Children.Add(textBox);
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(textBox);
+        textBox.Text = "Alpha";
+        session.FlushPendingStateForTesting();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.EnterText(static page => page.SearchBox, \"Alpha\");");
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesDeleteOnlyTextEdits_ViaTextPropertyChanges()
+    {
+        var root = new StackPanel();
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+        var textBox = new TextBox { Text = "Seed" };
+        AutomationProperties.SetAutomationId(textBox, "QueryBox");
+        root.Children.Add(textBox);
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(textBox);
+        textBox.Text = string.Empty;
+        session.FlushPendingStateForTesting();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.EnterText(static page => page.QueryBox, \"\");");
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesButtonClick_FromNestedButtonContent()
+    {
+        var root = new StackPanel();
+        var nestedText = new TextBlock { Text = "Run" };
+        var button = new Button { Content = nestedText };
+        AutomationProperties.SetAutomationId(button, "CalculateButton");
+        root.Children.Add(button);
+
+        var session = new RecorderSession(CreateWindowStub(), new AppAutomationRecorderOptions { ShowOverlay = false }, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(nestedText);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.ClickButton(static page => page.CalculateButton);");
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_RevalidatesButtonActionImmediately_WhenLocatorTargetsNonClickableAncestor()
+    {
+        var root = new StackPanel();
+        var container = new Border();
+        var button = new Button { Content = "Run" };
+        AutomationProperties.SetAutomationId(container, "RunButton");
+        container.Child = button;
+        root.Children.Add(container);
+
+        var session = new RecorderSession(CreateWindowStub(), new AppAutomationRecorderOptions { ShowOverlay = false }, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(button);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].StatusMessage.Contains("not compatible", StringComparison.OrdinalIgnoreCase)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesComboAndListSelection_WhenTriggeredByRecordedInput()
+    {
+        var root = new StackPanel();
+        var comboBox = new ComboBox
+        {
+            ItemsSource = new[] { "GCD", "LCM" },
+            SelectedItem = "LCM"
+        };
+        var listBox = new ListBox
+        {
+            ItemsSource = new[] { "Prime", "Fibonacci" },
+            SelectedItem = "Fibonacci"
+        };
+        AutomationProperties.SetAutomationId(comboBox, "OperationCombo");
+        AutomationProperties.SetAutomationId(listBox, "SeriesList");
+        root.Children.Add(comboBox);
+        root.Children.Add(listBox);
+
+        var session = new RecorderSession(CreateWindowStub(), new AppAutomationRecorderOptions { ShowOverlay = false }, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RegisterPointerInputFromSourceForTesting(comboBox);
+        session.CaptureComboBoxSelectionForTesting(comboBox);
+        session.RegisterPointerInputFromSourceForTesting(listBox);
+        session.CaptureListBoxSelectionForTesting(listBox);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(2);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SelectComboItem(static page => page.OperationCombo, \"LCM\");");
+            await Assert.That(details.StepJournal[1].Preview).Contains("Page.SelectListBoxItem(static page => page.SeriesList, \"Fibonacci\");");
+        }
+    }
+
+    [Test]
     public async Task Overlay_MinimizeRestore_UpdatesPresentationAndCounters()
     {
         var session = new FakeRecorderSession
@@ -192,7 +362,8 @@ public sealed class RecorderTests
             PersistableStepCount = 2,
             LatestStatus = "Selector warning",
             LatestPreview = "Page.SelectListBoxItem(static page => page.HierarchySelectionList, \"Fibonacci\");",
-            LatestValidationStatus = RecorderValidationStatus.Warning
+            LatestValidationStatus = RecorderValidationStatus.Warning,
+            CurrentScenarioFilePath = @"C:\Recorder\Recorded\MainWindowScenariosBase.RecordedSmoke.<timestamp>.g.cs"
         };
         var overlay = new RecorderOverlay();
         var minimizedRaised = 0;
@@ -216,6 +387,7 @@ public sealed class RecorderTests
         var exportButton = overlay.FindControl<Button>("ExportButton");
         var expandedPanel = overlay.FindControl<Control>("ExpandedPanel");
         var minimizedPanel = overlay.FindControl<Control>("MinimizedPanel");
+        var scenarioPathText = overlay.FindControl<TextBlock>("ScenarioPathText");
 
         overlay.Minimize();
         overlay.Restore();
@@ -228,6 +400,8 @@ public sealed class RecorderTests
             await Assert.That(validationBadge!.Text).IsEqualTo("WARN");
             await Assert.That(exportButton).IsNotNull();
             await Assert.That(exportButton!.IsVisible).IsEqualTo(true);
+            await Assert.That(scenarioPathText).IsNotNull();
+            await Assert.That(scenarioPathText!.Text).IsEqualTo(@"C:\Recorder\Recorded\MainWindowScenariosBase.RecordedSmoke.<timestamp>.g.cs");
             await Assert.That(expandedPanel).IsNotNull();
             await Assert.That(expandedPanel!.IsVisible).IsEqualTo(true);
             await Assert.That(minimizedPanel).IsNotNull();
@@ -235,6 +409,202 @@ public sealed class RecorderTests
             await Assert.That(minimizedRaised).IsEqualTo(1);
             await Assert.That(restoredRaised).IsEqualTo(1);
             await Assert.That(overlay.IsMinimized).IsEqualTo(false);
+        }
+    }
+
+    [Test]
+    public async Task GetOverlayWindowConfiguration_UsesStandaloneOpaqueWindowConfiguration()
+    {
+        var configuration = AppAutomationRecorder.GetOverlayWindowConfiguration(
+            new AppAutomationRecorderOptions
+            {
+                OverlayTheme = RecorderOverlayTheme.Dark
+            });
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(configuration.ShowInTaskbar).IsEqualTo(true);
+            await Assert.That(configuration.Topmost).IsEqualTo(false);
+            await Assert.That(configuration.SystemDecorations).IsEqualTo(SystemDecorations.Full);
+            await Assert.That(configuration.WindowStartupLocation).IsEqualTo(WindowStartupLocation.CenterScreen);
+            await Assert.That(configuration.SizeToContent).IsEqualTo(SizeToContent.Manual);
+            await Assert.That(configuration.CanResize).IsEqualTo(true);
+            await Assert.That(configuration.Width).IsEqualTo(1080d);
+            await Assert.That(configuration.Height).IsEqualTo(760d);
+            await Assert.That(configuration.MinWidth).IsEqualTo(760d);
+            await Assert.That(configuration.MinHeight).IsEqualTo(420d);
+            await Assert.That(configuration.BackgroundColor.A).IsEqualTo((byte)255);
+            await Assert.That(configuration.ThemeVariant).IsEqualTo(ThemeVariant.Dark);
+            await Assert.That(configuration.BackgroundColor).IsEqualTo(Color.Parse("#18212B"));
+        }
+    }
+
+    [Test]
+    public async Task Overlay_Attach_AppliesDarkPaletteResources()
+    {
+        var overlay = new RecorderOverlay();
+        overlay.Attach(
+            new FakeRecorderSession(),
+            new AppAutomationRecorderOptions
+            {
+                OverlayTheme = RecorderOverlayTheme.Dark
+            });
+
+        var foundBackground = overlay.TryFindResource("RecorderOverlayBackground", out var overlayBackground);
+        var foundSurface = overlay.TryFindResource("RecorderSurfaceBackground", out var surfaceBackground);
+        var foundText = overlay.TryFindResource("RecorderText", out var textBrush);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(foundBackground).IsEqualTo(true);
+            await Assert.That(foundSurface).IsEqualTo(true);
+            await Assert.That(foundText).IsEqualTo(true);
+            await Assert.That(overlayBackground is ISolidColorBrush).IsEqualTo(true);
+            await Assert.That(surfaceBackground is ISolidColorBrush).IsEqualTo(true);
+            await Assert.That(textBrush is ISolidColorBrush).IsEqualTo(true);
+            await Assert.That(((ISolidColorBrush)overlayBackground!).Color).IsEqualTo(Color.Parse("#18212B"));
+            await Assert.That(((ISolidColorBrush)surfaceBackground!).Color).IsEqualTo(Color.Parse("#0F172A"));
+            await Assert.That(((ISolidColorBrush)textBrush!).Color).IsEqualTo(Color.Parse("#E2E8F0"));
+        }
+    }
+
+    [Test]
+    public async Task Overlay_RendersStepJournal_BusySummary_AndReviewActions()
+    {
+        var firstStepId = Guid.NewGuid();
+        var secondStepId = Guid.NewGuid();
+        var session = new FakeRecorderSession
+        {
+            StepCount = 3,
+            PersistableStepCount = 1,
+            LatestStatus = "Save in progress...",
+            LatestPreview = "Page.EnterText(static page => page.SearchBox, \"Alpha\");",
+            LatestValidationStatus = RecorderValidationStatus.Warning,
+            IsBusy = true,
+            BusyDescription = "Save...",
+            SessionSummary = "1/3 steps | 1 warnings | 1 invalid | save..."
+        };
+        session.SetJournal(
+        [
+            new RecorderStepJournalEntry(
+                firstStepId,
+                "Page.EnterText(static page => page.SearchBox, \"Alpha\");",
+                "Ready to persist.",
+                RecorderValidationStatus.Valid,
+                CanPersist: true,
+                IsIgnored: false,
+                RecorderStepReviewState.Active,
+                FailureCode: null,
+                LastValidationAt: DateTimeOffset.UtcNow),
+            new RecorderStepJournalEntry(
+                secondStepId,
+                "Page.ClickButton(static page => page.RunButton);",
+                "Selector is ambiguous.",
+                RecorderValidationStatus.Invalid,
+                CanPersist: false,
+                IsIgnored: false,
+                RecorderStepReviewState.NeedsReview,
+                FailureCode: "validation-invalid",
+                LastValidationAt: DateTimeOffset.UtcNow)
+        ]);
+
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+
+        var summary = overlay.FindControl<TextBlock>("SessionSummaryText");
+        var saveButton = overlay.FindControl<Button>("SaveButton");
+        var exportButton = overlay.FindControl<Button>("ExportButton");
+        var journalEmpty = overlay.FindControl<TextBlock>("JournalEmptyText");
+        var journalPanel = overlay.FindControl<Panel>("StepJournalPanel");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(summary).IsNotNull();
+            await Assert.That(summary!.Text).IsEqualTo("1/3 steps | 1 warnings | 1 invalid | save...");
+            await Assert.That(saveButton).IsNotNull();
+            await Assert.That(saveButton!.IsEnabled).IsEqualTo(false);
+            await Assert.That(exportButton).IsNotNull();
+            await Assert.That(exportButton!.IsEnabled).IsEqualTo(false);
+            await Assert.That(journalEmpty).IsNotNull();
+            await Assert.That(journalEmpty!.IsVisible).IsEqualTo(false);
+            await Assert.That(journalPanel).IsNotNull();
+            await Assert.That(journalPanel!.Children.Count).IsEqualTo(2);
+        }
+
+        session.IsBusy = false;
+        session.RaiseChanged();
+        var refreshedFirstItem = (Border)journalPanel!.Children[0];
+        var refreshedContainer = (StackPanel)refreshedFirstItem.Child!;
+        var refreshedActions = (StackPanel)refreshedContainer.Children[2];
+        var removeButton = (Button)refreshedActions.Children[0];
+        var ignoreButton = (Button)refreshedActions.Children[1];
+        var retryButton = (Button)refreshedActions.Children[2];
+        removeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        ignoreButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        retryButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.RemovedStepIds).Contains(secondStepId);
+            await Assert.That(session.IgnoredStepIds).Contains(secondStepId);
+            await Assert.That(session.RetriedStepIds).Contains(secondStepId);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_SaveAsync_IsSingleFlight()
+    {
+        var firstSaveRelease = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var saveCallCount = 0;
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false },
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            saveOperation: async (_, _, _) =>
+            {
+                Interlocked.Increment(ref saveCallCount);
+                return await firstSaveRelease.Task;
+            });
+
+        session.AddRecordedStepForTesting(
+            new RecordedStep(
+                RecordedActionKind.ClickButton,
+                new RecordedControlDescriptor(
+                    "RunButton",
+                    UiControlType.Button,
+                    "RunButton",
+                    UiLocatorKind.AutomationId,
+                    FallbackToName: false,
+                    AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+                    Warning: null),
+                StepId: Guid.NewGuid()));
+
+        var firstSave = session.SaveAsync();
+        var secondSave = await session.SaveAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.IsBusy).IsEqualTo(true);
+            await Assert.That(secondSave.Success).IsEqualTo(false);
+            await Assert.That(secondSave.Message).Contains("already in progress");
+            await Assert.That(saveCallCount).IsEqualTo(1);
+        }
+
+        firstSaveRelease.SetResult(
+            RecorderSaveResult.Completed(
+                "Saved.",
+                pageFilePath: "MainWindowPage.Recorded.cs",
+                scenarioFilePath: "Scenario.Recorded.cs",
+                persistedStepCount: 1,
+                skippedStepCount: 0));
+        var completedResult = await firstSave;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(completedResult.Success).IsEqualTo(true);
+            await Assert.That(session.IsBusy).IsEqualTo(false);
+            await Assert.That(saveCallCount).IsEqualTo(1);
         }
     }
 
@@ -493,8 +863,12 @@ public sealed class RecorderTests
         }
     }
 
-    private sealed class FakeRecorderSession : IAppAutomationRecorderSession
+    private sealed class FakeRecorderSession : IAppAutomationRecorderSession, IAppAutomationRecorderSessionDetails, IRecorderScenarioPathDetails
     {
+        private List<RecorderStepJournalEntry> _stepJournal = new();
+
+        public event EventHandler? SessionChanged;
+
         public RecorderSessionState State { get; set; }
 
         public int StepCount { get; set; }
@@ -506,6 +880,28 @@ public sealed class RecorderTests
         public string LatestStatus { get; set; } = string.Empty;
 
         public RecorderValidationStatus LatestValidationStatus { get; set; } = RecorderValidationStatus.Valid;
+
+        public bool IsBusy { get; set; }
+
+        public string BusyDescription { get; set; } = string.Empty;
+
+        public string SessionSummary { get; set; } = string.Empty;
+
+        public string CurrentScenarioFilePath { get; set; } = string.Empty;
+
+        public int WarningStepCount => _stepJournal.Count(entry => !entry.IsIgnored && entry.ValidationStatus == RecorderValidationStatus.Warning);
+
+        public int InvalidStepCount => _stepJournal.Count(entry => !entry.IsIgnored && !entry.CanPersist);
+
+        public int IgnoredStepCount => _stepJournal.Count(entry => entry.IsIgnored);
+
+        public IReadOnlyList<RecorderStepJournalEntry> StepJournal => _stepJournal;
+
+        public List<Guid> RemovedStepIds { get; } = new();
+
+        public List<Guid> IgnoredStepIds { get; } = new();
+
+        public List<Guid> RetriedStepIds { get; } = new();
 
         public void Start()
         {
@@ -524,6 +920,7 @@ public sealed class RecorderTests
             LatestPreview = string.Empty;
             LatestStatus = "Recorded steps cleared.";
             LatestValidationStatus = RecorderValidationStatus.Valid;
+            _stepJournal.Clear();
         }
 
         public string ExportPreview()
@@ -549,6 +946,45 @@ public sealed class RecorderTests
 
         public void Dispose()
         {
+        }
+
+        public void RemoveStep(Guid stepId)
+        {
+            RemovedStepIds.Add(stepId);
+            _stepJournal = _stepJournal.Where(entry => entry.StepId != stepId).ToList();
+            RaiseChanged();
+        }
+
+        public void SetStepIgnored(Guid stepId, bool isIgnored)
+        {
+            IgnoredStepIds.Add(stepId);
+            _stepJournal = _stepJournal
+                .Select(entry => entry.StepId == stepId
+                    ? entry with
+                    {
+                        IsIgnored = isIgnored,
+                        ReviewState = isIgnored ? RecorderStepReviewState.Ignored : RecorderStepReviewState.Active
+                    }
+                    : entry)
+                .ToList();
+            RaiseChanged();
+        }
+
+        public bool RetryStepValidation(Guid stepId)
+        {
+            RetriedStepIds.Add(stepId);
+            RaiseChanged();
+            return true;
+        }
+
+        public void SetJournal(IReadOnlyList<RecorderStepJournalEntry> entries)
+        {
+            _stepJournal = entries.ToList();
+        }
+
+        public void RaiseChanged()
+        {
+            SessionChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 

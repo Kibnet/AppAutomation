@@ -153,6 +153,40 @@ internal sealed class AuthoringCodeGenerator
             diagnostics);
     }
 
+    internal RecorderOutputDescription DescribeOutput(
+        Window window,
+        AppAutomationRecorderOptions options,
+        string? outputDirectoryOverride)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(options.AuthoringProjectDirectory))
+        {
+            return new RecorderOutputDescription(
+                IsConfigured: false,
+                ScenarioFilePathDisplay: "Authoring project directory is not configured.",
+                OutputDirectory: null,
+                PageFilePathDisplay: null);
+        }
+
+        var projectDirectory = Path.GetFullPath(options.AuthoringProjectDirectory);
+        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride);
+        var fileSafeScenarioName = RecorderNaming.CreateFileSafeName(target.ScenarioName, "scenario");
+        var scenarioFilePathDisplay = Path.Combine(
+            target.OutputDirectory,
+            $"{target.ScenarioClassName}.{fileSafeScenarioName}.<timestamp>.g.cs");
+        var pageFilePathDisplay = Path.Combine(
+            target.OutputDirectory,
+            $"{target.PageClassName}.{fileSafeScenarioName}.controls.g.cs");
+
+        return new RecorderOutputDescription(
+            IsConfigured: true,
+            ScenarioFilePathDisplay: scenarioFilePathDisplay,
+            OutputDirectory: target.OutputDirectory,
+            PageFilePathDisplay: pageFilePathDisplay);
+    }
+
     public string GeneratePreview(IReadOnlyList<RecordedStep> steps)
     {
         if (steps.Count == 0)

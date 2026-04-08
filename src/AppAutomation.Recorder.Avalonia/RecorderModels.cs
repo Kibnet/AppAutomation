@@ -58,7 +58,12 @@ internal sealed record RecordedStep(
     string? Warning = null,
     RecorderValidationStatus ValidationStatus = RecorderValidationStatus.Valid,
     string? ValidationMessage = null,
-    bool CanPersist = true);
+    bool CanPersist = true,
+    Guid StepId = default,
+    bool IsIgnored = false,
+    RecorderStepReviewState ReviewState = RecorderStepReviewState.Active,
+    string? FailureCode = null,
+    DateTimeOffset? LastValidationAt = null);
 
 internal sealed record StepCreationResult(bool Success, RecordedStep? Step, string Message)
 {
@@ -115,6 +120,12 @@ internal sealed record AuthoringTargetConfiguration(
     string ScenarioClassName,
     string ScenarioName,
     string AppName);
+
+internal sealed record RecorderOutputDescription(
+    bool IsConfigured,
+    string ScenarioFilePathDisplay,
+    string? OutputDirectory,
+    string? PageFilePathDisplay);
 
 internal sealed record ScannedClassInfo(
     string Namespace,

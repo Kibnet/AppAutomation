@@ -8,15 +8,28 @@ namespace AppAutomation.Recorder.Avalonia;
 internal sealed class RecorderSelectorResolver
 {
     private readonly AppAutomationRecorderOptions _options;
-    private readonly Control? _validationRoot;
+    private readonly Func<Control?>? _validationRootProvider;
 
     public RecorderSelectorResolver(
         AppAutomationRecorderOptions options,
         Window? validationWindow = null,
         Control? validationRoot = null)
+        : this(
+            options,
+            validationRoot is not null
+                ? (() => validationRoot)
+                : validationWindow is not null
+                    ? () => validationWindow.Content as Control
+                    : null)
+    {
+    }
+
+    internal RecorderSelectorResolver(
+        AppAutomationRecorderOptions options,
+        Func<Control?>? validationRootProvider)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _validationRoot = validationRoot ?? validationWindow?.Content as Control;
+        _validationRootProvider = validationRootProvider;
     }
 
     public ResolvedControlResult Resolve(Control? source, UiControlType controlType)
@@ -86,7 +99,40 @@ internal sealed class RecorderSelectorResolver
             canPersist: validation.CanPersist);
     }
 
+    internal ExistingControlResolutionResult ResolveExisting(RecordedControlDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        var validation = ValidateSelector(descriptor.LocatorValue, descriptor.LocatorKind);
+        return new ExistingControlResolutionResult(
+            validation.MatchedControl is not null,
+            validation.MatchedControl,
+            validation.Status,
+            validation.Message,
+            validation.CanPersist);
+    }
+
     private SelectorValidationResult ValidateSelector(Control expectedControl, string locatorValue, UiLocatorKind locatorKind)
+    {
+        var validation = ValidateSelector(locatorValue, locatorKind);
+        if (!validation.Success)
+        {
+            return validation;
+        }
+
+        if (!ReferenceEquals(validation.MatchedControl, expectedControl))
+        {
+            return new SelectorValidationResult(
+                RecorderValidationStatus.Invalid,
+                $"Selector '{locatorKind}:{locatorValue}' re-resolved a different control than the captured owner.",
+                false,
+                validation.MatchedControl);
+        }
+
+        return validation;
+    }
+
+    private SelectorValidationResult ValidateSelector(string locatorValue, UiLocatorKind locatorKind)
     {
         var baseStatus = locatorKind == UiLocatorKind.Name
             ? RecorderValidationStatus.Warning
@@ -95,9 +141,10 @@ internal sealed class RecorderSelectorResolver
             ? "Using Name locator; prefer AutomationId for long-term stability."
             : null;
 
-        if (!_options.Validation.ValidateSelectors || _validationRoot is not Control root)
+        var root = _validationRootProvider?.Invoke();
+        if (!_options.Validation.ValidateSelectors || root is not Control)
         {
-            return new SelectorValidationResult(baseStatus, baseMessage, true);
+            return new SelectorValidationResult(baseStatus, baseMessage, true, null);
         }
 
         var matches = root
@@ -112,7 +159,8 @@ internal sealed class RecorderSelectorResolver
             return new SelectorValidationResult(
                 RecorderValidationStatus.Invalid,
                 $"Selector '{locatorKind}:{locatorValue}' could not be re-resolved in the current visual tree.",
-                false);
+                false,
+                null);
         }
 
         if (matches.Length > 1)
@@ -120,18 +168,11 @@ internal sealed class RecorderSelectorResolver
             return new SelectorValidationResult(
                 RecorderValidationStatus.Invalid,
                 $"Selector '{locatorKind}:{locatorValue}' is ambiguous and matched {matches.Length} controls.",
-                false);
+                false,
+                null);
         }
 
-        if (!ReferenceEquals(matches[0], expectedControl))
-        {
-            return new SelectorValidationResult(
-                RecorderValidationStatus.Invalid,
-                $"Selector '{locatorKind}:{locatorValue}' re-resolved a different control than the captured owner.",
-                false);
-        }
-
-        return new SelectorValidationResult(baseStatus, baseMessage, true);
+        return new SelectorValidationResult(baseStatus, baseMessage, true, matches[0]);
     }
 
     private static bool MatchesLocator(Control candidate, string locatorValue, UiLocatorKind locatorKind)
@@ -171,5 +212,16 @@ internal sealed class RecorderSelectorResolver
     private sealed record SelectorValidationResult(
         RecorderValidationStatus Status,
         string? Message,
+        bool CanPersist,
+        Control? MatchedControl)
+    {
+        public bool Success => MatchedControl is not null || !CanPersist;
+    }
+
+    internal sealed record ExistingControlResolutionResult(
+        bool Success,
+        Control? MatchedControl,
+        RecorderValidationStatus ValidationStatus,
+        string? ValidationMessage,
         bool CanPersist);
 }
