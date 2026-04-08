@@ -1,0 +1,134 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AppAutomation.Recorder.Avalonia.UI.RecorderOverlay">
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="RecorderOverlayBackground">#F4F6F8</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderSurfaceBackground">#FFFFFF</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderOverlayBorder">#CBD5E1</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderText">#0F172A</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderAccent">#0F766E</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderMuted">#475569</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderWarning">#B45309</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderDanger">#B91C1C</SolidColorBrush>
+    </UserControl.Resources>
+
+    <Border Padding="10"
+            Background="{DynamicResource RecorderOverlayBackground}"
+            BorderBrush="{DynamicResource RecorderOverlayBorder}"
+            BorderThickness="1">
+        <Grid>
+            <Grid x:Name="ExpandedPanel"
+                  RowDefinitions="Auto,Auto,Auto,*,Auto"
+                  RowSpacing="8">
+                <Grid Grid.Row="0"
+                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
+                      ColumnSpacing="8">
+                    <Button x:Name="RecordButton"
+                            Grid.Column="0"
+                            Padding="10,4"
+                            MinWidth="72"
+                            Content="Record" />
+                    <Button x:Name="ClearButton"
+                            Grid.Column="1"
+                            Padding="10,4"
+                            Content="Clear" />
+                    <Button x:Name="SaveButton"
+                            Grid.Column="2"
+                            Padding="10,4"
+                            Content="Save" />
+                    <Button x:Name="ExportButton"
+                            Grid.Column="3"
+                            Padding="10,4"
+                            Content="Export..." />
+                    <Button x:Name="MinimizeButton"
+                            Grid.Column="4"
+                            Padding="10,4"
+                            Content="Minimize" />
+                    <TextBlock x:Name="StepCounter"
+                               Grid.Column="5"
+                               Margin="4,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource RecorderAccent}"
+                               FontWeight="SemiBold"
+                               Text="0 steps" />
+                    <TextBlock x:Name="ValidationBadgeText"
+                               Grid.Column="6"
+                               Margin="4,0,0,0"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold"
+                               Text="VALID" />
+                    <TextBlock x:Name="StatusText"
+                               Grid.Column="7"
+                               Margin="4,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource RecorderMuted}"
+                               TextWrapping="Wrap" />
+                </Grid>
+
+                <TextBlock x:Name="PreviewText"
+                           Grid.Row="1"
+                           FontFamily="Cascadia Mono, Consolas"
+                           Foreground="{DynamicResource RecorderText}"
+                           TextWrapping="Wrap" />
+
+                <StackPanel Grid.Row="2"
+                            Spacing="4">
+                    <TextBlock x:Name="SessionSummaryText"
+                               Foreground="{DynamicResource RecorderMuted}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="Scenario file"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource RecorderText}" />
+                    <TextBlock x:Name="ScenarioPathText"
+                               FontFamily="Cascadia Mono, Consolas"
+                               Foreground="{DynamicResource RecorderText}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <Border Grid.Row="3"
+                        Padding="8"
+                        Background="{DynamicResource RecorderSurfaceBackground}"
+                        BorderBrush="{DynamicResource RecorderOverlayBorder}"
+                        BorderThickness="1">
+                    <Grid RowDefinitions="Auto,Auto,*"
+                          RowSpacing="6">
+                        <TextBlock Grid.Row="0"
+                                   Text="Recorded Steps"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource RecorderText}" />
+                        <TextBlock x:Name="JournalEmptyText"
+                                   Grid.Row="1"
+                                   Foreground="{DynamicResource RecorderMuted}"
+                                   Text="No recorded steps yet." />
+                        <ScrollViewer Grid.Row="2"
+                                      HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="StepJournalPanel"
+                                        Spacing="6" />
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <TextBlock x:Name="ShortcutText"
+                           Grid.Row="4"
+                           Foreground="{DynamicResource RecorderMuted}"
+                           TextWrapping="Wrap" />
+            </Grid>
+
+            <Grid x:Name="MinimizedPanel"
+                  IsVisible="False"
+                  ColumnDefinitions="Auto,*"
+                  ColumnSpacing="12">
+                <Button x:Name="RestoreButton"
+                        Grid.Column="0"
+                        Padding="10,4"
+                        Content="Restore" />
+                <TextBlock x:Name="MinimizedStatusText"
+                           Grid.Column="1"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource RecorderMuted}"
+                           TextWrapping="Wrap" />
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

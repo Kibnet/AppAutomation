@@ -8,7 +8,7 @@ using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 
-public abstract class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
+public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
     where TSession : class, IUiTestSession
 {
     [Test]

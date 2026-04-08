@@ -36,6 +36,54 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task SelectListBoxItem_SelectsItem_WhenRuntimeSupportsCapability()
+    {
+        var listBox = new FakeSelectableListBoxControl(
+            "HierarchySelectionList",
+            [
+                new FakeListBoxItem("Prime", "Prime"),
+                new FakeListBoxItem("Fibonacci", "Fibonacci")
+            ]);
+        var page = new ListPage(new FakeResolver(("HierarchySelectionList", listBox)));
+
+        var returnedPage = page.SelectListBoxItem(static candidate => candidate.HierarchySelectionList, "Fibonacci");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Fibonacci");
+        }
+    }
+
+    [Test]
+    public async Task SelectListBoxItem_Throws_WhenRuntimeDoesNotSupportCapability()
+    {
+        var listBox = new FakeListBoxControl(
+            "HierarchySelectionList",
+            [
+                new FakeListBoxItem("Prime", "Prime"),
+                new FakeListBoxItem("Fibonacci", "Fibonacci")
+            ]);
+        var page = new ListPage(new FakeResolver(("HierarchySelectionList", listBox)));
+
+        Exception? exception = null;
+        try
+        {
+            page.SelectListBoxItem(static candidate => candidate.HierarchySelectionList, "Fibonacci");
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception is InvalidOperationException).IsEqualTo(true);
+            await Assert.That(exception!.Message).Contains("does not support interactive selection");
+        }
+    }
+
+    [Test]
     public async Task WaitUntilNameEquals_ThrowsUiOperationException_WithFailureContext()
     {
         var label = new FakeLabelControl("ResultLabel", "Actual");
@@ -130,6 +178,80 @@ public sealed class UiPageExtensionsTests
         await Assert.That(tabItem.IsSelected).IsEqualTo(true);
     }
 
+    [Test]
+    public async Task WaitUntilTextEquals_OnLabel_ReturnsPage_WhenTextAlreadyMatches()
+    {
+        var label = new FakeLabelControl("ResultLabel", "Expected");
+        var page = new DiagnosticsPage(new FakeResolver(("ResultLabel", label)));
+
+        var returnedPage = page.WaitUntilTextEquals(static candidate => candidate.ResultLabel, "Expected");
+
+        await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilTextContains_OnTextBox_ReturnsPage_WhenTextAlreadyMatches()
+    {
+        var textBox = new FakeTextBoxControl("SearchBox", "Alpha Beta");
+        var page = new TextPage(new FakeResolver(("SearchBox", textBox)));
+
+        var returnedPage = page.WaitUntilTextContains(static candidate => candidate.SearchBox, "Beta");
+
+        await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilIsChecked_ThrowsUiOperationException_WithFailureContext()
+    {
+        var checkBox = new FakeCheckBoxControl("AgreeCheck") { IsChecked = false };
+        var page = new StatePage(new FakeResolver(("AgreeCheck", checkBox)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilIsChecked(static candidate => candidate.AgreeCheck, expected: true, timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilIsChecked");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("AgreeCheck");
+            await Assert.That(exception.FailureContext.LastObservedValue).IsEqualTo("IsChecked=False");
+            await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilIsEnabled_ThrowsUiOperationException_WithFailureContext()
+    {
+        var button = new FakeButtonControl("SaveButton") { IsEnabled = false };
+        var page = new StatePage(new FakeResolver(("SaveButton", button)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilIsEnabled(static candidate => candidate.SaveButton, expected: true, timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilIsEnabled");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("SaveButton");
+            await Assert.That(exception.FailureContext.LastObservedValue).IsEqualTo("IsEnabled=False");
+            await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -154,6 +276,35 @@ public sealed class UiPageExtensionsTests
             "TasksTabItem",
             UiControlType.TabItem,
             "TasksTabItem");
+    }
+
+    public static class TextPageDefinitions
+    {
+        public static UiControlDefinition SearchBox { get; } = new(
+            "SearchBox",
+            UiControlType.TextBox,
+            "SearchBox");
+    }
+
+    public static class StatePageDefinitions
+    {
+        public static UiControlDefinition AgreeCheck { get; } = new(
+            "AgreeCheck",
+            UiControlType.CheckBox,
+            "AgreeCheck");
+
+        public static UiControlDefinition SaveButton { get; } = new(
+            "SaveButton",
+            UiControlType.Button,
+            "SaveButton");
+    }
+
+    public static class ListPageDefinitions
+    {
+        public static UiControlDefinition HierarchySelectionList { get; } = new(
+            "HierarchySelectionList",
+            UiControlType.ListBox,
+            "HierarchySelectionList");
     }
 
     private sealed class ComboPage : UiPage
@@ -184,6 +335,38 @@ public sealed class UiPageExtensionsTests
         }
 
         public ITabItemControl TasksTabItem => Resolve<ITabItemControl>(TabsPageDefinitions.TasksTabItem);
+    }
+
+    private sealed class TextPage : UiPage
+    {
+        public TextPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ITextBoxControl SearchBox => Resolve<ITextBoxControl>(TextPageDefinitions.SearchBox);
+    }
+
+    private sealed class StatePage : UiPage
+    {
+        public StatePage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ICheckBoxControl AgreeCheck => Resolve<ICheckBoxControl>(StatePageDefinitions.AgreeCheck);
+
+        public IButtonControl SaveButton => Resolve<IButtonControl>(StatePageDefinitions.SaveButton);
+    }
+
+    private sealed class ListPage : UiPage
+    {
+        public ListPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IListBoxControl HierarchySelectionList => Resolve<IListBoxControl>(ListPageDefinitions.HierarchySelectionList);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -299,6 +482,47 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    private sealed class FakeTextBoxControl : FakeControlBase, ITextBoxControl
+    {
+        public FakeTextBoxControl(string automationId, string text)
+            : base(automationId, automationId)
+        {
+            Text = text;
+        }
+
+        public string Text { get; set; }
+
+        public void Enter(string value)
+        {
+            Text = value;
+        }
+    }
+
+    private sealed class FakeCheckBoxControl : FakeControlBase, ICheckBoxControl
+    {
+        public FakeCheckBoxControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public bool? IsChecked { get; set; }
+    }
+
+    private sealed class FakeButtonControl : FakeControlBase, IButtonControl
+    {
+        public FakeButtonControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public int InvokeCount { get; private set; }
+
+        public void Invoke()
+        {
+            InvokeCount++;
+        }
+    }
+
     private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl
     {
         public FakeTabItemControl(string automationId)
@@ -314,5 +538,40 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    private class FakeListBoxControl : FakeControlBase, IListBoxControl
+    {
+        public FakeListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId, automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<IListBoxItem> Items { get; }
+    }
+
+    private sealed class FakeSelectableListBoxControl : FakeListBoxControl, ISelectableListBoxControl
+    {
+        public FakeSelectableListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId, items)
+        {
+        }
+
+        public string? SelectedItemText { get; private set; }
+
+        public void SelectItem(string itemText)
+        {
+            var match = Items.FirstOrDefault(candidate =>
+                string.Equals(candidate.Text, itemText, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            SelectedItemText = match.Text;
+        }
+    }
+
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
+
+    private sealed record FakeListBoxItem(string Text, string Name) : IListBoxItem;
 }

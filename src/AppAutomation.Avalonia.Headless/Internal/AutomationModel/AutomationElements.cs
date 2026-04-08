@@ -337,6 +337,31 @@ internal class ListBox : AutomationElement
         return values.Select(item => new ListBoxItem(item)).ToArray();
     });
 
+    public string? SelectedItemText => Ui(() => Native.SelectedItem?.ToString());
+
+    public void SelectItem(string itemText)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        Ui(() =>
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var values = ReadItems(Native.Items);
+            var match = values.FirstOrDefault(candidate =>
+                string.Equals(
+                    NormalizeLookupText(candidate?.ToString()),
+                    normalizedTarget,
+                    StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            Native.SelectedItem = match;
+            return true;
+        });
+    }
+
     private static IReadOnlyList<object?> ReadItems(IEnumerable? enumerable)
     {
         if (enumerable is null)
@@ -345,6 +370,16 @@ internal class ListBox : AutomationElement
         }
 
         return enumerable.Cast<object?>().ToArray();
+    }
+
+    private static string NormalizeLookupText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
     }
 }
 

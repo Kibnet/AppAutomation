@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "DotnetDebug.Avalonia": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "APPAUTOMATION_RECORDER": "1"
+      }
+    }
+  }
+}

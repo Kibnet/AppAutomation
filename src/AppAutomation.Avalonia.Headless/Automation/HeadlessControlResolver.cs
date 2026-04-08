@@ -293,7 +293,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public string Text => Inner.Text ?? Name;
     }
 
-    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, IListBoxControl
+    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, ISelectableListBoxControl
     {
         public HeadlessListBoxControl(ListBox inner) : base(inner)
         {
@@ -301,6 +301,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         public IReadOnlyList<IListBoxItem> Items =>
             Inner.Items.Select(item => (IListBoxItem)new HeadlessListBoxItem(item)).ToArray();
+
+        public string? SelectedItemText => Inner.SelectedItemText;
+
+        public void SelectItem(string itemText)
+        {
+            Inner.SelectItem(itemText);
+        }
     }
 
     private sealed class HeadlessListBoxItem : IListBoxItem

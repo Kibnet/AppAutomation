@@ -384,7 +384,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public string Text => TryRead(() => Inner.Text) ?? Name;
     }
 
-    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, IListBoxControl
+    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, ISelectableListBoxControl
     {
         public FlaUiListBoxControl(ListBox inner) : base(inner)
         {
@@ -393,52 +393,168 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public IReadOnlyList<IListBoxItem> Items =>
             ReadItems();
 
+        public string? SelectedItemText => ReadSelectedText();
+
         private IReadOnlyList<IListBoxItem> ReadItems()
         {
+            return GetSelectableItems()
+                .Select(candidate =>
+                {
+                    var text = ReadAutomationElementText(candidate);
+                    return (IListBoxItem)new FlaUiListBoxItem(text, text);
+                })
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
+                .ToArray();
+        }
+
+        public void SelectItem(string itemText)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var candidate = GetSelectableItems().FirstOrDefault(element =>
+            {
+                var text = ReadAutomationElementText(element);
+                return string.Equals(
+                    NormalizeLookupText(text),
+                    normalizedTarget,
+                    StringComparison.OrdinalIgnoreCase);
+            });
+            if (candidate is null)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            if (TrySelect(candidate) && SelectionMatches(normalizedTarget))
+            {
+                return;
+            }
+
+            if (TryClick(candidate) && SelectionMatches(normalizedTarget))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException($"ListBox item '{itemText}' could not be selected.");
+        }
+
+        private List<AutomationElement> GetSelectableItems()
+        {
+            var items = new List<AutomationElement>();
+
             try
             {
-                var directItems = Inner.Items
-                    .Select(item => (IListBoxItem)new FlaUiListBoxItem(item.Text, item.Name))
-                    .ToArray();
-                if (directItems.Length > 0)
+                foreach (var item in Inner.Items)
                 {
-                    return directItems;
+                    if (item is not null && !items.Contains(item))
+                    {
+                        items.Add(item);
+                    }
                 }
             }
             catch
             {
-                // fallback to descendant scan
+                // Some providers do not expose direct list items.
             }
 
-            var descendants = Inner
-                .FindAllDescendants()
-                .Where(node => node != Inner)
-                .ToArray();
-
-            var listItemElements = descendants
-                .Where(node => node.ControlType == ControlType.ListItem)
-                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
-                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
-                .ToArray();
-            if (listItemElements.Length > 0)
+            foreach (var candidate in Inner.FindAllDescendants())
             {
-                return listItemElements;
+                if (candidate is null || candidate == Inner || items.Contains(candidate) || !IsListItemCandidate(candidate))
+                {
+                    continue;
+                }
+
+                var text = ReadAutomationElementText(candidate);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    items.Add(candidate);
+                }
             }
 
-            var textElements = descendants
-                .Where(node => node.ControlType == ControlType.Text)
-                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
-                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
-                .ToArray();
-            if (textElements.Length > 0)
+            return items;
+        }
+
+        private string? ReadSelectedText()
+        {
+            var selectedCandidate = GetSelectableItems().FirstOrDefault(candidate =>
             {
-                return textElements;
+                try
+                {
+                    return candidate.Patterns.SelectionItem.IsSupported
+                        && candidate.Patterns.SelectionItem.Pattern.IsSelected.Value;
+                }
+                catch
+                {
+                    return false;
+                }
+            });
+
+            return selectedCandidate is null
+                ? null
+                : ReadAutomationElementText(selectedCandidate);
+        }
+
+        private bool SelectionMatches(string expectedText)
+        {
+            if (string.IsNullOrWhiteSpace(expectedText))
+            {
+                return true;
             }
 
-            return descendants
-                .Select(node => (IListBoxItem)new FlaUiListBoxItem(node.Name, node.Name))
-                .Where(static item => !string.IsNullOrWhiteSpace(item.Text) || !string.IsNullOrWhiteSpace(item.Name))
-                .ToArray();
+            return string.Equals(
+                NormalizeLookupText(ReadSelectedText()),
+                expectedText,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsListItemCandidate(AutomationElement candidate)
+        {
+            return candidate.ControlType == ControlType.ListItem
+                || candidate.ControlType == ControlType.Text
+                || candidate.ControlType == ControlType.DataItem;
+        }
+
+        private static bool TrySelect(AutomationElement candidate)
+        {
+            try
+            {
+                if (candidate.Patterns.SelectionItem.IsSupported)
+                {
+                    candidate.Patterns.SelectionItem.Pattern.Select();
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static bool TryClick(AutomationElement candidate)
+        {
+            try
+            {
+                candidate.Click();
+                return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (candidate.Patterns.Invoke.IsSupported)
+                {
+                    candidate.Patterns.Invoke.Pattern.Invoke();
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
     }
 

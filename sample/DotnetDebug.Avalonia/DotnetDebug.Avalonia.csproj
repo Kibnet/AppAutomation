@@ -24,5 +24,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DotnetDebug.Core\DotnetDebug.Core.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Recorder.Avalonia\AppAutomation.Recorder.Avalonia.csproj" />
   </ItemGroup>
 </Project>
