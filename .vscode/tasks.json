@@ -7,7 +7,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/src/DotnetDebug/DotnetDebug.csproj",
+        "${workspaceFolder}/sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj",
         "-c",
         "Debug"
       ],
@@ -19,7 +19,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/tests/DotnetDebug.Tests/DotnetDebug.Tests.csproj",
+        "${workspaceFolder}/sample/DotnetDebug.Tests/DotnetDebug.Tests.csproj",
         "-c",
         "Debug"
       ],
@@ -31,7 +31,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/src/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj",
+        "${workspaceFolder}/sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj",
         "-c",
         "Debug"
       ],
@@ -43,7 +43,7 @@
       "command": "dotnet",
       "args": [
         "build",
-        "${workspaceFolder}/tests/DotnetDebug.AppAutomation.FlaUI.Tests/DotnetDebug.AppAutomation.FlaUI.Tests.csproj",
+        "${workspaceFolder}/sample/DotnetDebug.AppAutomation.FlaUI.Tests/DotnetDebug.AppAutomation.FlaUI.Tests.csproj",
         "-c",
         "Debug"
       ],

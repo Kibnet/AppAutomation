@@ -5,31 +5,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "C#: Dotnet Console Debug",
+            "name": "C#: Dotnet Avalonia Debug",
             "type": "dotnet",
             "request": "launch",
-            "projectPath": "${workspaceFolder}/src/DotnetDebug/DotnetDebug.csproj"
-        },
-        {
-            "name": "C#: Dotnet Console Debug (MCP CoreCLR)",
-            "type": "coreclr",
-            "request": "launch",
-            "program": "${workspaceFolder}/src/DotnetDebug/bin/Debug/net10.0/DotnetDebug.dll",
-            "cwd": "${workspaceFolder}/src/DotnetDebug",
-            "args": [
-                "3",
-                "6",
-                "9"
-            ],
-            "stopAtEntry": true,
-            "preLaunchTask": "build-dotnetdebug"
+            "projectPath": "${workspaceFolder}/sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj"
         },
         {
             "name": "C#: Dotnet Avalonia Debug (MCP CoreCLR)",
             "type": "coreclr",
             "request": "launch",
-            "program": "${workspaceFolder}/src/DotnetDebug.Avalonia/bin/Debug/net10.0/DotnetDebug.Avalonia.dll",
-            "cwd": "${workspaceFolder}/src/DotnetDebug.Avalonia",
+            "program": "${workspaceFolder}/sample/DotnetDebug.Avalonia/bin/Debug/net10.0/DotnetDebug.Avalonia.dll",
+            "cwd": "${workspaceFolder}/sample/DotnetDebug.Avalonia",
             "stopAtEntry": false,
             "preLaunchTask": "build-dotnetdebug-avalonia"
         },
@@ -37,12 +23,8 @@
             "name": "C#: Dotnet Unit Tests Debug (MCP CoreCLR)",
             "type": "coreclr",
             "request": "launch",
-            "program": "${workspaceFolder}/tests/DotnetDebug.Tests/bin/Debug/net10.0/DotnetDebug.Tests.exe",
-            "cwd": "${workspaceFolder}/tests/DotnetDebug.Tests",
-            "args": [
-                "--filter-uid",
-                "<global namespace>.GcdCalculatorTests.1.1.ComputeGcd_TwoNumbers(System.Int64, System.Int64, System.Int64).3.1.0"
-            ],
+            "program": "${workspaceFolder}/sample/DotnetDebug.Tests/bin/Debug/net10.0/DotnetDebug.Tests.exe",
+            "cwd": "${workspaceFolder}/sample/DotnetDebug.Tests",
             "stopAtEntry": false,
             "preLaunchTask": "build-dotnetdebug-tests"
         },
@@ -50,12 +32,8 @@
             "name": "C#: Dotnet UI Tests AppAutomation.FlaUI Debug (MCP CoreCLR)",
             "type": "coreclr",
             "request": "launch",
-            "program": "${workspaceFolder}/tests/DotnetDebug.AppAutomation.FlaUI.Tests/bin/Debug/net10.0-windows7.0/DotnetDebug.AppAutomation.FlaUI.Tests.exe",
-            "cwd": "${workspaceFolder}/tests/DotnetDebug.AppAutomation.FlaUI.Tests",
-            "args": [
-                "--filter-uid",
-                "DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests.MainWindowFlaUiRuntimeTests.1.1.DataGrid_BuildSelectClear_ShowsRowsSelectionAndValidation.1.1.0"
-            ],
+            "program": "${workspaceFolder}/sample/DotnetDebug.AppAutomation.FlaUI.Tests/bin/Debug/net10.0-windows7.0/DotnetDebug.AppAutomation.FlaUI.Tests.exe",
+            "cwd": "${workspaceFolder}/sample/DotnetDebug.AppAutomation.FlaUI.Tests",
             "stopAtEntry": false,
             "preLaunchTask": "build-dotnetdebug-appautomation-flaui-tests"
         }
