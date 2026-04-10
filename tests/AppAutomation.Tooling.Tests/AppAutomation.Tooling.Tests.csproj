@@ -7,5 +7,6 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" />
+    <ProjectReference Include="..\..\src\AppAutomation.Tooling\AppAutomation.Tooling.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

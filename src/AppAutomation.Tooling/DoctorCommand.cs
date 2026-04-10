@@ -307,7 +307,13 @@ internal static class DoctorCommand
         }
 
         var stablePart = versionText.Split('-', 2, StringSplitOptions.TrimEntries)[0];
-        return Version.TryParse(stablePart, out version);
+        if (!Version.TryParse(stablePart, out var parsedVersion) || parsedVersion is null)
+        {
+            return false;
+        }
+
+        version = parsedVersion;
+        return true;
     }
 
     private sealed record DoctorOptions(string RepositoryRoot, bool Strict);

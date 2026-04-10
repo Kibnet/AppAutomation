@@ -41,7 +41,7 @@ public sealed class DoctorPlaceholderTests
     private static ScriptResult InvokeDoctor(string repositoryRoot, bool strict)
     {
         var repoRoot = GetRepoRoot();
-        var toolingProjectPath = Path.Combine(repoRoot, "src", "AppAutomation.Tooling", "AppAutomation.Tooling.csproj");
+        var toolingAssemblyPath = GetToolingAssemblyPath(repoRoot);
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -51,10 +51,8 @@ public sealed class DoctorPlaceholderTests
             UseShellExecute = false
         };
 
-        startInfo.ArgumentList.Add("run");
-        startInfo.ArgumentList.Add("--project");
-        startInfo.ArgumentList.Add(toolingProjectPath);
-        startInfo.ArgumentList.Add("--");
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(toolingAssemblyPath);
         startInfo.ArgumentList.Add("doctor");
         startInfo.ArgumentList.Add("--repo-root");
         startInfo.ArgumentList.Add(repositoryRoot);
@@ -64,13 +62,43 @@ public sealed class DoctorPlaceholderTests
         }
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Unable to start dotnet run for AppAutomation.Tooling.");
+            ?? throw new InvalidOperationException("Unable to start AppAutomation.Tooling.");
 
         var standardOutput = process.StandardOutput.ReadToEnd();
         var standardError = process.StandardError.ReadToEnd();
         process.WaitForExit();
 
         return new ScriptResult(process.ExitCode, standardOutput, standardError);
+    }
+
+    private static string GetToolingAssemblyPath(string repoRoot)
+    {
+        var toolingAssemblyPath = Path.Combine(
+            repoRoot,
+            "src",
+            "AppAutomation.Tooling",
+            "bin",
+            GetBuildConfiguration(),
+            "net8.0",
+            "AppAutomation.Tooling.dll");
+
+        if (File.Exists(toolingAssemblyPath))
+        {
+            return toolingAssemblyPath;
+        }
+
+        throw new FileNotFoundException(
+            $"Built AppAutomation.Tooling assembly was not found. Expected path: {toolingAssemblyPath}",
+            toolingAssemblyPath);
+    }
+
+    private static string GetBuildConfiguration()
+    {
+#if DEBUG
+        return "Debug";
+#else
+        return "Release";
+#endif
     }
 
     private static void WriteConsumerFixture(string repositoryRoot, bool includePlaceholders)
