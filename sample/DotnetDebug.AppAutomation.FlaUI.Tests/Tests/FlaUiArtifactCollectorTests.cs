@@ -1,4 +1,5 @@
 using AppAutomation.Abstractions;
+using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
@@ -13,6 +14,8 @@ public sealed class FlaUiArtifactCollectorTests
     [NotInParallel("DesktopUi")]
     public async Task CollectAsync_ReturnsFlaUiSpecificArtifacts()
     {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
         var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory);
         var failureContext = new UiFailureContext(

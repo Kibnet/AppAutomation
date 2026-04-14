@@ -1,5 +1,6 @@
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
+using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
@@ -14,6 +15,7 @@ public sealed class MainWindowFlaUiRuntimeTests : MainWindowScenariosBase<MainWi
 {
     protected override FlaUiRuntimeSession LaunchSession()
     {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
         return new FlaUiRuntimeSession(DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions()));
     }
 

@@ -1,5 +1,6 @@
 using AppAutomation.Abstractions;
 using DotnetDebug.AppAutomation.Authoring.Pages;
+using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
@@ -14,6 +15,8 @@ public sealed class FlaUiControlResolverTests
     [NotInParallel("DesktopUi")]
     public async Task SelectListBoxItem_ByCapability_SelectsDesktopItem()
     {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
         var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
 
