@@ -84,6 +84,30 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task SelectTreeItem_UsesSelectedItemIdentity_WhenSelectedTextIsUnavailable()
+    {
+        var tree = new FakeTreeControl("DemoTree");
+        var selectedItem = new FakeTreeItemControl("TreeNodeFibonacci", "Different header", string.Empty);
+        var targetItem = new FakeTreeItemControl("TreeNodeFibonacci", "Fibonacci", "Fibonacci")
+        {
+            OnSelect = () => tree.SelectedTreeItem = selectedItem
+        };
+
+        tree.SetItems(targetItem);
+
+        var page = new TreePage(new FakeResolver(("DemoTree", tree)));
+
+        var returnedPage = page.SelectTreeItem(static candidate => candidate.DemoTree, "Fibonacci");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(tree.SelectedTreeItem).IsNotNull();
+            await Assert.That(tree.SelectedTreeItem!.AutomationId).IsEqualTo("TreeNodeFibonacci");
+        }
+    }
+
+    [Test]
     public async Task WaitUntilNameEquals_ThrowsUiOperationException_WithFailureContext()
     {
         var label = new FakeLabelControl("ResultLabel", "Actual");
@@ -307,6 +331,14 @@ public sealed class UiPageExtensionsTests
             "HierarchySelectionList");
     }
 
+    public static class TreePageDefinitions
+    {
+        public static UiControlDefinition DemoTree { get; } = new(
+            "DemoTree",
+            UiControlType.Tree,
+            "DemoTree");
+    }
+
     private sealed class ComboPage : UiPage
     {
         public ComboPage(IUiControlResolver resolver)
@@ -367,6 +399,16 @@ public sealed class UiPageExtensionsTests
         }
 
         public IListBoxControl HierarchySelectionList => Resolve<IListBoxControl>(ListPageDefinitions.HierarchySelectionList);
+    }
+
+    private sealed class TreePage : UiPage
+    {
+        public TreePage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ITreeControl DemoTree => Resolve<ITreeControl>(TreePageDefinitions.DemoTree);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -568,6 +610,58 @@ public sealed class UiPageExtensionsTests
             }
 
             SelectedItemText = match.Text;
+        }
+    }
+
+    private sealed class FakeTreeControl : FakeControlBase, ITreeControl
+    {
+        private IReadOnlyList<ITreeItemControl> _items = Array.Empty<ITreeItemControl>();
+
+        public FakeTreeControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public IReadOnlyList<ITreeItemControl> Items => _items;
+
+        public ITreeItemControl? SelectedTreeItem { get; set; }
+
+        public void SetItems(params ITreeItemControl[] items)
+        {
+            _items = items;
+        }
+    }
+
+    private sealed class FakeTreeItemControl : FakeControlBase, ITreeItemControl
+    {
+        private IReadOnlyList<ITreeItemControl> _items = Array.Empty<ITreeItemControl>();
+
+        public FakeTreeItemControl(string automationId, string name, string text)
+            : base(automationId, name)
+        {
+            Text = text;
+        }
+
+        public bool IsSelected { get; set; }
+
+        public string Text { get; }
+
+        public IReadOnlyList<ITreeItemControl> Items => _items;
+
+        public Action? OnSelect { get; init; }
+
+        public void SetItems(params ITreeItemControl[] items)
+        {
+            _items = items;
+        }
+
+        public void Expand()
+        {
+        }
+
+        public void SelectNode()
+        {
+            OnSelect?.Invoke();
         }
     }
 

@@ -485,7 +485,7 @@ public static class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, ITreeControl>> selector,
         string itemText,
-        int timeoutMs = 5000)
+        int timeoutMs = 10000)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
@@ -510,13 +510,25 @@ public static class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => target.IsSelected
-                || TextMatches(tree.SelectedTreeItem?.Text, itemText)
-                || TextMatches(tree.SelectedTreeItem?.Name, itemText),
+            () =>
+            {
+                if (target.IsSelected)
+                {
+                    return true;
+                }
+
+                var selectedTreeItem = tree.SelectedTreeItem;
+                return TreeItemMatches(selectedTreeItem, target, itemText);
+            },
             timeoutMs,
             $"Tree '{tree.AutomationId}' failed to select item.",
             expectedValue: itemText,
-            lastObservedValueFactory: () => tree.SelectedTreeItem?.Text ?? tree.SelectedTreeItem?.Name ?? target.Text);
+            lastObservedValueFactory: () =>
+            {
+                var selectedTreeItem = tree.SelectedTreeItem;
+                return GetTreeItemDisplayValue(selectedTreeItem)
+                    ?? GetTreeItemDisplayValue(target);
+            });
         return page;
     }
 
@@ -1312,6 +1324,36 @@ public static class UiPageExtensions
         }
 
         return null;
+    }
+
+    private static bool TreeItemMatches(ITreeItemControl? actual, ITreeItemControl expected, string expectedText)
+    {
+        if (actual is null)
+        {
+            return false;
+        }
+
+        return TextMatches(actual.Text, expectedText)
+            || TextMatches(actual.Name, expectedText)
+            || TextMatches(actual.AutomationId, expectedText)
+            || TextMatches(actual.AutomationId, expected.AutomationId)
+            || TextMatches(actual.Name, expected.Name)
+            || TextMatches(actual.Text, expected.Text);
+    }
+
+    private static string? GetTreeItemDisplayValue(ITreeItemControl? item)
+    {
+        if (item is null)
+        {
+            return null;
+        }
+
+        return FirstNonWhiteSpace(item.Text, item.Name, item.AutomationId);
+    }
+
+    private static string? FirstNonWhiteSpace(params string?[] values)
+    {
+        return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
     }
 
     private static bool TextMatches(string? actual, string expected)

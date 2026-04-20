@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security;
+using System.Text.Json;
 using System.Text;
 using AppAutomation.Session.Contracts;
 
@@ -202,15 +204,27 @@ public static class AvaloniaDesktopLaunchHost
         TimeSpan buildTimeout,
         string? buildOutputRoot)
     {
+        var dotnetExecutablePath = ResolveDotnetExecutablePath(solutionRoot);
         var processInfo = new ProcessStartInfo
         {
-            FileName = "dotnet",
+            FileName = dotnetExecutablePath,
             WorkingDirectory = solutionRoot,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        if (Path.IsPathRooted(dotnetExecutablePath))
+        {
+            processInfo.Environment["DOTNET_HOST_PATH"] = dotnetExecutablePath;
+
+            var dotnetRoot = Path.GetDirectoryName(dotnetExecutablePath);
+            if (!string.IsNullOrWhiteSpace(dotnetRoot))
+            {
+                processInfo.Environment["DOTNET_ROOT"] = dotnetRoot;
+            }
+        }
 
         processInfo.ArgumentList.Add("build");
         processInfo.ArgumentList.Add(projectPath);
@@ -250,6 +264,170 @@ public static class AvaloniaDesktopLaunchHost
             throw new InvalidOperationException(
                 $"Failed to build desktop app. ExitCode={process.ExitCode}{Environment.NewLine}{stdout}{Environment.NewLine}{stderr}");
         }
+    }
+
+    private static string ResolveDotnetExecutablePath(string solutionRoot)
+    {
+        var pinnedSdkVersion = TryReadPinnedSdkVersion(solutionRoot);
+        foreach (var candidate in EnumerateDotnetExecutableCandidates(solutionRoot))
+        {
+            if (IsUsableDotnetHost(candidate, pinnedSdkVersion))
+            {
+                return Path.GetFullPath(candidate!);
+            }
+        }
+
+        return "dotnet";
+    }
+
+    private static IEnumerable<string?> EnumerateDotnetExecutableCandidates(string solutionRoot)
+    {
+        yield return Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+
+        var resolverCliDirectory = Environment.GetEnvironmentVariable("DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR");
+        if (!string.IsNullOrWhiteSpace(resolverCliDirectory))
+        {
+            yield return Path.Combine(resolverCliDirectory, GetDotnetExecutableName());
+        }
+
+        yield return TryGetParentDotnetHostPath();
+
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (!string.IsNullOrWhiteSpace(dotnetRoot))
+        {
+            yield return Path.Combine(dotnetRoot, GetDotnetExecutableName());
+        }
+
+        yield return Path.Combine(solutionRoot, ".dotnet", GetDotnetExecutableName());
+    }
+
+    private static string GetDotnetExecutableName()
+    {
+        return OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+    }
+
+    private static bool IsUsableDotnetHost(string? path, string? pinnedSdkVersion)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var normalizedPath = Path.GetFullPath(path);
+        if (!File.Exists(normalizedPath))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(pinnedSdkVersion))
+        {
+            return true;
+        }
+
+        var dotnetRoot = Path.GetDirectoryName(normalizedPath);
+        if (string.IsNullOrWhiteSpace(dotnetRoot))
+        {
+            return false;
+        }
+
+        return Directory.Exists(Path.Combine(dotnetRoot, "sdk", pinnedSdkVersion));
+    }
+
+    private static string? TryReadPinnedSdkVersion(string solutionRoot)
+    {
+        var globalJsonPath = Path.Combine(solutionRoot, "global.json");
+        if (!File.Exists(globalJsonPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(globalJsonPath);
+            using var document = JsonDocument.Parse(stream);
+            if (!document.RootElement.TryGetProperty("sdk", out var sdkElement))
+            {
+                return null;
+            }
+
+            if (!sdkElement.TryGetProperty("version", out var versionElement))
+            {
+                return null;
+            }
+
+            return versionElement.GetString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryGetParentDotnetHostPath()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        try
+        {
+            using var currentProcess = Process.GetCurrentProcess();
+            var processInfo = new ProcessBasicInformation();
+            var status = NtQueryInformationProcess(
+                currentProcess.Handle,
+                processInformationClass: 0,
+                ref processInfo,
+                Marshal.SizeOf<ProcessBasicInformation>(),
+                out _);
+            if (status != 0)
+            {
+                return null;
+            }
+
+            var parentProcessId = processInfo.InheritedFromUniqueProcessId.ToInt32();
+            if (parentProcessId <= 0)
+            {
+                return null;
+            }
+
+            using var parentProcess = Process.GetProcessById(parentProcessId);
+            var parentPath = parentProcess.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(parentPath))
+            {
+                return null;
+            }
+
+            return string.Equals(
+                Path.GetFileName(parentPath),
+                GetDotnetExecutableName(),
+                StringComparison.OrdinalIgnoreCase)
+                ? parentPath
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        ref ProcessBasicInformation processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2_0;
+        public IntPtr Reserved2_1;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
     }
 
     private static string ResolveExecutablePath(

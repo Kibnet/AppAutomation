@@ -375,6 +375,49 @@ public sealed class LaunchContractTests
         await Assert.That(Directory.Exists(isolatedRoot)).IsEqualTo(false);
     }
 
+    [Test]
+    public async Task AvaloniaDesktopLaunchHost_BuildUsesDotnetHostPath_WhenPathDoesNotContainDotnet()
+    {
+        using var workspace = TemporaryWorkspace.Create();
+        WriteFakeDesktopRepo(workspace.FullPath, includeExecutable: false, includeSource: true);
+
+        var descriptor = new AvaloniaDesktopAppDescriptor(
+            solutionFileNames: ["FakeDesktop.sln"],
+            desktopProjectRelativePaths: ["src\\FakeDesktop\\FakeDesktop.csproj"],
+            desktopTargetFramework: "net8.0",
+            executableName: "FakeDesktop.exe");
+        var dotnetHostPath = ResolveAvailableDotnetHostPath();
+        var unreachablePathEntry = Path.Combine(workspace.FullPath, "missing-dotnet");
+
+        using var pathScope = TemporaryEnvironmentVariableScope.Override("PATH", unreachablePathEntry);
+        using var dotnetHostScope = TemporaryEnvironmentVariableScope.Override("DOTNET_HOST_PATH", dotnetHostPath);
+        using var dotnetRootScope = TemporaryEnvironmentVariableScope.Override(
+            "DOTNET_ROOT",
+            Path.GetDirectoryName(dotnetHostPath));
+
+        var options = AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+            descriptor,
+            new AvaloniaDesktopLaunchOptions
+            {
+                UseIsolatedBuildOutput = true,
+                BuildConfiguration = "Debug",
+                BuildBeforeLaunch = true,
+                BuildOncePerProcess = false
+            },
+            repositoryRoot: workspace.FullPath);
+
+        var isolatedRoot = Path.GetFullPath(Path.Combine(options.ExecutablePath, "..", "..", ".."));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(File.Exists(options.ExecutablePath)).IsEqualTo(true);
+            await Assert.That(options.ExecutablePath.Contains("AppAutomationDesktopBuild-", StringComparison.Ordinal)).IsEqualTo(true);
+        }
+
+        options.DisposeCallback!.Invoke();
+        await Assert.That(Directory.Exists(isolatedRoot)).IsEqualTo(false);
+    }
+
     private static void WriteFakeDesktopRepo(string repositoryRoot, bool includeExecutable, bool includeSource)
     {
         Directory.CreateDirectory(repositoryRoot);
@@ -411,6 +454,28 @@ Console.WriteLine("Fake desktop");
         File.WriteAllText(executablePath, "fake");
     }
 
+    private static string ResolveAvailableDotnetHostPath()
+    {
+        var dotnetHostPath = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrWhiteSpace(dotnetHostPath) && File.Exists(dotnetHostPath))
+        {
+            return Path.GetFullPath(dotnetHostPath);
+        }
+
+        var executableName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var pathEntry in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var candidate = Path.Combine(pathEntry, executableName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException("Could not resolve a dotnet host path for the test process.");
+    }
+
     private sealed record LaunchPayload(string UserName);
 
     private sealed class TemporaryWorkspace : IDisposable
@@ -437,6 +502,29 @@ Console.WriteLine("Fake desktop");
             {
                 Directory.Delete(FullPath, recursive: true);
             }
+        }
+    }
+
+    private sealed class TemporaryEnvironmentVariableScope : IDisposable
+    {
+        private readonly string _name;
+        private readonly string? _originalValue;
+
+        private TemporaryEnvironmentVariableScope(string name, string? value)
+        {
+            _name = name;
+            _originalValue = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public static TemporaryEnvironmentVariableScope Override(string name, string? value)
+        {
+            return new TemporaryEnvironmentVariableScope(name, value);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(_name, _originalValue);
         }
     }
 }

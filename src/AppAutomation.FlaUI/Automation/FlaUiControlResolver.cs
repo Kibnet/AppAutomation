@@ -1150,31 +1150,28 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void SelectNode()
         {
-            try
+            if (TrySelectTreeItem(Inner))
             {
-                Inner.Select();
                 _selectedByInteraction = true;
                 return;
             }
-            catch
-            {
-            }
 
-            try
+            var normalizedTargetText = NormalizeLookupText(ReadAutomationElementText(Inner));
+            foreach (var candidate in GetFallbackSelectionCandidates(normalizedTargetText))
             {
-                Inner.Click();
-                _selectedByInteraction = true;
-                return;
+                if (TryActivateTreeSelectionCandidate(candidate))
+                {
+                    _selectedByInteraction = true;
+                    return;
+                }
             }
-            catch
-            {
-            }
+        }
 
-            if (TryRead(() => Inner.Patterns.SelectionItem.IsSupported) == true)
-            {
-                Inner.Patterns.SelectionItem.Pattern.Select();
-                _selectedByInteraction = true;
-            }
+        private IEnumerable<AutomationElement> GetFallbackSelectionCandidates(string normalizedTargetText)
+        {
+            return Inner.FindAllDescendants()
+                .Where(candidate => candidate is not null && IsTreeSelectionCandidate(candidate))
+                .OrderBy(candidate => GetTreeSelectionCandidatePriority(candidate, normalizedTargetText));
         }
     }
 
@@ -1334,6 +1331,129 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         var automationId = TryRead(() => element.AutomationId);
         return string.IsNullOrWhiteSpace(automationId) ? name : automationId;
+    }
+
+    private static bool TrySelectTreeItem(TreeItem treeItem)
+    {
+        try
+        {
+            treeItem.Select();
+            return true;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            treeItem.Click();
+            return true;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            if (treeItem.Patterns.SelectionItem.IsSupported)
+            {
+                treeItem.Patterns.SelectionItem.Pattern.Select();
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TryActivateTreeSelectionCandidate(AutomationElement candidate)
+    {
+        return TryClickTreeSelectionCandidate(candidate)
+            || TryInvokeTreeSelectionCandidate(candidate)
+            || TrySelectTreeSelectionCandidate(candidate);
+    }
+
+    private static bool TryClickTreeSelectionCandidate(AutomationElement candidate)
+    {
+        try
+        {
+            candidate.Click();
+            return true;
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TryInvokeTreeSelectionCandidate(AutomationElement candidate)
+    {
+        try
+        {
+            if (candidate.Patterns.Invoke.IsSupported)
+            {
+                candidate.Patterns.Invoke.Pattern.Invoke();
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TrySelectTreeSelectionCandidate(AutomationElement candidate)
+    {
+        try
+        {
+            if (candidate.Patterns.SelectionItem.IsSupported)
+            {
+                candidate.Patterns.SelectionItem.Pattern.Select();
+                return true;
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool IsTreeSelectionCandidate(AutomationElement candidate)
+    {
+        return candidate.ControlType == ControlType.Text
+            || candidate.ControlType == ControlType.Button
+            || candidate.ControlType == ControlType.Custom
+            || candidate.ControlType == ControlType.Pane
+            || candidate.ControlType == ControlType.Group
+            || candidate.ControlType == ControlType.TreeItem
+            || candidate.ControlType == ControlType.ListItem;
+    }
+
+    private static int GetTreeSelectionCandidatePriority(AutomationElement candidate, string normalizedTargetText)
+    {
+        var candidateText = NormalizeLookupText(ReadAutomationElementText(candidate));
+        if (!string.IsNullOrWhiteSpace(normalizedTargetText)
+            && string.Equals(candidateText, normalizedTargetText, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        return candidate.ControlType switch
+        {
+            ControlType.Text => 1,
+            ControlType.Button => 2,
+            ControlType.Custom => 3,
+            ControlType.Pane => 4,
+            ControlType.Group => 5,
+            ControlType.TreeItem => 6,
+            ControlType.ListItem => 7,
+            _ => int.MaxValue
+        };
     }
 
     private static string NormalizeLookupText(string? value)
