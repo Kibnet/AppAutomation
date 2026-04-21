@@ -60,7 +60,7 @@ public class LaunchOptionsDefaultsTests
             buildBeforeLaunch: true,
             buildOncePerProcess: false);
         var noBuildOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
-            buildConfiguration: "Debug",
+            buildConfiguration: "Release",
             buildBeforeLaunch: false);
 
         using (Assert.Multiple())
