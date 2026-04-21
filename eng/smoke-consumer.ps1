@@ -211,6 +211,12 @@ if ([string]::IsNullOrWhiteSpace($PackagesCacheRoot)) {
 New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $PackagesCacheRoot -Force | Out-Null
 
+$dotnetCliHome = Join-Path $WorkspaceRoot ".dotnet"
+New-Item -ItemType Directory -Path $dotnetCliHome -Force | Out-Null
+$env:DOTNET_CLI_HOME = $dotnetCliHome
+$env:DOTNET_NOLOGO = "1"
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
+
 $authoringProjectDir = Join-Path $WorkspaceRoot "Smoke.Authoring"
 $runtimeProjectDir = Join-Path $WorkspaceRoot "Smoke.Headless.Tests"
 New-Item -ItemType Directory -Path (Join-Path $authoringProjectDir "Pages") -Force | Out-Null
@@ -248,6 +254,7 @@ Write-WorkspaceGlobalJson -Path $globalJsonPath
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -419,13 +426,17 @@ Write-NuGetConfig -Path (Join-Path $templateWorkspace "NuGet.Config") -PackagesP
 Write-WorkspaceGlobalJson -Path (Join-Path $templateWorkspace "global.json")
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
-    "new", "tool-manifest")
+    "new", "tool-manifest",
+    "--output", ".config")
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
     "tool", "install",
     "AppAutomation.Tooling",
     "--version", $resolvedVersion,
     "--add-source", $PackagesPath)
+
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
+    "tool", "restore")
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
     "new", "install",
