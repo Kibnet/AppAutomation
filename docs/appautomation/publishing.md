@@ -62,7 +62,7 @@ pwsh -File eng/publish-nuget.ps1 `
   -ApiKey <api-key>
 ```
 
-`publish-nuget.ps1` now runs post-publish consumer verification automatically and fails the release if the published template/tool are not yet consumable from the target feed.
+`publish-nuget.ps1` publishes packages only. It does not run post-publish consumer verification automatically because NuGet feed propagation can lag behind a successful push.
 
 ## Published Consumer Verification
 
@@ -168,7 +168,7 @@ pwsh -File eng/publish-nuget.ps1 `
   -ApiKey <api-key>
 ```
 
-`publish-nuget.ps1` теперь автоматически запускает post-publish проверку consumer flow и считает релиз неподтверждённым, если опубликованные template/tool ещё нельзя установить из целевого feed.
+`publish-nuget.ps1` только публикует пакеты. Он не запускает post-publish проверку consumer flow автоматически, потому что распространение пакетов по NuGet feed может отставать от успешного push.
 
 ## Проверка опубликованного consumer flow
 
