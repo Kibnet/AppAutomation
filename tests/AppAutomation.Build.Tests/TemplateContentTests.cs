@@ -31,11 +31,8 @@ public sealed partial class TemplateContentTests
             await Assert.That(versions).Contains(VersionPlaceholder)
                 .Because($"Template project '{relativePath}' must keep package version tokenized.");
 
-            await Assert.That(versions).DoesNotContain("1.1.0")
-                .Because($"Template project '{relativePath}' must not hardcode the default template version.");
-
-            await Assert.That(versions).DoesNotContain("2.1.0")
-                .Because($"Template project '{relativePath}' must not hardcode the repository release version.");
+            await Assert.That(versions.Any(static version => ConcretePackageVersionRegex().IsMatch(version))).IsEqualTo(false)
+                .Because($"Template project '{relativePath}' must not hardcode an AppAutomation package version.");
         }
     }
 
@@ -72,4 +69,7 @@ public sealed partial class TemplateContentTests
 
     [GeneratedRegex("PackageReference Include=\"AppAutomation\\.[^\"]+\" Version=\"(?<version>[^\"]+)\"", RegexOptions.CultureInvariant)]
     private static partial Regex AppAutomationPackageVersionRegex();
+
+    [GeneratedRegex("^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$", RegexOptions.CultureInvariant)]
+    private static partial Regex ConcretePackageVersionRegex();
 }

@@ -44,7 +44,7 @@ Full matrix: [docs/appautomation/compatibility.md](docs/appautomation/compatibil
 ## Fast Path
 
 The commands below use the latest version available from your configured feed.
-If you need a reproducible install for a specific release, use the pinned example further below.
+The generated AppAutomation package references also float to the latest available version by default.
 
 ### 1. Install template package
 
@@ -75,12 +75,10 @@ From the root of your consumer repository:
 dotnet new appauto-avalonia --name MyApp
 ```
 
-Pinned example for a specific release:
+Explicit floating package-version override:
 
 ```powershell
-dotnet new install AppAutomation.Templates@2.1.0
-dotnet tool install AppAutomation.Tooling --version 2.1.0
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion "*"
 ```
 
 The template will create:
@@ -326,7 +324,7 @@ tests/
 ## Быстрый старт
 
 Команды ниже используют последнюю доступную версию из настроенного feed.
-Если нужна воспроизводимая установка конкретного релиза, используйте pinned-пример ниже.
+Сгенерированные `PackageReference` для AppAutomation по умолчанию тоже используют последнюю доступную версию.
 
 ### 1. Установите пакет шаблонов
 
@@ -357,12 +355,10 @@ dotnet tool install --global AppAutomation.Tooling
 dotnet new appauto-avalonia --name MyApp
 ```
 
-Pinned-пример для конкретного релиза:
+Явный floating override для версии пакетов:
 
 ```powershell
-dotnet new install AppAutomation.Templates@2.1.0
-dotnet tool install AppAutomation.Tooling --version 2.1.0
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion "*"
 ```
 
 Шаблон создаст:

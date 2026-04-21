@@ -130,7 +130,7 @@ public sealed class DoctorPlaceholderTests
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Abstractions" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.Abstractions" Version="*" />
   </ItemGroup>
 </Project>
 """);
@@ -143,7 +143,7 @@ public sealed class DoctorPlaceholderTests
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.Avalonia.Headless" Version="*" />
   </ItemGroup>
 </Project>
 """);
@@ -156,7 +156,7 @@ public sealed class DoctorPlaceholderTests
     <TargetFramework>net8.0-windows7.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AppAutomation.FlaUI" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.FlaUI" Version="*" />
   </ItemGroup>
 </Project>
 """);
@@ -169,7 +169,7 @@ public sealed class DoctorPlaceholderTests
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="AppAutomation.TestHost.Avalonia" Version="2.1.0" />
+    <PackageReference Include="AppAutomation.TestHost.Avalonia" Version="*" />
   </ItemGroup>
 </Project>
 """);

@@ -25,12 +25,7 @@ dotnet tool install AppAutomation.Tooling
 ```
 
 These commands install the latest version from your configured feeds.
-For a reproducible install of a specific release:
-
-```powershell
-dotnet new install AppAutomation.Templates@2.1.0
-dotnet tool install AppAutomation.Tooling --version 2.1.0
-```
+The generated AppAutomation package references also float to the latest available version by default.
 
 ## 3. Generate canonical topology
 
@@ -38,10 +33,10 @@ dotnet tool install AppAutomation.Tooling --version 2.1.0
 dotnet new appauto-avalonia --name MyApp
 ```
 
-Pinned example for a specific release:
+Explicit floating package-version override:
 
 ```powershell
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion "*"
 ```
 
 The template will create:
@@ -261,12 +256,7 @@ dotnet tool install AppAutomation.Tooling
 ```
 
 Эти команды ставят последнюю доступную версию из настроенных feed.
-Для воспроизводимой установки конкретного релиза:
-
-```powershell
-dotnet new install AppAutomation.Templates@2.1.0
-dotnet tool install AppAutomation.Tooling --version 2.1.0
-```
+Сгенерированные `PackageReference` для AppAutomation по умолчанию тоже используют последнюю доступную версию.
 
 ## 3. Сгенерируйте стандартную структуру проектов
 
@@ -274,10 +264,10 @@ dotnet tool install AppAutomation.Tooling --version 2.1.0
 dotnet new appauto-avalonia --name MyApp
 ```
 
-Pinned-пример для конкретного релиза:
+Явный floating override для версии пакетов:
 
 ```powershell
-dotnet new appauto-avalonia --name MyApp --AppAutomationVersion 2.1.0
+dotnet new appauto-avalonia --name MyApp --AppAutomationVersion "*"
 ```
 
 Шаблон создаст:
