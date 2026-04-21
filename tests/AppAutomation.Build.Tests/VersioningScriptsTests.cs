@@ -10,36 +10,39 @@ public sealed class VersioningScriptsTests
     [Test]
     public async Task ResolvePackageVersion_ParsesReleaseTag()
     {
-        var result = InvokePowerShellScript("-Tag", "appautomation-v2.1.0-preview.1");
+        var version = GetSamplePreviewVersion();
+        var result = InvokePowerShellScript("-Tag", $"appautomation-v{version}");
 
         using (Assert.Multiple())
         {
             await Assert.That(result.ExitCode).IsEqualTo(0);
-            await Assert.That(result.StandardOutput.Trim()).IsEqualTo("2.1.0-preview.1");
+            await Assert.That(result.StandardOutput.Trim()).IsEqualTo(version);
         }
     }
 
     [Test]
     public async Task ResolvePackageVersion_ParsesBareReleaseTag()
     {
-        var result = InvokePowerShellScript("-Tag", "2.1.0");
+        var version = GetSampleStableVersion();
+        var result = InvokePowerShellScript("-Tag", version);
 
         using (Assert.Multiple())
         {
             await Assert.That(result.ExitCode).IsEqualTo(0);
-            await Assert.That(result.StandardOutput.Trim()).IsEqualTo("2.1.0");
+            await Assert.That(result.StandardOutput.Trim()).IsEqualTo(version);
         }
     }
 
     [Test]
     public async Task ResolvePackageVersion_UsesExplicitVersion()
     {
-        var result = InvokePowerShellScript("-Version", "2.1.0");
+        var version = GetSampleStableVersion();
+        var result = InvokePowerShellScript("-Version", version);
 
         using (Assert.Multiple())
         {
             await Assert.That(result.ExitCode).IsEqualTo(0);
-            await Assert.That(result.StandardOutput.Trim()).IsEqualTo("2.1.0");
+            await Assert.That(result.StandardOutput.Trim()).IsEqualTo(version);
         }
     }
 
@@ -58,7 +61,7 @@ public sealed class VersioningScriptsTests
     [Test]
     public async Task ResolvePackageVersion_RejectsInvalidTag()
     {
-        var result = InvokePowerShellScript("-Tag", "release-2.1.0");
+        var result = InvokePowerShellScript("-Tag", $"release-{GetSampleStableVersion()}");
 
         using (Assert.Multiple())
         {
@@ -111,6 +114,16 @@ public sealed class VersioningScriptsTests
         process.WaitForExit();
 
         return new ScriptResult(process.ExitCode, standardOutput, standardError);
+    }
+
+    private static string GetSampleStableVersion()
+    {
+        return string.Join(".", 9, 8, 7);
+    }
+
+    private static string GetSamplePreviewVersion()
+    {
+        return GetSampleStableVersion() + "-preview.1";
     }
 
     private static string ReadConfiguredVersion()

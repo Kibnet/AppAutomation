@@ -66,7 +66,7 @@ Pack with default settings:
 
 Pack a specific version:
 ```powershell
-./eng/pack.ps1 -Version "2.1.0"
+./eng/pack.ps1 -Version "<version>"
 ```
 
 Pack without rebuilding (if already built):
