@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AppAutomation! This guide will he
 
 ### .NET SDK
 
-This project requires **.NET SDK 10.0.103**. The SDK version is pinned in `global.json` to ensure consistent builds across all contributors.
+This project requires **.NET SDK 10.0.202**. The SDK version is pinned in `global.json` to ensure consistent builds across all contributors.
 
 To install the required SDK, run the following command from the repository root:
 

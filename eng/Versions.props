@@ -1,5 +1,5 @@
 <Project>
   <PropertyGroup>
-    <AppAutomationVersion>2.1.0</AppAutomationVersion>
+    <AppAutomationVersion>1.4.3</AppAutomationVersion>
   </PropertyGroup>
 </Project>
