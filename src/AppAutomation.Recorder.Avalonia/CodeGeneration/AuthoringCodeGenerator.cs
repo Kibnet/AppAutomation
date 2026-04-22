@@ -368,6 +368,11 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
             RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SearchAndSelect => $"Page.SearchAndSelect(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
+            RecordedActionKind.OpenGridRow => $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
+            RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
+            RecordedActionKind.CopyGridCell => $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
+            RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 

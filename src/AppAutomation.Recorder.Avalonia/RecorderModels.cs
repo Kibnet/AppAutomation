@@ -24,7 +24,12 @@ public enum RecordedActionKind
     SelectListBoxItem = 16,
     WaitUntilGridRowsAtLeast = 17,
     WaitUntilGridCellEquals = 18,
-    SearchAndSelect = 19
+    SearchAndSelect = 19,
+    OpenGridRow = 20,
+    SortGridByColumn = 21,
+    ScrollGridToEnd = 22,
+    CopyGridCell = 23,
+    ExportGrid = 24
 }
 
 public enum RecorderAssertionMode

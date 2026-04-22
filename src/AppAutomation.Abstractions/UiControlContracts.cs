@@ -458,3 +458,44 @@ public interface IGridControl : IUiControl
     /// <returns>The <see cref="IGridRowControl"/> at the specified index, or <see langword="null"/> if the index is out of range.</returns>
     IGridRowControl? GetRowByIndex(int index);
 }
+
+/// <summary>
+/// Represents a grid control that can execute user-level grid actions.
+/// </summary>
+/// <remarks>
+/// Implement this interface only when the runtime adapter has stable provider support for
+/// row activation, column sorting, scrolling, cell copy, and export triggers. Callers should
+/// use <see cref="UiPageExtensions"/> methods so unsupported runtimes report consistent diagnostics.
+/// </remarks>
+public interface IGridUserActionControl : IGridControl
+{
+    /// <summary>
+    /// Opens or activates a row by its zero-based index.
+    /// </summary>
+    /// <param name="rowIndex">The zero-based row index.</param>
+    void OpenRow(int rowIndex);
+
+    /// <summary>
+    /// Sorts the grid by the specified column.
+    /// </summary>
+    /// <param name="columnName">The stable column name or visible header text.</param>
+    void SortByColumn(string columnName);
+
+    /// <summary>
+    /// Scrolls the grid to the end or triggers its load-more behavior.
+    /// </summary>
+    void ScrollToEnd();
+
+    /// <summary>
+    /// Copies or reads a cell value by zero-based row and column indexes.
+    /// </summary>
+    /// <param name="rowIndex">The zero-based row index.</param>
+    /// <param name="columnIndex">The zero-based column index.</param>
+    /// <returns>The copied cell value when the runtime can read it.</returns>
+    string CopyCell(int rowIndex, int columnIndex);
+
+    /// <summary>
+    /// Invokes the grid export action.
+    /// </summary>
+    void Export();
+}

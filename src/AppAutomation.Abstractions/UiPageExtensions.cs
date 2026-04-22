@@ -1130,6 +1130,107 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Opens or activates a grid row by its zero-based index.
+    /// </summary>
+    public static TSelf OpenGridRow<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(OpenGridRow),
+            timeoutMs,
+            grid => grid.OpenRow(rowIndex),
+            grid => $"rowIndex={rowIndex}; rows={grid.Rows.Count}");
+    }
+
+    /// <summary>
+    /// Sorts a grid by a stable column name or visible header text.
+    /// </summary>
+    public static TSelf SortGridByColumn<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        string columnName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(SortGridByColumn),
+            timeoutMs,
+            grid => grid.SortByColumn(columnName),
+            _ => $"columnName={columnName}");
+    }
+
+    /// <summary>
+    /// Scrolls a grid to the end or triggers its load-more behavior.
+    /// </summary>
+    public static TSelf ScrollGridToEnd<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(ScrollGridToEnd),
+            timeoutMs,
+            grid => grid.ScrollToEnd(),
+            grid => $"rows={grid.Rows.Count}");
+    }
+
+    /// <summary>
+    /// Copies or reads a grid cell by zero-based row and column indexes.
+    /// </summary>
+    public static TSelf CopyGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(CopyGridCell),
+            timeoutMs,
+            grid => grid.CopyCell(rowIndex, columnIndex),
+            grid => TryReadGridCellValue(grid, rowIndex, columnIndex));
+    }
+
+    /// <summary>
+    /// Invokes a grid export action.
+    /// </summary>
+    public static TSelf ExportGrid<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(ExportGrid),
+            timeoutMs,
+            grid => grid.Export(),
+            grid => $"rows={grid.Rows.Count}");
+    }
+
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
         where TSelf : UiPage
     {
@@ -1143,6 +1244,46 @@ public static class UiPageExtensions
         }
 
         return control;
+    }
+
+    private static TSelf ExecuteGridUserAction<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        string actionName,
+        int timeoutMs,
+        Action<IGridUserActionControl> action,
+        Func<IGridControl, string?> lastObservedValueFactory)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var grid = Resolve(selector, page);
+        try
+        {
+            if (grid is not IGridUserActionControl actionGrid)
+            {
+                throw new NotSupportedException(
+                    $"Grid '{grid.AutomationId}' does not support user action '{actionName}' in adapter '{page.Capabilities.AdapterId}'.");
+            }
+
+            action(actionGrid);
+            return page;
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Grid '{grid.AutomationId}' failed to execute user action '{actionName}'.",
+                expectedValue: actionName,
+                lastObservedValueFactory: () => lastObservedValueFactory(grid),
+                actionName,
+                ex);
+        }
     }
 
     private static string? TryReadGridCellValue(IGridControl grid, int rowIndex, int columnIndex)

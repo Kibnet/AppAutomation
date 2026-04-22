@@ -624,6 +624,112 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateGridActionStep_WithConfiguredHints_CapturesGridUserActions()
+    {
+        var options = CreateEremexGridActionOptions();
+        var root = new StackPanel();
+        var rows = CreateEremexRows();
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var bridge = new Border();
+        var openCell = new TextBlock { Text = "EX-R3", DataContext = rows[2] };
+        var copyCell = new TextBlock { Text = "EX-13", DataContext = rows[2] };
+        var header = new TextBlock { Text = "Value" };
+        var loadMoreButton = new Button { Content = "Load more" };
+        var exportButton = new Button { Content = "Export" };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(openCell, "EremexDemoDataGridAutomationBridge_Row2_Cell0");
+        AutomationProperties.SetAutomationId(copyCell, "EremexDemoDataGridAutomationBridge_Row2_Cell1");
+        AutomationProperties.SetAutomationId(header, "EremexDemoDataGridAutomationBridge_HeaderValue");
+        AutomationProperties.SetAutomationId(loadMoreButton, "EremexDemoDataGridLoadMoreButton");
+        AutomationProperties.SetAutomationId(exportButton, "EremexDemoDataGridExportButton");
+        eremexVisualControl.Children.Add(openCell);
+        eremexVisualControl.Children.Add(copyCell);
+        root.Children.Add(eremexVisualControl);
+        root.Children.Add(header);
+        root.Children.Add(loadMoreButton);
+        root.Children.Add(exportButton);
+        root.Children.Add(bridge);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var openResult = factory.TryCreateGridActionStep(openCell);
+        var sortResult = factory.TryCreateGridActionStep(header);
+        var scrollResult = factory.TryCreateGridActionStep(loadMoreButton);
+        var copyResult = factory.TryCreateGridActionStep(copyCell);
+        var exportResult = factory.TryCreateGridActionStep(exportButton);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(openResult.Success).IsEqualTo(true);
+            await Assert.That(openResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.OpenGridRow);
+            await Assert.That(openResult.Step.RowIndex).IsEqualTo(2);
+            await Assert.That(openResult.Step.Control.LocatorValue).IsEqualTo("EremexDemoDataGridAutomationBridge");
+
+            await Assert.That(sortResult.Success).IsEqualTo(true);
+            await Assert.That(sortResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.SortGridByColumn);
+            await Assert.That(sortResult.Step.StringValue).IsEqualTo("Value");
+
+            await Assert.That(scrollResult.Success).IsEqualTo(true);
+            await Assert.That(scrollResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.ScrollGridToEnd);
+
+            await Assert.That(copyResult.Success).IsEqualTo(true);
+            await Assert.That(copyResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.CopyGridCell);
+            await Assert.That(copyResult.Step.RowIndex).IsEqualTo(2);
+            await Assert.That(copyResult.Step.ColumnIndex).IsEqualTo(1);
+
+            await Assert.That(exportResult.Success).IsEqualTo(true);
+            await Assert.That(exportResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.ExportGrid);
+        }
+    }
+
+    [Test]
+    public async Task TryCreateGridActionStep_OpenRowWithoutRowContext_ReturnsDiagnostic()
+    {
+        var options = CreateEremexGridOptions();
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridOpenButton",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.OpenRow));
+        var openButton = new Button { Content = "Open" };
+        AutomationProperties.SetAutomationId(openButton, "EremexDemoDataGridOpenButton");
+        var factory = new RecorderStepFactory(options, validationRootProvider: null);
+
+        var result = factory.TryCreateGridActionStep(openButton);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(false);
+            await Assert.That(result.Message).Contains("requires a row index");
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesConfiguredGridExportButton_InsteadOfGenericClick()
+    {
+        var options = CreateEremexGridActionOptions();
+        var root = new StackPanel();
+        var bridge = new Border();
+        var exportButton = new Button { Content = "Export" };
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(exportButton, "EremexDemoDataGridExportButton");
+        root.Children.Add(exportButton);
+        root.Children.Add(bridge);
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(exportButton);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);");
+            await Assert.That(details.StepJournal[0].Preview.Contains("Page.ClickButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+        }
+    }
+
+    [Test]
     public async Task HotkeyMap_UsesConfiguredGestures_AndBuildsLegend()
     {
         var hotkeys = new RecorderHotkeys
@@ -1199,6 +1305,72 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task SaveAsync_UsesGridUserActions_InGeneratedScenario()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("EremexDemoDataGridAutomationBridge", UiControlType.Grid, "EremexDemoDataGridAutomationBridge", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var gridDescriptor = new RecordedControlDescriptor(
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid,
+            "EremexDemoDataGridAutomationBridge",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: "Recorded grid user action from configured hint.");
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(RecordedActionKind.OpenGridRow, gridDescriptor, RowIndex: 2),
+            new RecordedStep(RecordedActionKind.SortGridByColumn, gridDescriptor, StringValue: "Value"),
+            new RecordedStep(RecordedActionKind.ScrollGridToEnd, gridDescriptor),
+            new RecordedStep(RecordedActionKind.CopyGridCell, gridDescriptor, RowIndex: 2, ColumnIndex: 1),
+            new RecordedStep(RecordedActionKind.ExportGrid, gridDescriptor)
+        ];
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Eremex Grid Actions");
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains("Page.OpenGridRow(static page => page.EremexDemoDataGridAutomationBridge, 2);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.SortGridByColumn(static page => page.EremexDemoDataGridAutomationBridge, \"Value\");", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ScrollGridToEnd(static page => page.EremexDemoDataGridAutomationBridge);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.CopyGridCell(static page => page.EremexDemoDataGridAutomationBridge, 2, 1);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);", StringComparison.Ordinal)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
     public async Task SaveAsync_SkipsInvalidSteps_AndReportsCounts()
     {
         using var directory = new TemporaryDirectory();
@@ -1363,6 +1535,32 @@ public sealed class RecorderTests
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
             ["EremexRow", "EremexValue", "EremexParity"]));
+        return options;
+    }
+
+    private static AppAutomationRecorderOptions CreateEremexGridActionOptions()
+    {
+        var options = CreateEremexGridOptions();
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridAutomationBridge_Row2_Cell0",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.OpenRow));
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridAutomationBridge_HeaderValue",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.SortByColumn));
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridLoadMoreButton",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.ScrollToEnd));
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridAutomationBridge_Row2_Cell1",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.CopyCell));
+        options.GridActionHints.Add(new RecorderGridActionHint(
+            "EremexDemoDataGridExportButton",
+            "EremexDemoDataGridAutomationBridge",
+            RecorderGridUserActionKind.Export));
         return options;
     }
 

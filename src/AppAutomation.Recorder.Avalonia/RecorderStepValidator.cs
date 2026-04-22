@@ -46,6 +46,11 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsEnabled => true,
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
             RecordedActionKind.SearchAndSelect => source is ComboBox,
+            RecordedActionKind.OpenGridRow
+                or RecordedActionKind.SortGridByColumn
+                or RecordedActionKind.ScrollGridToEnd
+                or RecordedActionKind.CopyGridCell
+                or RecordedActionKind.ExportGrid => true,
             _ => false
         };
     }

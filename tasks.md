@@ -23,9 +23,9 @@
 - Control: Eremex `DataGridControl`
 - Scenario: Record and replay selected-row open, header sort, scroll-to-load-more, copy cell and export triggers
 - Description: Add explicit recorder/runtime primitives for grid user actions that are currently only described as gaps in Arm.Srv list-page workflows.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-003-eremex-grid-user-actions.md
+- LastStep: completed
 - DoneCriteria: Grid user actions have typed API/recorded actions where feasible; tests cover generated code or documented unsupported cases with diagnostics.
 
 ## AAR-004 In-Grid Editor Activation

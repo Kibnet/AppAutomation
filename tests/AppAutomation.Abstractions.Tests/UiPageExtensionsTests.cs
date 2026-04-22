@@ -329,6 +329,63 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task GridUserActions_InvokeRuntimeActionControl_WhenSupported()
+    {
+        var grid = new FakeGridUserActionControl(
+            "EremexDemoDataGridAutomationBridge",
+            [
+                new FakeGridRowControl(new FakeGridCellControl("EX-R1"), new FakeGridCellControl("EX-7")),
+                new FakeGridRowControl(new FakeGridCellControl("EX-R2"), new FakeGridCellControl("EX-10"))
+            ]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        var returnedPage = page
+            .OpenGridRow(static candidate => candidate.EremexDemoDataGridAutomationBridge, 1)
+            .SortGridByColumn(static candidate => candidate.EremexDemoDataGridAutomationBridge, "Value")
+            .ScrollGridToEnd(static candidate => candidate.EremexDemoDataGridAutomationBridge)
+            .CopyGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 1, 0)
+            .ExportGrid(static candidate => candidate.EremexDemoDataGridAutomationBridge);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(grid.OpenedRowIndex).IsEqualTo(1);
+            await Assert.That(grid.SortedColumnName).IsEqualTo("Value");
+            await Assert.That(grid.ScrollToEndCount).IsEqualTo(1);
+            await Assert.That(grid.CopiedCell).IsEqualTo((1, 0, "EX-R2"));
+            await Assert.That(grid.ExportCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task GridUserActions_ThrowUiOperationException_WhenRuntimeDoesNotSupportActions()
+    {
+        var grid = new FakeGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl(new FakeGridCellControl("EX-R1"))]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.OpenGridRow(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("OpenGridRow");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("EremexDemoDataGridAutomationBridge");
+            await Assert.That(exception.Message).Contains("does not support user action 'OpenGridRow'");
+            await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -736,7 +793,7 @@ public sealed class UiPageExtensionsTests
         }
     }
 
-    private sealed class FakeGridControl : FakeControlBase, IGridControl
+    private class FakeGridControl : FakeControlBase, IGridControl
     {
         public FakeGridControl(string automationId, IReadOnlyList<IGridRowControl> rows)
             : base(automationId, automationId)
@@ -751,6 +808,52 @@ public sealed class UiPageExtensionsTests
             return index >= 0 && index < Rows.Count
                 ? Rows[index]
                 : null;
+        }
+    }
+
+    private sealed class FakeGridUserActionControl : FakeGridControl, IGridUserActionControl
+    {
+        public FakeGridUserActionControl(string automationId, IReadOnlyList<IGridRowControl> rows)
+            : base(automationId, rows)
+        {
+        }
+
+        public int? OpenedRowIndex { get; private set; }
+
+        public string? SortedColumnName { get; private set; }
+
+        public int ScrollToEndCount { get; private set; }
+
+        public (int RowIndex, int ColumnIndex, string Value)? CopiedCell { get; private set; }
+
+        public int ExportCount { get; private set; }
+
+        public void OpenRow(int rowIndex)
+        {
+            OpenedRowIndex = rowIndex;
+        }
+
+        public void SortByColumn(string columnName)
+        {
+            SortedColumnName = columnName;
+        }
+
+        public void ScrollToEnd()
+        {
+            ScrollToEndCount++;
+        }
+
+        public string CopyCell(int rowIndex, int columnIndex)
+        {
+            var value = GetRowByIndex(rowIndex)?.Cells[columnIndex].Value
+                ?? throw new InvalidOperationException("Cell was not found.");
+            CopiedCell = (rowIndex, columnIndex, value);
+            return value;
+        }
+
+        public void Export()
+        {
+            ExportCount++;
         }
     }
 

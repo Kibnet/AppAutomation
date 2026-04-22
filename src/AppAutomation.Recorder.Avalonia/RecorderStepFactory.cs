@@ -1,14 +1,18 @@
 using System.Collections;
 using AppAutomation.Abstractions;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
 
 internal sealed class RecorderStepFactory
 {
+    internal const string NoGridActionHintMessage = "Recorder does not have a grid action hint for this source.";
+
     private readonly AppAutomationRecorderOptions _options;
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
@@ -203,6 +207,55 @@ internal sealed class RecorderStepFactory
                 Warning: warning,
                 ItemValue: selectedText),
             warning);
+    }
+
+    public StepCreationResult TryCreateGridActionStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported(NoGridActionHintMessage);
+        }
+
+        if (!TryResolveGridActionHint(source, out var hint, out var matchedSource))
+        {
+            return StepCreationResult.Unsupported(NoGridActionHintMessage);
+        }
+
+        if (string.IsNullOrWhiteSpace(hint.TargetGridLocatorValue))
+        {
+            return StepCreationResult.Unsupported("Grid action hint target grid locator is empty.");
+        }
+
+        var warning = $"Recorded grid user action '{hint.ActionKind}' from configured hint.";
+        var descriptor = new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(hint.TargetGridLocatorValue, UiControlType.Grid),
+            UiControlType.Grid,
+            hint.TargetGridLocatorValue.Trim(),
+            hint.TargetGridLocatorKind,
+            hint.TargetFallbackToName,
+            source.GetType().FullName ?? source.GetType().Name,
+            warning);
+
+        return hint.ActionKind switch
+        {
+            RecorderGridUserActionKind.OpenRow =>
+                TryCreateOpenGridRowStep(source, descriptor, warning, hint),
+            RecorderGridUserActionKind.SortByColumn =>
+                TryCreateSortGridByColumnStep(source, matchedSource, descriptor, warning, hint),
+            RecorderGridUserActionKind.ScrollToEnd =>
+                CreateStep(
+                    source,
+                    new RecordedStep(RecordedActionKind.ScrollGridToEnd, descriptor, Warning: warning),
+                    warning),
+            RecorderGridUserActionKind.CopyCell =>
+                TryCreateCopyGridCellStep(source, descriptor, warning, hint),
+            RecorderGridUserActionKind.Export =>
+                CreateStep(
+                    source,
+                    new RecordedStep(RecordedActionKind.ExportGrid, descriptor, Warning: warning),
+                    warning),
+            _ => StepCreationResult.Unsupported($"Unsupported grid action hint '{hint.ActionKind}'.")
+        };
     }
 
     public StepCreationResult TryCreateListBoxStep(ListBox listBox)
@@ -471,6 +524,75 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
+    private StepCreationResult TryCreateOpenGridRowStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridActionHint hint)
+    {
+        if (!TryResolveGridRowIndex(source, hint, out var rowIndex))
+        {
+            return StepCreationResult.Unsupported("Grid open-row action requires a row index from the hint or grid row/cell context.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.OpenGridRow,
+                descriptor,
+                Warning: warning,
+                RowIndex: rowIndex),
+            warning);
+    }
+
+    private StepCreationResult TryCreateSortGridByColumnStep(
+        Control source,
+        Control matchedSource,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridActionHint hint)
+    {
+        var columnName = FirstNonWhiteSpace(
+            hint.ColumnName,
+            ExtractTextValue(source),
+            ExtractTextValue(matchedSource));
+        if (string.IsNullOrWhiteSpace(columnName))
+        {
+            return StepCreationResult.Unsupported("Grid sort action requires a column name from the hint or source text.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SortGridByColumn,
+                descriptor,
+                StringValue: columnName.Trim(),
+                Warning: warning),
+            warning);
+    }
+
+    private StepCreationResult TryCreateCopyGridCellStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridActionHint hint)
+    {
+        if (!TryResolveGridCellIndexes(source, hint, out var rowIndex, out var columnIndex))
+        {
+            return StepCreationResult.Unsupported("Grid copy-cell action requires row and column indexes from the hint or grid cell context.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.CopyGridCell,
+                descriptor,
+                Warning: warning,
+                RowIndex: rowIndex,
+                ColumnIndex: columnIndex),
+            warning);
+    }
+
     private RecorderActionHint TryResolveActionHint(Control control, RecordedControlDescriptor descriptor)
     {
         if (TryResolveActionHint(descriptor.LocatorValue, descriptor.LocatorKind, out var actionHint))
@@ -585,6 +707,30 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private bool TryResolveGridActionHint(
+        Control source,
+        out RecorderGridActionHint hint,
+        out Control matchedSource)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            foreach (var candidate in _options.GridActionHints)
+            {
+                if (TryGetLocator(current, candidate.SourceLocatorKind, out var locatorValue)
+                    && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
+                {
+                    hint = candidate;
+                    matchedSource = current;
+                    return true;
+                }
+            }
+        }
+
+        hint = null!;
+        matchedSource = null!;
+        return false;
+    }
+
     private bool TryResolveSearchPickerHint(
         TextBox searchInput,
         ComboBox results,
@@ -606,6 +752,69 @@ internal sealed class RecorderStepFactory
 
         hint = null!;
         return false;
+    }
+
+    private bool TryResolveGridRowIndex(Control source, RecorderGridActionHint hint, out int rowIndex)
+    {
+        if (hint.RowIndex is >= 0)
+        {
+            rowIndex = hint.RowIndex.Value;
+            return true;
+        }
+
+        if (TryResolveGridHint(source, out _, out var gridSource)
+            && TryReadItemsSource(gridSource, out var items)
+            && TryResolveGridRow(source, gridSource, items, out rowIndex, out _))
+        {
+            return true;
+        }
+
+        return TryResolveGridRowIndexFromAutomationId(source, out rowIndex);
+    }
+
+    private bool TryResolveGridCellIndexes(
+        Control source,
+        RecorderGridActionHint hint,
+        out int rowIndex,
+        out int columnIndex)
+    {
+        rowIndex = hint.RowIndex is >= 0 ? hint.RowIndex.Value : -1;
+        columnIndex = hint.ColumnIndex is >= 0 ? hint.ColumnIndex.Value : -1;
+        if (rowIndex >= 0 && columnIndex >= 0)
+        {
+            return true;
+        }
+
+        if (TryResolveGridHint(source, out var gridHint, out var gridSource)
+            && TryReadItemsSource(gridSource, out var items)
+            && TryResolveGridCell(source, gridSource, gridHint, items, out var resolvedRowIndex, out var resolvedColumnIndex, out _))
+        {
+            if (rowIndex < 0)
+            {
+                rowIndex = resolvedRowIndex;
+            }
+
+            if (columnIndex < 0)
+            {
+                columnIndex = resolvedColumnIndex;
+            }
+
+            return rowIndex >= 0 && columnIndex >= 0;
+        }
+
+        TryResolveGridRowIndexFromAutomationId(source, out var parsedRowIndex);
+        TryResolveGridColumnIndexFromAutomationId(source, out var parsedColumnIndex);
+        if (rowIndex < 0)
+        {
+            rowIndex = parsedRowIndex;
+        }
+
+        if (columnIndex < 0)
+        {
+            columnIndex = parsedColumnIndex;
+        }
+
+        return rowIndex >= 0 && columnIndex >= 0;
     }
 
     private static bool TryResolveGridCell(
@@ -691,6 +900,27 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private static bool TryResolveGridRow(
+        Control source,
+        Control gridSource,
+        IReadOnlyList<object?> items,
+        out int rowIndex,
+        out object item)
+    {
+        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        {
+            var dataContext = current.DataContext;
+            if (dataContext is not null && TryFindItemIndex(items, dataContext, out rowIndex, out item))
+            {
+                return true;
+            }
+        }
+
+        rowIndex = -1;
+        item = null!;
+        return false;
+    }
+
     private static bool TryResolveGridColumnIndex(
         Control source,
         Control gridSource,
@@ -739,6 +969,34 @@ internal sealed class RecorderStepFactory
                 System.Globalization.NumberStyles.None,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out index);
+    }
+
+    private static bool TryResolveGridRowIndexFromAutomationId(Control source, out int rowIndex)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Row", out rowIndex))
+            {
+                return true;
+            }
+        }
+
+        rowIndex = -1;
+        return false;
+    }
+
+    private static bool TryResolveGridColumnIndexFromAutomationId(Control source, out int columnIndex)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Cell", out columnIndex))
+            {
+                return true;
+            }
+        }
+
+        columnIndex = -1;
+        return false;
     }
 
     private static bool TryReadItemsSource(Control control, out IReadOnlyList<object?> items)
@@ -817,6 +1075,49 @@ internal sealed class RecorderStepFactory
 
         locator = locator.Trim();
         return !string.IsNullOrWhiteSpace(locator);
+    }
+
+    private static string? FirstNonWhiteSpace(params string?[] values)
+    {
+        return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
+    {
+        if (control is null)
+        {
+            yield break;
+        }
+
+        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<Control>();
+        queue.Enqueue(control);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!seen.Add(current))
+            {
+                continue;
+            }
+
+            yield return current;
+
+            if (current.GetVisualParent() is Control visualParent)
+            {
+                queue.Enqueue(visualParent);
+            }
+
+            if (current is ILogical { LogicalParent: Control logicalParent })
+            {
+                queue.Enqueue(logicalParent);
+            }
+
+            if (current is StyledElement { TemplatedParent: Control templatedParent })
+            {
+                queue.Enqueue(templatedParent);
+            }
+        }
     }
 
     private static string? ExtractTreeSelectionText(object? selectedItem)

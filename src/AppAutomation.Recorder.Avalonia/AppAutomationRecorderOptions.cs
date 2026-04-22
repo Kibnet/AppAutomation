@@ -37,6 +37,8 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderGridHint> GridHints { get; } = new List<RecorderGridHint>();
 
+    public IList<RecorderGridActionHint> GridActionHints { get; } = new List<RecorderGridActionHint>();
+
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
@@ -73,11 +75,31 @@ public sealed record RecorderGridHint(
     UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 
+public sealed record RecorderGridActionHint(
+    string SourceLocatorValue,
+    string TargetGridLocatorValue,
+    RecorderGridUserActionKind ActionKind,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetGridLocatorKind = UiLocatorKind.AutomationId,
+    bool TargetFallbackToName = false,
+    string? ColumnName = null,
+    int? RowIndex = null,
+    int? ColumnIndex = null);
+
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
+
+public enum RecorderGridUserActionKind
+{
+    OpenRow = 0,
+    SortByColumn = 1,
+    ScrollToEnd = 2,
+    CopyCell = 3,
+    Export = 4
+}
 
 public enum RecorderActionHint
 {

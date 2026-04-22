@@ -314,6 +314,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         var control = ResolveButtonActionOwner(source);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        if (TryRecordGridAction(control))
+        {
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateButtonStep(control));
     }
 
@@ -325,6 +330,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     internal void CaptureListBoxSelectionForTesting(ListBox listBox)
     {
         RecordListBoxSelection(listBox);
+    }
+
+    internal void CaptureGridActionForTesting(Control? source)
+    {
+        TryRecordGridAction(source);
     }
 
     private void ApplySaveResult(RecorderSaveResult result)
@@ -487,6 +497,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         RegisterPointerInput(control);
+
+        if (FindAncestorOrSelf<Button>(e.Source as Control) is null)
+        {
+            TryRecordGridAction(e.Source as Control ?? control);
+        }
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -533,6 +548,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             if (focused is TextBox && e.Key is Key.Enter or Key.Tab)
             {
                 FlushPendingText();
+            }
+            else if (e.Key is Key.Enter)
+            {
+                TryRecordGridAction(focused);
             }
         }
     }
@@ -588,6 +607,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         var control = ResolveButtonActionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        if (TryRecordGridAction(control))
+        {
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateButtonStep(control));
     }
 
@@ -829,6 +853,24 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         SetStatus(ResolveStepStatusMessage(recordedStep, result.Message), recordedStep.ValidationStatus);
     }
 
+    private bool TryRecordGridAction(Control? source)
+    {
+        var result = _stepFactory.TryCreateGridActionStep(source);
+        if (result.Success)
+        {
+            AddStep(result);
+            return true;
+        }
+
+        if (string.Equals(result.Message, RecorderStepFactory.NoGridActionHintMessage, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        AddStep(result);
+        return true;
+    }
+
     private static string CreateFingerprint(RecordedStep step)
     {
         return string.Join(
@@ -839,8 +881,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             step.StringValue ?? string.Empty,
             step.ItemValue ?? string.Empty,
             step.BoolValue?.ToString() ?? string.Empty,
-            step.DoubleValue?.ToString() ?? string.Empty,
+            step.DoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.DateValue?.ToString("O") ?? string.Empty,
+            step.RowIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.ColumnIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.CanPersist);
     }
 
