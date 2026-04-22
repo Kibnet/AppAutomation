@@ -43,9 +43,9 @@
 - Control: `DateRangeFilterControl`, `RangeFromToControl`, Eremex `DateEditor` / `SpinEditor`
 - Scenario: Open filter popup, set date/range/spinner values, apply or cancel
 - Description: Add composite filter support so date/range popup controls can be automated through stable parts instead of ad hoc button/text interactions.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-005-popup-date-range-filters.md
+- LastStep: completed
 - DoneCriteria: Date/range filter adapters or helpers exist; tests cover open, set value, apply and cancel paths.
 
 ## AAR-006 Dialog Toast And Export Flow

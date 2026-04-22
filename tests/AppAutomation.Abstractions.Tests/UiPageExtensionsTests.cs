@@ -477,6 +477,87 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task SetDateRangeFilter_InvokesRuntimeFilterAndVerifiesApply()
+    {
+        var filter = new FakeDateRangeFilterControl("CreatedAtFilter");
+        var page = new FilterPage(new FakeResolver(("CreatedAtFilter", filter)));
+
+        var returnedPage = page.SetDateRangeFilter(
+            static candidate => candidate.CreatedAtFilter,
+            new DateTime(2026, 4, 1),
+            new DateTime(2026, 4, 30));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(filter.Requests.Count).IsEqualTo(1);
+            await Assert.That(filter.Requests[0].CommitMode).IsEqualTo(FilterPopupCommitMode.Apply);
+            await Assert.That(filter.FromValue).IsEqualTo(new DateTime(2026, 4, 1));
+            await Assert.That(filter.ToValue).IsEqualTo(new DateTime(2026, 4, 30));
+            await Assert.That(filter.OpenCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SetNumericRangeFilter_CancelModeInvokesRuntimeFilterWithoutMutatingAppliedRange()
+    {
+        var filter = new FakeNumericRangeFilterControl("AmountFilter")
+        {
+            FromValue = 1,
+            ToValue = 5
+        };
+        var page = new FilterPage(new FakeResolver(("AmountFilter", filter)));
+
+        page.SetNumericRangeFilter(
+            static candidate => candidate.AmountFilter,
+            10,
+            20,
+            FilterPopupCommitMode.Cancel);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(filter.Requests.Count).IsEqualTo(1);
+            await Assert.That(filter.Requests[0].CommitMode).IsEqualTo(FilterPopupCommitMode.Cancel);
+            await Assert.That(filter.FromValue).IsEqualTo(1);
+            await Assert.That(filter.ToValue).IsEqualTo(5);
+            await Assert.That(filter.OpenCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SetDateRangeFilter_ThrowsUiOperationException_WhenRuntimeFilterFails()
+    {
+        var filter = new FakeDateRangeFilterControl("CreatedAtFilter")
+        {
+            Failure = new InvalidOperationException("popup part missing")
+        };
+        var page = new FilterPage(new FakeResolver(("CreatedAtFilter", filter)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.SetDateRangeFilter(
+                static candidate => candidate.CreatedAtFilter,
+                new DateTime(2026, 4, 1),
+                new DateTime(2026, 4, 30),
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("SetDateRangeFilter");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("CreatedAtFilter");
+            await Assert.That(exception.Message).Contains("popup part missing");
+            await Assert.That(exception.InnerException is InvalidOperationException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -546,6 +627,19 @@ public sealed class UiPageExtensionsTests
             "EremexDemoDataGridAutomationBridge",
             UiControlType.Grid,
             "EremexDemoDataGridAutomationBridge");
+    }
+
+    public static class FilterPageDefinitions
+    {
+        public static UiControlDefinition CreatedAtFilter { get; } = new(
+            "CreatedAtFilter",
+            UiControlType.DateRangeFilter,
+            "CreatedAtFilter");
+
+        public static UiControlDefinition AmountFilter { get; } = new(
+            "AmountFilter",
+            UiControlType.NumericRangeFilter,
+            "AmountFilter");
     }
 
     private sealed class ComboPage : UiPage
@@ -630,6 +724,18 @@ public sealed class UiPageExtensionsTests
         public IGridControl EremexDemoDataGridAutomationBridge => Resolve<IGridControl>(GridPageDefinitions.EremexDemoDataGridAutomationBridge);
     }
 
+    private sealed class FilterPage : UiPage
+    {
+        public FilterPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDateRangeFilterControl CreatedAtFilter => Resolve<IDateRangeFilterControl>(FilterPageDefinitions.CreatedAtFilter);
+
+        public INumericRangeFilterControl AmountFilter => Resolve<INumericRangeFilterControl>(FilterPageDefinitions.AmountFilter);
+    }
+
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
     {
         private readonly Dictionary<string, object> _controls;
@@ -679,6 +785,81 @@ public sealed class UiPageExtensionsTests
         public string Name { get; protected set; }
 
         public bool IsEnabled { get; init; } = true;
+    }
+
+    private sealed class FakeDateRangeFilterControl : FakeControlBase, IDateRangeFilterControl
+    {
+        public FakeDateRangeFilterControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public DateTime? FromValue { get; private set; }
+
+        public DateTime? ToValue { get; private set; }
+
+        public Exception? Failure { get; init; }
+
+        public int OpenCount { get; private set; }
+
+        public List<DateRangeFilterRequest> Requests { get; } = [];
+
+        public void Open()
+        {
+            OpenCount++;
+        }
+
+        public void SetRange(DateRangeFilterRequest request)
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            Requests.Add(request);
+            Open();
+            if (request.CommitMode == FilterPopupCommitMode.Cancel)
+            {
+                return;
+            }
+
+            FromValue = request.From ?? FromValue;
+            ToValue = request.To ?? ToValue;
+        }
+    }
+
+    private sealed class FakeNumericRangeFilterControl : FakeControlBase, INumericRangeFilterControl
+    {
+        public FakeNumericRangeFilterControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public double? FromValue { get; set; }
+
+        public double? ToValue { get; set; }
+
+        public int OpenCount { get; private set; }
+
+        public List<NumericRangeFilterRequest> Requests { get; } = [];
+
+        public void Open()
+        {
+            OpenCount++;
+        }
+
+        public void SetRange(NumericRangeFilterRequest request)
+        {
+            Requests.Add(request);
+            Open();
+            if (request.CommitMode == FilterPopupCommitMode.Cancel)
+            {
+                return;
+            }
+
+            FromValue = request.From ?? FromValue;
+            ToValue = request.To ?? ToValue;
+        }
     }
 
     private sealed class FakeLabelControl : FakeControlBase, ILabelControl

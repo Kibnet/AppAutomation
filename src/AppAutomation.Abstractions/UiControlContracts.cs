@@ -330,6 +330,119 @@ public interface ISpinnerControl : IUiControl
 }
 
 /// <summary>
+/// Describes how a popup filter operation should be finished.
+/// </summary>
+public enum FilterPopupCommitMode
+{
+    /// <summary>
+    /// Apply the entered filter values.
+    /// </summary>
+    Apply = 0,
+
+    /// <summary>
+    /// Cancel the popup operation.
+    /// </summary>
+    Cancel = 1
+}
+
+/// <summary>
+/// Describes which primitive editor kind is used inside a composite filter popup.
+/// </summary>
+public enum FilterValueEditorKind
+{
+    /// <summary>
+    /// A text box editor. Dates use yyyy-MM-dd; numbers use invariant culture.
+    /// </summary>
+    TextBox = 0,
+
+    /// <summary>
+    /// A date-time picker editor.
+    /// </summary>
+    DateTimePicker = 1,
+
+    /// <summary>
+    /// A numeric spinner editor.
+    /// </summary>
+    Spinner = 2
+}
+
+/// <summary>
+/// Describes a date range filter popup request.
+/// </summary>
+/// <param name="From">The optional lower date bound. <see langword="null"/> leaves this bound unchanged.</param>
+/// <param name="To">The optional upper date bound. <see langword="null"/> leaves this bound unchanged.</param>
+/// <param name="CommitMode">Whether to apply or cancel the popup operation.</param>
+public sealed record DateRangeFilterRequest(
+    DateTime? From,
+    DateTime? To,
+    FilterPopupCommitMode CommitMode = FilterPopupCommitMode.Apply);
+
+/// <summary>
+/// Describes a numeric range filter popup request.
+/// </summary>
+/// <param name="From">The optional lower numeric bound. <see langword="null"/> leaves this bound unchanged.</param>
+/// <param name="To">The optional upper numeric bound. <see langword="null"/> leaves this bound unchanged.</param>
+/// <param name="CommitMode">Whether to apply or cancel the popup operation.</param>
+public sealed record NumericRangeFilterRequest(
+    double? From,
+    double? To,
+    FilterPopupCommitMode CommitMode = FilterPopupCommitMode.Apply);
+
+/// <summary>
+/// Represents a composite popup filter for date ranges.
+/// </summary>
+public interface IDateRangeFilterControl : IUiControl
+{
+    /// <summary>
+    /// Gets the current lower date bound when it can be read from the configured editor.
+    /// </summary>
+    DateTime? FromValue { get; }
+
+    /// <summary>
+    /// Gets the current upper date bound when it can be read from the configured editor.
+    /// </summary>
+    DateTime? ToValue { get; }
+
+    /// <summary>
+    /// Opens the filter popup if an open trigger is configured.
+    /// </summary>
+    void Open();
+
+    /// <summary>
+    /// Sets date bounds and applies or cancels the popup operation.
+    /// </summary>
+    /// <param name="request">The range request.</param>
+    void SetRange(DateRangeFilterRequest request);
+}
+
+/// <summary>
+/// Represents a composite popup filter for numeric ranges.
+/// </summary>
+public interface INumericRangeFilterControl : IUiControl
+{
+    /// <summary>
+    /// Gets the current lower numeric bound when it can be read from the configured editor.
+    /// </summary>
+    double? FromValue { get; }
+
+    /// <summary>
+    /// Gets the current upper numeric bound when it can be read from the configured editor.
+    /// </summary>
+    double? ToValue { get; }
+
+    /// <summary>
+    /// Opens the filter popup if an open trigger is configured.
+    /// </summary>
+    void Open();
+
+    /// <summary>
+    /// Sets numeric bounds and applies or cancels the popup operation.
+    /// </summary>
+    /// <param name="request">The range request.</param>
+    void SetRange(NumericRangeFilterRequest request);
+}
+
+/// <summary>
 /// Represents an individual tab within a <see cref="ITabControl"/>.
 /// </summary>
 public interface ITabItemControl : IUiControl

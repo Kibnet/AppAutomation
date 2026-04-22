@@ -48,6 +48,156 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task DateRangeFilterAdapter_OpensSetsDateValuesAndApplies()
+    {
+        var openButton = new FakeButtonControl("OpenCreatedAtFilterButton");
+        var applyButton = new FakeButtonControl("ApplyCreatedAtFilterButton");
+        var cancelButton = new FakeButtonControl("CancelCreatedAtFilterButton");
+        var fromEditor = new FakeDateTimePickerControl("CreatedAtFromEditor");
+        var toEditor = new FakeDateTimePickerControl("CreatedAtToEditor");
+        var resolver = new FakeResolver(
+            ("OpenCreatedAtFilterButton", openButton),
+            ("ApplyCreatedAtFilterButton", applyButton),
+            ("CancelCreatedAtFilterButton", cancelButton),
+            ("CreatedAtFromEditor", fromEditor),
+            ("CreatedAtToEditor", toEditor))
+            .WithDateRangeFilter(
+                "CreatedAtFilter",
+                DateRangeFilterParts.ByAutomationIds(
+                    "CreatedAtFromEditor",
+                    "CreatedAtToEditor",
+                    "ApplyCreatedAtFilterButton",
+                    "CancelCreatedAtFilterButton",
+                    openButtonAutomationId: "OpenCreatedAtFilterButton"));
+        var page = new FilterPage(resolver);
+
+        page.CreatedAtFilter.SetRange(new DateRangeFilterRequest(
+            new DateTime(2026, 4, 1),
+            new DateTime(2026, 4, 30)));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.CreatedAtFilter.FromValue).IsEqualTo(new DateTime(2026, 4, 1));
+            await Assert.That(page.CreatedAtFilter.ToValue).IsEqualTo(new DateTime(2026, 4, 30));
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task DateRangeFilterAdapter_SupportsTextEditorsAndCancel()
+    {
+        var applyButton = new FakeButtonControl("ApplyCreatedAtFilterButton");
+        var cancelButton = new FakeButtonControl("CancelCreatedAtFilterButton");
+        var fromEditor = new FakeTextBoxControl("CreatedAtFromEditor");
+        var toEditor = new FakeTextBoxControl("CreatedAtToEditor");
+        var resolver = new FakeResolver(
+            ("ApplyCreatedAtFilterButton", applyButton),
+            ("CancelCreatedAtFilterButton", cancelButton),
+            ("CreatedAtFromEditor", fromEditor),
+            ("CreatedAtToEditor", toEditor))
+            .WithDateRangeFilter(
+                "CreatedAtFilter",
+                DateRangeFilterParts.ByAutomationIds(
+                    "CreatedAtFromEditor",
+                    "CreatedAtToEditor",
+                    "ApplyCreatedAtFilterButton",
+                    "CancelCreatedAtFilterButton",
+                    editorKind: FilterValueEditorKind.TextBox));
+        var page = new FilterPage(resolver);
+
+        page.CreatedAtFilter.SetRange(new DateRangeFilterRequest(
+            new DateTime(2026, 5, 1),
+            new DateTime(2026, 5, 31),
+            FilterPopupCommitMode.Cancel));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fromEditor.Text).IsEqualTo("2026-05-01");
+            await Assert.That(toEditor.Text).IsEqualTo("2026-05-31");
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(page.CreatedAtFilter.FromValue).IsEqualTo(new DateTime(2026, 5, 1));
+            await Assert.That(page.CreatedAtFilter.ToValue).IsEqualTo(new DateTime(2026, 5, 31));
+        }
+    }
+
+    [Test]
+    public async Task NumericRangeFilterAdapter_SetsSpinnerValuesAndApplies()
+    {
+        var openButton = new FakeButtonControl("OpenAmountFilterButton");
+        var applyButton = new FakeButtonControl("ApplyAmountFilterButton");
+        var cancelButton = new FakeButtonControl("CancelAmountFilterButton");
+        var fromEditor = new FakeSpinnerControl("AmountFromEditor");
+        var toEditor = new FakeSpinnerControl("AmountToEditor");
+        var resolver = new FakeResolver(
+            ("OpenAmountFilterButton", openButton),
+            ("ApplyAmountFilterButton", applyButton),
+            ("CancelAmountFilterButton", cancelButton),
+            ("AmountFromEditor", fromEditor),
+            ("AmountToEditor", toEditor))
+            .WithNumericRangeFilter(
+                "AmountFilter",
+                NumericRangeFilterParts.ByAutomationIds(
+                    "AmountFromEditor",
+                    "AmountToEditor",
+                    "ApplyAmountFilterButton",
+                    "CancelAmountFilterButton",
+                    openButtonAutomationId: "OpenAmountFilterButton"));
+        var page = new FilterPage(resolver);
+
+        page.AmountFilter.SetRange(new NumericRangeFilterRequest(10.5, 42.25));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.AmountFilter.FromValue).IsEqualTo(10.5);
+            await Assert.That(page.AmountFilter.ToValue).IsEqualTo(42.25);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task NumericRangeFilterAdapter_SupportsTextEditorsAndCancel()
+    {
+        var applyButton = new FakeButtonControl("ApplyAmountFilterButton");
+        var cancelButton = new FakeButtonControl("CancelAmountFilterButton");
+        var fromEditor = new FakeTextBoxControl("AmountFromEditor");
+        var toEditor = new FakeTextBoxControl("AmountToEditor");
+        var resolver = new FakeResolver(
+            ("ApplyAmountFilterButton", applyButton),
+            ("CancelAmountFilterButton", cancelButton),
+            ("AmountFromEditor", fromEditor),
+            ("AmountToEditor", toEditor))
+            .WithNumericRangeFilter(
+                "AmountFilter",
+                NumericRangeFilterParts.ByAutomationIds(
+                    "AmountFromEditor",
+                    "AmountToEditor",
+                    "ApplyAmountFilterButton",
+                    "CancelAmountFilterButton",
+                    editorKind: FilterValueEditorKind.TextBox));
+        var page = new FilterPage(resolver);
+
+        page.AmountFilter.SetRange(new NumericRangeFilterRequest(
+            1000.125,
+            2000.25,
+            FilterPopupCommitMode.Cancel));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fromEditor.Text).IsEqualTo("1000.125");
+            await Assert.That(toEditor.Text).IsEqualTo("2000.25");
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(page.AmountFilter.FromValue).IsEqualTo(1000.125);
+            await Assert.That(page.AmountFilter.ToValue).IsEqualTo(2000.25);
+        }
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()
@@ -133,6 +283,35 @@ public sealed class UiControlAdapterTests
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
     }
 
+    public static class FilterPageDefinitions
+    {
+        public static UiControlDefinition CreatedAtFilter { get; } = new(
+            "CreatedAtFilter",
+            UiControlType.DateRangeFilter,
+            "CreatedAtFilter",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition AmountFilter { get; } = new(
+            "AmountFilter",
+            UiControlType.NumericRangeFilter,
+            "AmountFilter",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    private sealed class FilterPage : UiPage
+    {
+        public FilterPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDateRangeFilterControl CreatedAtFilter => Resolve<IDateRangeFilterControl>(FilterPageDefinitions.CreatedAtFilter);
+
+        public INumericRangeFilterControl AmountFilter => Resolve<INumericRangeFilterControl>(FilterPageDefinitions.AmountFilter);
+    }
+
     private sealed class FakeResolver : IUiControlResolver
     {
         private readonly Dictionary<string, object> _controls;
@@ -198,6 +377,26 @@ public sealed class UiControlAdapterTests
         {
             InvokeCount++;
         }
+    }
+
+    private sealed class FakeDateTimePickerControl : FakeControlBase, IDateTimePickerControl
+    {
+        public FakeDateTimePickerControl(string automationId)
+            : base(automationId)
+        {
+        }
+
+        public DateTime? SelectedDate { get; set; }
+    }
+
+    private sealed class FakeSpinnerControl : FakeControlBase, ISpinnerControl
+    {
+        public FakeSpinnerControl(string automationId)
+            : base(automationId)
+        {
+        }
+
+        public double Value { get; set; }
     }
 
     private sealed class FakeComboBoxControl : FakeControlBase, IComboBoxControl

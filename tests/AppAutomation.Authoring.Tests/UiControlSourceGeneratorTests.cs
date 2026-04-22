@@ -23,6 +23,8 @@ namespace Sample.Pages;
 [UiControl("NumbersInput", UiControlType.TextBox, "NumbersInput")]
 [UiControl("ResultText", UiControlType.Label, "ResultText", LocatorKind = UiLocatorKind.Name, FallbackToName = false)]
 [UiControl("HistoryOperationPicker", UiControlType.SearchPicker, "HistoryOperationPicker")]
+[UiControl("CreatedAtFilter", UiControlType.DateRangeFilter, "CreatedAtFilter")]
+[UiControl("AmountFilter", UiControlType.NumericRangeFilter, "AmountFilter")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -44,6 +46,8 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITextBoxControl NumbersInput => Resolve<global::AppAutomation.Abstractions.ITextBoxControl>(MainWindowPageDefinitions.NumbersInput);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ILabelControl ResultText => Resolve<global::AppAutomation.Abstractions.ILabelControl>(MainWindowPageDefinitions.ResultText);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ISearchPickerControl HistoryOperationPicker => Resolve<global::AppAutomation.Abstractions.ISearchPickerControl>(MainWindowPageDefinitions.HistoryOperationPicker);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IDateRangeFilterControl CreatedAtFilter => Resolve<global::AppAutomation.Abstractions.IDateRangeFilterControl>(MainWindowPageDefinitions.CreatedAtFilter);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.INumericRangeFilterControl AmountFilter => Resolve<global::AppAutomation.Abstractions.INumericRangeFilterControl>(MainWindowPageDefinitions.AmountFilter);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");

@@ -434,6 +434,56 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Sets date bounds in a composite popup filter and applies or cancels the operation.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the date range filter control.</param>
+    /// <param name="from">Optional lower date bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="to">Optional upper date bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="commitMode">Whether to apply or cancel the popup operation.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the filter is not enabled, misconfigured, or fails to set values.</exception>
+    public static TSelf SetDateRangeFilter<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDateRangeFilterControl>> selector,
+        DateTime? from,
+        DateTime? to,
+        FilterPopupCommitMode commitMode = FilterPopupCommitMode.Apply,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var request = new DateRangeFilterRequest(from?.Date, to?.Date, commitMode);
+        return ExecuteDateRangeFilter(page, selector, request, timeoutMs, nameof(SetDateRangeFilter));
+    }
+
+    /// <summary>
+    /// Sets numeric bounds in a composite popup filter and applies or cancels the operation.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the numeric range filter control.</param>
+    /// <param name="from">Optional lower numeric bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="to">Optional upper numeric bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="commitMode">Whether to apply or cancel the popup operation.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the filter is not enabled, misconfigured, or fails to set values.</exception>
+    public static TSelf SetNumericRangeFilter<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INumericRangeFilterControl>> selector,
+        double? from,
+        double? to,
+        FilterPopupCommitMode commitMode = FilterPopupCommitMode.Apply,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var request = new NumericRangeFilterRequest(from, to, commitMode);
+        return ExecuteNumericRangeFilter(page, selector, request, timeoutMs, nameof(SetNumericRangeFilter));
+    }
+
+    /// <summary>
     /// Selects a specific tab item control directly.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1401,6 +1451,162 @@ public static class UiPageExtensions
         }
 
         return control;
+    }
+
+    private static TSelf ExecuteDateRangeFilter<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IDateRangeFilterControl>> selector,
+        DateRangeFilterRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var filter = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => filter.IsEnabled,
+                timeoutMs,
+                $"Date range filter '{filter.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={filter.IsEnabled}",
+                actionName);
+
+            filter.SetRange(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Date range filter '{filter.AutomationId}' failed to execute popup operation.",
+                expectedValue: DescribeDateRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadDateRangeFilterValue(filter),
+                actionName,
+                ex);
+        }
+
+        if (request.CommitMode == FilterPopupCommitMode.Apply)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => DateBoundMatches(filter.FromValue, request.From)
+                    && DateBoundMatches(filter.ToValue, request.To),
+                timeoutMs,
+                $"Date range filter '{filter.AutomationId}' did not reach expected range.",
+                expectedValue: DescribeDateRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadDateRangeFilterValue(filter),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteNumericRangeFilter<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, INumericRangeFilterControl>> selector,
+        NumericRangeFilterRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var filter = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => filter.IsEnabled,
+                timeoutMs,
+                $"Numeric range filter '{filter.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={filter.IsEnabled}",
+                actionName);
+
+            filter.SetRange(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Numeric range filter '{filter.AutomationId}' failed to execute popup operation.",
+                expectedValue: DescribeNumericRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadNumericRangeFilterValue(filter),
+                actionName,
+                ex);
+        }
+
+        if (request.CommitMode == FilterPopupCommitMode.Apply)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => NumericBoundMatches(filter.FromValue, request.From)
+                    && NumericBoundMatches(filter.ToValue, request.To),
+                timeoutMs,
+                $"Numeric range filter '{filter.AutomationId}' did not reach expected range.",
+                expectedValue: DescribeNumericRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadNumericRangeFilterValue(filter),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static bool DateBoundMatches(DateTime? actual, DateTime? expected)
+    {
+        return expected is null || actual?.Date == expected.Value.Date;
+    }
+
+    private static bool NumericBoundMatches(double? actual, double? expected)
+    {
+        return expected is null || (actual is not null && Math.Abs(actual.Value - expected.Value) < 0.001);
+    }
+
+    private static string DescribeDateRangeFilterRequest(DateRangeFilterRequest request)
+    {
+        return $"{request.CommitMode}: from={FormatDateBound(request.From)}, to={FormatDateBound(request.To)}";
+    }
+
+    private static string DescribeNumericRangeFilterRequest(NumericRangeFilterRequest request)
+    {
+        return $"{request.CommitMode}: from={FormatNumericBound(request.From)}, to={FormatNumericBound(request.To)}";
+    }
+
+    private static string ReadDateRangeFilterValue(IDateRangeFilterControl filter)
+    {
+        return $"from={FormatDateBound(filter.FromValue)}, to={FormatDateBound(filter.ToValue)}";
+    }
+
+    private static string ReadNumericRangeFilterValue(INumericRangeFilterControl filter)
+    {
+        return $"from={FormatNumericBound(filter.FromValue)}, to={FormatNumericBound(filter.ToValue)}";
+    }
+
+    private static string FormatDateBound(DateTime? value)
+    {
+        return value?.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "<unchanged>";
+    }
+
+    private static string FormatNumericBound(double? value)
+    {
+        return value?.ToString("G17", CultureInfo.InvariantCulture) ?? "<unchanged>";
     }
 
     private static TSelf ExecuteGridUserAction<TSelf>(

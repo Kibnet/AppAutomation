@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 
 namespace AppAutomation.Abstractions;
@@ -79,6 +80,90 @@ public sealed record SearchPickerParts(
 }
 
 /// <summary>
+/// Configuration for composing a date range popup filter from individual UI controls.
+/// </summary>
+/// <param name="FromLocator">The locator for the lower-bound date editor.</param>
+/// <param name="ToLocator">The locator for the upper-bound date editor.</param>
+/// <param name="ApplyButtonLocator">The locator for the apply button.</param>
+/// <param name="CancelButtonLocator">The locator for the cancel button.</param>
+/// <param name="OpenButtonLocator">Optional locator for the popup open trigger.</param>
+/// <param name="EditorKind">The primitive editor kind used by both date endpoints.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record DateRangeFilterParts(
+    string FromLocator,
+    string ToLocator,
+    string ApplyButtonLocator,
+    string CancelButtonLocator,
+    string? OpenButtonLocator = null,
+    FilterValueEditorKind EditorKind = FilterValueEditorKind.DateTimePicker,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="DateRangeFilterParts"/> configuration using automation IDs.
+    /// </summary>
+    public static DateRangeFilterParts ByAutomationIds(
+        string fromAutomationId,
+        string toAutomationId,
+        string applyButtonAutomationId,
+        string cancelButtonAutomationId,
+        string? openButtonAutomationId = null,
+        FilterValueEditorKind editorKind = FilterValueEditorKind.DateTimePicker)
+    {
+        return new DateRangeFilterParts(
+            fromAutomationId,
+            toAutomationId,
+            applyButtonAutomationId,
+            cancelButtonAutomationId,
+            openButtonAutomationId,
+            editorKind);
+    }
+}
+
+/// <summary>
+/// Configuration for composing a numeric range popup filter from individual UI controls.
+/// </summary>
+/// <param name="FromLocator">The locator for the lower-bound numeric editor.</param>
+/// <param name="ToLocator">The locator for the upper-bound numeric editor.</param>
+/// <param name="ApplyButtonLocator">The locator for the apply button.</param>
+/// <param name="CancelButtonLocator">The locator for the cancel button.</param>
+/// <param name="OpenButtonLocator">Optional locator for the popup open trigger.</param>
+/// <param name="EditorKind">The primitive editor kind used by both numeric endpoints.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record NumericRangeFilterParts(
+    string FromLocator,
+    string ToLocator,
+    string ApplyButtonLocator,
+    string CancelButtonLocator,
+    string? OpenButtonLocator = null,
+    FilterValueEditorKind EditorKind = FilterValueEditorKind.Spinner,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="NumericRangeFilterParts"/> configuration using automation IDs.
+    /// </summary>
+    public static NumericRangeFilterParts ByAutomationIds(
+        string fromAutomationId,
+        string toAutomationId,
+        string applyButtonAutomationId,
+        string cancelButtonAutomationId,
+        string? openButtonAutomationId = null,
+        FilterValueEditorKind editorKind = FilterValueEditorKind.Spinner)
+    {
+        return new NumericRangeFilterParts(
+            fromAutomationId,
+            toAutomationId,
+            applyButtonAutomationId,
+            cancelButtonAutomationId,
+            openButtonAutomationId,
+            editorKind);
+    }
+}
+
+/// <summary>
 /// Extension methods for configuring <see cref="IUiControlResolver"/> with adapters.
 /// </summary>
 public static class UiControlResolverExtensions
@@ -135,6 +220,36 @@ public static class UiControlResolverExtensions
         ArgumentNullException.ThrowIfNull(parts);
 
         return innerResolver.WithAdapters(new SearchPickerControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a date range popup filter composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithDateRangeFilter(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        DateRangeFilterParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new DateRangeFilterControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a numeric range popup filter composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithNumericRangeFilter(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        NumericRangeFilterParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new NumericRangeFilterControlAdapter(propertyName, parts));
     }
 
     /// <summary>
@@ -372,6 +487,412 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         private static string Normalize(string? value)
         {
             return value?.Trim() ?? string.Empty;
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="IDateRangeFilterControl"/> instances from primitive controls.
+/// </summary>
+public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly DateRangeFilterParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DateRangeFilterControlAdapter"/> class.
+    /// </summary>
+    public DateRangeFilterControlAdapter(string propertyName, DateRangeFilterParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(IDateRangeFilterControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new DateRangeFilterControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class DateRangeFilterControl : IDateRangeFilterControl
+    {
+        private readonly DateRangeFilterParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public DateRangeFilterControl(string automationId, DateRangeFilterParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => TryReadOpenButtonName() ?? AutomationId;
+
+        public bool IsEnabled => string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
+            || ResolveButton("OpenButton", _parts.OpenButtonLocator).IsEnabled;
+
+        public DateTime? FromValue => ResolveEndpoint("From", _parts.FromLocator).Value;
+
+        public DateTime? ToValue => ResolveEndpoint("To", _parts.ToLocator).Value;
+
+        public void Open()
+        {
+            if (!string.IsNullOrWhiteSpace(_parts.OpenButtonLocator))
+            {
+                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+            }
+        }
+
+        public void SetRange(DateRangeFilterRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            Open();
+
+            if (request.From is not null)
+            {
+                ResolveEndpoint("From", _parts.FromLocator).Value = request.From.Value;
+            }
+
+            if (request.To is not null)
+            {
+                ResolveEndpoint("To", _parts.ToLocator).Value = request.To.Value;
+            }
+
+            var commitButton = request.CommitMode == FilterPopupCommitMode.Apply
+                ? ResolveButton("ApplyButton", _parts.ApplyButtonLocator)
+                : ResolveButton("CancelButton", _parts.CancelButtonLocator);
+            commitButton.Invoke();
+        }
+
+        private string? TryReadOpenButtonName()
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
+                    ? null
+                    : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private IButtonControl ResolveButton(string suffix, string? locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+        }
+
+        private IDateEndpoint ResolveEndpoint(string suffix, string locatorValue)
+        {
+            return _parts.EditorKind switch
+            {
+                FilterValueEditorKind.DateTimePicker => new DateTimePickerEndpoint(
+                    _innerResolver.Resolve<IDateTimePickerControl>(CreateDefinition(suffix, UiControlType.DateTimePicker, locatorValue))),
+                FilterValueEditorKind.TextBox => new TextBoxDateEndpoint(
+                    _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue))),
+                _ => throw new NotSupportedException($"Date range filter '{AutomationId}' does not support editor kind '{_parts.EditorKind}'.")
+            };
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
+        }
+    }
+
+    private interface IDateEndpoint
+    {
+        DateTime? Value { get; set; }
+    }
+
+    private sealed class DateTimePickerEndpoint : IDateEndpoint
+    {
+        private readonly IDateTimePickerControl _control;
+
+        public DateTimePickerEndpoint(IDateTimePickerControl control)
+        {
+            _control = control;
+        }
+
+        public DateTime? Value
+        {
+            get => _control.SelectedDate?.Date;
+            set => _control.SelectedDate = value?.Date;
+        }
+    }
+
+    private sealed class TextBoxDateEndpoint : IDateEndpoint
+    {
+        private readonly ITextBoxControl _control;
+
+        public TextBoxDateEndpoint(ITextBoxControl control)
+        {
+            _control = control;
+        }
+
+        public DateTime? Value
+        {
+            get
+            {
+                var text = _control.Text?.Trim();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return null;
+                }
+
+                if (DateTime.TryParseExact(
+                    text,
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var exactDate))
+                {
+                    return exactDate.Date;
+                }
+
+                return DateTime.TryParse(
+                    text,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces,
+                    out var parsedDate)
+                    ? parsedDate.Date
+                    : null;
+            }
+
+            set => _control.Enter(value?.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? string.Empty);
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="INumericRangeFilterControl"/> instances from primitive controls.
+/// </summary>
+public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly NumericRangeFilterParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NumericRangeFilterControlAdapter"/> class.
+    /// </summary>
+    public NumericRangeFilterControlAdapter(string propertyName, NumericRangeFilterParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(INumericRangeFilterControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new NumericRangeFilterControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class NumericRangeFilterControl : INumericRangeFilterControl
+    {
+        private readonly NumericRangeFilterParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public NumericRangeFilterControl(string automationId, NumericRangeFilterParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => TryReadOpenButtonName() ?? AutomationId;
+
+        public bool IsEnabled => string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
+            || ResolveButton("OpenButton", _parts.OpenButtonLocator).IsEnabled;
+
+        public double? FromValue => ResolveEndpoint("From", _parts.FromLocator).Value;
+
+        public double? ToValue => ResolveEndpoint("To", _parts.ToLocator).Value;
+
+        public void Open()
+        {
+            if (!string.IsNullOrWhiteSpace(_parts.OpenButtonLocator))
+            {
+                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+            }
+        }
+
+        public void SetRange(NumericRangeFilterRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            Open();
+
+            if (request.From is not null)
+            {
+                ResolveEndpoint("From", _parts.FromLocator).Value = request.From.Value;
+            }
+
+            if (request.To is not null)
+            {
+                ResolveEndpoint("To", _parts.ToLocator).Value = request.To.Value;
+            }
+
+            var commitButton = request.CommitMode == FilterPopupCommitMode.Apply
+                ? ResolveButton("ApplyButton", _parts.ApplyButtonLocator)
+                : ResolveButton("CancelButton", _parts.CancelButtonLocator);
+            commitButton.Invoke();
+        }
+
+        private string? TryReadOpenButtonName()
+        {
+            try
+            {
+                return string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
+                    ? null
+                    : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private IButtonControl ResolveButton(string suffix, string? locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+        }
+
+        private INumericEndpoint ResolveEndpoint(string suffix, string locatorValue)
+        {
+            return _parts.EditorKind switch
+            {
+                FilterValueEditorKind.Spinner => new SpinnerEndpoint(
+                    _innerResolver.Resolve<ISpinnerControl>(CreateDefinition(suffix, UiControlType.Spinner, locatorValue))),
+                FilterValueEditorKind.TextBox => new TextBoxNumericEndpoint(
+                    _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue))),
+                _ => throw new NotSupportedException($"Numeric range filter '{AutomationId}' does not support editor kind '{_parts.EditorKind}'.")
+            };
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
+        }
+    }
+
+    private interface INumericEndpoint
+    {
+        double? Value { get; set; }
+    }
+
+    private sealed class SpinnerEndpoint : INumericEndpoint
+    {
+        private readonly ISpinnerControl _control;
+
+        public SpinnerEndpoint(ISpinnerControl control)
+        {
+            _control = control;
+        }
+
+        public double? Value
+        {
+            get => _control.Value;
+            set
+            {
+                if (value is not null)
+                {
+                    _control.Value = value.Value;
+                }
+            }
+        }
+    }
+
+    private sealed class TextBoxNumericEndpoint : INumericEndpoint
+    {
+        private readonly ITextBoxControl _control;
+
+        public TextBoxNumericEndpoint(ITextBoxControl control)
+        {
+            _control = control;
+        }
+
+        public double? Value
+        {
+            get
+            {
+                var text = _control.Text?.Trim();
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return null;
+                }
+
+                return double.TryParse(
+                    text,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var value)
+                    ? value
+                    : null;
+            }
+
+            set => _control.Enter(value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty);
         }
     }
 }

@@ -398,6 +398,8 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             22 => "global::AppAutomation.Abstractions.IGridRowControl",
             23 => "global::AppAutomation.Abstractions.IGridCellControl",
             24 => "global::AppAutomation.Abstractions.ISearchPickerControl",
+            25 => "global::AppAutomation.Abstractions.IDateRangeFilterControl",
+            26 => "global::AppAutomation.Abstractions.INumericRangeFilterControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -430,6 +432,8 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             22 => "GridRow",
             23 => "GridCell",
             24 => "SearchPicker",
+            25 => "DateRangeFilter",
+            26 => "NumericRangeFilter",
             _ => "AutomationElement"
         };
     }

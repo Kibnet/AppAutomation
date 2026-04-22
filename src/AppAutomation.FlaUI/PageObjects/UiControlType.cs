@@ -26,5 +26,7 @@ public enum UiControlType
     Grid = 21,
     GridRow = 22,
     GridCell = 23,
-    SearchPicker = 24
+    SearchPicker = 24,
+    DateRangeFilter = 25,
+    NumericRangeFilter = 26
 }

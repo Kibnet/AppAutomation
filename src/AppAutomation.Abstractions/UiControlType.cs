@@ -132,5 +132,15 @@ public enum UiControlType
     /// <summary>
     /// A composite search picker control. Maps to <see cref="ISearchPickerControl"/>.
     /// </summary>
-    SearchPicker = 24
+    SearchPicker = 24,
+
+    /// <summary>
+    /// A composite date range filter popup. Maps to <see cref="IDateRangeFilterControl"/>.
+    /// </summary>
+    DateRangeFilter = 25,
+
+    /// <summary>
+    /// A composite numeric range filter popup. Maps to <see cref="INumericRangeFilterControl"/>.
+    /// </summary>
+    NumericRangeFilter = 26
 }
