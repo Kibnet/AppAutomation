@@ -14,6 +14,8 @@ next to cover the widest possible set of `ControlType`.
 - Real controls of the test application page are in
   `sample/DotnetDebug.AppAutomation.Authoring/Pages/MainWindowPage.cs`
 - Real actions/waits are in `src/AppAutomation.FlaUI/Extensions/*`
+- Consumer control audit source: static XAML/code-behind scan of
+  `C:\Projects\ИЗП\Sources\Arm.Srv\src\Arm.Client`
 
 ## What is currently covered in demo (ready for scenarios in tests)
 
@@ -33,8 +35,50 @@ next to cover the widest possible set of `ControlType`.
 | TabItem | `MathTabItem`, `...` | `TabItem` | full | Via search in Tab tree/finding Selected |
 | Tree | `DemoTree` | `Tree` | full | `SelectTreeItem`, `WaitUntilHasItem` |
 | DateTimePicker | `StartDatePicker`, `EndDatePicker` | `DateTimePicker` | full (via main API + fallback via text field) | `SetDate` |
+| Calendar | `DemoCalendar` | `Calendar` | full | `SetDate`/`SelectDate` and selected-date assertions through typed API |
 | Avalonia DataGrid | `DemoDataGrid` | `Grid` | full baseline | Shared UI scenario builds/selects/clears rows through typed page object |
 | Eremex DataGrid + recorder bridge | `EremexDemoDataGridControl` visual control + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | full recorder playback through bridge/provider | Native Eremex UIA remains root-only, but recorder `GridHint` maps Eremex assertions to the bridge; Headless/FlaUI providers expose bridge rows/cells as `IGridControl` |
+
+## Arm.Srv consumer audit (static XAML/code-behind scan)
+
+Scope: `C:\Projects\ИЗП\Sources\Arm.Srv\src\Arm.Client`. The scan covered 80
+`.axaml` files. Static facts: the client has `Name` / `x:Name` anchors, but no
+`AutomationProperties.AutomationId` in the scanned XAML; Eremex controls dominate
+the real workflows (`DataGridControl`, `GridColumn`, editors, docking, popup
+editors) and many scenarios are implemented through attached behaviors.
+
+| Arm.Srv control / scenario | Evidence from scan | Suggested mapping | Recorder | Headless | FlaUI | Required support / note |
+|---|---|---|---|---|---|---|
+| Standard Avalonia primitives: `Button`, `TextBox`, `CheckBox`, `ToggleButton`, `ListBox`, `ProgressBar` | `Button` 188, `TextBox` 120, `CheckBox` 7, `ToggleButton` 5, `ListBox` 4, plus loading/status controls | Existing `Button`, `TextBox`, `CheckBox`, `ToggleButton`, `ListBox`, `ProgressBar` | mostly covered | covered for native Avalonia | covered if UIA exposes stable element | Needs stable automation ids or explicit page aliases; relying on content/name is fragile in Russian/localized UI. |
+| `miniControls:CopyTextBox` | 93 usages; wrapper contains `PART_CopyTextBox` + hidden `PART_CopyButton` | Root as `AutomationElement`, inner text as `TextBox`, copy action as `Button`; recorder hints can pin the intended mapping | custom type/locator hints are available; copy flow still needs explicit part aliases or a page adapter | covered when stable child ids are supplied | covered when stable child ids are supplied; hover-revealed copy button may still need app-specific show/click handling | Remaining app-contract item: publish stable ids for root/text/copy button or add a `CopyTextBox` composite adapter. |
+| Eremex `ComboBoxEditor` / `ButtonEditor` / text editors used as filters and card fields | `ComboBoxEditor` 70, `ButtonEditor` 2, many `TextEditorProperties`/cell editors | Prefer configured `TextBox`, `ComboBox`, `SearchPicker`, range filter or `AutomationElement` parts based on exposed runtime elements | custom control hints are available; automatic generic Eremex editor discovery is still an Arm.Srv/app mapping task | covered through configured primitive or composite parts | covered through configured primitive or composite parts; native Eremex popup UIA still needs runtime validation | No new core control type is required; remaining work is stable part ids or provider adapters where Eremex hides the real editor. |
+| `miniControls:SearchControl` global list search | 16 usages; Eremex `ButtonEditor`, history `Popup`, history `ListBox`, fuzzy search `CheckBox` | `ISearchPickerControl` plus optional primitive toggles for history/fuzzy options | supported for configured search-picker parts and generated user-level search/select operations | supported by `SearchPickerControlAdapter` when input/list/open/clear parts are supplied | supported through primitive popup/listbox parts; runtime UIA exposure must be checked in Arm.Srv | Resolved as a typed search-picker workflow; extra history deletion/fuzzy toggles can remain explicit primitive steps. |
+| `client:ServerSearchComboBox` searchable relation picker | 10 usages; custom Eremex `PopupEditor`, `PART_RealEditor` TextBox, popup `PART_ListBox`, `SearchTextChangedCommand`; also used inside grid cells | `ISearchPickerControl` / `ComboBox` adapter; cell editor variant via editable grid workflow | supported with custom search-picker hints; in-grid mode uses editable-grid requests | supported when async result list and editor parts expose stable ids | supported through popup/listbox primitives when Eremex exposes them; otherwise returns unsupported diagnostics | Business picker is now represented by typed APIs; Arm.Srv still needs stable part contracts for real runtime replay. |
+| Eremex `DataGridControl`: list pages and nested grids | 41 `DataGridControl` tags in views/templates, 531 `GridColumn` tags; named grids include `OrdersGridControl`, `ProductionTasksGridControl`, `ProductsGridControl`, `CustomersGridControl`, `RecipesGridControl`, `RestockOrdersGridControl` | `Grid` with `GridRow`/`GridCell`, plus `IGridUserActionControl` helpers | grid hints and user-action primitives are supported when a bridge/grid mapping is configured | covered through bridge/provider row-cell ids; native Eremex row/cell model is not assumed | covered through explicit visual bridge/row/cell ids; native Eremex row/cell UIA remains unclaimed | Core API gap is resolved; each Arm.Srv business grid still needs a deterministic bridge or verified native UIA contract. |
+| Grid behaviors: load-more, server sorting, copy cell, export, open card, arrow restriction, persisted layout | `EnableAutoLoadMore` 16, server sorting 16, copy cell 31, export 13, open-on-double-click 19, Enter binding 18, layout 29 | `IGridUserActionControl` scenario helpers, not just raw `Grid` | supported as recorded/actionable user-level grid operations when configured | supported through action parts for open, sort, scroll, copy and export | supported through action parts/keyboard/mouse primitives when available; missing parts produce diagnostics | Workflow primitives are implemented; persisted layout and proprietary native gestures remain app-specific assertions or diagnostics. |
+| In-grid editors | Eremex `GridColumn.EditorProperties`, `ComboBoxEditorProperties`, `SpinEditorProperties`, `DateEditor`, `ServerSearchComboBox DataGridControlMode=True` | `IEditableGridControl` + editor-specific `GridCellEditRequest` | supported as authored editable-grid workflow; recorder capture depends on configured cell/editor hints | supported by editable-grid adapter/visual bridge path | supported when activation and editor parts are exposed; direct native Eremex activation is not claimed without runtime proof | Edit-cell primitive exists: activate cell, set text/spin/date/combo/search value, commit/cancel, with unsupported diagnostics for missing runtime capability. |
+| Date and numeric filter popups | `DateEditor` 13, `DateRangeFilterControl` 2, `RangeFromToControl` 3; popup `Calendar` + `SpinEditor` + OK/Cancel | `DateTimePicker`, `Calendar`, `Spinner`, `IDateRangeFilterControl`, `INumericRangeFilterControl` | supported through configured date/range filter actions | supported by composite filter adapters when popup parts are supplied | supported through popup open/set/apply/cancel parts when exposed by UIA | Date/range filter API gap is resolved; Arm.Srv must expose stable popup and apply/cancel part ids. |
+| `DialogHost`, notification toast, folder export dialog | `DialogHost` in `MainWindow`, notification manager, `ShowOpenFolderDialogAsync` in export service | `IDialogControl`, `INotificationControl`, `IFolderExportControl` | typed actions/assertions are available for authored flows; automatic recorder recognition is optional follow-up | supported by composed dialog/toast/export parts | supported by composed parts; native OS folder picker automation is not assumed | Delete/confirm, toast/status and export folder workflows are represented; app-specific dialog/toast anchors are still required. |
+| Eremex docking/navigation shell | `MainControl` uses Eremex `DockGroup`, `DocumentGroup`, `DocumentPane`; menu items for layout reload | `IShellNavigationControl` over tree/list/tab/pane anchors | typed shell navigation helpers are available for authored flows | supported when navigation source and pane tabs are exposed | supported through stable tree/list/tab/pane anchors; drag/floating/pinning/layout persistence is out of scope | Open/switch page workflows are covered; proprietary docking gestures remain runtime-specific and diagnostic-only. |
+| `Expander`, status/loading/approval controls | `Expander` 7; `StatusBar` includes expander, grid, reload button, metadata checkbox; `LoadingControl` includes progress + reload | Mostly composite `AutomationElement` + primitive children | needs wrapper/child selector strategy | primitive children covered if stable ids exist | primitive children covered if stable ids exist | Add stable ids and optional helpers for expanded state, reload, loading/error status and approval toggle/readback. |
+
+## Arm.Srv remaining additional support by layer
+
+| Layer | Remaining support | Priority |
+|---|---|---|
+| Recorder | Arm.Srv-specific hints and part maps for wrappers and Eremex editors: `CopyTextBox`, generic `ComboBoxEditor`/`ButtonEditor`/`SpinEditor`/`DateEditor`, `SaveCloseButtonsControl`, `CrudActionsControl`, status/loading/approval controls | medium |
+| Recorder | Search picker, grid user actions, editable grid, filters, dialog/toast/export and shell navigation have typed workflows; remaining recorder work is richer automatic recognition of Arm.Srv-specific history/fuzzy toggles, layout persistence and proprietary gestures | medium |
+| Headless | Composite adapters exist for search, grid actions, editable cells, range filters, dialog, notification, folder export and shell navigation when stable parts are supplied; remaining work is exposing deterministic Arm.Srv bridge/part ids | high |
+| Headless | Additional page adapters may still be useful for `CopyTextBox`, save/close, CRUD, status/loading/approval and expanded-state wrappers | medium |
+| FlaUI | Composite workflows are supported through primitive controls and bridges; remaining high-risk item is runtime validation of real Arm.Srv Eremex UIA and business-grid row/cell bridges | high |
+| FlaUI | Direct native Eremex popup/editor/docking gestures, OS folder picker automation and layout persistence are not claimed; use stable anchors, explicit action parts or unsupported diagnostics | medium |
+
+Recommended automation contract for Arm.Srv:
+
+1. Add `AutomationProperties.AutomationId` to scenario-facing roots and children; keep `Name` for layout/state if needed, but do not use it as the only automation contract.
+2. For every business grid, expose either a reusable automation bridge or deterministic row/cell ids like `<GridName>AutomationBridge_Row{row}_Cell{column}`.
+3. Treat Eremex search/editor controls as composite controls in authoring APIs: input, popup/list, selected value, clear/open/apply buttons.
+4. Keep recorder-generated scenarios at user-flow level: search/filter -> wait grid rows/cell -> open card -> edit/save/cancel -> assert toast/status.
 
 ## What is supported through fallback/special paths
 
@@ -56,7 +100,6 @@ next to cover the widest possible set of `ControlType`.
 
 | Control | Status | What's missing |
 |---|---|---|
-| Calendar | `Calendar` (enum 11) | No control in UI, can add a separate contribution/scenario `Date selection` |
 | Native Eremex DataGrid row/cell UIA | bridged | Native Eremex `DataGridControl` still does not expose stable row/cell UIA; use `EremexDemoDataGridAutomationBridge` for recorder-generated row/cell assertions |
 
 ## What from the docs list is currently not included in demo
@@ -69,7 +112,7 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 
 1. Leave the current minimal set as stable baseline.
 2. Keep standard Avalonia `DataGrid` as the native typed grid baseline; use the Eremex bridge/provider for recorder-generated row/cell scenarios until Eremex exposes stable native UIA row/cell patterns.
-3. Add a `Calendar` contribution and basic date selection/validation checks.
+3. Keep date/calendar coverage as baseline; add app-specific date variants only when a consumer exposes a new automation pattern.
 4. For each new control:
    - add `UiControl` to `MainWindowPage`,
    - methods/waits in `UiPageExtensions` + `AutomationElementWaitExtensions` only when necessary,
@@ -96,6 +139,8 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 - Реальные контролы страницы тестового приложения в
   `sample/DotnetDebug.AppAutomation.Authoring/Pages/MainWindowPage.cs`
 - Реальные действия/ожидания в `src/AppAutomation.FlaUI/Extensions/*`
+- Источник потребительской ревизии: статический scan XAML/code-behind
+  `C:\Projects\ИЗП\Sources\Arm.Srv\src\Arm.Client`
 
 ## Что сейчас покрыто в demo (готово для сценариев в тестах)
 
@@ -115,8 +160,50 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 | TabItem | `MathTabItem`, `...` | `TabItem` | полная | Через поиск в дереве Tab/поиск Selected |
 | Tree | `DemoTree` | `Tree` | полная | `SelectTreeItem`, `WaitUntilHasItem` |
 | DateTimePicker | `StartDatePicker`, `EndDatePicker` | `DateTimePicker` | полная (через основной API + fallback по текстовому полю) | `SetDate` |
+| Calendar | `DemoCalendar` | `Calendar` | полная | `SetDate`/`SelectDate` и проверки выбранной даты через typed API |
 | Avalonia DataGrid | `DemoDataGrid` | `Grid` | полный baseline | Shared UI-сценарий строит/выбирает/очищает строки через typed page object |
 | Eremex DataGrid + recorder bridge | визуальный `EremexDemoDataGridControl` + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | полноценное playback-покрытие через bridge/provider | Нативный Eremex UIA остаётся root-only, но recorder `GridHint` мапит Eremex assertions на bridge; Headless/FlaUI providers отдают строки/ячейки bridge как `IGridControl` |
+
+## Ревизия потребителя Arm.Srv (статический XAML/code-behind scan)
+
+Область: `C:\Projects\ИЗП\Sources\Arm.Srv\src\Arm.Client`. Проверено 80
+`.axaml` файлов. Статические факты: в XAML есть `Name` / `x:Name`, но нет
+`AutomationProperties.AutomationId`; реальные пользовательские workflow сильно
+завязаны на Eremex controls (`DataGridControl`, `GridColumn`, editors, docking,
+popup editors) и attached behaviors.
+
+| Контрол / сценарий Arm.Srv | Факт из scan | Рекомендуемый mapping | Recorder | Headless | FlaUI | Что требуется / комментарий |
+|---|---|---|---|---|---|---|
+| Стандартные Avalonia primitives: `Button`, `TextBox`, `CheckBox`, `ToggleButton`, `ListBox`, `ProgressBar` | `Button` 188, `TextBox` 120, `CheckBox` 7, `ToggleButton` 5, `ListBox` 4, плюс loading/status controls | Существующие `Button`, `TextBox`, `CheckBox`, `ToggleButton`, `ListBox`, `ProgressBar` | в основном покрыто | покрыто для native Avalonia | покрыто, если UIA отдаёт стабильный элемент | Нужны стабильные automation ids или явные aliases в page object; привязка к content/name хрупкая из-за русскоязычного UI. |
+| `miniControls:CopyTextBox` | 93 использования; wrapper содержит `PART_CopyTextBox` + скрытую `PART_CopyButton` | Root как `AutomationElement`, текст как `TextBox`, copy action как `Button`; recorder hints могут зафиксировать нужный mapping | custom type/locator hints доступны; copy-flow всё ещё требует явных aliases частей или page adapter | покрыто при наличии стабильных child ids | покрыто при наличии стабильных child ids; hover-кнопка копирования может потребовать app-specific show/click | Остаточный app-contract: опубликовать стабильные ids для root/text/copy button или добавить composite adapter `CopyTextBox`. |
+| Eremex `ComboBoxEditor` / `ButtonEditor` / text editors в фильтрах и карточках | `ComboBoxEditor` 70, `ButtonEditor` 2, много `TextEditorProperties`/cell editors | Настроенные `TextBox`, `ComboBox`, `SearchPicker`, range filter или `AutomationElement` parts по фактическому runtime element | custom control hints доступны; automatic generic Eremex editor discovery остаётся задачей mapping'а Arm.Srv | покрыто через настроенные primitive или composite parts | покрыто через настроенные primitive/composite parts; native Eremex popup UIA требует runtime-проверки | Новый core control type не нужен; остаточная работа - стабильные part ids или provider adapters там, где Eremex скрывает реальный editor. |
+| `miniControls:SearchControl` глобального поиска по спискам | 16 использований; Eremex `ButtonEditor`, history `Popup`, history `ListBox`, checkbox нечёткого поиска | `ISearchPickerControl` плюс optional primitive toggles для history/fuzzy options | покрыто для настроенных search-picker parts и user-level search/select операций | покрыто `SearchPickerControlAdapter`, если заданы input/list/open/clear parts | покрыто через primitive popup/listbox parts; UIA exposure нужно проверить в Arm.Srv runtime | Gap закрыт typed search-picker workflow; удаление истории и fuzzy toggle могут оставаться явными primitive steps. |
+| `client:ServerSearchComboBox` для выбора связанных сущностей | 10 использований; custom Eremex `PopupEditor`, `PART_RealEditor` TextBox, popup `PART_ListBox`, `SearchTextChangedCommand`; используется и внутри grid cells | `ISearchPickerControl` / `ComboBox` adapter; вариант в ячейке через editable grid workflow | покрыто custom search-picker hints; режим внутри grid использует editable-grid requests | покрыто, если async result list и editor parts имеют стабильные ids | покрыто через popup/listbox primitives, когда Eremex их отдаёт; иначе возвращаются unsupported diagnostics | Бизнесовый picker теперь представлен typed API; Arm.Srv всё ещё нужен стабильный контракт частей для реального replay. |
+| Eremex `DataGridControl`: списки и вложенные таблицы | 41 `DataGridControl` tag в views/templates, 531 `GridColumn` tag; именованные grids: `OrdersGridControl`, `ProductionTasksGridControl`, `ProductsGridControl`, `CustomersGridControl`, `RecipesGridControl`, `RestockOrdersGridControl` и др. | `Grid` с `GridRow`/`GridCell`, плюс `IGridUserActionControl` helpers | grid hints и user-action primitives поддержаны при наличии bridge/grid mapping | покрыто через bridge/provider row-cell ids; native Eremex row/cell model не предполагается | покрыто через явный visual bridge/row/cell ids; native Eremex row/cell UIA не заявлен | Core API gap закрыт; для каждой бизнес-таблицы Arm.Srv всё ещё нужен deterministic bridge или проверенный native UIA contract. |
+| Grid behaviors: load-more, server sorting, copy cell, export, open card, arrow restriction, persisted layout | `EnableAutoLoadMore` 16, server sorting 16, copy cell 31, export 13, open-on-double-click 19, Enter binding 18, layout 29 | `IGridUserActionControl` scenario helpers, а не только raw `Grid` | поддержано как recorded/actionable user-level grid operations при настройке | поддержано через action parts для open, sort, scroll, copy и export | поддержано через action parts/keyboard/mouse primitives при наличии; отсутствующие части дают diagnostics | Workflow primitives реализованы; persisted layout и proprietary native gestures остаются app-specific assertions или diagnostics. |
+| Редакторы внутри grid | Eremex `GridColumn.EditorProperties`, `ComboBoxEditorProperties`, `SpinEditorProperties`, `DateEditor`, `ServerSearchComboBox DataGridControlMode=True` | `IEditableGridControl` + editor-specific `GridCellEditRequest` | поддержано как authored editable-grid workflow; recorder capture зависит от настроенных cell/editor hints | поддержано editable-grid adapter / visual bridge path | поддержано, когда activation и editor parts доступны; direct native Eremex activation не заявлен без runtime-подтверждения | Edit-cell primitive существует: активировать ячейку, ввести text/spin/date/combo/search value, commit/cancel, с unsupported diagnostics при отсутствии runtime capability. |
+| Date/numeric filter popups | `DateEditor` 13, `DateRangeFilterControl` 2, `RangeFromToControl` 3; popup `Calendar` + `SpinEditor` + OK/Cancel | `DateTimePicker`, `Calendar`, `Spinner`, `IDateRangeFilterControl`, `INumericRangeFilterControl` | поддержано через настроенные date/range filter actions | поддержано composite filter adapters при наличии popup parts | поддержано через popup open/set/apply/cancel parts, если они отдаются UIA | Gap date/range filter API закрыт; Arm.Srv должен отдать стабильные ids popup и apply/cancel parts. |
+| `DialogHost`, notification toast, folder export dialog | `DialogHost` в `MainWindow`, notification manager, `ShowOpenFolderDialogAsync` в export service | `IDialogControl`, `INotificationControl`, `IFolderExportControl` | typed actions/assertions доступны для authored flows; automatic recorder recognition остаётся optional follow-up | поддержано composed dialog/toast/export parts | поддержано composed parts; native OS folder picker automation не предполагается | Delete/confirm, toast/status и export-folder workflow представлены; app-specific dialog/toast anchors всё ещё требуются. |
+| Eremex docking/navigation shell | `MainControl` использует Eremex `DockGroup`, `DocumentGroup`, `DocumentPane`; menu item для reload layout | `IShellNavigationControl` поверх tree/list/tab/pane anchors | typed shell navigation helpers доступны для authored flows | поддержано при наличии navigation source и pane tabs | поддержано через стабильные tree/list/tab/pane anchors; drag/floating/pinning/layout persistence вне scope | Open/switch page workflow покрыты; proprietary docking gestures остаются runtime-specific и diagnostic-only. |
+| `Expander`, status/loading/approval controls | `Expander` 7; `StatusBar` включает expander, grid, reload button, metadata checkbox; `LoadingControl` включает progress + reload | В основном composite `AutomationElement` + primitive children | нужна стратегия wrapper/child selectors | primitive children покрыты при наличии stable ids | primitive children покрыты при наличии stable ids | Добавить stable ids и опциональные helpers для expanded state, reload, loading/error status и approval toggle/readback. |
+
+## Что ещё требует дополнительной поддержки по слоям для Arm.Srv
+
+| Слой | Остаточная поддержка | Приоритет |
+|---|---|---|
+| Recorder | Arm.Srv-specific hints и part maps для wrappers и Eremex editors: `CopyTextBox`, generic `ComboBoxEditor`/`ButtonEditor`/`SpinEditor`/`DateEditor`, `SaveCloseButtonsControl`, `CrudActionsControl`, status/loading/approval controls | средний |
+| Recorder | Search picker, grid user actions, editable grid, filters, dialog/toast/export и shell navigation имеют typed workflows; остаточная recorder-работа - richer automatic recognition для Arm.Srv history/fuzzy toggles, layout persistence и proprietary gestures | средний |
+| Headless | Composite adapters существуют для search, grid actions, editable cells, range filters, dialog, notification, folder export и shell navigation при наличии stable parts; остаточная работа - детерминированные Arm.Srv bridge/part ids | высокий |
+| Headless | Дополнительные page adapters могут быть полезны для `CopyTextBox`, save/close, CRUD, status/loading/approval и expanded-state wrappers | средний |
+| FlaUI | Composite workflows поддержаны через primitive controls и bridges; главный остаточный риск - runtime validation реального Arm.Srv Eremex UIA и bridge для бизнес-гридов | высокий |
+| FlaUI | Direct native Eremex popup/editor/docking gestures, OS folder picker automation и layout persistence не заявлены; использовать stable anchors, явные action parts или unsupported diagnostics | средний |
+
+Рекомендуемый automation contract для Arm.Srv:
+
+1. Добавить `AutomationProperties.AutomationId` на scenario-facing roots и дочерние элементы; `Name` можно оставить для layout/state, но не использовать как единственный automation contract.
+2. Для каждой бизнес-таблицы дать reusable automation bridge или детерминированные row/cell ids вида `<GridName>AutomationBridge_Row{row}_Cell{column}`.
+3. Считать Eremex search/editor controls composite controls в authoring API: input, popup/list, selected value, clear/open/apply buttons.
+4. Держать recorder-generated сценарии на уровне user-flow: search/filter -> wait grid rows/cell -> open card -> edit/save/cancel -> assert toast/status.
 
 ## Что поддерживается через fallback/особые пути
 
@@ -138,7 +225,6 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 
 | Контрол | Статус | Что не хватает |
 |---|---|---|
-| Calendar | `Calendar` (enum 11) | Нет контролла на UI, можно добавить отдельный вклад/сценарий `Date selection` |
 | Нативная Eremex DataGrid row/cell UIA | закрыто bridge-слоем | Нативный Eremex `DataGridControl` всё ещё не отдаёт стабильные row/cell UIA; для recorder-generated assertions используется `EremexDemoDataGridAutomationBridge` |
 
 ## Что из списка docs на текущий момент не включено в demo
@@ -151,7 +237,7 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 
 1. Оставить текущий минимальный set как stable baseline.
 2. Держать стандартный Avalonia `DataGrid` как native typed grid baseline; для recorder-generated row/cell сценариев Eremex использовать bridge/provider, пока Eremex не отдаёт стабильные native UIA row/cell patterns.
-3. Добавить вклад `Calendar` и базовую проверку выбора даты/валидации.
+3. Держать date/calendar coverage как baseline; app-specific date variants добавлять только при появлении нового consumer automation pattern.
 4. Для каждого нового контрола:
    - добавить `UiControl` в `MainWindowPage`,
    - методы/ожидания в `UiPageExtensions` + `AutomationElementWaitExtensions` только при необходимости,

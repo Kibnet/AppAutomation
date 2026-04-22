@@ -73,7 +73,7 @@
 - Control: Support matrix documentation
 - Scenario: Reflect implemented gap resolutions and remaining runtime-only risks
 - Description: Update `ControlSupportMatrix.md` after implementation tasks so resolved gaps are no longer listed as open and residual risks are clearly scoped.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-008-matrix-gap-status-update.md
+- LastStep: completed
 - DoneCriteria: Matrix status matches implemented code and tests; no resolved gap remains described as requiring implementation.
