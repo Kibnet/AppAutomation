@@ -48,6 +48,10 @@ if ($packageFiles.Count -eq 0) {
     throw "No .nupkg files were found in $PackagesPath"
 }
 
+$symbolPackages = Get-ChildItem -Path $PackagesPath -Filter "*.snupkg" | Sort-Object Name
+$publishSymbolsSeparately = -not [string]::IsNullOrWhiteSpace($SymbolSource) -and $symbolPackages.Count -gt 0
+$disableImplicitSymbolPush = $symbolPackages.Count -gt 0
+
 foreach ($package in $packageFiles) {
     $arguments = @(
         "nuget", "push", $package.FullName,
@@ -59,6 +63,10 @@ foreach ($package in $packageFiles) {
         $arguments += "--skip-duplicate"
     }
 
+    if ($disableImplicitSymbolPush) {
+        $arguments += "--no-symbols"
+    }
+
     Write-Host "Publishing $($package.Name) -> $Source"
     & dotnet @arguments
     if ($LASTEXITCODE -ne 0) {
@@ -66,8 +74,7 @@ foreach ($package in $packageFiles) {
     }
 }
 
-$symbolPackages = Get-ChildItem -Path $PackagesPath -Filter "*.snupkg" | Sort-Object Name
-if (-not [string]::IsNullOrWhiteSpace($SymbolSource) -and $symbolPackages.Count -gt 0) {
+if ($publishSymbolsSeparately) {
     $effectiveSymbolApiKey = if ([string]::IsNullOrWhiteSpace($SymbolApiKey)) { $ApiKey } else { $SymbolApiKey }
 
     foreach ($package in $symbolPackages) {
