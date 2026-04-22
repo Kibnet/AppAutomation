@@ -538,6 +538,12 @@ internal sealed class RecorderStepFactory
             return false;
         }
 
+        var hasSourceColumnIndex = TryResolveGridColumnIndex(
+            source,
+            gridSource,
+            hint.ColumnPropertyNames.Count,
+            out var sourceColumnIndex);
+
         for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
         {
             var dataContext = current.DataContext;
@@ -546,25 +552,99 @@ internal sealed class RecorderStepFactory
                 continue;
             }
 
+            if (hasSourceColumnIndex)
+            {
+                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[sourceColumnIndex], out var sourceColumnValue)
+                    || !string.Equals(sourceColumnValue, observedText, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                columnIndex = sourceColumnIndex;
+                cellValue = sourceColumnValue;
+                return true;
+            }
+
+            var matchedColumnIndex = -1;
+            var matchedValue = string.Empty;
+            var matchedColumnCount = 0;
             for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
             {
-                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[candidateColumnIndex], out var candidateValue))
+                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[candidateColumnIndex], out var candidateValue)
+                    || !string.Equals(candidateValue, observedText, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                if (!string.Equals(candidateValue, observedText, StringComparison.Ordinal))
-                {
-                    continue;
-                }
+                matchedColumnIndex = candidateColumnIndex;
+                matchedValue = candidateValue;
+                matchedColumnCount++;
+            }
 
-                columnIndex = candidateColumnIndex;
-                cellValue = candidateValue;
+            if (matchedColumnCount == 1)
+            {
+                columnIndex = matchedColumnIndex;
+                cellValue = matchedValue;
                 return true;
+            }
+
+            if (matchedColumnCount > 1)
+            {
+                return false;
             }
         }
 
         return false;
+    }
+
+    private static bool TryResolveGridColumnIndex(
+        Control source,
+        Control gridSource,
+        int columnCount,
+        out int columnIndex)
+    {
+        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        {
+            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Cell", out var candidate)
+                && candidate >= 0
+                && candidate < columnCount)
+            {
+                columnIndex = candidate;
+                return true;
+            }
+        }
+
+        columnIndex = -1;
+        return false;
+    }
+
+    private static bool TryParseVisualGridIndex(string? automationId, string marker, out int index)
+    {
+        index = -1;
+        if (string.IsNullOrWhiteSpace(automationId))
+        {
+            return false;
+        }
+
+        var markerIndex = automationId.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var digitStart = markerIndex + marker.Length;
+        var digitEnd = digitStart;
+        while (digitEnd < automationId.Length && char.IsDigit(automationId[digitEnd]))
+        {
+            digitEnd++;
+        }
+
+        return digitEnd > digitStart
+            && int.TryParse(
+                automationId[digitStart..digitEnd],
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out index);
     }
 
     private static bool TryReadItemsSource(Control control, out IReadOnlyList<object?> items)

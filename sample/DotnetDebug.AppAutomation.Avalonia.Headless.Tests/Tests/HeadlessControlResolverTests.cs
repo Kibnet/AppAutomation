@@ -91,6 +91,7 @@ public sealed class HeadlessControlResolverTests
 
         using (Assert.Multiple())
         {
+            await Assert.That(page.Capabilities.SupportsGridCellAccess).IsEqualTo(true);
             await Assert.That(page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
             await Assert.That(page.EremexDemoDataGrid.IsEnabled).IsEqualTo(true);
             await Assert.That(page.EremexDemoDataGridAutomationBridge.Rows.Count >= 5).IsEqualTo(true);

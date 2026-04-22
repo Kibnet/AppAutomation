@@ -288,6 +288,7 @@ public sealed class RecorderTests
         };
         AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
         AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(cell, "EremexDemoDataGridAutomationBridge_Row2_Cell1");
         eremexVisualControl.Children.Add(cell);
         root.Children.Add(eremexVisualControl);
         root.Children.Add(bridge);
@@ -306,6 +307,79 @@ public sealed class RecorderTests
             await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.Grid);
             await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("EremexDemoDataGridAutomationBridge");
             await Assert.That(result.Step.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task TryCreateAssertionStep_WithGridHintCellAutomationId_UsesCellColumnIndexWhenValuesRepeat()
+    {
+        var options = CreateEremexGridOptions();
+        var root = new StackPanel();
+        var rows =
+            new[]
+            {
+                new RecorderGridRow("EX-R1", "EX-Duplicate", "EX-Duplicate")
+            };
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var bridge = new Border();
+        var cell = new TextBlock
+        {
+            Text = "EX-Duplicate",
+            DataContext = rows[0]
+        };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(cell, "EremexDemoDataGridAutomationBridge_Row0_Cell2");
+        eremexVisualControl.Children.Add(cell);
+        root.Children.Add(eremexVisualControl);
+        root.Children.Add(bridge);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateAssertionStep(cell, RecorderAssertionMode.Text);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.WaitUntilGridCellEquals);
+            await Assert.That(result.Step.RowIndex).IsEqualTo(0);
+            await Assert.That(result.Step.ColumnIndex).IsEqualTo(2);
+            await Assert.That(result.Step.StringValue).IsEqualTo("EX-Duplicate");
+        }
+    }
+
+    [Test]
+    public async Task TryCreateAssertionStep_WithAmbiguousGridHintCellText_DoesNotGuessColumn()
+    {
+        var options = CreateEremexGridOptions();
+        var root = new StackPanel();
+        var rows =
+            new[]
+            {
+                new RecorderGridRow("EX-R1", "EX-Duplicate", "EX-Duplicate")
+            };
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var bridge = new Border();
+        var cell = new TextBlock
+        {
+            Text = "EX-Duplicate",
+            DataContext = rows[0]
+        };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        eremexVisualControl.Children.Add(cell);
+        root.Children.Add(eremexVisualControl);
+        root.Children.Add(bridge);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateAssertionStep(cell, RecorderAssertionMode.Text);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.WaitUntilGridRowsAtLeast);
+            await Assert.That(result.Step.IntValue).IsEqualTo(1);
         }
     }
 

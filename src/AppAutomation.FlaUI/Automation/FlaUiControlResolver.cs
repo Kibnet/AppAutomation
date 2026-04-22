@@ -110,10 +110,16 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     private IGridControl ResolveGrid(UiControlDefinition definition)
     {
         var element = FindElement(definition);
-        var nativeGrid = TryRead(() => element.AsGrid());
-        return nativeGrid is null
-            ? new FlaUiVisualGridControl(_window, definition.LocatorValue)
-            : new FlaUiGridControl(nativeGrid);
+        if (TryRead(() => element.Patterns.Grid.IsSupported) != true)
+        {
+            var fallbackGrid = TryRead(() => element.AsGrid());
+            return new FlaUiVisualGridControl(
+                _window,
+                definition.LocatorValue,
+                fallbackGrid is null ? null : new FlaUiGridControl(fallbackGrid));
+        }
+
+        return new FlaUiGridControl(element.AsGrid());
     }
 
     private AutomationElement FindElement(UiControlDefinition definition)
@@ -1213,10 +1219,15 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     private sealed class FlaUiVisualGridControl : IGridControl
     {
         private readonly AutomationElement _searchRoot;
+        private readonly IGridControl? _fallback;
 
-        public FlaUiVisualGridControl(AutomationElement searchRoot, string automationId)
+        public FlaUiVisualGridControl(
+            AutomationElement searchRoot,
+            string automationId,
+            IGridControl? fallback = null)
         {
             _searchRoot = searchRoot ?? throw new ArgumentNullException(nameof(searchRoot));
+            _fallback = fallback;
             AutomationId = string.IsNullOrWhiteSpace(automationId)
                 ? throw new ArgumentException("Automation id cannot be empty.", nameof(automationId))
                 : automationId;
@@ -1229,14 +1240,47 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public bool IsEnabled => true;
 
         public IReadOnlyList<IGridRowControl> Rows =>
-            ReadRows().Select(row => (IGridRowControl)new FlaUiVisualGridRowControl(row)).ToArray();
+            ReadVisualRows();
 
         public IGridRowControl? GetRowByIndex(int index)
         {
             var row = ReadRows()
                 .FirstOrDefault(candidate =>
                     ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == index);
-            return row is null ? null : new FlaUiVisualGridRowControl(row);
+            if (row is not null)
+            {
+                return new FlaUiVisualGridRowControl(row);
+            }
+
+            var cellRow = ReadCellRows()
+                .FirstOrDefault(candidate => candidate.RowIndex == index);
+            if (cellRow is not null && cellRow.Cells.Count > 0)
+            {
+                return new FlaUiVisualGridCellBackedRowControl(cellRow.Cells);
+            }
+
+            return _fallback?.GetRowByIndex(index);
+        }
+
+        private IReadOnlyList<IGridRowControl> ReadVisualRows()
+        {
+            var rows = ReadRows()
+                .Select(row => (IGridRowControl)new FlaUiVisualGridRowControl(row))
+                .ToArray();
+            if (rows.Length > 0)
+            {
+                return rows;
+            }
+
+            var cellRows = ReadCellRows()
+                .Select(row => (IGridRowControl)new FlaUiVisualGridCellBackedRowControl(row.Cells))
+                .ToArray();
+            if (cellRows.Length > 0)
+            {
+                return cellRows;
+            }
+
+            return _fallback?.Rows ?? Array.Empty<IGridRowControl>();
         }
 
         private AutomationElement[] ReadRows()
@@ -1247,7 +1291,41 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 .OrderBy(candidate => ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row"))
                 .ToArray();
         }
+
+        private VisualGridCellRow[] ReadCellRows()
+        {
+            var cellPrefix = $"{AutomationId}_Row";
+            return FindAutomationDescendants(_searchRoot)
+                .Select(static candidate => new VisualGridCellCandidate(
+                    candidate,
+                    TryRead(() => candidate.AutomationId),
+                    RowIndex: ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row"),
+                    ColumnIndex: ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Cell")))
+                .Where(candidate =>
+                    candidate.AutomationId?.StartsWith(cellPrefix, StringComparison.Ordinal) == true
+                    && candidate.RowIndex != int.MaxValue
+                    && candidate.ColumnIndex != int.MaxValue)
+                .GroupBy(static candidate => candidate.RowIndex)
+                .OrderBy(static group => group.Key)
+                .Select(static group => new VisualGridCellRow(
+                    group.Key,
+                    group
+                        .OrderBy(static candidate => candidate.ColumnIndex)
+                        .Select(static candidate => candidate.Element)
+                        .ToArray()))
+                .ToArray();
+        }
     }
+
+    private sealed record VisualGridCellCandidate(
+        AutomationElement Element,
+        string? AutomationId,
+        int RowIndex,
+        int ColumnIndex);
+
+    private sealed record VisualGridCellRow(
+        int RowIndex,
+        IReadOnlyList<AutomationElement> Cells);
 
     private sealed class FlaUiVisualGridRowControl : IGridRowControl
     {
@@ -1275,6 +1353,19 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 .OrderBy(candidate => ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Cell"))
                 .ToArray();
         }
+    }
+
+    private sealed class FlaUiVisualGridCellBackedRowControl : IGridRowControl
+    {
+        private readonly IReadOnlyList<AutomationElement> _cells;
+
+        public FlaUiVisualGridCellBackedRowControl(IReadOnlyList<AutomationElement> cells)
+        {
+            _cells = cells ?? throw new ArgumentNullException(nameof(cells));
+        }
+
+        public IReadOnlyList<IGridCellControl> Cells =>
+            _cells.Select(cell => (IGridCellControl)new FlaUiVisualGridCellControl(cell)).ToArray();
     }
 
     private sealed class FlaUiVisualGridCellControl : IGridCellControl

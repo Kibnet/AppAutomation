@@ -20,7 +20,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     public UiRuntimeCapabilities Capabilities { get; } = new(
         AdapterId: "avalonia-headless",
-        SupportsGridCellAccess: false,
+        SupportsGridCellAccess: true,
         SupportsCalendarRangeSelection: false,
         SupportsTreeNodeExpansionState: false,
         SupportsRawNativeHandles: false,

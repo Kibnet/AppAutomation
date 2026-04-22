@@ -67,12 +67,19 @@ public sealed class FlaUiControlResolverTests
             EremexGridWaitOptions,
             "Eremex DataGrid automation anchor was not found by AutomationId.")
             ?? throw new InvalidOperationException("Eremex DataGrid automation anchor was not found by AutomationId.");
+        var bridgeElement = UiWait.Until(
+            () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGridAutomationBridge")),
+            static element => element is not null && TryRead(() => element.IsAvailable),
+            EremexGridWaitOptions,
+            "Eremex DataGrid automation bridge was not found by AutomationId.")
+            ?? throw new InvalidOperationException("Eremex DataGrid automation bridge was not found by AutomationId.");
 
         var visibleTexts = ReadElementNames(session.MainWindow);
 
         using (Assert.Multiple())
         {
             await Assert.That(eremexAnchor.AutomationId).IsEqualTo("EremexDemoDataGrid");
+            await Assert.That(TryRead(() => bridgeElement.Patterns.Grid.IsSupported)).IsEqualTo(false);
             await Assert.That(page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
             await Assert.That(page.EremexDemoDataGridAutomationBridge.Rows.Count >= 5).IsEqualTo(true);
             await Assert.That(page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
