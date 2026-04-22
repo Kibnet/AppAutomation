@@ -484,6 +484,167 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Completes a modal dialog using the requested action.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the dialog control.</param>
+    /// <param name="actionKind">The dialog action to invoke.</param>
+    /// <param name="expectedMessageContains">Optional message fragment that must be visible before completion.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the dialog is not enabled, text does not match, or the action fails.</exception>
+    public static TSelf CompleteDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        DialogActionKind actionKind = DialogActionKind.Confirm,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (expectedMessageContains is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedMessageContains);
+        }
+
+        return ExecuteDialog(page, selector, actionKind, expectedMessageContains, timeoutMs, nameof(CompleteDialog));
+    }
+
+    /// <summary>
+    /// Confirms a modal dialog.
+    /// </summary>
+    public static TSelf ConfirmDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Confirm, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Cancels a modal dialog.
+    /// </summary>
+    public static TSelf CancelDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Cancel, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Dismisses a modal dialog.
+    /// </summary>
+    public static TSelf DismissDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Dismiss, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Waits until a notification contains the expected text.
+    /// </summary>
+    public static TSelf WaitUntilNotificationContains<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INotificationControl>> selector,
+        string expectedText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedText);
+
+        var notification = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => ContainsText(notification.Text, expectedText),
+            timeoutMs,
+            $"Notification '{notification.AutomationId}' did not contain expected text.",
+            expectedValue: $"Contains '{expectedText}'",
+            lastObservedValueFactory: () => notification.Text);
+        return page;
+    }
+
+    /// <summary>
+    /// Dismisses a notification when the runtime adapter exposes a dismiss action.
+    /// </summary>
+    public static TSelf DismissNotification<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INotificationControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var notification = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => notification.IsEnabled,
+                timeoutMs,
+                $"Notification '{notification.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={notification.IsEnabled}",
+                nameof(DismissNotification));
+
+            notification.Dismiss();
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Notification '{notification.AutomationId}' failed to dismiss.",
+                expectedValue: "Dismiss",
+                lastObservedValueFactory: () => notification.Text,
+                nameof(DismissNotification),
+                ex);
+        }
+
+        return page;
+    }
+
+    /// <summary>
+    /// Opens an export flow and selects or cancels a target folder.
+    /// </summary>
+    public static TSelf SelectExportFolder<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IFolderExportControl>> selector,
+        string folderPath,
+        FolderExportCommitMode commitMode = FolderExportCommitMode.Select,
+        string? expectedStatusContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
+        if (expectedStatusContains is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedStatusContains);
+        }
+
+        return ExecuteFolderExport(
+            page,
+            selector,
+            folderPath,
+            commitMode,
+            expectedStatusContains,
+            timeoutMs,
+            nameof(SelectExportFolder));
+    }
+
+    /// <summary>
     /// Selects a specific tab item control directly.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1569,6 +1730,119 @@ public static class UiPageExtensions
         return page;
     }
 
+    private static TSelf ExecuteDialog<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        DialogActionKind actionKind,
+        string? expectedMessageContains,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var dialog = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => dialog.IsEnabled,
+                timeoutMs,
+                $"Dialog '{dialog.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={dialog.IsEnabled}",
+                actionName);
+
+            if (!string.IsNullOrWhiteSpace(expectedMessageContains))
+            {
+                WaitUntil(
+                    page,
+                    selector,
+                    () => ContainsText(dialog.MessageText, expectedMessageContains),
+                    timeoutMs,
+                    $"Dialog '{dialog.AutomationId}' did not contain expected message.",
+                    expectedValue: $"Contains '{expectedMessageContains}'",
+                    lastObservedValueFactory: () => dialog.MessageText,
+                    actionName);
+            }
+
+            dialog.Complete(actionKind);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Dialog '{dialog.AutomationId}' failed to complete action '{actionKind}'.",
+                expectedValue: DescribeDialogAction(actionKind, expectedMessageContains),
+                lastObservedValueFactory: () => dialog.MessageText,
+                actionName,
+                ex);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteFolderExport<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IFolderExportControl>> selector,
+        string folderPath,
+        FolderExportCommitMode commitMode,
+        string? expectedStatusContains,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var export = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => export.IsEnabled,
+                timeoutMs,
+                $"Folder export '{export.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={export.IsEnabled}",
+                actionName);
+
+            export.SelectFolder(folderPath, commitMode);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Folder export '{export.AutomationId}' failed to complete '{commitMode}'.",
+                expectedValue: DescribeFolderExportRequest(folderPath, commitMode, expectedStatusContains),
+                lastObservedValueFactory: () => ReadFolderExportValue(export),
+                actionName,
+                ex);
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedStatusContains))
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => ContainsText(export.StatusText, expectedStatusContains),
+                timeoutMs,
+                $"Folder export '{export.AutomationId}' did not reach expected status.",
+                expectedValue: $"Contains '{expectedStatusContains}'",
+                lastObservedValueFactory: () => ReadFolderExportValue(export),
+                actionName);
+        }
+
+        return page;
+    }
+
     private static bool DateBoundMatches(DateTime? actual, DateTime? expected)
     {
         return expected is null || actual?.Date == expected.Value.Date;
@@ -1577,6 +1851,11 @@ public static class UiPageExtensions
     private static bool NumericBoundMatches(double? actual, double? expected)
     {
         return expected is null || (actual is not null && Math.Abs(actual.Value - expected.Value) < 0.001);
+    }
+
+    private static bool ContainsText(string? actual, string expected)
+    {
+        return actual?.Contains(expected, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static string DescribeDateRangeFilterRequest(DateRangeFilterRequest request)
@@ -1597,6 +1876,29 @@ public static class UiPageExtensions
     private static string ReadNumericRangeFilterValue(INumericRangeFilterControl filter)
     {
         return $"from={FormatNumericBound(filter.FromValue)}, to={FormatNumericBound(filter.ToValue)}";
+    }
+
+    private static string DescribeDialogAction(DialogActionKind actionKind, string? expectedMessageContains)
+    {
+        return string.IsNullOrWhiteSpace(expectedMessageContains)
+            ? actionKind.ToString()
+            : $"{actionKind}: message contains '{expectedMessageContains}'";
+    }
+
+    private static string DescribeFolderExportRequest(
+        string folderPath,
+        FolderExportCommitMode commitMode,
+        string? expectedStatusContains)
+    {
+        var statusExpectation = string.IsNullOrWhiteSpace(expectedStatusContains)
+            ? string.Empty
+            : $", status contains '{expectedStatusContains}'";
+        return $"{commitMode}: folder='{folderPath}'{statusExpectation}";
+    }
+
+    private static string ReadFolderExportValue(IFolderExportControl export)
+    {
+        return $"folder={export.SelectedFolderPath ?? "<none>"}, status={export.StatusText ?? "<none>"}";
     }
 
     private static string FormatDateBound(DateTime? value)

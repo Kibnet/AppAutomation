@@ -28,5 +28,8 @@ public enum UiControlType
     GridCell = 23,
     SearchPicker = 24,
     DateRangeFilter = 25,
-    NumericRangeFilter = 26
+    NumericRangeFilter = 26,
+    Dialog = 27,
+    Notification = 28,
+    FolderExport = 29
 }

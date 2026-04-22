@@ -142,5 +142,20 @@ public enum UiControlType
     /// <summary>
     /// A composite numeric range filter popup. Maps to <see cref="INumericRangeFilterControl"/>.
     /// </summary>
-    NumericRangeFilter = 26
+    NumericRangeFilter = 26,
+
+    /// <summary>
+    /// A modal dialog control. Maps to <see cref="IDialogControl"/>.
+    /// </summary>
+    Dialog = 27,
+
+    /// <summary>
+    /// A toast, notification, or status message control. Maps to <see cref="INotificationControl"/>.
+    /// </summary>
+    Notification = 28,
+
+    /// <summary>
+    /// A composite folder export flow. Maps to <see cref="IFolderExportControl"/>.
+    /// </summary>
+    FolderExport = 29
 }

@@ -558,6 +558,157 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task ConfirmDialog_ValidatesMessageAndInvokesConfirm()
+    {
+        var dialog = new FakeDialogControl("DeleteDialog", "Delete selected record?");
+        var page = new WorkflowPage(new FakeResolver(("DeleteDialog", dialog)));
+
+        var returnedPage = page.ConfirmDialog(
+            static candidate => candidate.DeleteDialog,
+            "delete selected");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(dialog.CompletedActions.Count).IsEqualTo(1);
+            await Assert.That(dialog.CompletedActions[0]).IsEqualTo(DialogActionKind.Confirm);
+        }
+    }
+
+    [Test]
+    public async Task CancelDialog_ThrowsUiOperationException_WhenRuntimeDialogFails()
+    {
+        var dialog = new FakeDialogControl("DeleteDialog", "Delete selected record?")
+        {
+            Failure = new NotSupportedException("CancelButton is not configured")
+        };
+        var page = new WorkflowPage(new FakeResolver(("DeleteDialog", dialog)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.CancelDialog(
+                static candidate => candidate.DeleteDialog,
+                "Delete",
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("CompleteDialog");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("DeleteDialog");
+            await Assert.That(exception.Message).Contains("CancelButton is not configured");
+            await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task NotificationHelpers_WaitAndDismissNotification()
+    {
+        var notification = new FakeNotificationControl("ExportToast", "Export completed");
+        var page = new WorkflowPage(new FakeResolver(("ExportToast", notification)));
+
+        var returnedPage = page
+            .WaitUntilNotificationContains(static candidate => candidate.ExportToast, "completed")
+            .DismissNotification(static candidate => candidate.ExportToast);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(notification.DismissCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilNotificationContains_ThrowsUiOperationException_WhenTextIsMissing()
+    {
+        var notification = new FakeNotificationControl("ExportToast", "Export queued");
+        var page = new WorkflowPage(new FakeResolver(("ExportToast", notification)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilNotificationContains(
+                static candidate => candidate.ExportToast,
+                "completed",
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilNotificationContains");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("ExportToast");
+            await Assert.That(exception.FailureContext.LastObservedValue).IsEqualTo("Export queued");
+            await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task SelectExportFolder_InvokesRuntimeExportAndWaitsStatus()
+    {
+        var export = new FakeFolderExportControl("ReportExport")
+        {
+            StatusText = "Export completed"
+        };
+        var page = new WorkflowPage(new FakeResolver(("ReportExport", export)));
+
+        var returnedPage = page.SelectExportFolder(
+            static candidate => candidate.ReportExport,
+            @"C:\Exports\Reports",
+            expectedStatusContains: "completed");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(export.Requests.Count).IsEqualTo(1);
+            await Assert.That(export.Requests[0]).IsEqualTo((@"C:\Exports\Reports", FolderExportCommitMode.Select));
+            await Assert.That(export.SelectedFolderPath).IsEqualTo(@"C:\Exports\Reports");
+        }
+    }
+
+    [Test]
+    public async Task SelectExportFolder_ThrowsUiOperationException_WhenRuntimeExportFails()
+    {
+        var export = new FakeFolderExportControl("ReportExport")
+        {
+            Failure = new InvalidOperationException("folder picker unavailable")
+        };
+        var page = new WorkflowPage(new FakeResolver(("ReportExport", export)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.SelectExportFolder(
+                static candidate => candidate.ReportExport,
+                @"C:\Exports\Reports",
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("SelectExportFolder");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("ReportExport");
+            await Assert.That(exception.Message).Contains("folder picker unavailable");
+            await Assert.That(exception.InnerException is InvalidOperationException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -640,6 +791,24 @@ public sealed class UiPageExtensionsTests
             "AmountFilter",
             UiControlType.NumericRangeFilter,
             "AmountFilter");
+    }
+
+    public static class WorkflowPageDefinitions
+    {
+        public static UiControlDefinition DeleteDialog { get; } = new(
+            "DeleteDialog",
+            UiControlType.Dialog,
+            "DeleteDialog");
+
+        public static UiControlDefinition ExportToast { get; } = new(
+            "ExportToast",
+            UiControlType.Notification,
+            "ExportToast");
+
+        public static UiControlDefinition ReportExport { get; } = new(
+            "ReportExport",
+            UiControlType.FolderExport,
+            "ReportExport");
     }
 
     private sealed class ComboPage : UiPage
@@ -734,6 +903,20 @@ public sealed class UiPageExtensionsTests
         public IDateRangeFilterControl CreatedAtFilter => Resolve<IDateRangeFilterControl>(FilterPageDefinitions.CreatedAtFilter);
 
         public INumericRangeFilterControl AmountFilter => Resolve<INumericRangeFilterControl>(FilterPageDefinitions.AmountFilter);
+    }
+
+    private sealed class WorkflowPage : UiPage
+    {
+        public WorkflowPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDialogControl DeleteDialog => Resolve<IDialogControl>(WorkflowPageDefinitions.DeleteDialog);
+
+        public INotificationControl ExportToast => Resolve<INotificationControl>(WorkflowPageDefinitions.ExportToast);
+
+        public IFolderExportControl ReportExport => Resolve<IFolderExportControl>(WorkflowPageDefinitions.ReportExport);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -859,6 +1042,86 @@ public sealed class UiPageExtensionsTests
 
             FromValue = request.From ?? FromValue;
             ToValue = request.To ?? ToValue;
+        }
+    }
+
+    private sealed class FakeDialogControl : FakeControlBase, IDialogControl
+    {
+        public FakeDialogControl(string automationId, string messageText)
+            : base(automationId, automationId)
+        {
+            MessageText = messageText;
+        }
+
+        public string MessageText { get; set; }
+
+        public Exception? Failure { get; init; }
+
+        public List<DialogActionKind> CompletedActions { get; } = [];
+
+        public void Complete(DialogActionKind actionKind = DialogActionKind.Confirm)
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            CompletedActions.Add(actionKind);
+        }
+    }
+
+    private sealed class FakeNotificationControl : FakeControlBase, INotificationControl
+    {
+        public FakeNotificationControl(string automationId, string text)
+            : base(automationId, automationId)
+        {
+            Text = text;
+        }
+
+        public string Text { get; set; }
+
+        public Exception? Failure { get; init; }
+
+        public int DismissCount { get; private set; }
+
+        public void Dismiss()
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            DismissCount++;
+        }
+    }
+
+    private sealed class FakeFolderExportControl : FakeControlBase, IFolderExportControl
+    {
+        public FakeFolderExportControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public string? SelectedFolderPath { get; private set; }
+
+        public string? StatusText { get; init; }
+
+        public Exception? Failure { get; init; }
+
+        public List<(string FolderPath, FolderExportCommitMode CommitMode)> Requests { get; } = [];
+
+        public void SelectFolder(string folderPath, FolderExportCommitMode commitMode = FolderExportCommitMode.Select)
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            Requests.Add((folderPath, commitMode));
+            if (commitMode == FolderExportCommitMode.Select)
+            {
+                SelectedFolderPath = folderPath;
+            }
         }
     }
 

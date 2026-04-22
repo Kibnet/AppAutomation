@@ -400,6 +400,9 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             24 => "global::AppAutomation.Abstractions.ISearchPickerControl",
             25 => "global::AppAutomation.Abstractions.IDateRangeFilterControl",
             26 => "global::AppAutomation.Abstractions.INumericRangeFilterControl",
+            27 => "global::AppAutomation.Abstractions.IDialogControl",
+            28 => "global::AppAutomation.Abstractions.INotificationControl",
+            29 => "global::AppAutomation.Abstractions.IFolderExportControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -434,6 +437,9 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             24 => "SearchPicker",
             25 => "DateRangeFilter",
             26 => "NumericRangeFilter",
+            27 => "Dialog",
+            28 => "Notification",
+            29 => "FolderExport",
             _ => "AutomationElement"
         };
     }

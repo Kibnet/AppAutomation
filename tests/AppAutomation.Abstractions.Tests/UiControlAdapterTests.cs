@@ -198,6 +198,132 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task DialogAdapter_ExposesMessageAndCompletesConfiguredActions()
+    {
+        var message = new FakeLabelControl("DeleteDialogMessage", "Delete selected record?");
+        var confirmButton = new FakeButtonControl("ConfirmDeleteButton");
+        var cancelButton = new FakeButtonControl("CancelDeleteButton");
+        var dismissButton = new FakeButtonControl("DismissDeleteButton");
+        var resolver = new FakeResolver(
+            ("DeleteDialogMessage", message),
+            ("ConfirmDeleteButton", confirmButton),
+            ("CancelDeleteButton", cancelButton),
+            ("DismissDeleteButton", dismissButton))
+            .WithDialog(
+                "DeleteDialog",
+                DialogControlParts.ByAutomationIds(
+                    "DeleteDialogMessage",
+                    "ConfirmDeleteButton",
+                    cancelButtonAutomationId: "CancelDeleteButton",
+                    dismissButtonAutomationId: "DismissDeleteButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.DeleteDialog.Complete();
+        page.DeleteDialog.Complete(DialogActionKind.Cancel);
+        page.DeleteDialog.Complete(DialogActionKind.Dismiss);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.DeleteDialog.MessageText).IsEqualTo("Delete selected record?");
+            await Assert.That(confirmButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task NotificationAdapter_ExposesTextAndDismisses()
+    {
+        var text = new FakeLabelControl("ExportToastText", "Export completed");
+        var dismissButton = new FakeButtonControl("DismissExportToastButton");
+        var resolver = new FakeResolver(
+            ("ExportToastText", text),
+            ("DismissExportToastButton", dismissButton))
+            .WithNotification(
+                "ExportToast",
+                NotificationControlParts.ByAutomationIds(
+                    "ExportToastText",
+                    dismissButtonAutomationId: "DismissExportToastButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.ExportToast.Dismiss();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ExportToast.Text).IsEqualTo("Export completed");
+            await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task FolderExportAdapter_SelectModeOpensWritesPathAndSelects()
+    {
+        var openButton = new FakeButtonControl("OpenReportExportButton");
+        var folderInput = new FakeTextBoxControl("ReportExportFolderInput");
+        var selectButton = new FakeButtonControl("SelectReportExportFolderButton");
+        var cancelButton = new FakeButtonControl("CancelReportExportFolderButton");
+        var status = new FakeLabelControl("ReportExportStatus", "Export ready");
+        var resolver = new FakeResolver(
+            ("OpenReportExportButton", openButton),
+            ("ReportExportFolderInput", folderInput),
+            ("SelectReportExportFolderButton", selectButton),
+            ("CancelReportExportFolderButton", cancelButton),
+            ("ReportExportStatus", status))
+            .WithFolderExport(
+                "ReportExport",
+                FolderExportControlParts.ByAutomationIds(
+                    "OpenReportExportButton",
+                    "ReportExportFolderInput",
+                    "SelectReportExportFolderButton",
+                    "CancelReportExportFolderButton",
+                    statusAutomationId: "ReportExportStatus"));
+        var page = new WorkflowPage(resolver);
+
+        page.ReportExport.SelectFolder(@"C:\Exports\Reports");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ReportExport.SelectedFolderPath).IsEqualTo(@"C:\Exports\Reports");
+            await Assert.That(page.ReportExport.StatusText).IsEqualTo("Export ready");
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(selectButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task FolderExportAdapter_CancelModeOpensAndCancelsWithoutPathMutation()
+    {
+        var openButton = new FakeButtonControl("OpenReportExportButton");
+        var folderInput = new FakeTextBoxControl("ReportExportFolderInput");
+        var selectButton = new FakeButtonControl("SelectReportExportFolderButton");
+        var cancelButton = new FakeButtonControl("CancelReportExportFolderButton");
+        var resolver = new FakeResolver(
+            ("OpenReportExportButton", openButton),
+            ("ReportExportFolderInput", folderInput),
+            ("SelectReportExportFolderButton", selectButton),
+            ("CancelReportExportFolderButton", cancelButton))
+            .WithFolderExport(
+                "ReportExport",
+                FolderExportControlParts.ByAutomationIds(
+                    "OpenReportExportButton",
+                    "ReportExportFolderInput",
+                    "SelectReportExportFolderButton",
+                    "CancelReportExportFolderButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.ReportExport.SelectFolder(@"C:\Exports\Reports", FolderExportCommitMode.Cancel);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ReportExport.SelectedFolderPath).IsEqualTo(string.Empty);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(selectButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()
@@ -300,6 +426,30 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class WorkflowPageDefinitions
+    {
+        public static UiControlDefinition DeleteDialog { get; } = new(
+            "DeleteDialog",
+            UiControlType.Dialog,
+            "DeleteDialog",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition ExportToast { get; } = new(
+            "ExportToast",
+            UiControlType.Notification,
+            "ExportToast",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition ReportExport { get; } = new(
+            "ReportExport",
+            UiControlType.FolderExport,
+            "ReportExport",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class FilterPage : UiPage
     {
         public FilterPage(IUiControlResolver resolver)
@@ -310,6 +460,20 @@ public sealed class UiControlAdapterTests
         public IDateRangeFilterControl CreatedAtFilter => Resolve<IDateRangeFilterControl>(FilterPageDefinitions.CreatedAtFilter);
 
         public INumericRangeFilterControl AmountFilter => Resolve<INumericRangeFilterControl>(FilterPageDefinitions.AmountFilter);
+    }
+
+    private sealed class WorkflowPage : UiPage
+    {
+        public WorkflowPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDialogControl DeleteDialog => Resolve<IDialogControl>(WorkflowPageDefinitions.DeleteDialog);
+
+        public INotificationControl ExportToast => Resolve<INotificationControl>(WorkflowPageDefinitions.ExportToast);
+
+        public IFolderExportControl ReportExport => Resolve<IFolderExportControl>(WorkflowPageDefinitions.ReportExport);
     }
 
     private sealed class FakeResolver : IUiControlResolver
@@ -362,6 +526,18 @@ public sealed class UiControlAdapterTests
         {
             Text = value;
         }
+    }
+
+    private sealed class FakeLabelControl : FakeControlBase, ILabelControl
+    {
+        public FakeLabelControl(string automationId, string text)
+            : base(automationId)
+        {
+            Text = text;
+            Name = text;
+        }
+
+        public string Text { get; }
     }
 
     private sealed class FakeButtonControl : FakeControlBase, IButtonControl

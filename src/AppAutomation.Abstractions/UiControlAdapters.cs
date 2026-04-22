@@ -164,6 +164,102 @@ public sealed record NumericRangeFilterParts(
 }
 
 /// <summary>
+/// Configuration for composing a modal dialog from individual UI controls.
+/// </summary>
+/// <param name="MessageLocator">The locator for the dialog message label.</param>
+/// <param name="ConfirmButtonLocator">The locator for the confirm button.</param>
+/// <param name="CancelButtonLocator">Optional locator for the cancel button.</param>
+/// <param name="DismissButtonLocator">Optional locator for the dismiss/close button.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record DialogControlParts(
+    string MessageLocator,
+    string ConfirmButtonLocator,
+    string? CancelButtonLocator = null,
+    string? DismissButtonLocator = null,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="DialogControlParts"/> configuration using automation IDs.
+    /// </summary>
+    public static DialogControlParts ByAutomationIds(
+        string messageAutomationId,
+        string confirmButtonAutomationId,
+        string? cancelButtonAutomationId = null,
+        string? dismissButtonAutomationId = null)
+    {
+        return new DialogControlParts(
+            messageAutomationId,
+            confirmButtonAutomationId,
+            cancelButtonAutomationId,
+            dismissButtonAutomationId);
+    }
+}
+
+/// <summary>
+/// Configuration for composing a toast, notification, or status message from individual UI controls.
+/// </summary>
+/// <param name="TextLocator">The locator for the notification text label.</param>
+/// <param name="DismissButtonLocator">Optional locator for the dismiss button.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record NotificationControlParts(
+    string TextLocator,
+    string? DismissButtonLocator = null,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="NotificationControlParts"/> configuration using automation IDs.
+    /// </summary>
+    public static NotificationControlParts ByAutomationIds(
+        string textAutomationId,
+        string? dismissButtonAutomationId = null)
+    {
+        return new NotificationControlParts(textAutomationId, dismissButtonAutomationId);
+    }
+}
+
+/// <summary>
+/// Configuration for composing a folder export picker from individual UI controls.
+/// </summary>
+/// <param name="OpenButtonLocator">The locator for the button that opens the export picker.</param>
+/// <param name="FolderPathInputLocator">The locator for the folder path text input.</param>
+/// <param name="SelectButtonLocator">The locator for the select/continue button.</param>
+/// <param name="CancelButtonLocator">The locator for the cancel button.</param>
+/// <param name="StatusLocator">Optional locator for an export status label.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record FolderExportControlParts(
+    string OpenButtonLocator,
+    string FolderPathInputLocator,
+    string SelectButtonLocator,
+    string CancelButtonLocator,
+    string? StatusLocator = null,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="FolderExportControlParts"/> configuration using automation IDs.
+    /// </summary>
+    public static FolderExportControlParts ByAutomationIds(
+        string openButtonAutomationId,
+        string folderPathInputAutomationId,
+        string selectButtonAutomationId,
+        string cancelButtonAutomationId,
+        string? statusAutomationId = null)
+    {
+        return new FolderExportControlParts(
+            openButtonAutomationId,
+            folderPathInputAutomationId,
+            selectButtonAutomationId,
+            cancelButtonAutomationId,
+            statusAutomationId);
+    }
+}
+
+/// <summary>
 /// Extension methods for configuring <see cref="IUiControlResolver"/> with adapters.
 /// </summary>
 public static class UiControlResolverExtensions
@@ -250,6 +346,51 @@ public static class UiControlResolverExtensions
         ArgumentNullException.ThrowIfNull(parts);
 
         return innerResolver.WithAdapters(new NumericRangeFilterControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a modal dialog composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithDialog(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        DialogControlParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new DialogControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a notification composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithNotification(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        NotificationControlParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new NotificationControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a folder export composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithFolderExport(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        FolderExportControlParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new FolderExportControlAdapter(propertyName, parts));
     }
 
     /// <summary>
@@ -893,6 +1034,361 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
             }
 
             set => _control.Enter(value?.ToString("G17", CultureInfo.InvariantCulture) ?? string.Empty);
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="IDialogControl"/> instances from primitive controls.
+/// </summary>
+public sealed class DialogControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly DialogControlParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DialogControlAdapter"/> class.
+    /// </summary>
+    public DialogControlAdapter(string propertyName, DialogControlParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(IDialogControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new DialogControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class DialogControl : IDialogControl
+    {
+        private readonly DialogControlParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public DialogControl(string automationId, DialogControlParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => TryReadMessageText() ?? AutomationId;
+
+        public bool IsEnabled => ResolveLabel("Message", _parts.MessageLocator).IsEnabled;
+
+        public string MessageText => ResolveLabel("Message", _parts.MessageLocator).Text;
+
+        public void Complete(DialogActionKind actionKind = DialogActionKind.Confirm)
+        {
+            var button = actionKind switch
+            {
+                DialogActionKind.Confirm => ResolveButton("ConfirmButton", _parts.ConfirmButtonLocator, actionKind),
+                DialogActionKind.Cancel => ResolveButton("CancelButton", _parts.CancelButtonLocator, actionKind),
+                DialogActionKind.Dismiss => ResolveButton("DismissButton", _parts.DismissButtonLocator, actionKind),
+                _ => throw new ArgumentOutOfRangeException(nameof(actionKind), actionKind, "Unsupported dialog action.")
+            };
+            button.Invoke();
+        }
+
+        private string? TryReadMessageText()
+        {
+            try
+            {
+                return MessageText;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private ILabelControl ResolveLabel(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+        }
+
+        private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind actionKind)
+        {
+            if (string.IsNullOrWhiteSpace(locatorValue))
+            {
+                throw new NotSupportedException(
+                    $"Dialog '{AutomationId}' does not support action '{actionKind}' because '{suffix}' is not configured.");
+            }
+
+            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="INotificationControl"/> instances from primitive controls.
+/// </summary>
+public sealed class NotificationControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly NotificationControlParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NotificationControlAdapter"/> class.
+    /// </summary>
+    public NotificationControlAdapter(string propertyName, NotificationControlParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(INotificationControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new NotificationControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class NotificationControl : INotificationControl
+    {
+        private readonly NotificationControlParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public NotificationControl(string automationId, NotificationControlParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => TryReadText() ?? AutomationId;
+
+        public bool IsEnabled => ResolveLabel("Text", _parts.TextLocator).IsEnabled;
+
+        public string Text => ResolveLabel("Text", _parts.TextLocator).Text;
+
+        public void Dismiss()
+        {
+            if (string.IsNullOrWhiteSpace(_parts.DismissButtonLocator))
+            {
+                throw new NotSupportedException(
+                    $"Notification '{AutomationId}' cannot be dismissed because 'DismissButton' is not configured.");
+            }
+
+            ResolveButton("DismissButton", _parts.DismissButtonLocator).Invoke();
+        }
+
+        private string? TryReadText()
+        {
+            try
+            {
+                return Text;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private ILabelControl ResolveLabel(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+        }
+
+        private IButtonControl ResolveButton(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="IFolderExportControl"/> instances from primitive controls.
+/// </summary>
+public sealed class FolderExportControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly FolderExportControlParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="FolderExportControlAdapter"/> class.
+    /// </summary>
+    public FolderExportControlAdapter(string propertyName, FolderExportControlParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(IFolderExportControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new FolderExportControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class FolderExportControl : IFolderExportControl
+    {
+        private readonly FolderExportControlParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public FolderExportControl(string automationId, FolderExportControlParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => TryReadOpenButtonName() ?? AutomationId;
+
+        public bool IsEnabled => ResolveButton("OpenButton", _parts.OpenButtonLocator).IsEnabled;
+
+        public string? SelectedFolderPath => ResolveTextBox("FolderPathInput", _parts.FolderPathInputLocator).Text;
+
+        public string? StatusText => string.IsNullOrWhiteSpace(_parts.StatusLocator)
+            ? null
+            : ResolveLabel("Status", _parts.StatusLocator).Text;
+
+        public void SelectFolder(string folderPath, FolderExportCommitMode commitMode = FolderExportCommitMode.Select)
+        {
+            if (commitMode == FolderExportCommitMode.Select)
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
+            }
+
+            ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+
+            switch (commitMode)
+            {
+                case FolderExportCommitMode.Select:
+                    ResolveTextBox("FolderPathInput", _parts.FolderPathInputLocator).Enter(folderPath);
+                    ResolveButton("SelectButton", _parts.SelectButtonLocator).Invoke();
+                    break;
+                case FolderExportCommitMode.Cancel:
+                    ResolveButton("CancelButton", _parts.CancelButtonLocator).Invoke();
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(commitMode), commitMode, "Unsupported folder export commit mode.");
+            }
+        }
+
+        private string? TryReadOpenButtonName()
+        {
+            try
+            {
+                return ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private IButtonControl ResolveButton(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+        }
+
+        private ITextBoxControl ResolveTextBox(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue));
+        }
+
+        private ILabelControl ResolveLabel(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
         }
     }
 }

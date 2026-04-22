@@ -443,6 +443,99 @@ public interface INumericRangeFilterControl : IUiControl
 }
 
 /// <summary>
+/// Describes how a modal dialog operation should be completed.
+/// </summary>
+public enum DialogActionKind
+{
+    /// <summary>
+    /// Invoke the dialog's confirm/accept action.
+    /// </summary>
+    Confirm = 0,
+
+    /// <summary>
+    /// Invoke the dialog's cancel action.
+    /// </summary>
+    Cancel = 1,
+
+    /// <summary>
+    /// Invoke the dialog's dismiss/close action.
+    /// </summary>
+    Dismiss = 2
+}
+
+/// <summary>
+/// Describes how a folder export picker operation should be completed.
+/// </summary>
+public enum FolderExportCommitMode
+{
+    /// <summary>
+    /// Select the requested folder and continue the export.
+    /// </summary>
+    Select = 0,
+
+    /// <summary>
+    /// Cancel the export picker operation.
+    /// </summary>
+    Cancel = 1
+}
+
+/// <summary>
+/// Represents a modal dialog with a readable message and explicit completion actions.
+/// </summary>
+public interface IDialogControl : IUiControl
+{
+    /// <summary>
+    /// Gets the dialog message text.
+    /// </summary>
+    string MessageText { get; }
+
+    /// <summary>
+    /// Completes the dialog using the requested action.
+    /// </summary>
+    /// <param name="actionKind">The dialog action to invoke.</param>
+    void Complete(DialogActionKind actionKind = DialogActionKind.Confirm);
+}
+
+/// <summary>
+/// Represents a toast, notification, or status message that can be asserted by text.
+/// </summary>
+public interface INotificationControl : IUiControl
+{
+    /// <summary>
+    /// Gets the current notification text.
+    /// </summary>
+    string Text { get; }
+
+    /// <summary>
+    /// Dismisses the notification when a dismiss action is configured by the runtime adapter.
+    /// </summary>
+    void Dismiss();
+}
+
+/// <summary>
+/// Represents an export flow that chooses a target folder through stable in-app controls.
+/// </summary>
+public interface IFolderExportControl : IUiControl
+{
+    /// <summary>
+    /// Gets the currently entered or selected folder path when it can be read.
+    /// </summary>
+    string? SelectedFolderPath { get; }
+
+    /// <summary>
+    /// Gets the export status text when a status part is configured.
+    /// </summary>
+    string? StatusText { get; }
+
+    /// <summary>
+    /// Opens the export picker and selects or cancels the folder operation.
+    /// </summary>
+    /// <param name="folderPath">The folder path to enter for select mode.</param>
+    /// <param name="commitMode">Whether to select the folder or cancel the picker.</param>
+    void SelectFolder(string folderPath, FolderExportCommitMode commitMode = FolderExportCommitMode.Select);
+}
+
+/// <summary>
 /// Represents an individual tab within a <see cref="ITabControl"/>.
 /// </summary>
 public interface ITabItemControl : IUiControl

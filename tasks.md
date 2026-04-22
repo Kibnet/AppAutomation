@@ -53,9 +53,9 @@
 - Control: `DialogHost`, notifications, folder picker/export
 - Scenario: Confirm modal dialogs, assert toast/status messages, and handle export folder selection
 - Description: Add automation support or explicit abstractions for modal/toast/export workflows used by Arm.Srv.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-006-dialog-toast-export-flow.md
+- LastStep: completed
 - DoneCriteria: Dialog/toast/export interactions have documented typed API or provider-specific supported/unsupported diagnostics; tests cover supported behavior.
 
 ## AAR-007 Shell Docking Navigation
