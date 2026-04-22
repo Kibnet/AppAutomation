@@ -243,6 +243,7 @@
   - `git diff --check`: PASS; line-ending warnings only.
   - `dotnet build .\AppAutomation.sln -c Release`: PASS; existing warnings only.
   - `dotnet test --solution .\AppAutomation.sln -c Release --no-build`: PASS, 161/161.
+  - GitHub release workflow `1.5.2`: PASS (`https://github.com/Kibnet/AppAutomation/actions/runs/24794878037`); `Restore`, `Build`, `Test`, `Pack`, `Smoke consumer`, NuGet publish, GitHub Packages publish and release asset attach all succeeded.
 
 ### Post-EXEC Review
 - Статус: PASS
@@ -265,3 +266,4 @@
 | EXEC | Post-EXEC review | 0.94 | GitHub Actions результат будет после push/release | Закоммитить и запушить scoped файлы | Нет | Нет | Diff соответствует SPEС, случайный локальный артефакт удалён, unrelated untracked файл оставлен вне scope | `.github/workflows/pr-validation.yml`, `src/AppAutomation.Templates/.../SampleApp.UiTests.Headless.csproj`, `tests/AppAutomation.Build.Tests/TemplateContentTests.cs`, `specs/2026-04-22-release-smoke-consumer-hardening.md` |
 | EXEC | Release workflow triage | 0.93 | Результат нового `1.5.2` release workflow ещё не получен | Исправить duplicate symbol publish и добавить regression tests | Нет | Нет | `1.5.1` прошёл smoke, но упал на `Publish packages`: `.snupkg` публиковался дважды, второй цикл получил conflicts/500; безопаснее выпустить `1.5.2`, не переписывая уже опубликованный `1.5.1` | `eng/publish-nuget.ps1`, `tests/AppAutomation.Build.Tests/PublishNugetScriptTests.cs`, `specs/2026-04-22-release-smoke-consumer-hardening.md` |
 | EXEC | Publish hardening verification | 0.94 | GitHub Actions результат будет после push/release `1.5.2` | Закоммитить, запушить `master`, создать release `1.5.2` | Нет | Нет | Publish script parse, targeted tests, solution build, full tests and whitespace check pass; scoped diff only touches publish script, its tests and spec journal | `eng/publish-nuget.ps1`, `tests/AppAutomation.Build.Tests/PublishNugetScriptTests.cs`, `specs/2026-04-22-release-smoke-consumer-hardening.md` |
+| EXEC | Release `1.5.2` completion | 0.98 | Нет | Завершить задачу | Нет | Нет | Release workflow `24794878037` прошёл end-to-end: smoke подтверждён, NuGet/GitHub Packages publish и release asset attach завершились успешно; `1.5.1` не переписывался | GitHub release/tag `1.5.2`, `specs/2026-04-22-release-smoke-consumer-hardening.md` |
