@@ -33,6 +33,8 @@ next to cover the widest possible set of `ControlType`.
 | TabItem | `MathTabItem`, `...` | `TabItem` | full | Via search in Tab tree/finding Selected |
 | Tree | `DemoTree` | `Tree` | full | `SelectTreeItem`, `WaitUntilHasItem` |
 | DateTimePicker | `StartDatePicker`, `EndDatePicker` | `DateTimePicker` | full (via main API + fallback via text field) | `SetDate` |
+| Avalonia DataGrid | `DemoDataGrid` | `Grid` | full baseline | Shared UI scenario builds/selects/clears rows through typed page object |
+| Eremex DataGrid + recorder bridge | `EremexDemoDataGridControl` visual control + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | full recorder playback through bridge/provider | Native Eremex UIA remains root-only, but recorder `GridHint` maps Eremex assertions to the bridge; Headless/FlaUI providers expose bridge rows/cells as `IGridControl` |
 
 ## What is supported through fallback/special paths
 
@@ -55,18 +57,18 @@ next to cover the widest possible set of `ControlType`.
 | Control | Status | What's missing |
 |---|---|---|
 | Calendar | `Calendar` (enum 11) | No control in UI, can add a separate contribution/scenario `Date selection` |
-| DataGrid / DataGridView / Grid / GridRow / GridCell | listed | No DataGrid in UI, no `WaitUntil` for row/cell/cell addressing |
+| Native Eremex DataGrid row/cell UIA | bridged | Native Eremex `DataGridControl` still does not expose stable row/cell UIA; use `EremexDemoDataGridAutomationBridge` for recorder-generated row/cell assertions |
 
 ## What from the docs list is currently not included in demo
 
 According to the current roadmap of this repository, the showcase has: math, mix-logic, date, hierarchy.
-Not added: separate scenarios for `Calendar`, `DataGrid`, `CalendarDatePicker` sub-variants,
+Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell UIA,
 `ListBox`/`Tree` are already covered, but without deep dive into mass navigation across all `IText` types, etc.
 
 ## What's next (recommended next step)
 
 1. Leave the current minimal set as stable baseline.
-2. Add a separate `DataGrid` contribution in `MainWindow.axaml` with a simple `DataGrid` and tests for reading row count/values.
+2. Keep standard Avalonia `DataGrid` as the native typed grid baseline; use the Eremex bridge/provider for recorder-generated row/cell scenarios until Eremex exposes stable native UIA row/cell patterns.
 3. Add a `Calendar` contribution and basic date selection/validation checks.
 4. For each new control:
    - add `UiControl` to `MainWindowPage`,
@@ -113,6 +115,8 @@ Not added: separate scenarios for `Calendar`, `DataGrid`, `CalendarDatePicker` s
 | TabItem | `MathTabItem`, `...` | `TabItem` | полная | Через поиск в дереве Tab/поиск Selected |
 | Tree | `DemoTree` | `Tree` | полная | `SelectTreeItem`, `WaitUntilHasItem` |
 | DateTimePicker | `StartDatePicker`, `EndDatePicker` | `DateTimePicker` | полная (через основной API + fallback по текстовому полю) | `SetDate` |
+| Avalonia DataGrid | `DemoDataGrid` | `Grid` | полный baseline | Shared UI-сценарий строит/выбирает/очищает строки через typed page object |
+| Eremex DataGrid + recorder bridge | визуальный `EremexDemoDataGridControl` + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | полноценное playback-покрытие через bridge/provider | Нативный Eremex UIA остаётся root-only, но recorder `GridHint` мапит Eremex assertions на bridge; Headless/FlaUI providers отдают строки/ячейки bridge как `IGridControl` |
 
 ## Что поддерживается через fallback/особые пути
 
@@ -135,18 +139,18 @@ Not added: separate scenarios for `Calendar`, `DataGrid`, `CalendarDatePicker` s
 | Контрол | Статус | Что не хватает |
 |---|---|---|
 | Calendar | `Calendar` (enum 11) | Нет контролла на UI, можно добавить отдельный вклад/сценарий `Date selection` |
-| DataGrid / DataGridView / Grid / GridRow / GridCell | перечислены | Нет DataGrid в UI, нет `WaitUntil` для row/cell/адресации ячеек |
+| Нативная Eremex DataGrid row/cell UIA | закрыто bridge-слоем | Нативный Eremex `DataGridControl` всё ещё не отдаёт стабильные row/cell UIA; для recorder-generated assertions используется `EremexDemoDataGridAutomationBridge` |
 
 ## Что из списка docs на текущий момент не включено в demo
 
 По текущему roadmap этого репозитория в showcase есть: math, mix-логика, date, hierarchy.
-Не добавлены: отдельные сценарии для `Calendar`, `DataGrid`, `CalendarDatePicker`-подварианты,
+Не добавлены: `CalendarDatePicker`-подварианты и нативная row/cell UIA для Eremex DataGrid,
 `ListBox`/`Tree` уже закрыты, но без углубления в массовую навигацию по всем типам `IText` и т.п.
 
 ## Что дальше (рекомендуемый следующий шаг)
 
 1. Оставить текущий минимальный set как stable baseline.
-2. Добавить отдельный вклад `DataGrid` в `MainWindow.axaml` с простым `DataGrid` и тестами чтения числа строк/значений.
+2. Держать стандартный Avalonia `DataGrid` как native typed grid baseline; для recorder-generated row/cell сценариев Eremex использовать bridge/provider, пока Eremex не отдаёт стабильные native UIA row/cell patterns.
 3. Добавить вклад `Calendar` и базовую проверку выбора даты/валидации.
 4. Для каждого нового контрола:
    - добавить `UiControl` в `MainWindowPage`,

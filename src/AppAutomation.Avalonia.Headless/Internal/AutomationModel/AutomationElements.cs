@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reflection;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Interactivity;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
@@ -787,10 +788,15 @@ internal class Grid : AutomationElement
             return Array.Empty<GridRow>();
         }
 
+        var columnBindings = dataGrid.Columns
+            .OfType<DataGridBoundColumn>()
+            .Select(static column => column.Binding)
+            .ToArray();
+
         var rows = new List<GridRow>();
         foreach (var item in source)
         {
-            rows.Add(new GridRow(item));
+            rows.Add(new GridRow(item, columnBindings));
         }
 
         return rows.ToArray();
@@ -806,12 +812,15 @@ internal class DataGridView : Grid
 
 internal class GridRow
 {
-    internal GridRow(object? item)
+    internal GridRow(object? item, IReadOnlyList<IBinding?> columnBindings)
     {
         Item = item;
+        ColumnBindings = columnBindings;
     }
 
     private object? Item { get; }
+
+    private IReadOnlyList<IBinding?> ColumnBindings { get; }
 
     public GridCell[] Cells
     {
@@ -825,6 +834,13 @@ internal class GridRow
             if (Item is string value)
             {
                 return [new GridCell(value)];
+            }
+
+            if (ColumnBindings.Count > 0)
+            {
+                return ColumnBindings
+                    .Select(binding => new GridCell(ReadBoundValue(Item, binding)))
+                    .ToArray();
             }
 
             var properties = Item
@@ -847,6 +863,40 @@ internal class GridRow
                 })
                 .ToArray();
         }
+    }
+
+    private static string ReadBoundValue(object item, IBinding? binding)
+    {
+        if (binding is Binding { Path: { } path } && !string.IsNullOrWhiteSpace(path))
+        {
+            return ReadPropertyPath(item, path);
+        }
+
+        return item.ToString() ?? string.Empty;
+    }
+
+    private static string ReadPropertyPath(object item, string path)
+    {
+        object? current = item;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is null)
+            {
+                return string.Empty;
+            }
+
+            var property = current
+                .GetType()
+                .GetProperty(segment, BindingFlags.Public | BindingFlags.Instance);
+            if (property is null || !property.CanRead)
+            {
+                return string.Empty;
+            }
+
+            current = property.GetValue(current);
+        }
+
+        return current?.ToString() ?? string.Empty;
     }
 }
 

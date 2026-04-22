@@ -1,7 +1,9 @@
+using System.Collections;
 using AppAutomation.Abstractions;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -331,6 +333,11 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("No control is available for assertion capture.");
         }
 
+        if (TryCreateGridAssertionStep(source, mode, out var gridResult))
+        {
+            return gridResult;
+        }
+
         foreach (var extractor in _assertionExtractors)
         {
             if (!extractor.TryCreate(source, mode, out var candidate) || candidate is null)
@@ -361,6 +368,64 @@ internal sealed class RecorderStepFactory
         }
 
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
+    }
+
+    private bool TryCreateGridAssertionStep(Control source, RecorderAssertionMode mode, out StepCreationResult result)
+    {
+        result = StepCreationResult.Unsupported("Recorder could not derive a supported grid assertion for this control.");
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        {
+            return false;
+        }
+
+        if (!TryResolveGridHint(source, out var hint, out var gridSource))
+        {
+            return false;
+        }
+
+        var locatorResult = _selectorResolver.Resolve(gridSource, UiControlType.Grid);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            result = StepCreationResult.Unsupported(locatorResult.Message);
+            return true;
+        }
+
+        if (!TryReadItemsSource(gridSource, out var items) || items.Count == 0)
+        {
+            result = StepCreationResult.Unsupported("Configured grid source does not expose a non-empty ItemsSource to record.");
+            return true;
+        }
+
+        if (TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var columnIndex, out var cellValue))
+        {
+            result = CreateStep(
+                source,
+                new RecordedStep(
+                    RecordedActionKind.WaitUntilGridCellEquals,
+                    locatorResult.Control,
+                    StringValue: cellValue,
+                    Warning: locatorResult.Control.Warning,
+                    ValidationStatus: locatorResult.ValidationStatus,
+                    ValidationMessage: locatorResult.ValidationMessage,
+                    CanPersist: locatorResult.CanPersist,
+                    RowIndex: rowIndex,
+                    ColumnIndex: columnIndex),
+                locatorResult.Message);
+            return true;
+        }
+
+        result = CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.WaitUntilGridRowsAtLeast,
+                locatorResult.Control,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist,
+                IntValue: items.Count),
+            locatorResult.Message);
+        return true;
     }
 
     private RecorderActionHint TryResolveActionHint(Control control, string locatorValue)
@@ -421,6 +486,163 @@ internal sealed class RecorderStepFactory
             Button button => button.Content?.ToString(),
             _ => AutomationProperties.GetName(control)
         };
+    }
+
+    private bool TryResolveGridHint(Control source, out RecorderGridHint hint, out Control gridSource)
+    {
+        for (Control? current = source; current is not null; current = current.GetVisualParent() as Control)
+        {
+            if (current is Window)
+            {
+                break;
+            }
+
+            foreach (var candidate in _options.GridHints)
+            {
+                if (TryGetLocator(current, candidate.SourceLocatorKind, out var locatorValue)
+                    && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
+                {
+                    hint = candidate;
+                    gridSource = current;
+                    return true;
+                }
+            }
+        }
+
+        hint = null!;
+        gridSource = null!;
+        return false;
+    }
+
+    private static bool TryResolveGridCell(
+        Control source,
+        Control gridSource,
+        RecorderGridHint hint,
+        IReadOnlyList<object?> items,
+        out int rowIndex,
+        out int columnIndex,
+        out string cellValue)
+    {
+        rowIndex = -1;
+        columnIndex = -1;
+        cellValue = string.Empty;
+
+        if (hint.ColumnPropertyNames.Count == 0)
+        {
+            return false;
+        }
+
+        var observedText = ExtractTextValue(source)?.Trim();
+        if (string.IsNullOrWhiteSpace(observedText))
+        {
+            return false;
+        }
+
+        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        {
+            var dataContext = current.DataContext;
+            if (dataContext is null || !TryFindItemIndex(items, dataContext, out rowIndex, out var item))
+            {
+                continue;
+            }
+
+            for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
+            {
+                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[candidateColumnIndex], out var candidateValue))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(candidateValue, observedText, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                columnIndex = candidateColumnIndex;
+                cellValue = candidateValue;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadItemsSource(Control control, out IReadOnlyList<object?> items)
+    {
+        var itemsSourceProperty = control.GetType().GetProperty("ItemsSource");
+        var itemsValue = itemsSourceProperty?.GetValue(control);
+        if (itemsValue is null)
+        {
+            var itemsProperty = control.GetType().GetProperty("Items");
+            itemsValue = itemsProperty?.GetValue(control);
+        }
+
+        if (itemsValue is IEnumerable enumerable and not string)
+        {
+            items = enumerable.Cast<object?>().ToArray();
+            return true;
+        }
+
+        items = Array.Empty<object?>();
+        return false;
+    }
+
+    private static bool TryFindItemIndex(
+        IReadOnlyList<object?> items,
+        object dataContext,
+        out int rowIndex,
+        out object item)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            var candidate = items[i];
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(candidate, dataContext) || candidate.Equals(dataContext))
+            {
+                rowIndex = i;
+                item = candidate;
+                return true;
+            }
+        }
+
+        rowIndex = -1;
+        item = null!;
+        return false;
+    }
+
+    private static bool TryReadPropertyValue(object item, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            return false;
+        }
+
+        var property = item.GetType().GetProperty(propertyName.Trim());
+        if (property is null)
+        {
+            return false;
+        }
+
+        value = property.GetValue(item)?.ToString() ?? string.Empty;
+        return true;
+    }
+
+    private static bool TryGetLocator(Control control, UiLocatorKind locatorKind, out string locator)
+    {
+        locator = locatorKind switch
+        {
+            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(control) ?? string.Empty,
+            UiLocatorKind.Name => AutomationProperties.GetName(control) ?? control.Name ?? string.Empty,
+            _ => string.Empty
+        };
+
+        locator = locator.Trim();
+        return !string.IsNullOrWhiteSpace(locator);
     }
 
     private static string? ExtractTreeSelectionText(object? selectedItem)

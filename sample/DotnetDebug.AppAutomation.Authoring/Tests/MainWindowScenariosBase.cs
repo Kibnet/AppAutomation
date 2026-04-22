@@ -239,6 +239,31 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task DataGrid_EremexRecorderBridge_GeneratedFlowWorks()
+    {
+        Page
+            .SelectTabItem(p => p.DataGridTabItem)
+            .EnterText(p => p.DataGridRowsInput, "5")
+            .ClickButton(p => p.BuildGridButton)
+            .WaitUntilNameEquals(p => p.GridResultLabel, "Grid rows: 5")
+            .WaitUntilGridRowsAtLeast(p => p.EremexDemoDataGridAutomationBridge, 5)
+            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 0, "EX-R3")
+            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 1, "EX-13")
+            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 2, "EX-Odd")
+            .WaitUntilIsEnabled(p => p.EremexDemoDataGrid, true);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
+            await Assert.That(Page.EremexDemoDataGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
+            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
+            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("EX-13");
+            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("EX-Odd");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task DateTime_InvalidRange_ShowsValidation()
     {
         Page

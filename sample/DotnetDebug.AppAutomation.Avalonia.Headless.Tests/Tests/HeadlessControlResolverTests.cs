@@ -71,4 +71,30 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(selectableList!.SelectedItemText).IsEqualTo("Fibonacci");
         }
     }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ResolveEremexDataGridBridge_ByAutomationId_ReadsRowsAndCells()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "5")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
+            .WaitUntilGridRowsAtLeast(static candidate => candidate.EremexDemoDataGridAutomationBridge, 5)
+            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 0, "EX-R3")
+            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 1, "EX-13")
+            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 2, "EX-Odd");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
+            await Assert.That(page.EremexDemoDataGrid.IsEnabled).IsEqualTo(true);
+            await Assert.That(page.EremexDemoDataGridAutomationBridge.Rows.Count >= 5).IsEqualTo(true);
+            await Assert.That(page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
+        }
+    }
 }

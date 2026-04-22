@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
         xmlns:local="clr-namespace:DotnetDebug.Avalonia"
+        xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
         x:CompileBindings="False"
         mc:Ignorable="d"
         d:DesignWidth="920" d:DesignHeight="620"
@@ -376,29 +377,118 @@
                     </Grid>
                 </StackPanel>
 
-                <DataGrid x:Name="DemoDataGrid"
-                          Grid.Row="2"
-                          automation:AutomationProperties.AutomationId="DemoDataGrid"
-                          SelectionMode="Single"
-                          HeadersVisibility="All"
-                          ItemsSource="{Binding DataGridRows}"
-                          SelectedItem="{Binding SelectedDataGridRow, Mode=TwoWay}"
-                          IsReadOnly="True">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Row"
-                                            Width="70"
-                                            x:DataType="local:DataGridRowViewModel"
-                                            Binding="{Binding Row}" />
-                        <DataGridTextColumn Header="Value"
-                                            Width="Auto"
-                                            x:DataType="local:DataGridRowViewModel"
-                                            Binding="{Binding Value}" />
-                        <DataGridTextColumn Header="Parity"
-                                            Width="Auto"
-                                            x:DataType="local:DataGridRowViewModel"
-                                            Binding="{Binding Parity}" />
-                    </DataGrid.Columns>
-                </DataGrid>
+                <Grid Grid.Row="2" RowDefinitions="Auto,120,2*" RowSpacing="6">
+                    <TextBlock Grid.Row="0" FontSize="14" FontWeight="SemiBold" Text="Avalonia DataGrid" />
+                    <DataGrid x:Name="DemoDataGrid"
+                              Grid.Row="1"
+                              automation:AutomationProperties.AutomationId="DemoDataGrid"
+                              SelectionMode="Single"
+                              HeadersVisibility="All"
+                              ItemsSource="{Binding DataGridRows}"
+                              SelectedItem="{Binding SelectedDataGridRow, Mode=TwoWay}"
+                              IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Row"
+                                                Width="70"
+                                                x:DataType="local:DataGridRowViewModel"
+                                                Binding="{Binding Row}" />
+                            <DataGridTextColumn Header="Value"
+                                                Width="Auto"
+                                                x:DataType="local:DataGridRowViewModel"
+                                                Binding="{Binding Value}" />
+                            <DataGridTextColumn Header="Parity"
+                                                Width="Auto"
+                                                x:DataType="local:DataGridRowViewModel"
+                                                Binding="{Binding Parity}" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <Border Grid.Row="2"
+                            BorderBrush="#444444"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="8">
+                        <Grid RowDefinitions="Auto,*" ColumnDefinitions="*,*" ColumnSpacing="10" RowSpacing="6">
+                            <TextBlock x:Name="EremexDemoDataGrid"
+                                       Grid.Row="0"
+                                       Grid.Column="0"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Text="Eremex DataGrid"
+                                       automation:AutomationProperties.AutomationId="EremexDemoDataGrid" />
+                            <TextBlock Grid.Row="0"
+                                       Grid.Column="1"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Text="Eremex automation bridge" />
+                            <mxdg:DataGridControl x:Name="EremexDemoDataGridControl"
+                                                   Grid.Row="1"
+                                                   Grid.Column="0"
+                                                   automation:AutomationProperties.AutomationId="EremexDemoDataGridControl"
+                                                   ItemsSource="{Binding DataGridRows}">
+                                <mxdg:DataGridControl.Columns>
+                                    <mxdg:GridColumn FieldName="EremexRow" Header="Row" Width="90" />
+                                    <mxdg:GridColumn FieldName="EremexValue" Header="Value" Width="110" />
+                                    <mxdg:GridColumn FieldName="EremexParity" Header="Parity" Width="110" />
+                                </mxdg:DataGridControl.Columns>
+                            </mxdg:DataGridControl>
+                            <Border Grid.Row="1"
+                                    Grid.Column="1"
+                                    BorderBrush="#666666"
+                                    BorderThickness="1"
+                                    MinHeight="160">
+                                <Grid RowDefinitions="Auto,*">
+                                    <Grid Grid.Row="0"
+                                          ColumnDefinitions="90,110,110"
+                                          Background="#F4F4F4">
+                                        <TextBlock Grid.Column="0"
+                                                   Padding="6,4"
+                                                   FontWeight="SemiBold"
+                                                   Text="Row" />
+                                        <TextBlock Grid.Column="1"
+                                                   Padding="6,4"
+                                                   FontWeight="SemiBold"
+                                                   Text="Value" />
+                                        <TextBlock Grid.Column="2"
+                                                   Padding="6,4"
+                                                   FontWeight="SemiBold"
+                                                   Text="Parity" />
+                                    </Grid>
+                                    <ListBox x:Name="EremexDemoDataGridAutomationBridge"
+                                             Grid.Row="1"
+                                             automation:AutomationProperties.AutomationId="EremexDemoDataGridAutomationBridge"
+                                             BorderThickness="0"
+                                             Background="Transparent"
+                                             ItemsSource="{Binding DataGridRows}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="local:DataGridRowViewModel">
+                                                <Grid ColumnDefinitions="90,110,110"
+                                                      MinHeight="28"
+                                                      automation:AutomationProperties.AutomationId="{Binding EremexAutomationRowId}">
+                                                    <TextBlock Grid.Column="0"
+                                                               Padding="6,4"
+                                                               Text="{Binding EremexRow}"
+                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell0Id}"
+                                                               automation:AutomationProperties.Name="{Binding EremexRow}" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Padding="6,4"
+                                                               Text="{Binding EremexValue}"
+                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell1Id}"
+                                                               automation:AutomationProperties.Name="{Binding EremexValue}" />
+                                                    <TextBlock Grid.Column="2"
+                                                               Padding="6,4"
+                                                               Text="{Binding EremexParity}"
+                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell2Id}"
+                                                               automation:AutomationProperties.Name="{Binding EremexParity}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
 
                 <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12">
                     <Label x:Name="GridResultLabel"
