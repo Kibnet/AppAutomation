@@ -37,7 +37,133 @@ public sealed class RecorderTests
             await Assert.That(result.Step).IsNotNull();
             await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SetSpinnerValue);
             await Assert.That(result.Step.DoubleValue).IsEqualTo(10.5);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.TextBox);
             await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("MixCountSpinner");
+        }
+    }
+
+    [Test]
+    public async Task Resolve_AppliesControlHint_ToCustomAutomationId()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.ControlHints.Add(new RecorderControlHint(
+            "ServerSearchComboBox",
+            RecorderActionHint.None,
+            UiControlType.ComboBox));
+        var resolver = new RecorderSelectorResolver(options);
+        var wrapper = new Border();
+        AutomationProperties.SetAutomationId(wrapper, "ServerSearchComboBox");
+
+        var result = resolver.Resolve(wrapper, UiControlType.AutomationElement);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Control).IsNotNull();
+            await Assert.That(result.Control!.ControlType).IsEqualTo(UiControlType.ComboBox);
+            await Assert.That(result.Control.LocatorKind).IsEqualTo(UiLocatorKind.AutomationId);
+            await Assert.That(result.Control.LocatorValue).IsEqualTo("ServerSearchComboBox");
+            await Assert.That(result.Control.FallbackToName).IsEqualTo(false);
+            await Assert.That(result.Control.Warning).Contains("Applied recorder control hint");
+        }
+    }
+
+    [Test]
+    public async Task Resolve_AppliesControlHint_ToNameLocatorMetadata()
+    {
+        var options = new AppAutomationRecorderOptions { AllowNameLocators = true };
+        options.ControlHints.Add(new RecorderControlHint(
+            "PART_RealEditor",
+            RecorderActionHint.None,
+            UiControlType.TextBox,
+            UiLocatorKind.Name,
+            FallbackToName: true));
+        var root = new StackPanel();
+        var wrapper = new Border { Name = "PART_RealEditor" };
+        root.Children.Add(wrapper);
+        var resolver = new RecorderSelectorResolver(options, validationRoot: root);
+
+        var result = resolver.Resolve(wrapper, UiControlType.AutomationElement);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Control).IsNotNull();
+            await Assert.That(result.Control!.ControlType).IsEqualTo(UiControlType.TextBox);
+            await Assert.That(result.Control.LocatorKind).IsEqualTo(UiLocatorKind.Name);
+            await Assert.That(result.Control.LocatorValue).IsEqualTo("PART_RealEditor");
+            await Assert.That(result.Control.FallbackToName).IsEqualTo(true);
+            await Assert.That(result.Control.Warning).Contains("Applied recorder control hint");
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
+            await Assert.That(result.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_UsesHintedControlDescriptor_InUiControlAttribute()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            namespace Sample.Authoring.Pages;
+
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+        var recorderOptions = new AppAutomationRecorderOptions { AllowNameLocators = true };
+        recorderOptions.ControlHints.Add(new RecorderControlHint(
+            "PART_RealEditor",
+            RecorderActionHint.None,
+            UiControlType.TextBox,
+            UiLocatorKind.Name,
+            FallbackToName: true));
+        var wrapper = new Border { Name = "PART_RealEditor" };
+        var resolver = new RecorderSelectorResolver(recorderOptions);
+        var resolved = resolver.Resolve(wrapper, UiControlType.AutomationElement);
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Custom Editor Flow");
+
+        var result = await generator.SaveAsync(
+            CreateWindowStub(),
+            options,
+            [
+                new RecordedStep(
+                    RecordedActionKind.WaitUntilIsEnabled,
+                    resolved.Control!,
+                    BoolValue: true)
+            ],
+            outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolved.Success).IsEqualTo(true);
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNotNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var pageSource = await File.ReadAllTextAsync(result.PageFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"PART_RealEditor\", UiControlType.TextBox, \"PART_RealEditor\", LocatorKind = UiLocatorKind.Name, FallbackToName = true)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains(
+                "Page.WaitUntilIsEnabled(static page => page.PART_RealEditor, true);",
+                StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
 

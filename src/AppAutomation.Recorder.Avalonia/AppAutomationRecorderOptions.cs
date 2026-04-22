@@ -48,7 +48,12 @@ public enum RecorderOverlayTheme
     Dark = 1
 }
 
-public sealed record RecorderControlHint(string LocatorValue, RecorderActionHint ActionHint);
+public sealed record RecorderControlHint(
+    string LocatorValue,
+    RecorderActionHint ActionHint,
+    UiControlType? TargetControlType = null,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool? FallbackToName = null);
 
 public sealed record RecorderLocatorAlias(
     string SourceLocatorValue,

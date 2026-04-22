@@ -104,7 +104,7 @@ internal sealed class RecorderStepFactory
 
         var descriptor = locatorResult.Control;
         var text = textBox.Text ?? string.Empty;
-        if (TryResolveActionHint(textBox, descriptor.LocatorValue) == RecorderActionHint.SpinnerTextBox
+        if (TryResolveActionHint(textBox, descriptor) == RecorderActionHint.SpinnerTextBox
             && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var numericValue))
         {
             return CreateStep(
@@ -428,20 +428,48 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
-    private RecorderActionHint TryResolveActionHint(Control control, string locatorValue)
+    private RecorderActionHint TryResolveActionHint(Control control, RecordedControlDescriptor descriptor)
     {
-        var explicitHint = _options.ControlHints
-            .FirstOrDefault(candidate => string.Equals(candidate.LocatorValue, locatorValue, StringComparison.Ordinal));
-        if (explicitHint is not null)
+        if (TryResolveActionHint(descriptor.LocatorValue, descriptor.LocatorKind, out var actionHint))
         {
-            return explicitHint.ActionHint;
+            return actionHint;
         }
 
         var automationId = AutomationProperties.GetAutomationId(control);
+        if (!string.IsNullOrWhiteSpace(automationId)
+            && TryResolveActionHint(automationId.Trim(), UiLocatorKind.AutomationId, out actionHint))
+        {
+            return actionHint;
+        }
+
+        if (TryGetLocator(control, UiLocatorKind.Name, out var nameLocator)
+            && TryResolveActionHint(nameLocator, UiLocatorKind.Name, out actionHint))
+        {
+            return actionHint;
+        }
+
         return !string.IsNullOrWhiteSpace(automationId)
                && automationId.Contains("Spinner", StringComparison.OrdinalIgnoreCase)
             ? RecorderActionHint.SpinnerTextBox
             : RecorderActionHint.None;
+    }
+
+    private bool TryResolveActionHint(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        out RecorderActionHint actionHint)
+    {
+        var explicitHint = _options.ControlHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == locatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), locatorValue, StringComparison.Ordinal));
+        if (explicitHint is not null)
+        {
+            actionHint = explicitHint.ActionHint;
+            return true;
+        }
+
+        actionHint = RecorderActionHint.None;
+        return false;
     }
 
     private static UiControlType? ClassifyTextAssertionType(Control control)
