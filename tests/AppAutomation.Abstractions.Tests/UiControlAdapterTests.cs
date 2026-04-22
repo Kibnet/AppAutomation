@@ -324,6 +324,101 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task ShellNavigationAdapter_OpensPaneThroughTreeNavigation()
+    {
+        var activePaneLabel = new FakeLabelControl("ActivePaneTitle", "Home");
+        var customersNode = new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers")
+        {
+            OnSelect = () => activePaneLabel.Text = "Customers"
+        };
+        var navigationTree = new FakeTreeControl("MainNavigation", customersNode);
+        var resolver = new FakeResolver(
+            ("MainNavigation", navigationTree),
+            ("ActivePaneTitle", activePaneLabel))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "MainNavigation",
+                    activePaneLabelAutomationId: "ActivePaneTitle"));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers", ShellPaneNavigationMode.Open));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(customersNode.SelectCount).IsEqualTo(1);
+            await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpensPaneThroughSelectableListNavigation()
+    {
+        var navigationList = new FakeSelectableListBoxControl(
+            "ShellNavigationList",
+            [
+                new FakeListBoxItem("Customers", "Customers"),
+                new FakeListBoxItem("Reports", "Reports")
+            ]);
+        var resolver = new FakeResolver(("ShellNavigationList", navigationList))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "ShellNavigationList",
+                    navigationKind: ShellNavigationSourceKind.ListBox));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Reports", ShellPaneNavigationMode.Open));
+
+        await Assert.That(navigationList.SelectedItemText).IsEqualTo("Reports");
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpenOrActivatePrefersExistingPaneTab()
+    {
+        var customersNode = new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers");
+        var navigationTree = new FakeTreeControl("MainNavigation", customersNode);
+        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers");
+        var homeTab = new FakeTabItemControl("HomePaneTab", "Home") { IsSelected = true };
+        var paneTabs = new FakeTabControl("DockPaneTabs", homeTab, customersTab);
+        var resolver = new FakeResolver(
+            ("MainNavigation", navigationTree),
+            ("DockPaneTabs", paneTabs))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "MainNavigation",
+                    paneTabsAutomationId: "DockPaneTabs"));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers"));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(customersNode.SelectCount).IsEqualTo(0);
+            await Assert.That(customersTab.IsSelected).IsEqualTo(true);
+            await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_ThrowsWhenActivationTabsAreMissing()
+    {
+        var navigationTree = new FakeTreeControl(
+            "MainNavigation",
+            new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers"));
+        var resolver = new FakeResolver(("MainNavigation", navigationTree))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds("MainNavigation"));
+        var page = new WorkflowPage(resolver);
+
+        await Assert.That(() => page.Shell.OpenOrActivate(
+                new ShellPaneNavigationRequest("Customers", ShellPaneNavigationMode.Activate)))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()
@@ -448,6 +543,13 @@ public sealed class UiControlAdapterTests
             "ReportExport",
             UiLocatorKind.AutomationId,
             FallbackToName: false);
+
+        public static UiControlDefinition Shell { get; } = new(
+            "Shell",
+            UiControlType.ShellNavigation,
+            "Shell",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
     }
 
     private sealed class FilterPage : UiPage
@@ -474,6 +576,8 @@ public sealed class UiControlAdapterTests
         public INotificationControl ExportToast => Resolve<INotificationControl>(WorkflowPageDefinitions.ExportToast);
 
         public IFolderExportControl ReportExport => Resolve<IFolderExportControl>(WorkflowPageDefinitions.ReportExport);
+
+        public IShellNavigationControl Shell => Resolve<IShellNavigationControl>(WorkflowPageDefinitions.Shell);
     }
 
     private sealed class FakeResolver : IUiControlResolver
@@ -537,7 +641,11 @@ public sealed class UiControlAdapterTests
             Name = text;
         }
 
-        public string Text { get; }
+        public string Text
+        {
+            get => Name;
+            set => Name = value;
+        }
     }
 
     private sealed class FakeButtonControl : FakeControlBase, IButtonControl
@@ -609,6 +717,143 @@ public sealed class UiControlAdapterTests
     }
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
+
+    private sealed class FakeTabControl : FakeControlBase, ITabControl
+    {
+        private readonly IReadOnlyList<FakeTabItemControl> _items;
+
+        public FakeTabControl(string automationId, params FakeTabItemControl[] items)
+            : base(automationId)
+        {
+            _items = items;
+        }
+
+        public IReadOnlyList<ITabItemControl> Items => _items;
+
+        public void SelectTabItem(string itemText)
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var item = _items.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate.Name), normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeLookupText(candidate.AutomationId), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Tab item '{itemText}' was not found.");
+
+            foreach (var candidate in _items)
+            {
+                candidate.IsSelected = false;
+            }
+
+            item.SelectTab();
+        }
+    }
+
+    private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl
+    {
+        public FakeTabItemControl(string automationId, string name)
+            : base(automationId)
+        {
+            Name = name;
+        }
+
+        public bool IsSelected { get; set; }
+
+        public void SelectTab()
+        {
+            IsSelected = true;
+        }
+    }
+
+    private sealed class FakeTreeControl : FakeControlBase, ITreeControl
+    {
+        public FakeTreeControl(string automationId, params ITreeItemControl[] items)
+            : base(automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<ITreeItemControl> Items { get; }
+
+        public ITreeItemControl? SelectedTreeItem { get; private set; }
+
+        public void Select(FakeTreeItemControl item)
+        {
+            SelectedTreeItem = item;
+        }
+    }
+
+    private sealed class FakeTreeItemControl : FakeControlBase, ITreeItemControl
+    {
+        private IReadOnlyList<ITreeItemControl> _items = Array.Empty<ITreeItemControl>();
+
+        public FakeTreeItemControl(string automationId, string name, string text)
+            : base(automationId)
+        {
+            Name = name;
+            Text = text;
+        }
+
+        public bool IsSelected { get; set; }
+
+        public string Text { get; }
+
+        public IReadOnlyList<ITreeItemControl> Items => _items;
+
+        public int SelectCount { get; private set; }
+
+        public Action? OnSelect { get; init; }
+
+        public void SetItems(params ITreeItemControl[] items)
+        {
+            _items = items;
+        }
+
+        public void Expand()
+        {
+        }
+
+        public void SelectNode()
+        {
+            SelectCount++;
+            IsSelected = true;
+            OnSelect?.Invoke();
+        }
+    }
+
+    private sealed class FakeSelectableListBoxControl : FakeControlBase, ISelectableListBoxControl
+    {
+        public FakeSelectableListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<IListBoxItem> Items { get; }
+
+        public string? SelectedItemText { get; private set; }
+
+        public void SelectItem(string itemText)
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var item = Items.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate.Text), normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeLookupText(candidate.Name), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"List item '{itemText}' was not found.");
+
+            SelectedItemText = item.Text ?? item.Name;
+        }
+    }
+
+    private sealed record FakeListBoxItem(string? Text, string? Name) : IListBoxItem;
+
+    private static string NormalizeLookupText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
 
     private sealed class MinimalResolver : IUiControlResolver
     {

@@ -645,6 +645,87 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Navigates to a shell pane using the requested navigation mode.
+    /// </summary>
+    public static TSelf NavigateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        ShellPaneNavigationMode mode = ShellPaneNavigationMode.OpenOrActivate,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, mode),
+            timeoutMs,
+            nameof(NavigateShellPane));
+    }
+
+    /// <summary>
+    /// Opens a shell pane through the configured navigation source.
+    /// </summary>
+    public static TSelf OpenShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.Open),
+            timeoutMs,
+            nameof(OpenShellPane));
+    }
+
+    /// <summary>
+    /// Activates an already-open shell pane.
+    /// </summary>
+    public static TSelf ActivateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.Activate),
+            timeoutMs,
+            nameof(ActivateShellPane));
+    }
+
+    /// <summary>
+    /// Activates an already-open shell pane or opens it when no matching pane is open.
+    /// </summary>
+    public static TSelf OpenOrActivateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.OpenOrActivate),
+            timeoutMs,
+            nameof(OpenOrActivateShellPane));
+    }
+
+    /// <summary>
     /// Selects a specific tab item control directly.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1843,6 +1924,65 @@ public static class UiPageExtensions
         return page;
     }
 
+    private static TSelf ExecuteShellNavigation<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        ShellPaneNavigationRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.PaneName);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var shell = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => shell.IsEnabled,
+                timeoutMs,
+                $"Shell navigation '{shell.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={shell.IsEnabled}",
+                actionName);
+
+            shell.OpenOrActivate(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Shell navigation '{shell.AutomationId}' failed to navigate to pane '{request.PaneName}'.",
+                expectedValue: DescribeShellNavigationRequest(request),
+                lastObservedValueFactory: () => DescribeShellNavigationState(ReadShellNavigationState(shell)),
+                actionName,
+                ex);
+        }
+
+        var stateAfterNavigation = ReadShellNavigationState(shell);
+        if (stateAfterNavigation.IsObservable)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => ShellNavigationReached(shell, request.PaneName),
+                timeoutMs,
+                $"Shell navigation '{shell.AutomationId}' did not reach expected pane.",
+                expectedValue: request.PaneName,
+                lastObservedValueFactory: () => DescribeShellNavigationState(ReadShellNavigationState(shell)),
+                actionName);
+        }
+
+        return page;
+    }
+
     private static bool DateBoundMatches(DateTime? actual, DateTime? expected)
     {
         return expected is null || actual?.Date == expected.Value.Date;
@@ -1899,6 +2039,54 @@ public static class UiPageExtensions
     private static string ReadFolderExportValue(IFolderExportControl export)
     {
         return $"folder={export.SelectedFolderPath ?? "<none>"}, status={export.StatusText ?? "<none>"}";
+    }
+
+    private static string DescribeShellNavigationRequest(ShellPaneNavigationRequest request)
+    {
+        return $"{request.Mode}: pane='{request.PaneName}'";
+    }
+
+    private static bool ShellNavigationReached(IShellNavigationControl shell, string paneName)
+    {
+        var state = ReadShellNavigationState(shell);
+        if (!string.IsNullOrWhiteSpace(state.Error))
+        {
+            throw new InvalidOperationException(state.Error);
+        }
+
+        return ShellPaneNameMatches(state.ActivePaneName, paneName)
+            || state.OpenPaneNames.Any(openPaneName => ShellPaneNameMatches(openPaneName, paneName));
+    }
+
+    private static ShellNavigationState ReadShellNavigationState(IShellNavigationControl shell)
+    {
+        try
+        {
+            return new ShellNavigationState(
+                shell.ActivePaneName,
+                shell.OpenPaneNames.Where(static value => !string.IsNullOrWhiteSpace(value)).ToArray(),
+                Error: null);
+        }
+        catch (Exception ex)
+        {
+            return new ShellNavigationState(null, Array.Empty<string>(), ex.Message);
+        }
+    }
+
+    private static string DescribeShellNavigationState(ShellNavigationState state)
+    {
+        if (!string.IsNullOrWhiteSpace(state.Error))
+        {
+            return $"error={state.Error}";
+        }
+
+        return $"active={state.ActivePaneName ?? "<none>"}, open=[{string.Join(", ", state.OpenPaneNames)}]";
+    }
+
+    private static bool ShellPaneNameMatches(string? actual, string expected)
+    {
+        return !string.IsNullOrWhiteSpace(actual)
+            && string.Equals(NormalizeLookupText(actual), NormalizeLookupText(expected), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatDateBound(DateTime? value)
@@ -2324,5 +2512,16 @@ public static class UiPageExtensions
         }
 
         return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
+
+    private sealed record ShellNavigationState(
+        string? ActivePaneName,
+        IReadOnlyList<string> OpenPaneNames,
+        string? Error)
+    {
+        public bool IsObservable =>
+            !string.IsNullOrWhiteSpace(Error)
+            || !string.IsNullOrWhiteSpace(ActivePaneName)
+            || OpenPaneNames.Count > 0;
     }
 }

@@ -63,9 +63,9 @@
 - Control: Eremex docking shell
 - Scenario: Open/switch business pages through the real shell
 - Description: Add generic shell/docking navigation helpers based on stable automation anchors without taking a hard dependency on Eremex.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-007-shell-docking-navigation.md
+- LastStep: completed
 - DoneCriteria: Navigation helpers can select/open named panes or explicitly report unsupported runtime capabilities; tests cover helper behavior.
 
 ## AAR-008 Matrix Gap Status Update

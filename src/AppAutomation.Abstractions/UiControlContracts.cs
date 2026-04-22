@@ -536,6 +536,79 @@ public interface IFolderExportControl : IUiControl
 }
 
 /// <summary>
+/// Describes how shell navigation should handle the requested pane.
+/// </summary>
+public enum ShellPaneNavigationMode
+{
+    /// <summary>
+    /// Activate an already-open pane when possible; otherwise open it through the navigation source.
+    /// </summary>
+    OpenOrActivate = 0,
+
+    /// <summary>
+    /// Open the pane through the navigation source.
+    /// </summary>
+    Open = 1,
+
+    /// <summary>
+    /// Activate an already-open pane.
+    /// </summary>
+    Activate = 2
+}
+
+/// <summary>
+/// Describes which primitive control is used as the shell navigation source.
+/// </summary>
+public enum ShellNavigationSourceKind
+{
+    /// <summary>
+    /// A tree control is used as the navigation source.
+    /// </summary>
+    Tree = 0,
+
+    /// <summary>
+    /// A selectable list box is used as the navigation source.
+    /// </summary>
+    ListBox = 1,
+
+    /// <summary>
+    /// A tab control is used as the navigation source.
+    /// </summary>
+    Tab = 2
+}
+
+/// <summary>
+/// Describes a shell pane navigation request.
+/// </summary>
+/// <param name="PaneName">The visible pane or navigation item name.</param>
+/// <param name="Mode">How to open or activate the pane.</param>
+public sealed record ShellPaneNavigationRequest(
+    string PaneName,
+    ShellPaneNavigationMode Mode = ShellPaneNavigationMode.OpenOrActivate);
+
+/// <summary>
+/// Represents application shell navigation over stable page and pane anchors.
+/// </summary>
+public interface IShellNavigationControl : IUiControl
+{
+    /// <summary>
+    /// Gets the active pane name when it can be observed.
+    /// </summary>
+    string? ActivePaneName { get; }
+
+    /// <summary>
+    /// Gets the names of currently open panes when they can be observed.
+    /// </summary>
+    IReadOnlyList<string> OpenPaneNames { get; }
+
+    /// <summary>
+    /// Opens or activates the requested shell pane.
+    /// </summary>
+    /// <param name="request">The navigation request.</param>
+    void OpenOrActivate(ShellPaneNavigationRequest request);
+}
+
+/// <summary>
 /// Represents an individual tab within a <see cref="ITabControl"/>.
 /// </summary>
 public interface ITabItemControl : IUiControl

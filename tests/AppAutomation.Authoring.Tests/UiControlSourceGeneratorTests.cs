@@ -28,6 +28,7 @@ namespace Sample.Pages;
 [UiControl("DeleteDialog", UiControlType.Dialog, "DeleteDialog")]
 [UiControl("ExportToast", UiControlType.Notification, "ExportToast")]
 [UiControl("ReportExport", UiControlType.FolderExport, "ReportExport")]
+[UiControl("Shell", UiControlType.ShellNavigation, "Shell")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -54,6 +55,7 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IDialogControl DeleteDialog => Resolve<global::AppAutomation.Abstractions.IDialogControl>(MainWindowPageDefinitions.DeleteDialog);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.INotificationControl ExportToast => Resolve<global::AppAutomation.Abstractions.INotificationControl>(MainWindowPageDefinitions.ExportToast);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IFolderExportControl ReportExport => Resolve<global::AppAutomation.Abstractions.IFolderExportControl>(MainWindowPageDefinitions.ReportExport);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IShellNavigationControl Shell => Resolve<global::AppAutomation.Abstractions.IShellNavigationControl>(MainWindowPageDefinitions.Shell);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");

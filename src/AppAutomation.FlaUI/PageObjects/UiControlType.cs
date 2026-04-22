@@ -31,5 +31,6 @@ public enum UiControlType
     NumericRangeFilter = 26,
     Dialog = 27,
     Notification = 28,
-    FolderExport = 29
+    FolderExport = 29,
+    ShellNavigation = 30
 }

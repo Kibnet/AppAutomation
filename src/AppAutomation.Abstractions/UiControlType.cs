@@ -157,5 +157,10 @@ public enum UiControlType
     /// <summary>
     /// A composite folder export flow. Maps to <see cref="IFolderExportControl"/>.
     /// </summary>
-    FolderExport = 29
+    FolderExport = 29,
+
+    /// <summary>
+    /// A shell/docking navigation control. Maps to <see cref="IShellNavigationControl"/>.
+    /// </summary>
+    ShellNavigation = 30
 }

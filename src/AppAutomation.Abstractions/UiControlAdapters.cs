@@ -260,6 +260,40 @@ public sealed record FolderExportControlParts(
 }
 
 /// <summary>
+/// Configuration for composing shell navigation from stable primitive controls.
+/// </summary>
+/// <param name="NavigationLocator">The locator for the navigation source used to open panes.</param>
+/// <param name="PaneTabsLocator">Optional locator for the tab control containing open panes.</param>
+/// <param name="ActivePaneLabelLocator">Optional locator for a label containing the active pane title.</param>
+/// <param name="NavigationKind">The primitive control kind used by the navigation source.</param>
+/// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
+/// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+public sealed record ShellNavigationParts(
+    string NavigationLocator,
+    string? PaneTabsLocator = null,
+    string? ActivePaneLabelLocator = null,
+    ShellNavigationSourceKind NavigationKind = ShellNavigationSourceKind.Tree,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Creates a <see cref="ShellNavigationParts"/> configuration using automation IDs.
+    /// </summary>
+    public static ShellNavigationParts ByAutomationIds(
+        string navigationAutomationId,
+        string? paneTabsAutomationId = null,
+        string? activePaneLabelAutomationId = null,
+        ShellNavigationSourceKind navigationKind = ShellNavigationSourceKind.Tree)
+    {
+        return new ShellNavigationParts(
+            navigationAutomationId,
+            paneTabsAutomationId,
+            activePaneLabelAutomationId,
+            navigationKind);
+    }
+}
+
+/// <summary>
 /// Extension methods for configuring <see cref="IUiControlResolver"/> with adapters.
 /// </summary>
 public static class UiControlResolverExtensions
@@ -391,6 +425,21 @@ public static class UiControlResolverExtensions
         ArgumentNullException.ThrowIfNull(parts);
 
         return innerResolver.WithAdapters(new FolderExportControlAdapter(propertyName, parts));
+    }
+
+    /// <summary>
+    /// Registers a shell navigation composite control for a specific property.
+    /// </summary>
+    public static IUiControlResolver WithShellNavigation(
+        this IUiControlResolver innerResolver,
+        string propertyName,
+        ShellNavigationParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentNullException.ThrowIfNull(parts);
+
+        return innerResolver.WithAdapters(new ShellNavigationControlAdapter(propertyName, parts));
     }
 
     /// <summary>
@@ -1389,6 +1438,282 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
                 locatorValue,
                 _parts.LocatorKind,
                 _parts.FallbackToName);
+        }
+    }
+}
+
+/// <summary>
+/// An adapter that creates composite <see cref="IShellNavigationControl"/> instances from primitive controls.
+/// </summary>
+public sealed class ShellNavigationControlAdapter : IUiControlAdapter
+{
+    private readonly string _propertyName;
+    private readonly ShellNavigationParts _parts;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ShellNavigationControlAdapter"/> class.
+    /// </summary>
+    public ShellNavigationControlAdapter(string propertyName, ShellNavigationParts parts)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            throw new ArgumentException("Property name is required.", nameof(propertyName));
+        }
+
+        _propertyName = propertyName.Trim();
+        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    /// <inheritdoc />
+    public bool CanResolve(Type requestedType, UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return requestedType == typeof(IShellNavigationControl)
+            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+    {
+        ArgumentNullException.ThrowIfNull(requestedType);
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(innerResolver);
+
+        return new ShellNavigationControl(definition.PropertyName, _parts, innerResolver);
+    }
+
+    private sealed class ShellNavigationControl : IShellNavigationControl
+    {
+        private readonly ShellNavigationParts _parts;
+        private readonly IUiControlResolver _innerResolver;
+
+        public ShellNavigationControl(string automationId, ShellNavigationParts parts, IUiControlResolver innerResolver)
+        {
+            AutomationId = automationId;
+            _parts = parts;
+            _innerResolver = innerResolver;
+        }
+
+        public string AutomationId { get; }
+
+        public string Name => ActivePaneName ?? AutomationId;
+
+        public bool IsEnabled => ResolveNavigationSource().IsEnabled;
+
+        public string? ActivePaneName
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(_parts.ActivePaneLabelLocator))
+                {
+                    return ResolveLabel("ActivePaneLabel", _parts.ActivePaneLabelLocator).Text;
+                }
+
+                var selectedTab = ResolvePaneTabsOrDefault()?.Items
+                    .FirstOrDefault(static item => item.IsSelected);
+                return selectedTab is null ? null : GetDisplayText(selectedTab);
+            }
+        }
+
+        public IReadOnlyList<string> OpenPaneNames =>
+            ResolvePaneTabsOrDefault()?.Items
+                .Select(GetDisplayText)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray()
+            ?? Array.Empty<string>();
+
+        public void OpenOrActivate(ShellPaneNavigationRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.PaneName);
+
+            switch (request.Mode)
+            {
+                case ShellPaneNavigationMode.Open:
+                    OpenPane(request.PaneName);
+                    break;
+                case ShellPaneNavigationMode.Activate:
+                    ActivatePane(request.PaneName);
+                    break;
+                case ShellPaneNavigationMode.OpenOrActivate:
+                    if (!TryActivateOpenPane(request.PaneName))
+                    {
+                        OpenPane(request.PaneName);
+                    }
+
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(request), request.Mode, "Unsupported shell navigation mode.");
+            }
+        }
+
+        private bool TryActivateOpenPane(string paneName)
+        {
+            var matchingPaneName = FindOpenPaneName(paneName);
+            if (matchingPaneName is null)
+            {
+                return false;
+            }
+
+            ActivatePane(matchingPaneName);
+            return true;
+        }
+
+        private string? FindOpenPaneName(string paneName)
+        {
+            var normalizedPaneName = NormalizeLookupText(paneName);
+            return OpenPaneNames.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate), normalizedPaneName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void OpenPane(string paneName)
+        {
+            switch (_parts.NavigationKind)
+            {
+                case ShellNavigationSourceKind.Tree:
+                    SelectTreeItem(ResolveTree("Navigation", _parts.NavigationLocator), paneName);
+                    break;
+                case ShellNavigationSourceKind.ListBox:
+                    SelectListItem(ResolveListBox("Navigation", _parts.NavigationLocator), paneName);
+                    break;
+                case ShellNavigationSourceKind.Tab:
+                    ResolveTab("Navigation", _parts.NavigationLocator).SelectTabItem(paneName);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Shell navigation '{AutomationId}' does not support navigation kind '{_parts.NavigationKind}'.");
+            }
+        }
+
+        private void ActivatePane(string paneName)
+        {
+            var paneTabs = ResolvePaneTabsOrDefault()
+                ?? throw new NotSupportedException(
+                    $"Shell navigation '{AutomationId}' cannot activate pane '{paneName}' because pane tabs are not configured.");
+
+            paneTabs.SelectTabItem(paneName);
+        }
+
+        private IUiControl ResolveNavigationSource()
+        {
+            return _parts.NavigationKind switch
+            {
+                ShellNavigationSourceKind.Tree => ResolveTree("Navigation", _parts.NavigationLocator),
+                ShellNavigationSourceKind.ListBox => ResolveListBox("Navigation", _parts.NavigationLocator),
+                ShellNavigationSourceKind.Tab => ResolveTab("Navigation", _parts.NavigationLocator),
+                _ => throw new NotSupportedException(
+                    $"Shell navigation '{AutomationId}' does not support navigation kind '{_parts.NavigationKind}'.")
+            };
+        }
+
+        private ITreeControl ResolveTree(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ITreeControl>(CreateDefinition(suffix, UiControlType.Tree, locatorValue));
+        }
+
+        private IListBoxControl ResolveListBox(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<IListBoxControl>(CreateDefinition(suffix, UiControlType.ListBox, locatorValue));
+        }
+
+        private ITabControl ResolveTab(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ITabControl>(CreateDefinition(suffix, UiControlType.Tab, locatorValue));
+        }
+
+        private ITabControl? ResolvePaneTabsOrDefault()
+        {
+            return string.IsNullOrWhiteSpace(_parts.PaneTabsLocator)
+                ? null
+                : ResolveTab("PaneTabs", _parts.PaneTabsLocator);
+        }
+
+        private ILabelControl ResolveLabel(string suffix, string locatorValue)
+        {
+            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+        }
+
+        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
+
+            return new UiControlDefinition(
+                $"{AutomationId}{suffix}",
+                controlType,
+                locatorValue,
+                _parts.LocatorKind,
+                _parts.FallbackToName);
+        }
+
+        private static void SelectTreeItem(ITreeControl tree, string paneName)
+        {
+            var item = FindTreeItem(tree.Items, paneName)
+                ?? throw new InvalidOperationException($"Shell navigation tree item '{paneName}' was not found.");
+
+            item.SelectNode();
+        }
+
+        private static ITreeItemControl? FindTreeItem(IEnumerable<ITreeItemControl> items, string paneName)
+        {
+            var normalizedPaneName = NormalizeLookupText(paneName);
+            foreach (var item in items)
+            {
+                if (string.Equals(NormalizeLookupText(item.Text), normalizedPaneName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(NormalizeLookupText(item.Name), normalizedPaneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return item;
+                }
+
+                try
+                {
+                    item.Expand();
+                }
+                catch
+                {
+                    // Tree expansion is best effort across mixed runtimes.
+                }
+
+                var nested = FindTreeItem(item.Items, paneName);
+                if (nested is not null)
+                {
+                    return nested;
+                }
+            }
+
+            return null;
+        }
+
+        private static void SelectListItem(IListBoxControl listBox, string paneName)
+        {
+            if (listBox is not ISelectableListBoxControl selectableListBox)
+            {
+                throw new NotSupportedException(
+                    $"Shell navigation list '{listBox.AutomationId}' does not support interactive selection.");
+            }
+
+            selectableListBox.SelectItem(paneName);
+        }
+
+        private static string GetDisplayText(IUiControl control)
+        {
+            return FirstNonWhiteSpace(control.Name, control.AutomationId) ?? string.Empty;
+        }
+
+        private static string? FirstNonWhiteSpace(params string?[] values)
+        {
+            return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
+        }
+
+        private static string NormalizeLookupText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
         }
     }
 }

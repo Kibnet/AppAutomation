@@ -709,6 +709,59 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task OpenOrActivateShellPane_InvokesRuntimeShellAndVerifiesActivePane()
+    {
+        var shell = new FakeShellNavigationControl("Shell");
+        var page = new WorkflowPage(new FakeResolver(("Shell", shell)));
+
+        var returnedPage = page.OpenOrActivateShellPane(
+            static candidate => candidate.Shell,
+            "Customers");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(shell.Requests.Count).IsEqualTo(1);
+            await Assert.That(shell.Requests[0].PaneName).IsEqualTo("Customers");
+            await Assert.That(shell.Requests[0].Mode).IsEqualTo(ShellPaneNavigationMode.OpenOrActivate);
+            await Assert.That(shell.ActivePaneName).IsEqualTo("Customers");
+            await Assert.That(shell.OpenPaneNames).Contains("Customers");
+        }
+    }
+
+    [Test]
+    public async Task ActivateShellPane_ThrowsUiOperationException_WhenRuntimeShellFails()
+    {
+        var shell = new FakeShellNavigationControl("Shell")
+        {
+            Failure = new NotSupportedException("pane tabs are not configured")
+        };
+        var page = new WorkflowPage(new FakeResolver(("Shell", shell)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.ActivateShellPane(
+                static candidate => candidate.Shell,
+                "Customers",
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("ActivateShellPane");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("Shell");
+            await Assert.That(exception.Message).Contains("pane tabs are not configured");
+            await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -809,6 +862,11 @@ public sealed class UiPageExtensionsTests
             "ReportExport",
             UiControlType.FolderExport,
             "ReportExport");
+
+        public static UiControlDefinition Shell { get; } = new(
+            "Shell",
+            UiControlType.ShellNavigation,
+            "Shell");
     }
 
     private sealed class ComboPage : UiPage
@@ -917,6 +975,8 @@ public sealed class UiPageExtensionsTests
         public INotificationControl ExportToast => Resolve<INotificationControl>(WorkflowPageDefinitions.ExportToast);
 
         public IFolderExportControl ReportExport => Resolve<IFolderExportControl>(WorkflowPageDefinitions.ReportExport);
+
+        public IShellNavigationControl Shell => Resolve<IShellNavigationControl>(WorkflowPageDefinitions.Shell);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -1121,6 +1181,39 @@ public sealed class UiPageExtensionsTests
             if (commitMode == FolderExportCommitMode.Select)
             {
                 SelectedFolderPath = folderPath;
+            }
+        }
+    }
+
+    private sealed class FakeShellNavigationControl : FakeControlBase, IShellNavigationControl
+    {
+        private readonly List<string> _openPaneNames = [];
+
+        public FakeShellNavigationControl(string automationId)
+            : base(automationId, automationId)
+        {
+        }
+
+        public string? ActivePaneName { get; private set; }
+
+        public IReadOnlyList<string> OpenPaneNames => _openPaneNames;
+
+        public Exception? Failure { get; init; }
+
+        public List<ShellPaneNavigationRequest> Requests { get; } = [];
+
+        public void OpenOrActivate(ShellPaneNavigationRequest request)
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            Requests.Add(request);
+            ActivePaneName = request.PaneName;
+            if (!_openPaneNames.Contains(request.PaneName, StringComparer.OrdinalIgnoreCase))
+            {
+                _openPaneNames.Add(request.PaneName);
             }
         }
     }

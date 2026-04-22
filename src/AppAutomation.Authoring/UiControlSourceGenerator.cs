@@ -403,6 +403,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             27 => "global::AppAutomation.Abstractions.IDialogControl",
             28 => "global::AppAutomation.Abstractions.INotificationControl",
             29 => "global::AppAutomation.Abstractions.IFolderExportControl",
+            30 => "global::AppAutomation.Abstractions.IShellNavigationControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -440,6 +441,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             27 => "Dialog",
             28 => "Notification",
             29 => "FolderExport",
+            30 => "ShellNavigation",
             _ => "AutomationElement"
         };
     }
