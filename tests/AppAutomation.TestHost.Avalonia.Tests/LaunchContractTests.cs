@@ -1,6 +1,11 @@
+using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.Headless;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -8,6 +13,8 @@ namespace AppAutomation.TestHost.Avalonia.Tests;
 
 public sealed class LaunchContractTests
 {
+    private const string HeadlessRuntimeConstraint = "HeadlessRuntime";
+
     [Test]
     public async Task AutomationLaunchContext_PrefersAmbientOverride_OverEnvironment()
     {
@@ -225,6 +232,71 @@ public sealed class LaunchContractTests
             await Assert.That(exception!.Message).Contains("BeforeLaunch failed.");
             await Assert.That(cleanupException).IsNotNull();
             await Assert.That(cleanupException!.Message).Contains("Dispose cleanup failed.");
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessVisualGrid_EditGridCellText_CommitsValue()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(() => CreateVisualGridWindow("OldValue"));
+        var page = new VisualGridPage(new HeadlessControlResolver(window));
+
+        page.EditGridCellText(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            1,
+            "EditedValue");
+
+        var editedValue = page.EremexDemoDataGridAutomationBridge.GetRowByIndex(0)!.Cells[1].Value;
+        await Assert.That(editedValue).IsEqualTo("EditedValue");
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessVisualGrid_EditGridCellText_CancelKeepsOriginalValue()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(() => CreateVisualGridWindow("OriginalValue"));
+        var page = new VisualGridPage(new HeadlessControlResolver(window));
+
+        page.EditGridCellText(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            1,
+            "ChangedValue",
+            GridCellEditCommitMode.Cancel);
+
+        var editedValue = page.EremexDemoDataGridAutomationBridge.GetRowByIndex(0)!.Cells[1].Value;
+        await Assert.That(editedValue).IsEqualTo("OriginalValue");
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessVisualGrid_EditGridCellDateAndCombo_CommitsTypedValues()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(CreateVisualGridWindowWithEditors);
+        var page = new VisualGridPage(new HeadlessControlResolver(window));
+
+        page
+            .EditGridCellDate(
+                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                0,
+                1,
+                new DateTime(2026, 4, 22))
+            .SelectGridCellComboItem(
+                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                0,
+                2,
+                "Ready");
+
+        var cells = page.EremexDemoDataGridAutomationBridge.GetRowByIndex(0)!.Cells;
+        using (Assert.Multiple())
+        {
+            await Assert.That(cells[1].Value).IsEqualTo("2026-04-22");
+            await Assert.That(cells[2].Value).IsEqualTo("Ready");
         }
     }
 
@@ -476,7 +548,96 @@ Console.WriteLine("Fake desktop");
         throw new InvalidOperationException("Could not resolve a dotnet host path for the test process.");
     }
 
+    private static HeadlessSessionScope StartHeadlessRuntime()
+    {
+        var session = HeadlessUnitTestSession.StartNew(typeof(TestAvaloniaApp));
+        HeadlessRuntime.SetSession(session);
+        return new HeadlessSessionScope(session);
+    }
+
+    private static Window CreateVisualGridWindow(string editableCellValue)
+    {
+        var row = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal };
+        var firstCell = new TextBlock { Text = "EX-R1" };
+        var editableCell = new TextBlock { Text = editableCellValue };
+        AutomationProperties.SetAutomationId(row, "EremexDemoDataGridAutomationBridge_Row0");
+        AutomationProperties.SetAutomationId(firstCell, "EremexDemoDataGridAutomationBridge_Row0_Cell0");
+        AutomationProperties.SetAutomationId(editableCell, "EremexDemoDataGridAutomationBridge_Row0_Cell1");
+        row.Children.Add(firstCell);
+        row.Children.Add(editableCell);
+
+        var bridge = new StackPanel();
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        bridge.Children.Add(row);
+
+        return new Window { Content = bridge };
+    }
+
+    private static Window CreateVisualGridWindowWithEditors()
+    {
+        var row = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal };
+        var firstCell = new TextBlock { Text = "EX-R1" };
+        var dateCell = new DatePicker { SelectedDate = new DateTimeOffset(new DateTime(2026, 1, 1)) };
+        var comboCell = new ComboBox
+        {
+            ItemsSource = new[] { "Draft", "Ready" },
+            SelectedIndex = 0
+        };
+        AutomationProperties.SetAutomationId(row, "EremexDemoDataGridAutomationBridge_Row0");
+        AutomationProperties.SetAutomationId(firstCell, "EremexDemoDataGridAutomationBridge_Row0_Cell0");
+        AutomationProperties.SetAutomationId(dateCell, "EremexDemoDataGridAutomationBridge_Row0_Cell1");
+        AutomationProperties.SetAutomationId(comboCell, "EremexDemoDataGridAutomationBridge_Row0_Cell2");
+        row.Children.Add(firstCell);
+        row.Children.Add(dateCell);
+        row.Children.Add(comboCell);
+
+        var bridge = new StackPanel();
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        bridge.Children.Add(row);
+
+        return new Window { Content = bridge };
+    }
+
     private sealed record LaunchPayload(string UserName);
+
+    private sealed class VisualGridPage : UiPage
+    {
+        public VisualGridPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IGridControl EremexDemoDataGridAutomationBridge =>
+            Resolve<IGridControl>(VisualGridPageDefinitions.EremexDemoDataGridAutomationBridge);
+    }
+
+    public static class VisualGridPageDefinitions
+    {
+        public static UiControlDefinition EremexDemoDataGridAutomationBridge { get; } = new(
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid,
+            "EremexDemoDataGridAutomationBridge");
+    }
+
+    private sealed class TestAvaloniaApp : global::Avalonia.Application
+    {
+    }
+
+    private sealed class HeadlessSessionScope : IDisposable
+    {
+        private readonly HeadlessUnitTestSession _session;
+
+        public HeadlessSessionScope(HeadlessUnitTestSession session)
+        {
+            _session = session;
+        }
+
+        public void Dispose()
+        {
+            HeadlessRuntime.SetSession(null);
+            _session.Dispose();
+        }
+    }
 
     private sealed class TemporaryWorkspace : IDisposable
     {

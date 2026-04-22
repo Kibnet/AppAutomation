@@ -1231,6 +1231,163 @@ public static class UiPageExtensions
             grid => $"rows={grid.Rows.Count}");
     }
 
+    /// <summary>
+    /// Edits a grid cell using a provider-neutral editor request.
+    /// </summary>
+    public static TSelf EditGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditorKind editorKind = GridCellEditorKind.Text,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        string? searchText = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+        ArgumentNullException.ThrowIfNull(value);
+
+        var request = new GridCellEditRequest(
+            rowIndex,
+            columnIndex,
+            value,
+            editorKind,
+            commitMode,
+            searchText);
+
+        return ExecuteGridCellEdit(page, selector, request, timeoutMs, nameof(EditGridCell));
+    }
+
+    /// <summary>
+    /// Edits a grid cell with a text value.
+    /// </summary>
+    public static TSelf EditGridCellText<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value,
+            GridCellEditorKind.Text,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a grid cell with an invariant-culture numeric value.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        double value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a grid cell with a date value formatted as yyyy-MM-dd.
+    /// </summary>
+    public static TSelf EditGridCellDate<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        DateTime value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Date,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Selects a combo-box item inside a grid cell.
+    /// </summary>
+    public static TSelf SelectGridCellComboItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string itemText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            itemText,
+            GridCellEditorKind.ComboBox,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Searches and selects an item inside a grid cell search-picker editor.
+    /// </summary>
+    public static TSelf SearchAndSelectGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string searchText,
+        string itemText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchText);
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            itemText,
+            GridCellEditorKind.SearchPicker,
+            commitMode,
+            searchText,
+            timeoutMs);
+    }
+
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
         where TSelf : UiPage
     {
@@ -1284,6 +1441,67 @@ public static class UiPageExtensions
                 actionName,
                 ex);
         }
+    }
+
+    private static TSelf ExecuteGridCellEdit<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridCellEditRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var grid = Resolve(selector, page);
+        var originalValue = TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex);
+        try
+        {
+            if (grid is not IEditableGridControl editableGrid)
+            {
+                throw new NotSupportedException(
+                    $"Grid '{grid.AutomationId}' does not support cell editing in adapter '{page.Capabilities.AdapterId}'.");
+            }
+
+            editableGrid.EditCell(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Grid '{grid.AutomationId}' failed to edit cell [{request.RowIndex},{request.ColumnIndex}].",
+                expectedValue: DescribeGridCellEditRequest(request),
+                lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                actionName,
+                ex);
+        }
+
+        var expectedValue = request.CommitMode == GridCellEditCommitMode.Commit
+            ? request.Value
+            : originalValue;
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(
+                TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                expectedValue,
+                StringComparison.Ordinal),
+            timeoutMs,
+            $"Grid '{grid.AutomationId}' cell [{request.RowIndex},{request.ColumnIndex}] did not reach expected edit result.",
+            expectedValue: expectedValue,
+            lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+            actionName);
+        return page;
+    }
+
+    private static string DescribeGridCellEditRequest(GridCellEditRequest request)
+    {
+        return $"{request.EditorKind}/{request.CommitMode}: [{request.RowIndex},{request.ColumnIndex}]='{request.Value}'";
     }
 
     private static string? TryReadGridCellValue(IGridControl grid, int rowIndex, int columnIndex)

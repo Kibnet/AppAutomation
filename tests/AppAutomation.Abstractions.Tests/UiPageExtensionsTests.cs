@@ -386,6 +386,97 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task GridCellEditMethods_InvokeRuntimeEditableGrid_WhenSupported()
+    {
+        var cells = new[]
+        {
+            new MutableFakeGridCellControl("OldText"),
+            new MutableFakeGridCellControl("1"),
+            new MutableFakeGridCellControl("2026-01-01"),
+            new MutableFakeGridCellControl("OldCombo"),
+            new MutableFakeGridCellControl("OldSearch")
+        };
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl(cells)]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        var returnedPage = page
+            .EditGridCellText(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 0, "NewText")
+            .EditGridCellNumber(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 1, 12.5)
+            .EditGridCellDate(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 2, new DateTime(2026, 4, 22))
+            .SelectGridCellComboItem(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 3, "ComboValue")
+            .SearchAndSelectGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 4, "Combo", "SearchValue");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(grid.Requests.Count).IsEqualTo(5);
+            await Assert.That(grid.Requests[0].EditorKind).IsEqualTo(GridCellEditorKind.Text);
+            await Assert.That(grid.Requests[1].EditorKind).IsEqualTo(GridCellEditorKind.Number);
+            await Assert.That(grid.Requests[1].Value).IsEqualTo("12.5");
+            await Assert.That(grid.Requests[2].EditorKind).IsEqualTo(GridCellEditorKind.Date);
+            await Assert.That(grid.Requests[2].Value).IsEqualTo("2026-04-22");
+            await Assert.That(grid.Requests[3].EditorKind).IsEqualTo(GridCellEditorKind.ComboBox);
+            await Assert.That(grid.Requests[4].EditorKind).IsEqualTo(GridCellEditorKind.SearchPicker);
+            await Assert.That(grid.Requests[4].SearchText).IsEqualTo("Combo");
+            await Assert.That(cells[4].Value).IsEqualTo("SearchValue");
+        }
+    }
+
+    [Test]
+    public async Task GridCellEdit_CancelMode_KeepsOriginalCellValue()
+    {
+        var cell = new MutableFakeGridCellControl("Original");
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl(cell)]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        page.EditGridCellText(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            0,
+            "Changed",
+            GridCellEditCommitMode.Cancel);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(grid.Requests.Count).IsEqualTo(1);
+            await Assert.That(grid.Requests[0].CommitMode).IsEqualTo(GridCellEditCommitMode.Cancel);
+            await Assert.That(cell.Value).IsEqualTo("Original");
+        }
+    }
+
+    [Test]
+    public async Task GridCellEdit_ThrowsUiOperationException_WhenRuntimeDoesNotSupportEditing()
+    {
+        var grid = new FakeGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl(new FakeGridCellControl("EX-R1"))]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.EditGridCellText(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 0, "EX-R2", timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("EditGridCell");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("EremexDemoDataGridAutomationBridge");
+            await Assert.That(exception.Message).Contains("does not support cell editing");
+            await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -857,12 +948,45 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    private sealed class FakeEditableGridControl : FakeGridControl, IEditableGridControl
+    {
+        public FakeEditableGridControl(string automationId, IReadOnlyList<IGridRowControl> rows)
+            : base(automationId, rows)
+        {
+        }
+
+        public List<GridCellEditRequest> Requests { get; } = [];
+
+        public void EditCell(GridCellEditRequest request)
+        {
+            Requests.Add(request);
+            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+            {
+                return;
+            }
+
+            var cell = GetRowByIndex(request.RowIndex)?.Cells[request.ColumnIndex] as MutableFakeGridCellControl
+                ?? throw new InvalidOperationException("Editable fake grid cell was not found.");
+            cell.Value = request.Value;
+        }
+    }
+
     private sealed record FakeGridRowControl(params IGridCellControl[] Cells) : IGridRowControl
     {
         IReadOnlyList<IGridCellControl> IGridRowControl.Cells => Cells;
     }
 
     private sealed record FakeGridCellControl(string Value) : IGridCellControl;
+
+    private sealed class MutableFakeGridCellControl : IGridCellControl
+    {
+        public MutableFakeGridCellControl(string value)
+        {
+            Value = value;
+        }
+
+        public string Value { get; set; }
+    }
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
 

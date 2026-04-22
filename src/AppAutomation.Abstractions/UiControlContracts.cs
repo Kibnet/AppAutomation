@@ -499,3 +499,79 @@ public interface IGridUserActionControl : IGridControl
     /// </summary>
     void Export();
 }
+
+/// <summary>
+/// Describes the editor kind used for a grid cell edit operation.
+/// </summary>
+public enum GridCellEditorKind
+{
+    /// <summary>
+    /// A text editor.
+    /// </summary>
+    Text = 0,
+
+    /// <summary>
+    /// A numeric editor such as a spin editor.
+    /// </summary>
+    Number = 1,
+
+    /// <summary>
+    /// A date editor.
+    /// </summary>
+    Date = 2,
+
+    /// <summary>
+    /// A combo box editor.
+    /// </summary>
+    ComboBox = 3,
+
+    /// <summary>
+    /// A composite search picker editor.
+    /// </summary>
+    SearchPicker = 4
+}
+
+/// <summary>
+/// Describes how a grid cell edit operation should be finished.
+/// </summary>
+public enum GridCellEditCommitMode
+{
+    /// <summary>
+    /// Commit the edited value.
+    /// </summary>
+    Commit = 0,
+
+    /// <summary>
+    /// Cancel the edit and keep the original value.
+    /// </summary>
+    Cancel = 1
+}
+
+/// <summary>
+/// Describes a provider-neutral grid cell edit request.
+/// </summary>
+/// <param name="RowIndex">The zero-based row index.</param>
+/// <param name="ColumnIndex">The zero-based column index.</param>
+/// <param name="Value">The final value or selected display item.</param>
+/// <param name="EditorKind">The editor kind expected inside the cell.</param>
+/// <param name="CommitMode">Whether to commit or cancel the edit.</param>
+/// <param name="SearchText">Optional search text for composite search picker editors.</param>
+public sealed record GridCellEditRequest(
+    int RowIndex,
+    int ColumnIndex,
+    string Value,
+    GridCellEditorKind EditorKind = GridCellEditorKind.Text,
+    GridCellEditCommitMode CommitMode = GridCellEditCommitMode.Commit,
+    string? SearchText = null);
+
+/// <summary>
+/// Represents a grid control that can activate and edit cells.
+/// </summary>
+public interface IEditableGridControl : IGridControl
+{
+    /// <summary>
+    /// Activates a cell editor, writes the requested value and commits or cancels the edit.
+    /// </summary>
+    /// <param name="request">The edit request.</param>
+    void EditCell(GridCellEditRequest request);
+}

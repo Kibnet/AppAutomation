@@ -289,14 +289,44 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     private static string? ReadVisualGridCellText(AutomationElement element)
     {
+        var directValue = TryRead(() => ReadVisualGridControlText(element.Control));
+        if (!string.IsNullOrWhiteSpace(directValue))
+        {
+            return directValue;
+        }
+
         if (!string.IsNullOrWhiteSpace(element.Name))
         {
             return element.Name;
         }
 
         return element.FindAllDescendants()
-            .Select(static candidate => candidate.Name)
+            .Select(static candidate => TryRead(() => ReadVisualGridControlText(candidate.Control)) ?? candidate.Name)
             .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name));
+    }
+
+    private static string? ReadVisualGridControlText(global::Avalonia.Controls.Control control)
+    {
+        return control switch
+        {
+            global::Avalonia.Controls.TextBox textBox => textBox.Text,
+            global::Avalonia.Controls.TextBlock textBlock => textBlock.Text,
+            global::Avalonia.Controls.Label label => label.Content?.ToString(),
+            global::Avalonia.Controls.ComboBox comboBox => ReadComboBoxItemText(comboBox.SelectedItem),
+            global::Avalonia.Controls.DatePicker datePicker => datePicker.SelectedDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            _ => null
+        };
+    }
+
+    private static string? ReadComboBoxItemText(object? item)
+    {
+        return item switch
+        {
+            null => null,
+            global::Avalonia.Controls.ComboBoxItem comboBoxItem => comboBoxItem.Content?.ToString(),
+            global::Avalonia.Controls.ContentControl contentControl => contentControl.Content?.ToString(),
+            _ => item.ToString()
+        };
     }
 
     private static IReadOnlyList<string> ReadDisplayValues(object? item)
@@ -668,7 +698,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessVisualGridControl : HeadlessControlBase<AutomationElement>, IGridControl
+    private sealed class HeadlessVisualGridControl : HeadlessControlBase<AutomationElement>, IEditableGridControl
     {
         public HeadlessVisualGridControl(AutomationElement inner) : base(inner)
         {
@@ -682,6 +712,180 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return index >= 0 && index < rows.Count
                 ? rows[index]
                 : null;
+        }
+
+        public void EditCell(GridCellEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentOutOfRangeException.ThrowIfNegative(request.RowIndex);
+            ArgumentOutOfRangeException.ThrowIfNegative(request.ColumnIndex);
+            ArgumentNullException.ThrowIfNull(request.Value);
+
+            var cell = FindVisualCell(request.RowIndex, request.ColumnIndex)
+                ?? throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] was not found in grid '{AutomationId}'.");
+
+            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+            {
+                return;
+            }
+
+            if (!TryWriteCellValue(cell, request))
+            {
+                throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a writable '{request.EditorKind}' editor.");
+            }
+        }
+
+        private AutomationElement? FindVisualCell(int rowIndex, int columnIndex)
+        {
+            if (string.IsNullOrWhiteSpace(AutomationId))
+            {
+                return null;
+            }
+
+            var rowPrefix = $"{AutomationId}_Row{rowIndex}";
+            return Inner.FindAllDescendants()
+                .FirstOrDefault(candidate =>
+                    candidate.AutomationId.StartsWith(rowPrefix, StringComparison.Ordinal)
+                    && ParseVisualGridIndex(candidate.AutomationId, "_Row") == rowIndex
+                    && ParseVisualGridIndex(candidate.AutomationId, "_Cell") == columnIndex);
+        }
+
+        private static bool TryWriteCellValue(AutomationElement cell, GridCellEditRequest request)
+        {
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                var controls = new[] { cell.Control }
+                    .Concat(ControlTree.EnumerateDescendants(cell.Control))
+                    .ToArray();
+
+                foreach (var candidate in controls)
+                {
+                    if (TryWriteTypedEditor(candidate, request))
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (var candidate in controls)
+                {
+                    if (TryWriteTextLikeControl(candidate, request.Value))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        private static bool TryWriteTypedEditor(global::Avalonia.Controls.Control control, GridCellEditRequest request)
+        {
+            switch (control)
+            {
+                case global::Avalonia.Controls.DatePicker datePicker
+                    when request.EditorKind == GridCellEditorKind.Date:
+                    datePicker.SelectedDate = ParseDate(request.Value);
+                    return true;
+                case global::Avalonia.Controls.ComboBox comboBox
+                    when request.EditorKind is GridCellEditorKind.ComboBox or GridCellEditorKind.SearchPicker:
+                    return TrySelectComboBoxItem(comboBox, request.Value);
+                case global::Avalonia.Controls.TextBox textBox
+                    when request.EditorKind is GridCellEditorKind.Text
+                        or GridCellEditorKind.Number
+                        or GridCellEditorKind.Date
+                        or GridCellEditorKind.ComboBox
+                        or GridCellEditorKind.SearchPicker:
+                    textBox.Text = request.Value;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryWriteTextLikeControl(global::Avalonia.Controls.Control control, string value)
+        {
+            switch (control)
+            {
+                case global::Avalonia.Controls.TextBlock textBlock:
+                    textBlock.Text = value;
+                    return true;
+                case global::Avalonia.Controls.Label label:
+                    label.Content = value;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TrySelectComboBoxItem(global::Avalonia.Controls.ComboBox comboBox, string itemText)
+        {
+            var items = comboBox.Items?.Cast<object?>().ToArray() ?? Array.Empty<object?>();
+            var normalizedTarget = NormalizeLookupText(itemText);
+            for (var index = 0; index < items.Length; index++)
+            {
+                var item = items[index];
+                if (!string.Equals(NormalizeLookupText(ReadComboBoxItemText(item)), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                comboBox.SelectedIndex = index;
+                comboBox.SelectedItem = item;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string? ReadComboBoxItemText(object? item)
+        {
+            return item switch
+            {
+                null => null,
+                global::Avalonia.Controls.ComboBoxItem comboBoxItem => comboBoxItem.Content?.ToString(),
+                global::Avalonia.Controls.ContentControl contentControl => contentControl.Content?.ToString(),
+                _ => item.ToString()
+            };
+        }
+
+        private static DateTimeOffset? ParseDate(string value)
+        {
+            if (DateTimeOffset.TryParseExact(
+                    value,
+                    "yyyy-MM-dd",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var exactDate))
+            {
+                return exactDate.Date;
+            }
+
+            if (DateTimeOffset.TryParse(
+                    value,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var invariantDate))
+            {
+                return invariantDate.Date;
+            }
+
+            if (DateTimeOffset.TryParse(
+                    value,
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out var currentCultureDate))
+            {
+                return currentCultureDate.Date;
+            }
+
+            throw new InvalidOperationException($"Grid cell date value '{value}' could not be parsed.");
+        }
+
+        private static string NormalizeLookupText(string? value)
+        {
+            return value?.Trim() ?? string.Empty;
         }
 
         private IReadOnlyList<IGridRowControl> ReadRows()

@@ -33,9 +33,9 @@
 - Control: Eremex grid cell editors
 - Scenario: Edit a grid cell using text, spin, date, combo or server-search editor and commit/cancel
 - Description: Add a provider-neutral edit-cell abstraction and at least one provider implementation path for visual grid cell activation and editor value commit.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-004-in-grid-editor-activation.md
+- LastStep: completed
 - DoneCriteria: API exposes cell edit workflow; tests cover activation/value/commit behavior or explicit unsupported diagnostics per runtime.
 
 ## AAR-005 Popup Date And Range Filters
