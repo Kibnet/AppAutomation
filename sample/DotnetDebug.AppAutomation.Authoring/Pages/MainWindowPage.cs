@@ -36,6 +36,8 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("SeriesErrorText", UiControlType.Label, "SeriesErrorText")]
 [UiControl("DataGridTabItem", UiControlType.TabItem, "DataGridTabItem")]
 [UiControl("DemoDataGrid", UiControlType.Grid, "DemoDataGrid")]
+[UiControl("EremexDemoDataGrid", UiControlType.AutomationElement, "EremexDemoDataGrid")]
+[UiControl("EremexDemoDataGridAutomationBridge", UiControlType.Grid, "EremexDemoDataGridAutomationBridge")]
 [UiControl("DataGridRowsInput", UiControlType.TextBox, "DataGridRowsInput")]
 [UiControl("BuildGridButton", UiControlType.Button, "BuildGridButton")]
 [UiControl("ClearGridButton", UiControlType.Button, "ClearGridButton")]

@@ -365,6 +365,8 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
+            RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
+            RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
@@ -402,6 +404,11 @@ internal sealed class AuthoringCodeGenerator
     private static string FormatDouble(double? value)
     {
         return (value ?? 0).ToString("G17", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatInt(int? value)
+    {
+        return (value ?? 0).ToString(CultureInfo.InvariantCulture);
     }
 
     private static string FormatDate(DateTime? value)

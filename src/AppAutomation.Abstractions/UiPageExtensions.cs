@@ -1059,6 +1059,77 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Waits until a grid contains at least the specified number of rows.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the grid control.</param>
+    /// <param name="minRows">The minimum number of rows expected.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the grid does not contain the minimum number of rows within the timeout.</exception>
+    public static TSelf WaitUntilGridRowsAtLeast<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int minRows,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(minRows);
+
+        var grid = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => grid.Rows.Count >= minRows,
+            timeoutMs,
+            $"Grid '{grid.AutomationId}' did not reach minimum row count.",
+            expectedValue: $">={minRows} rows",
+            lastObservedValueFactory: () => $"{grid.Rows.Count} rows");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a grid cell equals the expected value.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the grid control.</param>
+    /// <param name="rowIndex">The zero-based row index.</param>
+    /// <param name="columnIndex">The zero-based column index.</param>
+    /// <param name="expectedValue">The expected cell value.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the cell does not reach the expected value within the timeout.</exception>
+    public static TSelf WaitUntilGridCellEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string expectedValue,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+        ArgumentNullException.ThrowIfNull(expectedValue);
+
+        var grid = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(
+                TryReadGridCellValue(grid, rowIndex, columnIndex),
+                expectedValue,
+                StringComparison.Ordinal),
+            timeoutMs,
+            $"Grid '{grid.AutomationId}' cell [{rowIndex},{columnIndex}] did not reach expected value.",
+            expectedValue: expectedValue,
+            lastObservedValueFactory: () => TryReadGridCellValue(grid, rowIndex, columnIndex));
+        return page;
+    }
+
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
         where TSelf : UiPage
     {
@@ -1072,6 +1143,23 @@ public static class UiPageExtensions
         }
 
         return control;
+    }
+
+    private static string? TryReadGridCellValue(IGridControl grid, int rowIndex, int columnIndex)
+    {
+        var row = grid.GetRowByIndex(rowIndex);
+        if (row is null)
+        {
+            return $"<missing row {rowIndex}; rows={grid.Rows.Count}>";
+        }
+
+        var cells = row.Cells;
+        if (columnIndex >= cells.Count)
+        {
+            return $"<missing cell {rowIndex},{columnIndex}; cells={cells.Count}>";
+        }
+
+        return cells[columnIndex].Value;
     }
 
     private static TSelf WaitUntilText<TSelf, TControl>(

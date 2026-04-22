@@ -1,3 +1,4 @@
+using AppAutomation.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace AppAutomation.Recorder.Avalonia;
@@ -34,6 +35,10 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderControlHint> ControlHints { get; } = new List<RecorderControlHint>();
 
+    public IList<RecorderGridHint> GridHints { get; } = new List<RecorderGridHint>();
+
+    public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
+
     public IList<IRecorderAssertionExtractor> AssertionExtractors { get; } = new List<IRecorderAssertionExtractor>();
 }
 
@@ -44,6 +49,22 @@ public enum RecorderOverlayTheme
 }
 
 public sealed record RecorderControlHint(string LocatorValue, RecorderActionHint ActionHint);
+
+public sealed record RecorderLocatorAlias(
+    string SourceLocatorValue,
+    string TargetLocatorValue,
+    UiControlType TargetControlType = UiControlType.AutomationElement,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderGridHint(
+    string SourceLocatorValue,
+    string TargetLocatorValue,
+    IReadOnlyList<string> ColumnPropertyNames,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
 
 public enum RecorderActionHint
 {

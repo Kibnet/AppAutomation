@@ -1,3 +1,4 @@
+using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -55,6 +56,14 @@ public partial class App : Application
             AllowNameLocators = false
         };
         options.ControlHints.Add(new RecorderControlHint("MixCountSpinner", RecorderActionHint.SpinnerTextBox));
+        options.LocatorAliases.Add(new RecorderLocatorAlias(
+            "EremexDemoDataGridControl",
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid));
+        options.GridHints.Add(new RecorderGridHint(
+            "EremexDemoDataGridControl",
+            "EremexDemoDataGridAutomationBridge",
+            ["EremexRow", "EremexValue", "EremexParity"]));
 
         var session = AppAutomationRecorder.Attach(mainWindow, options);
         session.Start();

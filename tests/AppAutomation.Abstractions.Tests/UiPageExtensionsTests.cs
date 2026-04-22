@@ -276,6 +276,59 @@ public sealed class UiPageExtensionsTests
         }
     }
 
+    [Test]
+    public async Task WaitUntilGridRowsAtLeast_ReturnsPage_WhenRowsAlreadyPresent()
+    {
+        var grid = new FakeGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [
+                new FakeGridRowControl(new FakeGridCellControl("EX-R1")),
+                new FakeGridRowControl(new FakeGridCellControl("EX-R2")),
+                new FakeGridRowControl(new FakeGridCellControl("EX-R3"))
+            ]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        var returnedPage = page.WaitUntilGridRowsAtLeast(static candidate => candidate.EremexDemoDataGridAutomationBridge, 3);
+
+        await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilGridCellEquals_ThrowsUiOperationException_WithFailureContext()
+    {
+        var grid = new FakeGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [
+                new FakeGridRowControl(new FakeGridCellControl("EX-R1")),
+                new FakeGridRowControl(new FakeGridCellControl("EX-R2"))
+            ]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilGridCellEquals(
+                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                1,
+                0,
+                "EX-R3",
+                timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilGridCellEquals");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("EremexDemoDataGridAutomationBridge");
+            await Assert.That(exception.FailureContext.LastObservedValue).IsEqualTo("EX-R2");
+            await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
     public static class ComboPageDefinitions
     {
         public static UiControlDefinition OperationCombo { get; } = new(
@@ -337,6 +390,14 @@ public sealed class UiPageExtensionsTests
             "DemoTree",
             UiControlType.Tree,
             "DemoTree");
+    }
+
+    public static class GridPageDefinitions
+    {
+        public static UiControlDefinition EremexDemoDataGridAutomationBridge { get; } = new(
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid,
+            "EremexDemoDataGridAutomationBridge");
     }
 
     private sealed class ComboPage : UiPage
@@ -409,6 +470,16 @@ public sealed class UiPageExtensionsTests
         }
 
         public ITreeControl DemoTree => Resolve<ITreeControl>(TreePageDefinitions.DemoTree);
+    }
+
+    private sealed class GridPage : UiPage
+    {
+        public GridPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IGridControl EremexDemoDataGridAutomationBridge => Resolve<IGridControl>(GridPageDefinitions.EremexDemoDataGridAutomationBridge);
     }
 
     private sealed class FakeResolver : IUiControlResolver, IUiArtifactCollector
@@ -664,6 +735,31 @@ public sealed class UiPageExtensionsTests
             OnSelect?.Invoke();
         }
     }
+
+    private sealed class FakeGridControl : FakeControlBase, IGridControl
+    {
+        public FakeGridControl(string automationId, IReadOnlyList<IGridRowControl> rows)
+            : base(automationId, automationId)
+        {
+            Rows = rows;
+        }
+
+        public IReadOnlyList<IGridRowControl> Rows { get; }
+
+        public IGridRowControl? GetRowByIndex(int index)
+        {
+            return index >= 0 && index < Rows.Count
+                ? Rows[index]
+                : null;
+        }
+    }
+
+    private sealed record FakeGridRowControl(params IGridCellControl[] Cells) : IGridRowControl
+    {
+        IReadOnlyList<IGridCellControl> IGridRowControl.Cells => Cells;
+    }
+
+    private sealed record FakeGridCellControl(string Value) : IGridCellControl;
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
 

@@ -44,6 +44,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsToggled => source is ToggleButton and not CheckBox and not RadioButton,
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
             RecordedActionKind.WaitUntilIsEnabled => true,
+            RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
             _ => false
         };
     }

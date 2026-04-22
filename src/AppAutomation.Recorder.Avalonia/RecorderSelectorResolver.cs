@@ -83,6 +83,11 @@ internal sealed class RecorderSelectorResolver
         UiLocatorKind locatorKind,
         string? warning)
     {
+        if (TryResolveLocatorAlias(locatorValue, locatorKind, out var alias))
+        {
+            return CreateAliasedResolvedControl(control, locatorValue, locatorKind, warning, alias);
+        }
+
         var validation = ValidateSelector(control, locatorValue, locatorKind);
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -94,6 +99,33 @@ internal sealed class RecorderSelectorResolver
                 control.GetType().FullName ?? control.GetType().Name,
                 warning),
             message: validation.Message,
+            validationStatus: validation.Status,
+            validationMessage: validation.Message,
+            canPersist: validation.CanPersist);
+    }
+
+    private ResolvedControlResult CreateAliasedResolvedControl(
+        Control control,
+        string sourceLocatorValue,
+        UiLocatorKind sourceLocatorKind,
+        string? warning,
+        RecorderLocatorAlias alias)
+    {
+        var targetLocatorValue = alias.TargetLocatorValue.Trim();
+        var validation = ValidateSelector(targetLocatorValue, alias.TargetLocatorKind);
+        var aliasMessage =
+            $"Mapped recorder locator '{sourceLocatorKind}:{sourceLocatorValue}' to stable locator '{alias.TargetLocatorKind}:{targetLocatorValue}'.";
+
+        return ResolvedControlResult.Created(
+            new RecordedControlDescriptor(
+                RecorderNaming.CreateControlPropertyName(targetLocatorValue, alias.TargetControlType),
+                alias.TargetControlType,
+                targetLocatorValue,
+                alias.TargetLocatorKind,
+                alias.FallbackToName,
+                control.GetType().FullName ?? control.GetType().Name,
+                CombineMessage(warning, aliasMessage)),
+            message: validation.Message ?? aliasMessage,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
             canPersist: validation.CanPersist);
@@ -189,6 +221,37 @@ internal sealed class RecorderSelectorResolver
         };
     }
 
+    private bool TryResolveLocatorAlias(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        out RecorderLocatorAlias alias)
+    {
+        alias = _options.LocatorAliases.FirstOrDefault(candidate =>
+            candidate.SourceLocatorKind == locatorKind
+            && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))!;
+        if (alias is not null && !string.IsNullOrWhiteSpace(alias.TargetLocatorValue))
+        {
+            return true;
+        }
+
+        var gridHint = _options.GridHints.FirstOrDefault(candidate =>
+            candidate.SourceLocatorKind == locatorKind
+            && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal));
+        if (gridHint is null || string.IsNullOrWhiteSpace(gridHint.TargetLocatorValue))
+        {
+            return false;
+        }
+
+        alias = new RecorderLocatorAlias(
+            gridHint.SourceLocatorValue,
+            gridHint.TargetLocatorValue,
+            UiControlType.Grid,
+            gridHint.SourceLocatorKind,
+            gridHint.TargetLocatorKind,
+            gridHint.FallbackToName);
+        return true;
+    }
+
     private static bool TryGetNameLocator(Control control, out string locator)
     {
         locator = AutomationProperties.GetName(control) ?? string.Empty;
@@ -207,6 +270,21 @@ internal sealed class RecorderSelectorResolver
 
         locator = string.Empty;
         return false;
+    }
+
+    private static string? CombineMessage(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left))
+        {
+            return string.IsNullOrWhiteSpace(right) ? null : right;
+        }
+
+        if (string.IsNullOrWhiteSpace(right) || string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return left;
+        }
+
+        return $"{left} {right}";
     }
 
     private sealed record SelectorValidationResult(

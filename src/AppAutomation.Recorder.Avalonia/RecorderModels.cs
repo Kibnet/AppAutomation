@@ -21,7 +21,9 @@ public enum RecordedActionKind
     WaitUntilIsToggled = 13,
     WaitUntilIsSelected = 14,
     WaitUntilIsEnabled = 15,
-    SelectListBoxItem = 16
+    SelectListBoxItem = 16,
+    WaitUntilGridRowsAtLeast = 17,
+    WaitUntilGridCellEquals = 18
 }
 
 public enum RecorderAssertionMode
@@ -63,7 +65,10 @@ internal sealed record RecordedStep(
     bool IsIgnored = false,
     RecorderStepReviewState ReviewState = RecorderStepReviewState.Active,
     string? FailureCode = null,
-    DateTimeOffset? LastValidationAt = null);
+    DateTimeOffset? LastValidationAt = null,
+    int? IntValue = null,
+    int? RowIndex = null,
+    int? ColumnIndex = null);
 
 internal sealed record StepCreationResult(bool Success, RecordedStep? Step, string Message)
 {

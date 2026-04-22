@@ -15,6 +15,9 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Controls.DataGrid" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Eremex.Avalonia.Controls" />
+    <PackageReference Include="Eremex.Avalonia.Themes.DeltaDesign" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
     <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
     <PackageReference Include="Avalonia.Diagnostics">
       <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
