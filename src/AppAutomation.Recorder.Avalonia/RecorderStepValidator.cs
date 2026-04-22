@@ -45,6 +45,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
             RecordedActionKind.WaitUntilIsEnabled => true,
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
+            RecordedActionKind.SearchAndSelect => source is ComboBox,
             _ => false
         };
     }

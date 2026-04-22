@@ -168,6 +168,120 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateSearchPickerStep_WithConfiguredParts_CapturesCompositeAction()
+    {
+        var options = CreateSearchPickerOptions();
+        var factory = new RecorderStepFactory(options);
+        var searchInput = new TextBox { Text = "least" };
+        var results = new ComboBox
+        {
+            ItemsSource = new[] { "Greatest Common Divisor", "Least Common Multiple" },
+            SelectedItem = "Least Common Multiple"
+        };
+        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
+        AutomationProperties.SetAutomationId(results, "OperationCombo");
+
+        var result = factory.TryCreateSearchPickerStep(searchInput, results);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SearchAndSelect);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.SearchPicker);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("HistoryOperationPicker");
+            await Assert.That(result.Step.StringValue).IsEqualTo("least");
+            await Assert.That(result.Step.ItemValue).IsEqualTo("Least Common Multiple");
+            await Assert.That(result.Step.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task TryCreateSearchPickerStep_WithoutHint_ReturnsUnsupported()
+    {
+        var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
+        var searchInput = new TextBox { Text = "least" };
+        var results = new ComboBox
+        {
+            ItemsSource = new[] { "Least Common Multiple" },
+            SelectedItem = "Least Common Multiple"
+        };
+        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
+        AutomationProperties.SetAutomationId(results, "OperationCombo");
+
+        var result = factory.TryCreateSearchPickerStep(searchInput, results);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(false);
+            await Assert.That(result.Message).Contains("not configured");
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_UsesSearchPickerStep_InGeneratedScenario()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            namespace Sample.Authoring.Pages;
+
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+        var factory = new RecorderStepFactory(CreateSearchPickerOptions());
+        var searchInput = new TextBox { Text = "least" };
+        var results = new ComboBox
+        {
+            ItemsSource = new[] { "Greatest Common Divisor", "Least Common Multiple" },
+            SelectedItem = "Least Common Multiple"
+        };
+        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
+        AutomationProperties.SetAutomationId(results, "OperationCombo");
+        var stepResult = factory.TryCreateSearchPickerStep(searchInput, results);
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Search Picker Flow");
+
+        var result = await generator.SaveAsync(
+            CreateWindowStub(),
+            options,
+            [stepResult.Step!],
+            outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(stepResult.Success).IsEqualTo(true);
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNotNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var pageSource = await File.ReadAllTextAsync(result.PageFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"HistoryOperationPicker\", UiControlType.SearchPicker, \"HistoryOperationPicker\", FallbackToName = false)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains(
+                "Page.SearchAndSelect(static page => page.HistoryOperationPicker, \"least\", \"Least Common Multiple\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
     public async Task Resolve_UsesAutomationIdFromVisualAncestors()
     {
         var resolver = new RecorderSelectorResolver(new AppAutomationRecorderOptions());
@@ -1249,6 +1363,18 @@ public sealed class RecorderTests
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
             ["EremexRow", "EremexValue", "EremexParity"]));
+        return options;
+    }
+
+    private static AppAutomationRecorderOptions CreateSearchPickerOptions()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "HistoryOperationPicker",
+            SearchPickerParts.ByAutomationIds(
+                "HistoryFilterInput",
+                "OperationCombo",
+                applyButtonAutomationId: "ApplyFilterButton")));
         return options;
     }
 

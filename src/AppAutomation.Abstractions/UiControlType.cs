@@ -127,5 +127,10 @@ public enum UiControlType
     /// <summary>
     /// A cell within a grid control. Maps to <see cref="IGridCellControl"/>.
     /// </summary>
-    GridCell = 23
+    GridCell = 23,
+
+    /// <summary>
+    /// A composite search picker control. Maps to <see cref="ISearchPickerControl"/>.
+    /// </summary>
+    SearchPicker = 24
 }

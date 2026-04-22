@@ -397,6 +397,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             21 => "global::AppAutomation.Abstractions.IGridControl",
             22 => "global::AppAutomation.Abstractions.IGridRowControl",
             23 => "global::AppAutomation.Abstractions.IGridCellControl",
+            24 => "global::AppAutomation.Abstractions.ISearchPickerControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -428,6 +429,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             21 => "Grid",
             22 => "GridRow",
             23 => "GridCell",
+            24 => "SearchPicker",
             _ => "AutomationElement"
         };
     }

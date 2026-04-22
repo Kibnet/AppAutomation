@@ -367,6 +367,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
             RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.SearchAndSelect => $"Page.SearchAndSelect(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 

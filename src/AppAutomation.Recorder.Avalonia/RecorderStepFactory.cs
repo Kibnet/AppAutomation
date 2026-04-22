@@ -162,6 +162,49 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
+    public StepCreationResult TryCreateSearchPickerStep(TextBox searchInput, ComboBox results)
+    {
+        ArgumentNullException.ThrowIfNull(searchInput);
+        ArgumentNullException.ThrowIfNull(results);
+
+        if (!TryResolveSearchPickerHint(searchInput, results, out var hint))
+        {
+            return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
+        }
+
+        var searchText = searchInput.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return StepCreationResult.Unsupported("Search picker search text is empty.");
+        }
+
+        var selectedText = results.SelectedItem?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return StepCreationResult.Unsupported("Search picker does not have a selected result to record.");
+        }
+
+        var warning = "Recorded composite search picker from configured parts.";
+        var descriptor = new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(hint.LocatorValue, UiControlType.SearchPicker),
+            UiControlType.SearchPicker,
+            hint.LocatorValue.Trim(),
+            hint.LocatorKind,
+            hint.FallbackToName,
+            results.GetType().FullName ?? results.GetType().Name,
+            warning);
+
+        return CreateStep(
+            results,
+            new RecordedStep(
+                RecordedActionKind.SearchAndSelect,
+                descriptor,
+                StringValue: searchText,
+                Warning: warning,
+                ItemValue: selectedText),
+            warning);
+    }
+
     public StepCreationResult TryCreateListBoxStep(ListBox listBox)
     {
         ArgumentNullException.ThrowIfNull(listBox);
@@ -539,6 +582,29 @@ internal sealed class RecorderStepFactory
 
         hint = null!;
         gridSource = null!;
+        return false;
+    }
+
+    private bool TryResolveSearchPickerHint(
+        TextBox searchInput,
+        ComboBox results,
+        out RecorderSearchPickerHint hint)
+    {
+        foreach (var candidate in _options.SearchPickerHints)
+        {
+            var parts = candidate.Parts;
+            if (TryGetLocator(searchInput, parts.LocatorKind, out var searchInputLocator)
+                && TryGetLocator(results, parts.LocatorKind, out var resultsLocator)
+                && string.Equals(parts.SearchInputLocator.Trim(), searchInputLocator, StringComparison.Ordinal)
+                && string.Equals(parts.ResultsLocator.Trim(), resultsLocator, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(candidate.LocatorValue))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
         return false;
     }
 

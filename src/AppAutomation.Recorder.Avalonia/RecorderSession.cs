@@ -606,9 +606,34 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TryRecordSearchPickerSelection(comboBox))
+        {
+            return;
+        }
+
         FlushPendingTextIfSwitchingTo(comboBox);
         FlushPendingSliderIfSwitchingTo(comboBox);
         AddStep(_stepFactory.TryCreateComboBoxStep(comboBox));
+    }
+
+    private bool TryRecordSearchPickerSelection(ComboBox comboBox)
+    {
+        if (_pendingTextBox is null)
+        {
+            return false;
+        }
+
+        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, comboBox);
+        if (!result.Success)
+        {
+            return false;
+        }
+
+        _textDebounceTimer.Stop();
+        _pendingTextBox = null;
+        FlushPendingSliderIfSwitchingTo(comboBox);
+        AddStep(result);
+        return true;
     }
 
     private void OnListBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -812,6 +837,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             step.Control.LocatorKind,
             step.Control.LocatorValue,
             step.StringValue ?? string.Empty,
+            step.ItemValue ?? string.Empty,
             step.BoolValue?.ToString() ?? string.Empty,
             step.DoubleValue?.ToString() ?? string.Empty,
             step.DateValue?.ToString("O") ?? string.Empty,

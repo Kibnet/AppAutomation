@@ -13,9 +13,9 @@
 - Control: `miniControls:SearchControl`, `client:ServerSearchComboBox`
 - Scenario: Record composite search/select interactions as user-level search picker operations
 - Description: Add recorder support for a composite search picker action that can generate `Page.SearchAndSelect(...)` for configured search-picker controls instead of raw text/list/button fragments.
-- Status: new
-- Spec: null
-- LastStep: 0
+- Status: done
+- Spec: specs/AAR-002-recorder-search-picker-flow.md
+- LastStep: completed
 - DoneCriteria: Recorder can produce and persist a search picker step from configured parts; generated code uses `SearchAndSelect`; tests cover preview and save output.
 
 ## AAR-003 Eremex Grid User Actions

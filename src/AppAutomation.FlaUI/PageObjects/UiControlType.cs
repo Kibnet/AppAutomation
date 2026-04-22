@@ -25,5 +25,6 @@ public enum UiControlType
     TabItem = 20,
     Grid = 21,
     GridRow = 22,
-    GridCell = 23
+    GridCell = 23,
+    SearchPicker = 24
 }
