@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -36,6 +37,26 @@ public sealed partial class TemplateContentTests
         }
     }
 
+    [Test]
+    public async Task AvaloniaConsumerTemplate_UsesCentralAvaloniaHeadlessVersion()
+    {
+        var repoRoot = GetRepoRoot();
+        var centralVersion = GetCentralPackageVersion(repoRoot, "Avalonia.Headless");
+        var templateProject = Path.Combine(
+            repoRoot,
+            "src",
+            "AppAutomation.Templates",
+            "content",
+            "AppAutomation.Avalonia.Consumer",
+            "tests",
+            "SampleApp.UiTests.Headless",
+            "SampleApp.UiTests.Headless.csproj");
+        var templateVersion = GetPackageReferenceVersion(templateProject, "Avalonia.Headless");
+
+        await Assert.That(templateVersion).IsEqualTo(centralVersion)
+            .Because("the generated headless consumer must not downgrade the runtime required by AppAutomation.Avalonia.Headless.");
+    }
+
     private static IEnumerable<string> GetTemplateProjectFiles()
     {
         var repoRoot = GetRepoRoot();
@@ -65,6 +86,34 @@ public sealed partial class TemplateContentTests
         }
 
         throw new DirectoryNotFoundException("Could not locate AppAutomation.sln.");
+    }
+
+    private static string GetCentralPackageVersion(string repoRoot, string packageId)
+    {
+        var document = XDocument.Load(Path.Combine(repoRoot, "Directory.Packages.props"));
+        var version = document
+            .Descendants("PackageVersion")
+            .SingleOrDefault(element => string.Equals((string?)element.Attribute("Include"), packageId, StringComparison.Ordinal))
+            ?.Attribute("Version")
+            ?.Value;
+
+        return string.IsNullOrWhiteSpace(version)
+            ? throw new InvalidOperationException($"PackageVersion '{packageId}' was not found in Directory.Packages.props.")
+            : version;
+    }
+
+    private static string GetPackageReferenceVersion(string projectPath, string packageId)
+    {
+        var document = XDocument.Load(projectPath);
+        var version = document
+            .Descendants("PackageReference")
+            .SingleOrDefault(element => string.Equals((string?)element.Attribute("Include"), packageId, StringComparison.Ordinal))
+            ?.Attribute("Version")
+            ?.Value;
+
+        return string.IsNullOrWhiteSpace(version)
+            ? throw new InvalidOperationException($"PackageReference '{packageId}' was not found in {projectPath}.")
+            : version;
     }
 
     [GeneratedRegex("PackageReference Include=\"AppAutomation\\.[^\"]+\" Version=\"(?<version>[^\"]+)\"", RegexOptions.CultureInvariant)]

@@ -28,3 +28,11 @@ jobs:
 
       - name: Test
         run: dotnet test --solution AppAutomation.sln -c Release --no-build
+
+      - name: Pack
+        shell: pwsh
+        run: pwsh -File eng/pack.ps1 -Configuration Release
+
+      - name: Smoke consumer
+        shell: pwsh
+        run: pwsh -File eng/smoke-consumer.ps1 -Configuration Release -SkipPack

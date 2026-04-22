@@ -11,7 +11,7 @@
     <PackageReference Include="AppAutomation.Abstractions" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="AppAutomation.Avalonia.Headless" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="AppAutomation.TUnit" Version="__APPAUTOMATION_VERSION__" />
-    <PackageReference Include="Avalonia.Headless" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.8" />
     <PackageReference Include="TUnit" Version="1.12.111" />
   </ItemGroup>
 
