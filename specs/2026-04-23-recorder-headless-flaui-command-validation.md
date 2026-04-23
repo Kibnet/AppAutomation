@@ -265,6 +265,8 @@ throw while building logs.
   path can represent it, for example:
   `// AppAutomation recorder warning: FlaUI target unsupported (flaui-action-unsupported).`
 - Full context goes to `ILogger`.
+- Full context is also written to a diagnostic log file when file diagnostics
+  are enabled from the recorder overlay or through options.
 
 ## 7. Бизнес-правила / Алгоритмы
 1. On attempted capture:
@@ -287,6 +289,9 @@ throw while building logs.
    - Log once per failed capture attempt.
    - Log once per recorded step that has invalid/warning runtime findings.
    - Do not log full diagnostics for fully valid steps at warning/error level.
+   - File diagnostics are user-toggleable in the recorder overlay. When
+     enabled, every detailed recorder diagnostic is appended to the displayed
+     `.recorder-diagnostics.log` file.
 5. Deduplication:
    - Existing step fingerprint dedupe remains unchanged.
    - Diagnostic logging for unsupported capture is not deduped unless the same
@@ -303,9 +308,14 @@ throw while building logs.
   flow.
 - `RetryStepValidation(...)` reruns runtime-readiness checks and logs detailed
   diagnostics again only if current retry still fails.
+- Recorder overlay exposes a `Write to file` diagnostic toggle and diagnostic
+  path so users can collect a file for AppAutomation developers without
+  configuring an external logger.
 
 ## 9. Изменения модели данных / состояния
 - New runtime validation options are in-memory only.
+- New diagnostic file options are in-memory only. The log file is an external
+  diagnostic artifact, not scenario state.
 - New diagnostic finding models are recorder runtime model only; no persisted
   scenario schema is introduced.
 - Existing `RecordedStep` may receive additional compact validation/failure
@@ -320,6 +330,9 @@ throw while building logs.
   validation fails or every selected runtime target is blocked.
 - Consumers can disable runtime checks through validation options if they need
   legacy behavior.
+- Users can enable/disable diagnostic file recording from the recorder overlay;
+  initial state and optional file path can be configured through recorder
+  options.
 - Rollback: revert recorder validation/diagnostic changes; generated scenarios
   remain compatible because scenario format is unchanged.
 
@@ -336,6 +349,9 @@ Acceptance Criteria:
   `CaptureInvalidSteps` only keeps them in the recorder journal for review.
 - Diagnostics use stable event ids `4101..4106`.
 - Capture failures log detailed diagnostics even when no `RecordedStep` exists.
+- Diagnostic file recording can be enabled/disabled from the recorder overlay;
+  when enabled, capture/validation diagnostics are appended to a displayed file
+  path.
 - Validation failures log detailed diagnostics including failed checks, control,
   action, payload snapshot, visual path and logical path.
 - Diagnostics include enough structured fields to identify action kind,
@@ -350,6 +366,10 @@ Acceptance Criteria:
   - one-target failure stays persistable and generated output contains a
     warning comment for the failed target;
   - unsupported capture logs control snapshot and visual/logical paths;
+  - diagnostic file toggle writes detailed diagnostics to file and does not
+    create a file while disabled;
+  - recorder overlay toggle updates session diagnostic file state and shows the
+    file path;
   - selector/action invalid step logs diagnostics and remains non-persistable;
   - disabling runtime validation preserves previous validation outcome.
 
@@ -414,12 +434,15 @@ ids are required.
 ## 16. Таблица изменений файлов
 | Файл | Изменения | Причина |
 | --- | --- | --- |
-| `src/AppAutomation.Recorder.Avalonia/AppAutomationRecorderOptions.cs` | Add runtime validation target options | Let consumers configure Headless/FlaUI checks |
+| `src/AppAutomation.Recorder.Avalonia/AppAutomationRecorderOptions.cs` | Add runtime validation target options and diagnostic file options | Let consumers configure Headless/FlaUI checks and initial diagnostic file behavior |
+| `src/AppAutomation.Recorder.Avalonia/IAppAutomationRecorderSessionDetails.cs` | Expose diagnostic file state/toggle/path | Let overlay control and display file diagnostics |
 | `src/AppAutomation.Recorder.Avalonia/RecorderModels.cs` | Add diagnostic/finding records if needed | Carry target-specific validation metadata |
 | `src/AppAutomation.Recorder.Avalonia/RecorderDiagnosticsEventIds.cs` | Add stable logger event ids | Make diagnostics testable and searchable |
 | `src/AppAutomation.Recorder.Avalonia/RecorderCommandRuntimeValidator.cs` | New provider-readiness validation | Validate captured commands for Headless/FlaUI |
 | `src/AppAutomation.Recorder.Avalonia/RecorderCaptureDiagnostics.cs` | New diagnostic snapshot builder | Log control/action/tree details |
 | `src/AppAutomation.Recorder.Avalonia/RecorderSession.cs` | Integrate validation/logging | Run checks and log failures |
+| `src/AppAutomation.Recorder.Avalonia/UI/RecorderOverlay.axaml` | Add diagnostic file toggle and path display | Let users enable/disable file diagnostics in recorder window |
+| `src/AppAutomation.Recorder.Avalonia/UI/RecorderOverlay.axaml.cs` | Wire diagnostic file toggle and copy-path action | Update session state from overlay |
 | `src/AppAutomation.Recorder.Avalonia/CodeGeneration/AuthoringCodeGenerator.cs` | Ensure warning comments include unsupported runtime target names | Preserve generated command while surfacing target gap |
 | `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` | Add/adjust unit tests | Cover new validation and logs |
 
@@ -430,6 +453,7 @@ ids are required.
 | Step validation | Avalonia selector/action compatibility | Avalonia selector/action plus Headless and FlaUI readiness checks |
 | Runtime parity | Discovered later in runtime tests | Caught at recorder time as warning/invalid with target-specific finding |
 | Diagnostic depth | `ValidationMessage` and save diagnostics | Full structured logger event for AppAutomation developers |
+| Diagnostic collection | External `ILogger` only | Overlay toggle can write the same detailed diagnostics to a file with visible/copyable path |
 | Persistence | Any invalid validation can skip a step | Runtime target failure skips only when all selected targets fail; one-target failure persists with comment |
 
 ## 18. Альтернативы и компромиссы
@@ -506,11 +530,16 @@ ids are required.
 - Post-review fix: added an explicit generated-output test for the case where
   Headless is unsupported but FlaUI is supported, so the user decision is
   covered by a dedicated regression test.
+- Follow-up UX fix: added recorder-window diagnostic file recording. Users can
+  toggle `Write to file` in the overlay, see/copy the file path, and collect
+  detailed capture/validation diagnostics without configuring an external
+  logger.
 - Verification:
-  - `dotnet test --project .\tests\AppAutomation.Recorder.Avalonia.Tests\AppAutomation.Recorder.Avalonia.Tests.csproj --no-restore` -> PASS, 45/45.
+  - `dotnet test --project .\tests\AppAutomation.Recorder.Avalonia.Tests\AppAutomation.Recorder.Avalonia.Tests.csproj --no-restore` -> PASS, 47/47.
   - `dotnet test --project .\tests\AppAutomation.Abstractions.Tests\AppAutomation.Abstractions.Tests.csproj --no-restore` -> PASS, 51/51.
   - `dotnet build .\AppAutomation.sln` -> PASS, 0 errors.
-  - `dotnet test --solution .\AppAutomation.sln --no-build` -> PASS, 214/214.
+  - `dotnet test --solution .\AppAutomation.sln --no-build` -> FAIL, 214/216 passed; failures were isolated to existing sample FlaUI scenarios (`FilterHistory_ByText_ShowsOnlyMatchingItems`, `DataGrid_BuildSelectClear_ShowsRowsSelectionAndValidation`) and do not touch recorder code.
+  - `dotnet test --project .\sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj --no-build` -> FAIL, 26/27 passed; remaining failure was the same sample DataGrid UIA scenario with changing observed state.
 - Residual warnings: existing `NU1903` for `Tmds.DBus.Protocol` in sample
   projects and existing `CA1859` suggestions in recorder tests remain outside
   this change.
@@ -528,3 +557,6 @@ ids are required.
 | EXEC | Реализация runtime validation, diagnostics and codegen comments | 0.9 | Нет | Запустить broader verification | Нет | Нет | Добавлены options, stable EventIds, provider-neutral readiness validator, detailed diagnostic snapshots/logging and generated warning comments; recorder targeted tests passed 44/44 before post-review test addition | `src/AppAutomation.Recorder.Avalonia/*`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
 | EXEC | Post-review strengthening | 0.93 | Нет | Повторить targeted and full verification | Нет | Нет | Добавлен explicit regression test: one runtime target unsupported while another is supported still persists generated command with unsupported-target comment | `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
 | EXEC | Финальная проверка | 0.96 | Нет | Завершить задачу | Нет | Нет | Recorder tests 45/45, abstractions tests 51/51, solution build passed, full solution tests 214/214; post-EXEC review PASS | `specs/2026-04-23-recorder-headless-flaui-command-validation.md`, `src/AppAutomation.Recorder.Avalonia/*`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
+| EXEC | UX follow-up: diagnostic file toggle | 0.93 | Нет | Запустить targeted/full verification | Нет | Да, пользователь уточнил, что включение диагностики должно писать в файл | Добавлены options, session API, overlay checkbox/path/copy action and file append path for detailed diagnostics | `src/AppAutomation.Recorder.Avalonia/AppAutomationRecorderOptions.cs`, `src/AppAutomation.Recorder.Avalonia/IAppAutomationRecorderSessionDetails.cs`, `src/AppAutomation.Recorder.Avalonia/RecorderSession.cs`, `src/AppAutomation.Recorder.Avalonia/UI/RecorderOverlay.*`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
+| EXEC | Targeted verification после file diagnostics | 0.94 | Нет | Запустить solution build/tests | Нет | Нет | Recorder tests passed 47/47; existing analyzer warnings remain unrelated | `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
+| EXEC | Broader verification после file diagnostics | 0.9 | Нет | Зафиксировать известный FlaUI sample failure и завершить/опубликовать follow-up | Нет | Нет | Solution build passed; full solution tests failed only in sample FlaUI UIA scenarios unrelated to recorder file logging, retry of FlaUI project left the same DataGrid scenario failing | `specs/2026-04-23-recorder-headless-flaui-command-validation.md` |

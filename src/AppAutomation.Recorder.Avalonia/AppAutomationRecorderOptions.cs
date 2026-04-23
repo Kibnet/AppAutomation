@@ -27,6 +27,8 @@ public sealed class AppAutomationRecorderOptions
 
     public ILogger? Logger { get; init; }
 
+    public RecorderDiagnosticLogOptions DiagnosticLog { get; init; } = new();
+
     public RecorderHotkeys Hotkeys { get; init; } = RecorderHotkeys.Default;
 
     public RecorderOverlayOptions Overlay { get; init; } = new();
@@ -148,6 +150,13 @@ public sealed class RecorderValidationOptions
     public bool ValidateRuntimeTargets { get; init; } = true;
 
     public RecorderRuntimeValidationTargets RuntimeTargets { get; init; } = RecorderRuntimeValidationTargets.All;
+}
+
+public sealed class RecorderDiagnosticLogOptions
+{
+    public bool WriteToFile { get; init; }
+
+    public string? FilePath { get; init; }
 }
 
 [Flags]

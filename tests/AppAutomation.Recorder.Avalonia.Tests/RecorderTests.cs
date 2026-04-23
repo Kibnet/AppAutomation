@@ -830,6 +830,52 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_DiagnosticLogFileToggle_WritesDiagnosticsToFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var logPath = Path.Combine(directory.Path, "recorder-diagnostics.log");
+        var root = new StackPanel();
+        var unsupported = new Border();
+        AutomationProperties.SetAutomationId(unsupported, "UnsupportedBorder");
+        root.Children.Add(unsupported);
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                DiagnosticLog = new RecorderDiagnosticLogOptions
+                {
+                    FilePath = logPath
+                }
+            },
+            () => root,
+            attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(unsupported);
+        var disabledLogExists = File.Exists(logPath);
+
+        details.SetDiagnosticLogFileEnabled(true);
+        session.CaptureButtonClickForTesting(unsupported);
+
+        var logSource = await File.ReadAllTextAsync(logPath);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(disabledLogExists).IsEqualTo(false);
+            await Assert.That(details.IsDiagnosticLogFileEnabled).IsEqualTo(true);
+            await Assert.That(details.DiagnosticLogFilePath).IsEqualTo(logPath);
+            await Assert.That(details.DiagnosticLogEntryCount).IsEqualTo(1);
+            await Assert.That(logSource).Contains("EventId=4101");
+            await Assert.That(logSource).Contains("UnsupportedBorder");
+            await Assert.That(logSource).Contains("ControlSnapshot");
+            await Assert.That(logSource).Contains("VisualPath");
+            await Assert.That(logSource).Contains("LogicalPath");
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_ActionValidationFailure_LogsDiagnosticsAndRemainsNonPersistable()
     {
         var logger = new TestLogger();
@@ -1109,6 +1155,35 @@ public sealed class RecorderTests
             await Assert.That(minimizedRaised).IsEqualTo(1);
             await Assert.That(restoredRaised).IsEqualTo(1);
             await Assert.That(overlay.IsMinimized).IsEqualTo(false);
+        }
+    }
+
+    [Test]
+    public async Task Overlay_DiagnosticLogToggle_UpdatesSessionAndShowsPath()
+    {
+        var session = new FakeRecorderSession
+        {
+            DiagnosticLogFilePath = @"C:\Recorder\Recorded\recorder-diagnostics.log",
+            DiagnosticLogEntryCount = 2
+        };
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+
+        var checkBox = overlay.FindControl<CheckBox>("DiagnosticLogCheckBox");
+        var pathText = overlay.FindControl<TextBlock>("DiagnosticLogPathText");
+        var copyPathButton = overlay.FindControl<Button>("CopyDiagnosticLogPathButton");
+
+        checkBox!.IsChecked = true;
+        checkBox.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(checkBox).IsNotNull();
+            await Assert.That(pathText).IsNotNull();
+            await Assert.That(copyPathButton).IsNotNull();
+            await Assert.That(session.IsDiagnosticLogFileEnabled).IsEqualTo(true);
+            await Assert.That(pathText!.Text).Contains(@"C:\Recorder\Recorded\recorder-diagnostics.log");
+            await Assert.That(copyPathButton!.IsEnabled).IsEqualTo(true);
         }
     }
 
@@ -1962,6 +2037,12 @@ public sealed class RecorderTests
 
         public string CurrentScenarioFilePath { get; set; } = string.Empty;
 
+        public bool IsDiagnosticLogFileEnabled { get; set; }
+
+        public string DiagnosticLogFilePath { get; set; } = @"C:\Recorder\Recorded\recorder-diagnostics.log";
+
+        public int DiagnosticLogEntryCount { get; set; }
+
         public int WarningStepCount => _stepJournal.Count(entry => !entry.IsIgnored && entry.ValidationStatus == RecorderValidationStatus.Warning);
 
         public int InvalidStepCount => _stepJournal.Count(entry => !entry.IsIgnored && !entry.CanPersist);
@@ -2048,6 +2129,12 @@ public sealed class RecorderTests
             RetriedStepIds.Add(stepId);
             RaiseChanged();
             return true;
+        }
+
+        public void SetDiagnosticLogFileEnabled(bool isEnabled)
+        {
+            IsDiagnosticLogFileEnabled = isEnabled;
+            RaiseChanged();
         }
 
         public void SetJournal(IReadOnlyList<RecorderStepJournalEntry> entries)

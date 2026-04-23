@@ -83,6 +83,26 @@
                                FontFamily="Cascadia Mono, Consolas"
                                Foreground="{DynamicResource RecorderText}"
                                TextWrapping="Wrap" />
+                    <TextBlock Text="Diagnostic log"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource RecorderText}" />
+                    <Grid ColumnDefinitions="Auto,Auto,*"
+                          ColumnSpacing="8">
+                        <CheckBox x:Name="DiagnosticLogCheckBox"
+                                  Grid.Column="0"
+                                  VerticalAlignment="Center"
+                                  Content="Write to file" />
+                        <Button x:Name="CopyDiagnosticLogPathButton"
+                                Grid.Column="1"
+                                Padding="8,3"
+                                Content="Copy path" />
+                        <TextBlock x:Name="DiagnosticLogPathText"
+                                   Grid.Column="2"
+                                   VerticalAlignment="Center"
+                                   FontFamily="Cascadia Mono, Consolas"
+                                   Foreground="{DynamicResource RecorderMuted}"
+                                   TextWrapping="Wrap" />
+                    </Grid>
                 </StackPanel>
 
                 <Border Grid.Row="3"

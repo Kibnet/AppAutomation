@@ -50,6 +50,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private Task<RecorderSaveResult>? _activeOperationTask;
     private string _busyDescription = string.Empty;
     private readonly RecorderOutputDescription _defaultOutputDescription;
+    private readonly bool _hasConfiguredLogger;
+    private readonly string _diagnosticLogFilePath;
+    private bool _isDiagnosticLogFileEnabled;
+    private int _diagnosticLogEntryCount;
     private string? _lastScenarioFilePath;
 
     public RecorderSession(Window window, AppAutomationRecorderOptions options)
@@ -68,6 +72,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _validationRootProvider = validationRootProvider ?? (() => window.Content as Control);
         _logger = options.Logger ?? NullLogger.Instance;
+        _hasConfiguredLogger = options.Logger is not null;
         _hotkeyMap = RecorderHotkeyMap.Create(options.Hotkeys);
         _stepFactory = new RecorderStepFactory(options, _validationRootProvider);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
@@ -77,6 +82,12 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
             _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
         _defaultOutputDescription = _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null);
+        _diagnosticLogFilePath = ResolveDiagnosticLogFilePath(options, _defaultOutputDescription);
+        _isDiagnosticLogFileEnabled = options.DiagnosticLog.WriteToFile;
+        if (_isDiagnosticLogFileEnabled)
+        {
+            EnsureDiagnosticLogFileHeader();
+        }
 
         _textDebounceTimer = new DispatcherTimer
         {
@@ -128,6 +139,12 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
     public string SessionSummary => BuildSessionSummary();
 
+    public bool IsDiagnosticLogFileEnabled => _isDiagnosticLogFileEnabled;
+
+    public string DiagnosticLogFilePath => _diagnosticLogFilePath;
+
+    public int DiagnosticLogEntryCount => _diagnosticLogEntryCount;
+
     public int WarningStepCount => _steps.Count(static step => !step.IsIgnored && step.ValidationStatus == RecorderValidationStatus.Warning);
 
     public int InvalidStepCount => _steps.Count(static step => !step.IsIgnored && (step.ValidationStatus == RecorderValidationStatus.Invalid || !step.CanPersist));
@@ -157,6 +174,26 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _steps.Clear();
         LatestPreview = string.Empty;
         SetStatus("Recorded steps cleared.", RecorderValidationStatus.Valid);
+    }
+
+    public void SetDiagnosticLogFileEnabled(bool isEnabled)
+    {
+        if (_isDiagnosticLogFileEnabled == isEnabled)
+        {
+            return;
+        }
+
+        _isDiagnosticLogFileEnabled = isEnabled;
+        if (isEnabled)
+        {
+            EnsureDiagnosticLogFileHeader();
+        }
+
+        SetStatus(
+            isEnabled
+                ? $"Diagnostic log file enabled: {_diagnosticLogFilePath}"
+                : "Diagnostic log file disabled.",
+            LatestValidationStatus);
     }
 
     public string ExportPreview()
@@ -929,6 +966,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         IReadOnlyList<RecorderRuntimeValidationFinding> findings,
         string? message)
     {
+        if (!_hasConfiguredLogger && !_isDiagnosticLogFileEnabled)
+        {
+            return;
+        }
+
         try
         {
             var diagnostic = RecorderCaptureDiagnostics.Build(
@@ -939,7 +981,12 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 step,
                 findings,
                 message);
-            _logger.LogWarning(eventId, "{RecorderDiagnostic}", diagnostic);
+            AppendDiagnosticLogFile(eventId, diagnostic);
+
+            if (_hasConfiguredLogger)
+            {
+                _logger.LogWarning(eventId, "{RecorderDiagnostic}", diagnostic);
+            }
         }
         catch (Exception ex)
         {
@@ -950,6 +997,96 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 captureAction,
                 ex.Message);
         }
+    }
+
+    private void AppendDiagnosticLogFile(EventId eventId, string diagnostic)
+    {
+        if (!_isDiagnosticLogFileEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(_diagnosticLogFilePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.AppendAllText(
+                _diagnosticLogFilePath,
+                string.Join(
+                    Environment.NewLine,
+                    $"[{DateTimeOffset.UtcNow:O}] EventId={eventId.Id} EventName={eventId.Name}",
+                    diagnostic,
+                    string.Empty,
+                    new string('-', 80),
+                    string.Empty));
+            _diagnosticLogEntryCount++;
+            NotifySessionChanged();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed,
+                ex,
+                "Failed to append recorder diagnostic log file '{DiagnosticLogFilePath}': {Message}",
+                _diagnosticLogFilePath,
+                ex.Message);
+        }
+    }
+
+    private void EnsureDiagnosticLogFileHeader()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(_diagnosticLogFilePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            if (File.Exists(_diagnosticLogFilePath))
+            {
+                return;
+            }
+
+            File.WriteAllText(
+                _diagnosticLogFilePath,
+                string.Join(
+                    Environment.NewLine,
+                    "AppAutomation recorder diagnostic log",
+                    $"ScenarioName: {_options.ScenarioName}",
+                    $"CreatedUtc: {DateTimeOffset.UtcNow:O}",
+                    string.Empty));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed,
+                ex,
+                "Failed to initialize recorder diagnostic log file '{DiagnosticLogFilePath}': {Message}",
+                _diagnosticLogFilePath,
+                ex.Message);
+        }
+    }
+
+    private static string ResolveDiagnosticLogFilePath(
+        AppAutomationRecorderOptions options,
+        RecorderOutputDescription outputDescription)
+    {
+        if (!string.IsNullOrWhiteSpace(options.DiagnosticLog.FilePath))
+        {
+            return Path.GetFullPath(options.DiagnosticLog.FilePath);
+        }
+
+        var directory = !string.IsNullOrWhiteSpace(outputDescription.OutputDirectory)
+            ? outputDescription.OutputDirectory
+            : Path.Combine(Path.GetTempPath(), "AppAutomation", "Recorder");
+        var scenarioName = RecorderNaming.CreateFileSafeName(options.ScenarioName, "scenario");
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return Path.Combine(directory, $"{scenarioName}.{timestamp}.recorder-diagnostics.log");
     }
 
     private static bool RuntimeFindingsBlockAllTargets(IReadOnlyList<RecorderRuntimeValidationFinding> findings)
@@ -1413,6 +1550,13 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         if (IgnoredStepCount > 0)
         {
             parts.Add($"{IgnoredStepCount} ignored");
+        }
+
+        if (_isDiagnosticLogFileEnabled)
+        {
+            parts.Add(_diagnosticLogEntryCount == 0
+                ? "diagnostic log on"
+                : $"{_diagnosticLogEntryCount} diagnostic log entries");
         }
 
         if (IsBusy)
