@@ -23,7 +23,13 @@ public enum RecordedActionKind
     WaitUntilIsEnabled = 15,
     SelectListBoxItem = 16,
     WaitUntilGridRowsAtLeast = 17,
-    WaitUntilGridCellEquals = 18
+    WaitUntilGridCellEquals = 18,
+    SearchAndSelect = 19,
+    OpenGridRow = 20,
+    SortGridByColumn = 21,
+    ScrollGridToEnd = 22,
+    CopyGridCell = 23,
+    ExportGrid = 24
 }
 
 public enum RecorderAssertionMode
@@ -68,7 +74,32 @@ internal sealed record RecordedStep(
     DateTimeOffset? LastValidationAt = null,
     int? IntValue = null,
     int? RowIndex = null,
-    int? ColumnIndex = null);
+    int? ColumnIndex = null,
+    string? ItemValue = null,
+    IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null);
+
+internal enum RecorderRuntimeValidationTarget
+{
+    Headless = 0,
+    FlaUI = 1
+}
+
+internal enum RecorderRuntimeValidationSeverity
+{
+    Info = 0,
+    Warning = 1,
+    Invalid = 2
+}
+
+internal sealed record RecorderRuntimeValidationFinding(
+    RecorderRuntimeValidationTarget Target,
+    RecorderRuntimeValidationSeverity Severity,
+    string Code,
+    string Message,
+    bool BlocksTarget)
+{
+    public bool ShouldSurface => Severity != RecorderRuntimeValidationSeverity.Info || BlocksTarget;
+}
 
 internal sealed record StepCreationResult(bool Success, RecordedStep? Step, string Message)
 {

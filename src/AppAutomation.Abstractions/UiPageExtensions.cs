@@ -434,6 +434,298 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Sets date bounds in a composite popup filter and applies or cancels the operation.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the date range filter control.</param>
+    /// <param name="from">Optional lower date bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="to">Optional upper date bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="commitMode">Whether to apply or cancel the popup operation.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the filter is not enabled, misconfigured, or fails to set values.</exception>
+    public static TSelf SetDateRangeFilter<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDateRangeFilterControl>> selector,
+        DateTime? from,
+        DateTime? to,
+        FilterPopupCommitMode commitMode = FilterPopupCommitMode.Apply,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var request = new DateRangeFilterRequest(from?.Date, to?.Date, commitMode);
+        return ExecuteDateRangeFilter(page, selector, request, timeoutMs, nameof(SetDateRangeFilter));
+    }
+
+    /// <summary>
+    /// Sets numeric bounds in a composite popup filter and applies or cancels the operation.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the numeric range filter control.</param>
+    /// <param name="from">Optional lower numeric bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="to">Optional upper numeric bound. <see langword="null"/> leaves it unchanged.</param>
+    /// <param name="commitMode">Whether to apply or cancel the popup operation.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the filter is not enabled, misconfigured, or fails to set values.</exception>
+    public static TSelf SetNumericRangeFilter<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INumericRangeFilterControl>> selector,
+        double? from,
+        double? to,
+        FilterPopupCommitMode commitMode = FilterPopupCommitMode.Apply,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var request = new NumericRangeFilterRequest(from, to, commitMode);
+        return ExecuteNumericRangeFilter(page, selector, request, timeoutMs, nameof(SetNumericRangeFilter));
+    }
+
+    /// <summary>
+    /// Completes a modal dialog using the requested action.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the dialog control.</param>
+    /// <param name="actionKind">The dialog action to invoke.</param>
+    /// <param name="expectedMessageContains">Optional message fragment that must be visible before completion.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait for the operation to complete.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the dialog is not enabled, text does not match, or the action fails.</exception>
+    public static TSelf CompleteDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        DialogActionKind actionKind = DialogActionKind.Confirm,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (expectedMessageContains is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedMessageContains);
+        }
+
+        return ExecuteDialog(page, selector, actionKind, expectedMessageContains, timeoutMs, nameof(CompleteDialog));
+    }
+
+    /// <summary>
+    /// Confirms a modal dialog.
+    /// </summary>
+    public static TSelf ConfirmDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Confirm, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Cancels a modal dialog.
+    /// </summary>
+    public static TSelf CancelDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Cancel, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Dismisses a modal dialog.
+    /// </summary>
+    public static TSelf DismissDialog<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return CompleteDialog(page, selector, DialogActionKind.Dismiss, expectedMessageContains, timeoutMs);
+    }
+
+    /// <summary>
+    /// Waits until a notification contains the expected text.
+    /// </summary>
+    public static TSelf WaitUntilNotificationContains<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INotificationControl>> selector,
+        string expectedText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedText);
+
+        var notification = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => ContainsText(notification.Text, expectedText),
+            timeoutMs,
+            $"Notification '{notification.AutomationId}' did not contain expected text.",
+            expectedValue: $"Contains '{expectedText}'",
+            lastObservedValueFactory: () => notification.Text);
+        return page;
+    }
+
+    /// <summary>
+    /// Dismisses a notification when the runtime adapter exposes a dismiss action.
+    /// </summary>
+    public static TSelf DismissNotification<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, INotificationControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var notification = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => notification.IsEnabled,
+                timeoutMs,
+                $"Notification '{notification.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={notification.IsEnabled}",
+                nameof(DismissNotification));
+
+            notification.Dismiss();
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Notification '{notification.AutomationId}' failed to dismiss.",
+                expectedValue: "Dismiss",
+                lastObservedValueFactory: () => notification.Text,
+                nameof(DismissNotification),
+                ex);
+        }
+
+        return page;
+    }
+
+    /// <summary>
+    /// Opens an export flow and selects or cancels a target folder.
+    /// </summary>
+    public static TSelf SelectExportFolder<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IFolderExportControl>> selector,
+        string folderPath,
+        FolderExportCommitMode commitMode = FolderExportCommitMode.Select,
+        string? expectedStatusContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
+        if (expectedStatusContains is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedStatusContains);
+        }
+
+        return ExecuteFolderExport(
+            page,
+            selector,
+            folderPath,
+            commitMode,
+            expectedStatusContains,
+            timeoutMs,
+            nameof(SelectExportFolder));
+    }
+
+    /// <summary>
+    /// Navigates to a shell pane using the requested navigation mode.
+    /// </summary>
+    public static TSelf NavigateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        ShellPaneNavigationMode mode = ShellPaneNavigationMode.OpenOrActivate,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, mode),
+            timeoutMs,
+            nameof(NavigateShellPane));
+    }
+
+    /// <summary>
+    /// Opens a shell pane through the configured navigation source.
+    /// </summary>
+    public static TSelf OpenShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.Open),
+            timeoutMs,
+            nameof(OpenShellPane));
+    }
+
+    /// <summary>
+    /// Activates an already-open shell pane.
+    /// </summary>
+    public static TSelf ActivateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.Activate),
+            timeoutMs,
+            nameof(ActivateShellPane));
+    }
+
+    /// <summary>
+    /// Activates an already-open shell pane or opens it when no matching pane is open.
+    /// </summary>
+    public static TSelf OpenOrActivateShellPane<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        string paneName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
+
+        return ExecuteShellNavigation(
+            page,
+            selector,
+            new ShellPaneNavigationRequest(paneName, ShellPaneNavigationMode.OpenOrActivate),
+            timeoutMs,
+            nameof(OpenOrActivateShellPane));
+    }
+
+    /// <summary>
     /// Selects a specific tab item control directly.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1130,6 +1422,264 @@ public static class UiPageExtensions
         return page;
     }
 
+    /// <summary>
+    /// Opens or activates a grid row by its zero-based index.
+    /// </summary>
+    public static TSelf OpenGridRow<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(OpenGridRow),
+            timeoutMs,
+            grid => grid.OpenRow(rowIndex),
+            grid => $"rowIndex={rowIndex}; rows={grid.Rows.Count}");
+    }
+
+    /// <summary>
+    /// Sorts a grid by a stable column name or visible header text.
+    /// </summary>
+    public static TSelf SortGridByColumn<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        string columnName,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(SortGridByColumn),
+            timeoutMs,
+            grid => grid.SortByColumn(columnName),
+            _ => $"columnName={columnName}");
+    }
+
+    /// <summary>
+    /// Scrolls a grid to the end or triggers its load-more behavior.
+    /// </summary>
+    public static TSelf ScrollGridToEnd<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(ScrollGridToEnd),
+            timeoutMs,
+            grid => grid.ScrollToEnd(),
+            grid => $"rows={grid.Rows.Count}");
+    }
+
+    /// <summary>
+    /// Copies or reads a grid cell by zero-based row and column indexes.
+    /// </summary>
+    public static TSelf CopyGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(CopyGridCell),
+            timeoutMs,
+            grid => grid.CopyCell(rowIndex, columnIndex),
+            grid => TryReadGridCellValue(grid, rowIndex, columnIndex));
+    }
+
+    /// <summary>
+    /// Invokes a grid export action.
+    /// </summary>
+    public static TSelf ExportGrid<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return ExecuteGridUserAction(
+            page,
+            selector,
+            nameof(ExportGrid),
+            timeoutMs,
+            grid => grid.Export(),
+            grid => $"rows={grid.Rows.Count}");
+    }
+
+    /// <summary>
+    /// Edits a grid cell using a provider-neutral editor request.
+    /// </summary>
+    public static TSelf EditGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditorKind editorKind = GridCellEditorKind.Text,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        string? searchText = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+        ArgumentNullException.ThrowIfNull(value);
+
+        var request = new GridCellEditRequest(
+            rowIndex,
+            columnIndex,
+            value,
+            editorKind,
+            commitMode,
+            searchText);
+
+        return ExecuteGridCellEdit(page, selector, request, timeoutMs, nameof(EditGridCell));
+    }
+
+    /// <summary>
+    /// Edits a grid cell with a text value.
+    /// </summary>
+    public static TSelf EditGridCellText<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value,
+            GridCellEditorKind.Text,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a grid cell with an invariant-culture numeric value.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        double value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a grid cell with a date value formatted as yyyy-MM-dd.
+    /// </summary>
+    public static TSelf EditGridCellDate<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        DateTime value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Date,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Selects a combo-box item inside a grid cell.
+    /// </summary>
+    public static TSelf SelectGridCellComboItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string itemText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            itemText,
+            GridCellEditorKind.ComboBox,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Searches and selects an item inside a grid cell search-picker editor.
+    /// </summary>
+    public static TSelf SearchAndSelectGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string searchText,
+        string itemText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchText);
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            itemText,
+            GridCellEditorKind.SearchPicker,
+            commitMode,
+            searchText,
+            timeoutMs);
+    }
+
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
         where TSelf : UiPage
     {
@@ -1143,6 +1693,511 @@ public static class UiPageExtensions
         }
 
         return control;
+    }
+
+    private static TSelf ExecuteDateRangeFilter<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IDateRangeFilterControl>> selector,
+        DateRangeFilterRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var filter = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => filter.IsEnabled,
+                timeoutMs,
+                $"Date range filter '{filter.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={filter.IsEnabled}",
+                actionName);
+
+            filter.SetRange(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Date range filter '{filter.AutomationId}' failed to execute popup operation.",
+                expectedValue: DescribeDateRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadDateRangeFilterValue(filter),
+                actionName,
+                ex);
+        }
+
+        if (request.CommitMode == FilterPopupCommitMode.Apply)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => DateBoundMatches(filter.FromValue, request.From)
+                    && DateBoundMatches(filter.ToValue, request.To),
+                timeoutMs,
+                $"Date range filter '{filter.AutomationId}' did not reach expected range.",
+                expectedValue: DescribeDateRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadDateRangeFilterValue(filter),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteNumericRangeFilter<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, INumericRangeFilterControl>> selector,
+        NumericRangeFilterRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var filter = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => filter.IsEnabled,
+                timeoutMs,
+                $"Numeric range filter '{filter.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={filter.IsEnabled}",
+                actionName);
+
+            filter.SetRange(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Numeric range filter '{filter.AutomationId}' failed to execute popup operation.",
+                expectedValue: DescribeNumericRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadNumericRangeFilterValue(filter),
+                actionName,
+                ex);
+        }
+
+        if (request.CommitMode == FilterPopupCommitMode.Apply)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => NumericBoundMatches(filter.FromValue, request.From)
+                    && NumericBoundMatches(filter.ToValue, request.To),
+                timeoutMs,
+                $"Numeric range filter '{filter.AutomationId}' did not reach expected range.",
+                expectedValue: DescribeNumericRangeFilterRequest(request),
+                lastObservedValueFactory: () => ReadNumericRangeFilterValue(filter),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteDialog<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        DialogActionKind actionKind,
+        string? expectedMessageContains,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var dialog = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => dialog.IsEnabled,
+                timeoutMs,
+                $"Dialog '{dialog.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={dialog.IsEnabled}",
+                actionName);
+
+            if (!string.IsNullOrWhiteSpace(expectedMessageContains))
+            {
+                WaitUntil(
+                    page,
+                    selector,
+                    () => ContainsText(dialog.MessageText, expectedMessageContains),
+                    timeoutMs,
+                    $"Dialog '{dialog.AutomationId}' did not contain expected message.",
+                    expectedValue: $"Contains '{expectedMessageContains}'",
+                    lastObservedValueFactory: () => dialog.MessageText,
+                    actionName);
+            }
+
+            dialog.Complete(actionKind);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Dialog '{dialog.AutomationId}' failed to complete action '{actionKind}'.",
+                expectedValue: DescribeDialogAction(actionKind, expectedMessageContains),
+                lastObservedValueFactory: () => dialog.MessageText,
+                actionName,
+                ex);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteFolderExport<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IFolderExportControl>> selector,
+        string folderPath,
+        FolderExportCommitMode commitMode,
+        string? expectedStatusContains,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var export = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => export.IsEnabled,
+                timeoutMs,
+                $"Folder export '{export.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={export.IsEnabled}",
+                actionName);
+
+            export.SelectFolder(folderPath, commitMode);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Folder export '{export.AutomationId}' failed to complete '{commitMode}'.",
+                expectedValue: DescribeFolderExportRequest(folderPath, commitMode, expectedStatusContains),
+                lastObservedValueFactory: () => ReadFolderExportValue(export),
+                actionName,
+                ex);
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedStatusContains))
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => ContainsText(export.StatusText, expectedStatusContains),
+                timeoutMs,
+                $"Folder export '{export.AutomationId}' did not reach expected status.",
+                expectedValue: $"Contains '{expectedStatusContains}'",
+                lastObservedValueFactory: () => ReadFolderExportValue(export),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static TSelf ExecuteShellNavigation<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IShellNavigationControl>> selector,
+        ShellPaneNavigationRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.PaneName);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var shell = Resolve(selector, page);
+        try
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => shell.IsEnabled,
+                timeoutMs,
+                $"Shell navigation '{shell.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={shell.IsEnabled}",
+                actionName);
+
+            shell.OpenOrActivate(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Shell navigation '{shell.AutomationId}' failed to navigate to pane '{request.PaneName}'.",
+                expectedValue: DescribeShellNavigationRequest(request),
+                lastObservedValueFactory: () => DescribeShellNavigationState(ReadShellNavigationState(shell)),
+                actionName,
+                ex);
+        }
+
+        var stateAfterNavigation = ReadShellNavigationState(shell);
+        if (stateAfterNavigation.IsObservable)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => ShellNavigationReached(shell, request.PaneName),
+                timeoutMs,
+                $"Shell navigation '{shell.AutomationId}' did not reach expected pane.",
+                expectedValue: request.PaneName,
+                lastObservedValueFactory: () => DescribeShellNavigationState(ReadShellNavigationState(shell)),
+                actionName);
+        }
+
+        return page;
+    }
+
+    private static bool DateBoundMatches(DateTime? actual, DateTime? expected)
+    {
+        return expected is null || actual?.Date == expected.Value.Date;
+    }
+
+    private static bool NumericBoundMatches(double? actual, double? expected)
+    {
+        return expected is null || (actual is not null && Math.Abs(actual.Value - expected.Value) < 0.001);
+    }
+
+    private static bool ContainsText(string? actual, string expected)
+    {
+        return actual?.Contains(expected, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static string DescribeDateRangeFilterRequest(DateRangeFilterRequest request)
+    {
+        return $"{request.CommitMode}: from={FormatDateBound(request.From)}, to={FormatDateBound(request.To)}";
+    }
+
+    private static string DescribeNumericRangeFilterRequest(NumericRangeFilterRequest request)
+    {
+        return $"{request.CommitMode}: from={FormatNumericBound(request.From)}, to={FormatNumericBound(request.To)}";
+    }
+
+    private static string ReadDateRangeFilterValue(IDateRangeFilterControl filter)
+    {
+        return $"from={FormatDateBound(filter.FromValue)}, to={FormatDateBound(filter.ToValue)}";
+    }
+
+    private static string ReadNumericRangeFilterValue(INumericRangeFilterControl filter)
+    {
+        return $"from={FormatNumericBound(filter.FromValue)}, to={FormatNumericBound(filter.ToValue)}";
+    }
+
+    private static string DescribeDialogAction(DialogActionKind actionKind, string? expectedMessageContains)
+    {
+        return string.IsNullOrWhiteSpace(expectedMessageContains)
+            ? actionKind.ToString()
+            : $"{actionKind}: message contains '{expectedMessageContains}'";
+    }
+
+    private static string DescribeFolderExportRequest(
+        string folderPath,
+        FolderExportCommitMode commitMode,
+        string? expectedStatusContains)
+    {
+        var statusExpectation = string.IsNullOrWhiteSpace(expectedStatusContains)
+            ? string.Empty
+            : $", status contains '{expectedStatusContains}'";
+        return $"{commitMode}: folder='{folderPath}'{statusExpectation}";
+    }
+
+    private static string ReadFolderExportValue(IFolderExportControl export)
+    {
+        return $"folder={export.SelectedFolderPath ?? "<none>"}, status={export.StatusText ?? "<none>"}";
+    }
+
+    private static string DescribeShellNavigationRequest(ShellPaneNavigationRequest request)
+    {
+        return $"{request.Mode}: pane='{request.PaneName}'";
+    }
+
+    private static bool ShellNavigationReached(IShellNavigationControl shell, string paneName)
+    {
+        var state = ReadShellNavigationState(shell);
+        if (!string.IsNullOrWhiteSpace(state.Error))
+        {
+            throw new InvalidOperationException(state.Error);
+        }
+
+        return ShellPaneNameMatches(state.ActivePaneName, paneName)
+            || state.OpenPaneNames.Any(openPaneName => ShellPaneNameMatches(openPaneName, paneName));
+    }
+
+    private static ShellNavigationState ReadShellNavigationState(IShellNavigationControl shell)
+    {
+        try
+        {
+            return new ShellNavigationState(
+                shell.ActivePaneName,
+                shell.OpenPaneNames.Where(static value => !string.IsNullOrWhiteSpace(value)).ToArray(),
+                Error: null);
+        }
+        catch (Exception ex)
+        {
+            return new ShellNavigationState(null, Array.Empty<string>(), ex.Message);
+        }
+    }
+
+    private static string DescribeShellNavigationState(ShellNavigationState state)
+    {
+        if (!string.IsNullOrWhiteSpace(state.Error))
+        {
+            return $"error={state.Error}";
+        }
+
+        return $"active={state.ActivePaneName ?? "<none>"}, open=[{string.Join(", ", state.OpenPaneNames)}]";
+    }
+
+    private static bool ShellPaneNameMatches(string? actual, string expected)
+    {
+        return !string.IsNullOrWhiteSpace(actual)
+            && string.Equals(NormalizeLookupText(actual), NormalizeLookupText(expected), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatDateBound(DateTime? value)
+    {
+        return value?.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "<unchanged>";
+    }
+
+    private static string FormatNumericBound(double? value)
+    {
+        return value?.ToString("G17", CultureInfo.InvariantCulture) ?? "<unchanged>";
+    }
+
+    private static TSelf ExecuteGridUserAction<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        string actionName,
+        int timeoutMs,
+        Action<IGridUserActionControl> action,
+        Func<IGridControl, string?> lastObservedValueFactory)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var grid = Resolve(selector, page);
+        try
+        {
+            if (grid is not IGridUserActionControl actionGrid)
+            {
+                throw new NotSupportedException(
+                    $"Grid '{grid.AutomationId}' does not support user action '{actionName}' in adapter '{page.Capabilities.AdapterId}'.");
+            }
+
+            action(actionGrid);
+            return page;
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Grid '{grid.AutomationId}' failed to execute user action '{actionName}'.",
+                expectedValue: actionName,
+                lastObservedValueFactory: () => lastObservedValueFactory(grid),
+                actionName,
+                ex);
+        }
+    }
+
+    private static TSelf ExecuteGridCellEdit<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridCellEditRequest request,
+        int timeoutMs,
+        string actionName)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var grid = Resolve(selector, page);
+        var originalValue = TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex);
+        try
+        {
+            if (grid is not IEditableGridControl editableGrid)
+            {
+                throw new NotSupportedException(
+                    $"Grid '{grid.AutomationId}' does not support cell editing in adapter '{page.Capabilities.AdapterId}'.");
+            }
+
+            editableGrid.EditCell(request);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                $"Grid '{grid.AutomationId}' failed to edit cell [{request.RowIndex},{request.ColumnIndex}].",
+                expectedValue: DescribeGridCellEditRequest(request),
+                lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                actionName,
+                ex);
+        }
+
+        var expectedValue = request.CommitMode == GridCellEditCommitMode.Commit
+            ? request.Value
+            : originalValue;
+        WaitUntil(
+            page,
+            selector,
+            () => string.Equals(
+                TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                expectedValue,
+                StringComparison.Ordinal),
+            timeoutMs,
+            $"Grid '{grid.AutomationId}' cell [{request.RowIndex},{request.ColumnIndex}] did not reach expected edit result.",
+            expectedValue: expectedValue,
+            lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+            actionName);
+        return page;
+    }
+
+    private static string DescribeGridCellEditRequest(GridCellEditRequest request)
+    {
+        return $"{request.EditorKind}/{request.CommitMode}: [{request.RowIndex},{request.ColumnIndex}]='{request.Value}'";
     }
 
     private static string? TryReadGridCellValue(IGridControl grid, int rowIndex, int columnIndex)
@@ -1457,5 +2512,16 @@ public static class UiPageExtensions
         }
 
         return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
+
+    private sealed record ShellNavigationState(
+        string? ActivePaneName,
+        IReadOnlyList<string> OpenPaneNames,
+        string? Error)
+    {
+        public bool IsObservable =>
+            !string.IsNullOrWhiteSpace(Error)
+            || !string.IsNullOrWhiteSpace(ActivePaneName)
+            || OpenPaneNames.Count > 0;
     }
 }

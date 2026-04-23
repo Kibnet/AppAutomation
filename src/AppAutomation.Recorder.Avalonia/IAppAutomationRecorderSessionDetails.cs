@@ -10,6 +10,12 @@ public interface IAppAutomationRecorderSessionDetails
 
     string SessionSummary { get; }
 
+    bool IsDiagnosticLogFileEnabled { get; }
+
+    string DiagnosticLogFilePath { get; }
+
+    int DiagnosticLogEntryCount { get; }
+
     int WarningStepCount { get; }
 
     int InvalidStepCount { get; }
@@ -23,6 +29,8 @@ public interface IAppAutomationRecorderSessionDetails
     void SetStepIgnored(Guid stepId, bool isIgnored);
 
     bool RetryStepValidation(Guid stepId);
+
+    void SetDiagnosticLogFileEnabled(bool isEnabled);
 }
 
 public enum RecorderStepReviewState

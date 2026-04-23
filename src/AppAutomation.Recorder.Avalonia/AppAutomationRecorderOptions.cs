@@ -27,6 +27,8 @@ public sealed class AppAutomationRecorderOptions
 
     public ILogger? Logger { get; init; }
 
+    public RecorderDiagnosticLogOptions DiagnosticLog { get; init; } = new();
+
     public RecorderHotkeys Hotkeys { get; init; } = RecorderHotkeys.Default;
 
     public RecorderOverlayOptions Overlay { get; init; } = new();
@@ -36,6 +38,10 @@ public sealed class AppAutomationRecorderOptions
     public IList<RecorderControlHint> ControlHints { get; } = new List<RecorderControlHint>();
 
     public IList<RecorderGridHint> GridHints { get; } = new List<RecorderGridHint>();
+
+    public IList<RecorderGridActionHint> GridActionHints { get; } = new List<RecorderGridActionHint>();
+
+    public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
 
@@ -48,7 +54,12 @@ public enum RecorderOverlayTheme
     Dark = 1
 }
 
-public sealed record RecorderControlHint(string LocatorValue, RecorderActionHint ActionHint);
+public sealed record RecorderControlHint(
+    string LocatorValue,
+    RecorderActionHint ActionHint,
+    UiControlType? TargetControlType = null,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool? FallbackToName = null);
 
 public sealed record RecorderLocatorAlias(
     string SourceLocatorValue,
@@ -65,6 +76,32 @@ public sealed record RecorderGridHint(
     UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
     UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
+
+public sealed record RecorderGridActionHint(
+    string SourceLocatorValue,
+    string TargetGridLocatorValue,
+    RecorderGridUserActionKind ActionKind,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetGridLocatorKind = UiLocatorKind.AutomationId,
+    bool TargetFallbackToName = false,
+    string? ColumnName = null,
+    int? RowIndex = null,
+    int? ColumnIndex = null);
+
+public sealed record RecorderSearchPickerHint(
+    string LocatorValue,
+    SearchPickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public enum RecorderGridUserActionKind
+{
+    OpenRow = 0,
+    SortByColumn = 1,
+    ScrollToEnd = 2,
+    CopyCell = 3,
+    Export = 4
+}
 
 public enum RecorderActionHint
 {
@@ -109,4 +146,24 @@ public sealed class RecorderValidationOptions
     public bool ValidateSelectors { get; init; } = true;
 
     public bool CaptureInvalidSteps { get; init; } = true;
+
+    public bool ValidateRuntimeTargets { get; init; } = true;
+
+    public RecorderRuntimeValidationTargets RuntimeTargets { get; init; } = RecorderRuntimeValidationTargets.All;
+}
+
+public sealed class RecorderDiagnosticLogOptions
+{
+    public bool WriteToFile { get; init; }
+
+    public string? FilePath { get; init; }
+}
+
+[Flags]
+public enum RecorderRuntimeValidationTargets
+{
+    None = 0,
+    Headless = 1,
+    FlaUI = 2,
+    All = Headless | FlaUI
 }

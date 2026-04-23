@@ -264,6 +264,143 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_PrimitivesWrappersAndSearch_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .EnterText(p => p.ArmCopyTextBox, "ARM-COPY-42")
+            .ClickButton(p => p.ArmCopyButton)
+            .WaitUntilNameEquals(p => p.ArmCopyResultLabel, "Copied: ARM-COPY-42")
+            .SetChecked(p => p.ArmSearchFuzzyToggle, true)
+            .WaitUntilIsChecked(p => p.ArmSearchFuzzyToggle, true)
+            .SearchAndSelect(p => p.ArmSearchPicker, "customer", "Customer Alpha")
+            .WaitUntilNameContains(p => p.ArmSearchStatusLabel, "Customer Alpha")
+            .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
+            .WaitUntilNameContains(p => p.ArmServerPickerStatusLabel, "Product 42")
+            .ClickButton(p => p.ArmServerPickerClearButton)
+            .WaitUntilNameEquals(p => p.ArmServerPickerStatusLabel, "Server picker cleared");
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextEqualsAsync(() => Page.ArmCopyResultLabel.Text, "Copied: ARM-COPY-42");
+            await UiAssert.TextContainsAsync(() => Page.ArmSearchStatusLabel.Text, "Customer Alpha");
+            await UiAssert.TextContainsAsync(() => Page.ArmServerPickerStatusLabel.Text, "cleared");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_GridActionsAndEditableCells_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .ClickButton(p => p.ArmGridBuildButton)
+            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 3")
+            .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 3)
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 0, "ARM-01")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Value-1")
+            .EnterText(p => p.ArmGridEditValueInput, "Edited-42")
+            .WaitUntilTextEquals(p => p.ArmGridEditValueInput, "Edited-42")
+            .ClickButton(p => p.ArmGridCommitEditButton)
+            .WaitUntilNameContains(p => p.ArmGridStatusLabel, "Edited-42")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Edited-42")
+            .ClickButton(p => p.ArmGridOpenButton)
+            .WaitUntilNameContains(p => p.ArmGridStatusLabel, "ARM-01")
+            .ClickButton(p => p.ArmGridLoadMoreButton)
+            .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 5)
+            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 5")
+            .ClickButton(p => p.ArmGridSortButton)
+            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid sorted by value")
+            .ClickButton(p => p.ArmGridCopyButton)
+            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid copied")
+            .ClickButton(p => p.ArmGridExportButton)
+            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid export requested")
+            .WaitUntilIsEnabled(p => p.ArmEremexDataGridHost, true);
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextContainsAsync(() => Page.ArmGridStatusLabel.Text, "export");
+            await Assert.That(Page.ArmGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
+            await Assert.That(Page.ArmEremexDataGridHost.AutomationId).IsEqualTo("ArmEremexDataGridHost");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_FiltersDialogsNotificationsAndExport_Work()
+    {
+        var from = new DateTime(2026, 4, 1);
+        var to = new DateTime(2026, 4, 30);
+
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .SetDateRangeFilter(p => p.ArmDateRangeFilter, from, to)
+            .WaitUntilNameContains(p => p.ArmDateRangeStatusLabel, "2026-04-01..2026-04-30")
+            .SetNumericRangeFilter(p => p.ArmNumericRangeFilter, 10.5, 42.25)
+            .WaitUntilNameContains(p => p.ArmNumericRangeStatusLabel, "10.5..42.25")
+            .ConfirmDialog(p => p.ArmDialog, "Delete selected")
+            .WaitUntilNameEquals(p => p.ArmDialogResultLabel, "Dialog confirmed")
+            .WaitUntilNotificationContains(p => p.ArmNotification, "Export ready")
+            .DismissNotification(p => p.ArmNotification)
+            .WaitUntilNameEquals(p => p.ArmNotificationStatusLabel, "Notification dismissed")
+            .SelectExportFolder(
+                p => p.ArmFolderExport,
+                @"C:\Exports\Arm",
+                expectedStatusContains: @"C:\Exports\Arm")
+            .WaitUntilNameContains(p => p.ArmFolderExportStatusLabel, @"C:\Exports\Arm");
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextContainsAsync(() => Page.ArmDateRangeStatusLabel.Text, "2026-04-01");
+            await UiAssert.TextContainsAsync(() => Page.ArmNumericRangeStatusLabel.Text, "42.25");
+            await UiAssert.TextEqualsAsync(() => Page.ArmDialogResultLabel.Text, "Dialog confirmed");
+            await UiAssert.TextContainsAsync(() => Page.ArmFolderExportStatusLabel.Text, @"C:\Exports\Arm");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_ShellStatusLoadingApprovalAndCrud_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .OpenOrActivateShellPane(p => p.ArmShellNavigation, "Reports")
+            .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Reports")
+            .ActivateShellPane(p => p.ArmShellNavigation, "Customers")
+            .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Customers")
+            .ClickButton(p => p.ArmReloadButton)
+            .WaitUntilProgressAtLeast(p => p.ArmLoadingProgressBar, 100)
+            .WaitUntilNameEquals(p => p.ArmLoadingStatusLabel, "Reloaded: 100%")
+            .SetToggled(p => p.ArmStatusExpanderToggle, true)
+            .WaitUntilNameEquals(p => p.ArmStatusLabel, "Status expanded: True")
+            .SetToggled(p => p.ArmMetadataToggle, true)
+            .WaitUntilNameEquals(p => p.ArmMetadataStatusLabel, "Metadata visible: True")
+            .SetToggled(p => p.ArmApprovalToggle, true)
+            .WaitUntilNameEquals(p => p.ArmApprovalStatusLabel, "Approval: approved")
+            .ClickButton(p => p.ArmCrudAddButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "CRUD: added")
+            .ClickButton(p => p.ArmCrudEditButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "CRUD: edited")
+            .ClickButton(p => p.ArmCrudDeleteButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "CRUD: deleted")
+            .ClickButton(p => p.ArmSaveButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "Action: saved")
+            .ClickButton(p => p.ArmSaveCloseButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "Action: saved and closed")
+            .ClickButton(p => p.ArmCloseButton)
+            .WaitUntilNameEquals(p => p.ArmActionStatusLabel, "Action: closed");
+
+        using (Assert.Multiple())
+        {
+            await UiAssert.TextEqualsAsync(() => Page.ArmShellActivePaneLabel.Text, "Customers");
+            await UiAssert.TextEqualsAsync(() => Page.ArmLoadingStatusLabel.Text, "Reloaded: 100%");
+            await UiAssert.TextEqualsAsync(() => Page.ArmApprovalStatusLabel.Text, "Approval: approved");
+            await UiAssert.TextEqualsAsync(() => Page.ArmActionStatusLabel.Text, "Action: closed");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task DateTime_InvalidRange_ShowsValidation()
     {
         Page

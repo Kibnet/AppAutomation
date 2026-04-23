@@ -313,7 +313,7 @@ internal sealed class AuthoringCodeGenerator
         builder.AppendLine("    {");
         foreach (var statement in renderedStatements)
         {
-            builder.Append("        ").AppendLine(statement);
+            AppendIndentedBlock(builder, statement, "        ");
         }
 
         builder.AppendLine("    }");
@@ -367,6 +367,12 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
             RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.SearchAndSelect => $"Page.SearchAndSelect(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
+            RecordedActionKind.OpenGridRow => $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
+            RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
+            RecordedActionKind.CopyGridCell => $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
+            RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
@@ -382,9 +388,46 @@ internal sealed class AuthoringCodeGenerator
             commentParts.Add(step.ValidationMessage!);
         }
 
-        return commentParts.Count == 0
+        if (commentParts.Count > 0)
+        {
+            statement = $"{statement} // {string.Join(" | ", commentParts.Select(SanitizeCommentText))}";
+        }
+
+        var runtimeCommentLines = CreateRuntimeCommentLines(step);
+        return runtimeCommentLines.Count == 0
             ? statement
-            : $"{statement} // {string.Join(" | ", commentParts)}";
+            : string.Join(Environment.NewLine, runtimeCommentLines.Concat([statement]));
+    }
+
+    private static void AppendIndentedBlock(StringBuilder builder, string block, string indent)
+    {
+        var normalized = block.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        foreach (var line in normalized.Split('\n'))
+        {
+            builder.Append(indent).AppendLine(line);
+        }
+    }
+
+    private static IReadOnlyList<string> CreateRuntimeCommentLines(RecordedStep step)
+    {
+        var findings = step.RuntimeValidationFindings ?? Array.Empty<RecorderRuntimeValidationFinding>();
+        return findings
+            .Where(static finding => finding.ShouldSurface)
+            .Select(static finding =>
+            {
+                var targetState = finding.BlocksTarget ? "unsupported" : "warning";
+                return $"// AppAutomation recorder warning: {finding.Target} target {targetState} ({finding.Code}): {SanitizeCommentText(finding.Message)}";
+            })
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static string SanitizeCommentText(string value)
+    {
+        return value
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
     }
 
     private static string EscapeString(string value)

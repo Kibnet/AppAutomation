@@ -48,6 +48,377 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task DateRangeFilterAdapter_OpensSetsDateValuesAndApplies()
+    {
+        var openButton = new FakeButtonControl("OpenCreatedAtFilterButton");
+        var applyButton = new FakeButtonControl("ApplyCreatedAtFilterButton");
+        var cancelButton = new FakeButtonControl("CancelCreatedAtFilterButton");
+        var fromEditor = new FakeDateTimePickerControl("CreatedAtFromEditor");
+        var toEditor = new FakeDateTimePickerControl("CreatedAtToEditor");
+        var resolver = new FakeResolver(
+            ("OpenCreatedAtFilterButton", openButton),
+            ("ApplyCreatedAtFilterButton", applyButton),
+            ("CancelCreatedAtFilterButton", cancelButton),
+            ("CreatedAtFromEditor", fromEditor),
+            ("CreatedAtToEditor", toEditor))
+            .WithDateRangeFilter(
+                "CreatedAtFilter",
+                DateRangeFilterParts.ByAutomationIds(
+                    "CreatedAtFromEditor",
+                    "CreatedAtToEditor",
+                    "ApplyCreatedAtFilterButton",
+                    "CancelCreatedAtFilterButton",
+                    openButtonAutomationId: "OpenCreatedAtFilterButton"));
+        var page = new FilterPage(resolver);
+
+        page.CreatedAtFilter.SetRange(new DateRangeFilterRequest(
+            new DateTime(2026, 4, 1),
+            new DateTime(2026, 4, 30)));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.CreatedAtFilter.FromValue).IsEqualTo(new DateTime(2026, 4, 1));
+            await Assert.That(page.CreatedAtFilter.ToValue).IsEqualTo(new DateTime(2026, 4, 30));
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task DateRangeFilterAdapter_SupportsTextEditorsAndCancel()
+    {
+        var applyButton = new FakeButtonControl("ApplyCreatedAtFilterButton");
+        var cancelButton = new FakeButtonControl("CancelCreatedAtFilterButton");
+        var fromEditor = new FakeTextBoxControl("CreatedAtFromEditor");
+        var toEditor = new FakeTextBoxControl("CreatedAtToEditor");
+        var resolver = new FakeResolver(
+            ("ApplyCreatedAtFilterButton", applyButton),
+            ("CancelCreatedAtFilterButton", cancelButton),
+            ("CreatedAtFromEditor", fromEditor),
+            ("CreatedAtToEditor", toEditor))
+            .WithDateRangeFilter(
+                "CreatedAtFilter",
+                DateRangeFilterParts.ByAutomationIds(
+                    "CreatedAtFromEditor",
+                    "CreatedAtToEditor",
+                    "ApplyCreatedAtFilterButton",
+                    "CancelCreatedAtFilterButton",
+                    editorKind: FilterValueEditorKind.TextBox));
+        var page = new FilterPage(resolver);
+
+        page.CreatedAtFilter.SetRange(new DateRangeFilterRequest(
+            new DateTime(2026, 5, 1),
+            new DateTime(2026, 5, 31),
+            FilterPopupCommitMode.Cancel));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fromEditor.Text).IsEqualTo("2026-05-01");
+            await Assert.That(toEditor.Text).IsEqualTo("2026-05-31");
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(page.CreatedAtFilter.FromValue).IsEqualTo(new DateTime(2026, 5, 1));
+            await Assert.That(page.CreatedAtFilter.ToValue).IsEqualTo(new DateTime(2026, 5, 31));
+        }
+    }
+
+    [Test]
+    public async Task NumericRangeFilterAdapter_SetsSpinnerValuesAndApplies()
+    {
+        var openButton = new FakeButtonControl("OpenAmountFilterButton");
+        var applyButton = new FakeButtonControl("ApplyAmountFilterButton");
+        var cancelButton = new FakeButtonControl("CancelAmountFilterButton");
+        var fromEditor = new FakeSpinnerControl("AmountFromEditor");
+        var toEditor = new FakeSpinnerControl("AmountToEditor");
+        var resolver = new FakeResolver(
+            ("OpenAmountFilterButton", openButton),
+            ("ApplyAmountFilterButton", applyButton),
+            ("CancelAmountFilterButton", cancelButton),
+            ("AmountFromEditor", fromEditor),
+            ("AmountToEditor", toEditor))
+            .WithNumericRangeFilter(
+                "AmountFilter",
+                NumericRangeFilterParts.ByAutomationIds(
+                    "AmountFromEditor",
+                    "AmountToEditor",
+                    "ApplyAmountFilterButton",
+                    "CancelAmountFilterButton",
+                    openButtonAutomationId: "OpenAmountFilterButton"));
+        var page = new FilterPage(resolver);
+
+        page.AmountFilter.SetRange(new NumericRangeFilterRequest(10.5, 42.25));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.AmountFilter.FromValue).IsEqualTo(10.5);
+            await Assert.That(page.AmountFilter.ToValue).IsEqualTo(42.25);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task NumericRangeFilterAdapter_SupportsTextEditorsAndCancel()
+    {
+        var applyButton = new FakeButtonControl("ApplyAmountFilterButton");
+        var cancelButton = new FakeButtonControl("CancelAmountFilterButton");
+        var fromEditor = new FakeTextBoxControl("AmountFromEditor");
+        var toEditor = new FakeTextBoxControl("AmountToEditor");
+        var resolver = new FakeResolver(
+            ("ApplyAmountFilterButton", applyButton),
+            ("CancelAmountFilterButton", cancelButton),
+            ("AmountFromEditor", fromEditor),
+            ("AmountToEditor", toEditor))
+            .WithNumericRangeFilter(
+                "AmountFilter",
+                NumericRangeFilterParts.ByAutomationIds(
+                    "AmountFromEditor",
+                    "AmountToEditor",
+                    "ApplyAmountFilterButton",
+                    "CancelAmountFilterButton",
+                    editorKind: FilterValueEditorKind.TextBox));
+        var page = new FilterPage(resolver);
+
+        page.AmountFilter.SetRange(new NumericRangeFilterRequest(
+            1000.125,
+            2000.25,
+            FilterPopupCommitMode.Cancel));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fromEditor.Text).IsEqualTo("1000.125");
+            await Assert.That(toEditor.Text).IsEqualTo("2000.25");
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(page.AmountFilter.FromValue).IsEqualTo(1000.125);
+            await Assert.That(page.AmountFilter.ToValue).IsEqualTo(2000.25);
+        }
+    }
+
+    [Test]
+    public async Task DialogAdapter_ExposesMessageAndCompletesConfiguredActions()
+    {
+        var message = new FakeLabelControl("DeleteDialogMessage", "Delete selected record?");
+        var confirmButton = new FakeButtonControl("ConfirmDeleteButton");
+        var cancelButton = new FakeButtonControl("CancelDeleteButton");
+        var dismissButton = new FakeButtonControl("DismissDeleteButton");
+        var resolver = new FakeResolver(
+            ("DeleteDialogMessage", message),
+            ("ConfirmDeleteButton", confirmButton),
+            ("CancelDeleteButton", cancelButton),
+            ("DismissDeleteButton", dismissButton))
+            .WithDialog(
+                "DeleteDialog",
+                DialogControlParts.ByAutomationIds(
+                    "DeleteDialogMessage",
+                    "ConfirmDeleteButton",
+                    cancelButtonAutomationId: "CancelDeleteButton",
+                    dismissButtonAutomationId: "DismissDeleteButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.DeleteDialog.Complete();
+        page.DeleteDialog.Complete(DialogActionKind.Cancel);
+        page.DeleteDialog.Complete(DialogActionKind.Dismiss);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.DeleteDialog.MessageText).IsEqualTo("Delete selected record?");
+            await Assert.That(confirmButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task NotificationAdapter_ExposesTextAndDismisses()
+    {
+        var text = new FakeLabelControl("ExportToastText", "Export completed");
+        var dismissButton = new FakeButtonControl("DismissExportToastButton");
+        var resolver = new FakeResolver(
+            ("ExportToastText", text),
+            ("DismissExportToastButton", dismissButton))
+            .WithNotification(
+                "ExportToast",
+                NotificationControlParts.ByAutomationIds(
+                    "ExportToastText",
+                    dismissButtonAutomationId: "DismissExportToastButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.ExportToast.Dismiss();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ExportToast.Text).IsEqualTo("Export completed");
+            await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task FolderExportAdapter_SelectModeOpensWritesPathAndSelects()
+    {
+        var openButton = new FakeButtonControl("OpenReportExportButton");
+        var folderInput = new FakeTextBoxControl("ReportExportFolderInput");
+        var selectButton = new FakeButtonControl("SelectReportExportFolderButton");
+        var cancelButton = new FakeButtonControl("CancelReportExportFolderButton");
+        var status = new FakeLabelControl("ReportExportStatus", "Export ready");
+        var resolver = new FakeResolver(
+            ("OpenReportExportButton", openButton),
+            ("ReportExportFolderInput", folderInput),
+            ("SelectReportExportFolderButton", selectButton),
+            ("CancelReportExportFolderButton", cancelButton),
+            ("ReportExportStatus", status))
+            .WithFolderExport(
+                "ReportExport",
+                FolderExportControlParts.ByAutomationIds(
+                    "OpenReportExportButton",
+                    "ReportExportFolderInput",
+                    "SelectReportExportFolderButton",
+                    "CancelReportExportFolderButton",
+                    statusAutomationId: "ReportExportStatus"));
+        var page = new WorkflowPage(resolver);
+
+        page.ReportExport.SelectFolder(@"C:\Exports\Reports");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ReportExport.SelectedFolderPath).IsEqualTo(@"C:\Exports\Reports");
+            await Assert.That(page.ReportExport.StatusText).IsEqualTo("Export ready");
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(selectButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task FolderExportAdapter_CancelModeOpensAndCancelsWithoutPathMutation()
+    {
+        var openButton = new FakeButtonControl("OpenReportExportButton");
+        var folderInput = new FakeTextBoxControl("ReportExportFolderInput");
+        var selectButton = new FakeButtonControl("SelectReportExportFolderButton");
+        var cancelButton = new FakeButtonControl("CancelReportExportFolderButton");
+        var resolver = new FakeResolver(
+            ("OpenReportExportButton", openButton),
+            ("ReportExportFolderInput", folderInput),
+            ("SelectReportExportFolderButton", selectButton),
+            ("CancelReportExportFolderButton", cancelButton))
+            .WithFolderExport(
+                "ReportExport",
+                FolderExportControlParts.ByAutomationIds(
+                    "OpenReportExportButton",
+                    "ReportExportFolderInput",
+                    "SelectReportExportFolderButton",
+                    "CancelReportExportFolderButton"));
+        var page = new WorkflowPage(resolver);
+
+        page.ReportExport.SelectFolder(@"C:\Exports\Reports", FolderExportCommitMode.Cancel);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ReportExport.SelectedFolderPath).IsEqualTo(string.Empty);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(selectButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpensPaneThroughTreeNavigation()
+    {
+        var activePaneLabel = new FakeLabelControl("ActivePaneTitle", "Home");
+        var customersNode = new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers")
+        {
+            OnSelect = () => activePaneLabel.Text = "Customers"
+        };
+        var navigationTree = new FakeTreeControl("MainNavigation", customersNode);
+        var resolver = new FakeResolver(
+            ("MainNavigation", navigationTree),
+            ("ActivePaneTitle", activePaneLabel))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "MainNavigation",
+                    activePaneLabelAutomationId: "ActivePaneTitle"));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers", ShellPaneNavigationMode.Open));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(customersNode.SelectCount).IsEqualTo(1);
+            await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpensPaneThroughSelectableListNavigation()
+    {
+        var navigationList = new FakeSelectableListBoxControl(
+            "ShellNavigationList",
+            [
+                new FakeListBoxItem("Customers", "Customers"),
+                new FakeListBoxItem("Reports", "Reports")
+            ]);
+        var resolver = new FakeResolver(("ShellNavigationList", navigationList))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "ShellNavigationList",
+                    navigationKind: ShellNavigationSourceKind.ListBox));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Reports", ShellPaneNavigationMode.Open));
+
+        await Assert.That(navigationList.SelectedItemText).IsEqualTo("Reports");
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpenOrActivatePrefersExistingPaneTab()
+    {
+        var customersNode = new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers");
+        var navigationTree = new FakeTreeControl("MainNavigation", customersNode);
+        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers");
+        var homeTab = new FakeTabItemControl("HomePaneTab", "Home") { IsSelected = true };
+        var paneTabs = new FakeTabControl("DockPaneTabs", homeTab, customersTab);
+        var resolver = new FakeResolver(
+            ("MainNavigation", navigationTree),
+            ("DockPaneTabs", paneTabs))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    "MainNavigation",
+                    paneTabsAutomationId: "DockPaneTabs"));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers"));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(customersNode.SelectCount).IsEqualTo(0);
+            await Assert.That(customersTab.IsSelected).IsEqualTo(true);
+            await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_ThrowsWhenActivationTabsAreMissing()
+    {
+        var navigationTree = new FakeTreeControl(
+            "MainNavigation",
+            new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers"));
+        var resolver = new FakeResolver(("MainNavigation", navigationTree))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds("MainNavigation"));
+        var page = new WorkflowPage(resolver);
+
+        await Assert.That(() => page.Shell.OpenOrActivate(
+                new ShellPaneNavigationRequest("Customers", ShellPaneNavigationMode.Activate)))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()
@@ -133,6 +504,82 @@ public sealed class UiControlAdapterTests
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
     }
 
+    public static class FilterPageDefinitions
+    {
+        public static UiControlDefinition CreatedAtFilter { get; } = new(
+            "CreatedAtFilter",
+            UiControlType.DateRangeFilter,
+            "CreatedAtFilter",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition AmountFilter { get; } = new(
+            "AmountFilter",
+            UiControlType.NumericRangeFilter,
+            "AmountFilter",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    public static class WorkflowPageDefinitions
+    {
+        public static UiControlDefinition DeleteDialog { get; } = new(
+            "DeleteDialog",
+            UiControlType.Dialog,
+            "DeleteDialog",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition ExportToast { get; } = new(
+            "ExportToast",
+            UiControlType.Notification,
+            "ExportToast",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition ReportExport { get; } = new(
+            "ReportExport",
+            UiControlType.FolderExport,
+            "ReportExport",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition Shell { get; } = new(
+            "Shell",
+            UiControlType.ShellNavigation,
+            "Shell",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    private sealed class FilterPage : UiPage
+    {
+        public FilterPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDateRangeFilterControl CreatedAtFilter => Resolve<IDateRangeFilterControl>(FilterPageDefinitions.CreatedAtFilter);
+
+        public INumericRangeFilterControl AmountFilter => Resolve<INumericRangeFilterControl>(FilterPageDefinitions.AmountFilter);
+    }
+
+    private sealed class WorkflowPage : UiPage
+    {
+        public WorkflowPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDialogControl DeleteDialog => Resolve<IDialogControl>(WorkflowPageDefinitions.DeleteDialog);
+
+        public INotificationControl ExportToast => Resolve<INotificationControl>(WorkflowPageDefinitions.ExportToast);
+
+        public IFolderExportControl ReportExport => Resolve<IFolderExportControl>(WorkflowPageDefinitions.ReportExport);
+
+        public IShellNavigationControl Shell => Resolve<IShellNavigationControl>(WorkflowPageDefinitions.Shell);
+    }
+
     private sealed class FakeResolver : IUiControlResolver
     {
         private readonly Dictionary<string, object> _controls;
@@ -185,6 +632,22 @@ public sealed class UiControlAdapterTests
         }
     }
 
+    private sealed class FakeLabelControl : FakeControlBase, ILabelControl
+    {
+        public FakeLabelControl(string automationId, string text)
+            : base(automationId)
+        {
+            Text = text;
+            Name = text;
+        }
+
+        public string Text
+        {
+            get => Name;
+            set => Name = value;
+        }
+    }
+
     private sealed class FakeButtonControl : FakeControlBase, IButtonControl
     {
         public FakeButtonControl(string automationId)
@@ -198,6 +661,26 @@ public sealed class UiControlAdapterTests
         {
             InvokeCount++;
         }
+    }
+
+    private sealed class FakeDateTimePickerControl : FakeControlBase, IDateTimePickerControl
+    {
+        public FakeDateTimePickerControl(string automationId)
+            : base(automationId)
+        {
+        }
+
+        public DateTime? SelectedDate { get; set; }
+    }
+
+    private sealed class FakeSpinnerControl : FakeControlBase, ISpinnerControl
+    {
+        public FakeSpinnerControl(string automationId)
+            : base(automationId)
+        {
+        }
+
+        public double Value { get; set; }
     }
 
     private sealed class FakeComboBoxControl : FakeControlBase, IComboBoxControl
@@ -234,6 +717,143 @@ public sealed class UiControlAdapterTests
     }
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
+
+    private sealed class FakeTabControl : FakeControlBase, ITabControl
+    {
+        private readonly IReadOnlyList<FakeTabItemControl> _items;
+
+        public FakeTabControl(string automationId, params FakeTabItemControl[] items)
+            : base(automationId)
+        {
+            _items = items;
+        }
+
+        public IReadOnlyList<ITabItemControl> Items => _items;
+
+        public void SelectTabItem(string itemText)
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var item = _items.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate.Name), normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeLookupText(candidate.AutomationId), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Tab item '{itemText}' was not found.");
+
+            foreach (var candidate in _items)
+            {
+                candidate.IsSelected = false;
+            }
+
+            item.SelectTab();
+        }
+    }
+
+    private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl
+    {
+        public FakeTabItemControl(string automationId, string name)
+            : base(automationId)
+        {
+            Name = name;
+        }
+
+        public bool IsSelected { get; set; }
+
+        public void SelectTab()
+        {
+            IsSelected = true;
+        }
+    }
+
+    private sealed class FakeTreeControl : FakeControlBase, ITreeControl
+    {
+        public FakeTreeControl(string automationId, params ITreeItemControl[] items)
+            : base(automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<ITreeItemControl> Items { get; }
+
+        public ITreeItemControl? SelectedTreeItem { get; private set; }
+
+        public void Select(FakeTreeItemControl item)
+        {
+            SelectedTreeItem = item;
+        }
+    }
+
+    private sealed class FakeTreeItemControl : FakeControlBase, ITreeItemControl
+    {
+        private IReadOnlyList<ITreeItemControl> _items = Array.Empty<ITreeItemControl>();
+
+        public FakeTreeItemControl(string automationId, string name, string text)
+            : base(automationId)
+        {
+            Name = name;
+            Text = text;
+        }
+
+        public bool IsSelected { get; set; }
+
+        public string Text { get; }
+
+        public IReadOnlyList<ITreeItemControl> Items => _items;
+
+        public int SelectCount { get; private set; }
+
+        public Action? OnSelect { get; init; }
+
+        public void SetItems(params ITreeItemControl[] items)
+        {
+            _items = items;
+        }
+
+        public void Expand()
+        {
+        }
+
+        public void SelectNode()
+        {
+            SelectCount++;
+            IsSelected = true;
+            OnSelect?.Invoke();
+        }
+    }
+
+    private sealed class FakeSelectableListBoxControl : FakeControlBase, ISelectableListBoxControl
+    {
+        public FakeSelectableListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
+            : base(automationId)
+        {
+            Items = items;
+        }
+
+        public IReadOnlyList<IListBoxItem> Items { get; }
+
+        public string? SelectedItemText { get; private set; }
+
+        public void SelectItem(string itemText)
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var item = Items.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate.Text), normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeLookupText(candidate.Name), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"List item '{itemText}' was not found.");
+
+            SelectedItemText = item.Text ?? item.Name;
+        }
+    }
+
+    private sealed record FakeListBoxItem(string? Text, string? Name) : IListBoxItem;
+
+    private static string NormalizeLookupText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
 
     private sealed class MinimalResolver : IUiControlResolver
     {

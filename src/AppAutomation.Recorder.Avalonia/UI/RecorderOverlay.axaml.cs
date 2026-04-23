@@ -21,11 +21,14 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _exportButton;
     private Button? _minimizeButton;
     private Button? _restoreButton;
+    private Button? _copyDiagnosticLogPathButton;
+    private CheckBox? _diagnosticLogCheckBox;
     private TextBlock? _stepCounter;
     private TextBlock? _statusText;
     private TextBlock? _previewText;
     private TextBlock? _sessionSummaryText;
     private TextBlock? _scenarioPathText;
+    private TextBlock? _diagnosticLogPathText;
     private TextBlock? _shortcutText;
     private TextBlock? _validationBadgeText;
     private TextBlock? _minimizedStatusText;
@@ -138,11 +141,14 @@ internal sealed partial class RecorderOverlay : UserControl
         _exportButton = this.FindControl<Button>("ExportButton");
         _minimizeButton = this.FindControl<Button>("MinimizeButton");
         _restoreButton = this.FindControl<Button>("RestoreButton");
+        _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
+        _diagnosticLogCheckBox = this.FindControl<CheckBox>("DiagnosticLogCheckBox");
         _stepCounter = this.FindControl<TextBlock>("StepCounter");
         _statusText = this.FindControl<TextBlock>("StatusText");
         _previewText = this.FindControl<TextBlock>("PreviewText");
         _sessionSummaryText = this.FindControl<TextBlock>("SessionSummaryText");
         _scenarioPathText = this.FindControl<TextBlock>("ScenarioPathText");
+        _diagnosticLogPathText = this.FindControl<TextBlock>("DiagnosticLogPathText");
         _shortcutText = this.FindControl<TextBlock>("ShortcutText");
         _validationBadgeText = this.FindControl<TextBlock>("ValidationBadgeText");
         _minimizedStatusText = this.FindControl<TextBlock>("MinimizedStatusText");
@@ -181,6 +187,16 @@ internal sealed partial class RecorderOverlay : UserControl
             _restoreButton.Click += (_, _) => Restore();
         }
 
+        if (_diagnosticLogCheckBox is not null)
+        {
+            _diagnosticLogCheckBox.Click += OnDiagnosticLogToggleClick;
+        }
+
+        if (_copyDiagnosticLogPathButton is not null)
+        {
+            _copyDiagnosticLogPathButton.Click += OnCopyDiagnosticLogPathClick;
+        }
+
         UpdatePanelVisibility();
     }
 
@@ -212,6 +228,33 @@ internal sealed partial class RecorderOverlay : UserControl
 
         _ = await _session.SaveAsync();
         Refresh();
+    }
+
+    private void OnDiagnosticLogToggleClick(object? sender, RoutedEventArgs e)
+    {
+        if (_sessionDetails is null || _diagnosticLogCheckBox is null)
+        {
+            return;
+        }
+
+        _sessionDetails.SetDiagnosticLogFileEnabled(_diagnosticLogCheckBox.IsChecked == true);
+        Refresh();
+    }
+
+    private async void OnCopyDiagnosticLogPathClick(object? sender, RoutedEventArgs e)
+    {
+        if (_sessionDetails is null)
+        {
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel?.Clipboard is null)
+        {
+            return;
+        }
+
+        await topLevel.Clipboard.SetTextAsync(_sessionDetails.DiagnosticLogFilePath);
     }
 
     private void Refresh()
@@ -274,6 +317,26 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_scenarioPathText is not null)
         {
             _scenarioPathText.Text = _scenarioPathDetails?.CurrentScenarioFilePath ?? "Scenario file path is unavailable.";
+        }
+
+        if (_diagnosticLogCheckBox is not null)
+        {
+            _diagnosticLogCheckBox.IsEnabled = _sessionDetails is not null;
+            _diagnosticLogCheckBox.IsChecked = _sessionDetails?.IsDiagnosticLogFileEnabled == true;
+        }
+
+        if (_diagnosticLogPathText is not null)
+        {
+            _diagnosticLogPathText.Text = _sessionDetails is null
+                ? "Diagnostic log file is unavailable."
+                : _sessionDetails.IsDiagnosticLogFileEnabled
+                    ? $"{_sessionDetails.DiagnosticLogFilePath} ({_sessionDetails.DiagnosticLogEntryCount} entries)"
+                    : $"Off. File path when enabled: {_sessionDetails.DiagnosticLogFilePath}";
+        }
+
+        if (_copyDiagnosticLogPathButton is not null)
+        {
+            _copyDiagnosticLogPathButton.IsEnabled = _sessionDetails is not null;
         }
 
         RenderStepJournal();

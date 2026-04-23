@@ -127,5 +127,40 @@ public enum UiControlType
     /// <summary>
     /// A cell within a grid control. Maps to <see cref="IGridCellControl"/>.
     /// </summary>
-    GridCell = 23
+    GridCell = 23,
+
+    /// <summary>
+    /// A composite search picker control. Maps to <see cref="ISearchPickerControl"/>.
+    /// </summary>
+    SearchPicker = 24,
+
+    /// <summary>
+    /// A composite date range filter popup. Maps to <see cref="IDateRangeFilterControl"/>.
+    /// </summary>
+    DateRangeFilter = 25,
+
+    /// <summary>
+    /// A composite numeric range filter popup. Maps to <see cref="INumericRangeFilterControl"/>.
+    /// </summary>
+    NumericRangeFilter = 26,
+
+    /// <summary>
+    /// A modal dialog control. Maps to <see cref="IDialogControl"/>.
+    /// </summary>
+    Dialog = 27,
+
+    /// <summary>
+    /// A toast, notification, or status message control. Maps to <see cref="INotificationControl"/>.
+    /// </summary>
+    Notification = 28,
+
+    /// <summary>
+    /// A composite folder export flow. Maps to <see cref="IFolderExportControl"/>.
+    /// </summary>
+    FolderExport = 29,
+
+    /// <summary>
+    /// A shell/docking navigation control. Maps to <see cref="IShellNavigationControl"/>.
+    /// </summary>
+    ShellNavigation = 30
 }

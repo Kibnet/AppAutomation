@@ -88,16 +88,35 @@ internal sealed class RecorderSelectorResolver
             return CreateAliasedResolvedControl(control, locatorValue, locatorKind, warning, alias);
         }
 
+        var effectiveControlType = controlType;
+        var effectiveFallbackToName = locatorKind == UiLocatorKind.Name;
+        var effectiveWarning = warning;
+        if (TryResolveControlHint(locatorValue, locatorKind, out var hint))
+        {
+            if (hint.TargetControlType is { } targetControlType)
+            {
+                effectiveControlType = targetControlType;
+                effectiveWarning = CombineMessage(
+                    effectiveWarning,
+                    $"Applied recorder control hint '{locatorKind}:{locatorValue}' as UiControlType.{targetControlType}.");
+            }
+
+            if (hint.FallbackToName is { } fallbackToName)
+            {
+                effectiveFallbackToName = fallbackToName;
+            }
+        }
+
         var validation = ValidateSelector(control, locatorValue, locatorKind);
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
-                RecorderNaming.CreateControlPropertyName(locatorValue, controlType),
-                controlType,
+                RecorderNaming.CreateControlPropertyName(locatorValue, effectiveControlType),
+                effectiveControlType,
                 locatorValue,
                 locatorKind,
-                FallbackToName: locatorKind == UiLocatorKind.Name,
+                effectiveFallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                warning),
+                effectiveWarning),
             message: validation.Message,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
@@ -250,6 +269,17 @@ internal sealed class RecorderSelectorResolver
             gridHint.TargetLocatorKind,
             gridHint.FallbackToName);
         return true;
+    }
+
+    private bool TryResolveControlHint(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        out RecorderControlHint hint)
+    {
+        hint = _options.ControlHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == locatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), locatorValue, StringComparison.Ordinal))!;
+        return hint is not null;
     }
 
     private static bool TryGetNameLocator(Control control, out string locator)
