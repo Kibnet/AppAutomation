@@ -1,0 +1,454 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
+             x:Class="DotnetDebug.Avalonia.ArmDesktopControl"
+             x:CompileBindings="False">
+  <ScrollViewer VerticalScrollBarVisibility="Auto"
+                automation:AutomationProperties.AutomationId="ArmDesktopScrollViewer">
+    <StackPanel Margin="0"
+                Spacing="12">
+      <TextBlock Text="Arm Desktop Controls"
+                 FontSize="18"
+                 FontWeight="SemiBold" />
+
+      <Border BorderBrush="#D0D7DE"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="12">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Primitives, wrappers and search"
+                     FontWeight="SemiBold" />
+          <UniformGrid Columns="3"
+                       Rows="1">
+            <StackPanel Margin="0,0,8,0"
+                        Spacing="6">
+              <TextBlock Text="Copy wrapper" />
+              <TextBox x:Name="ArmCopyTextBox"
+                       MinWidth="180"
+                       Watermark="Copy value"
+                       automation:AutomationProperties.AutomationId="ArmCopyTextBox" />
+              <Button x:Name="ArmCopyButton"
+                      Content="Copy"
+                      Click="OnArmCopyClick"
+                      automation:AutomationProperties.AutomationId="ArmCopyButton" />
+              <Label x:Name="ArmCopyResultLabel"
+                     Content="Copy idle"
+                     automation:AutomationProperties.AutomationId="ArmCopyResultLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="8,0"
+                        Spacing="6">
+              <TextBlock Text="Search picker" />
+              <TextBox x:Name="ArmSearchInput"
+                       Watermark="Search"
+                       automation:AutomationProperties.AutomationId="ArmSearchInput" />
+              <ComboBox x:Name="ArmSearchResults"
+                        ItemsSource="{Binding ArmSearchItems}"
+                        SelectionChanged="OnArmSearchResultsChanged"
+                        automation:AutomationProperties.AutomationId="ArmSearchResults" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <CheckBox x:Name="ArmSearchFuzzyToggle"
+                          Content="Fuzzy"
+                          automation:AutomationProperties.AutomationId="ArmSearchFuzzyToggle" />
+                <Button x:Name="ArmSearchApplyButton"
+                        Content="Apply"
+                        Click="OnArmSearchApplyClick"
+                        automation:AutomationProperties.AutomationId="ArmSearchApplyButton" />
+                <Button x:Name="ArmSearchClearButton"
+                        Content="Clear"
+                        Click="OnArmSearchClearClick"
+                        automation:AutomationProperties.AutomationId="ArmSearchClearButton" />
+              </StackPanel>
+              <Label x:Name="ArmSearchStatusLabel"
+                     Content="Search idle"
+                     automation:AutomationProperties.AutomationId="ArmSearchStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="8,0,0,0"
+                        Spacing="6">
+              <TextBlock Text="Server picker" />
+              <TextBox x:Name="ArmServerPickerInput"
+                       Watermark="Lookup"
+                       automation:AutomationProperties.AutomationId="ArmServerPickerInput" />
+              <ComboBox x:Name="ArmServerPickerResults"
+                        ItemsSource="{Binding ArmServerItems}"
+                        SelectionChanged="OnArmServerPickerResultsChanged"
+                        automation:AutomationProperties.AutomationId="ArmServerPickerResults" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <Button x:Name="ArmServerPickerOpenButton"
+                        Content="Open"
+                        Click="OnArmServerPickerOpenClick"
+                        automation:AutomationProperties.AutomationId="ArmServerPickerOpenButton" />
+                <Button x:Name="ArmServerPickerClearButton"
+                        Content="Clear"
+                        Click="OnArmServerPickerClearClick"
+                        automation:AutomationProperties.AutomationId="ArmServerPickerClearButton" />
+              </StackPanel>
+              <Label x:Name="ArmServerPickerStatusLabel"
+                     Content="Server picker idle"
+                     automation:AutomationProperties.AutomationId="ArmServerPickerStatusLabel" />
+            </StackPanel>
+          </UniformGrid>
+        </StackPanel>
+      </Border>
+
+      <Border BorderBrush="#D0D7DE"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="12">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Grid actions and editable cells"
+                     FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="2*,*"
+                RowDefinitions="Auto">
+            <StackPanel Grid.Column="0"
+                        Spacing="8">
+              <TextBlock x:Name="ArmEremexDataGridHost"
+                         FontWeight="SemiBold"
+                         Text="Arm Eremex DataGrid"
+                         automation:AutomationProperties.AutomationId="ArmEremexDataGridHost" />
+              <mxdg:DataGridControl x:Name="ArmEremexDataGridControl"
+                                    Height="170"
+                                    ItemsSource="{Binding ArmGridRows}"
+                                    AutoGenerateColumns="False"
+                                    automation:AutomationProperties.AutomationId="ArmEremexDataGridControl">
+                <mxdg:DataGridControl.Columns>
+                  <mxdg:GridColumn FieldName="Key"
+                                   Header="Key" />
+                  <mxdg:GridColumn FieldName="Value"
+                                   Header="Value" />
+                  <mxdg:GridColumn FieldName="State"
+                                   Header="State" />
+                </mxdg:DataGridControl.Columns>
+              </mxdg:DataGridControl>
+
+              <ListBox x:Name="ArmGridAutomationBridge"
+                       Height="126"
+                       ItemsSource="{Binding ArmGridRows}"
+                       automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <Grid ColumnDefinitions="120,160,120"
+                          Margin="0,1"
+                          automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
+                      <TextBlock Grid.Column="0"
+                                 Text="{Binding Key}"
+                                 automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding Key}" />
+                      <TextBox Grid.Column="1"
+                               Text="{Binding Value, Mode=TwoWay}"
+                               MinHeight="24"
+                               BorderThickness="0"
+                               automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
+                               automation:AutomationProperties.Name="{Binding Value}" />
+                      <TextBlock Grid.Column="2"
+                                 Text="{Binding State}"
+                                 automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding State}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1"
+                        Margin="12,0,0,0"
+                        Spacing="6">
+              <Button x:Name="ArmGridBuildButton"
+                      Content="Build"
+                      Click="OnArmGridBuildClick"
+                      automation:AutomationProperties.AutomationId="ArmGridBuildButton" />
+              <Button x:Name="ArmGridOpenButton"
+                      Content="Open"
+                      Click="OnArmGridOpenClick"
+                      automation:AutomationProperties.AutomationId="ArmGridOpenButton" />
+              <Button x:Name="ArmGridSortButton"
+                      Content="Sort"
+                      Click="OnArmGridSortClick"
+                      automation:AutomationProperties.AutomationId="ArmGridSortButton" />
+              <Button x:Name="ArmGridLoadMoreButton"
+                      Content="Load more"
+                      Click="OnArmGridLoadMoreClick"
+                      automation:AutomationProperties.AutomationId="ArmGridLoadMoreButton" />
+              <Button x:Name="ArmGridCopyButton"
+                      Content="Copy"
+                      Click="OnArmGridCopyClick"
+                      automation:AutomationProperties.AutomationId="ArmGridCopyButton" />
+              <Button x:Name="ArmGridExportButton"
+                      Content="Export"
+                      Click="OnArmGridExportClick"
+                      automation:AutomationProperties.AutomationId="ArmGridExportButton" />
+              <TextBox x:Name="ArmGridEditValueInput"
+                       Text="Value-1"
+                       automation:AutomationProperties.AutomationId="ArmGridEditValueInput" />
+              <Button x:Name="ArmGridCommitEditButton"
+                      Content="Commit edit"
+                      Click="OnArmGridCommitEditClick"
+                      automation:AutomationProperties.AutomationId="ArmGridCommitEditButton" />
+              <Button x:Name="ArmGridCancelEditButton"
+                      Content="Cancel edit"
+                      Click="OnArmGridCancelEditClick"
+                      automation:AutomationProperties.AutomationId="ArmGridCancelEditButton" />
+              <Label x:Name="ArmGridStatusLabel"
+                     Content="Grid ready"
+                     automation:AutomationProperties.AutomationId="ArmGridStatusLabel" />
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <Border BorderBrush="#D0D7DE"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="12">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Filters, dialogs, notifications and export"
+                     FontWeight="SemiBold" />
+          <UniformGrid Columns="4"
+                       Rows="1">
+            <StackPanel Margin="0,0,8,0"
+                        Spacing="6">
+              <TextBlock Text="Date range" />
+              <DatePicker x:Name="ArmDateRangeFrom"
+                          automation:AutomationProperties.AutomationId="ArmDateRangeFrom" />
+              <DatePicker x:Name="ArmDateRangeTo"
+                          automation:AutomationProperties.AutomationId="ArmDateRangeTo" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <Button x:Name="ArmDateRangeOpenButton"
+                        Content="Open"
+                        Click="OnArmDateRangeOpenClick"
+                        automation:AutomationProperties.AutomationId="ArmDateRangeOpenButton" />
+                <Button x:Name="ArmDateRangeApplyButton"
+                        Content="Apply"
+                        Click="OnArmDateRangeApplyClick"
+                        automation:AutomationProperties.AutomationId="ArmDateRangeApplyButton" />
+                <Button x:Name="ArmDateRangeCancelButton"
+                        Content="Cancel"
+                        Click="OnArmDateRangeCancelClick"
+                        automation:AutomationProperties.AutomationId="ArmDateRangeCancelButton" />
+              </StackPanel>
+              <Label x:Name="ArmDateRangeStatusLabel"
+                     Content="Date filter idle"
+                     automation:AutomationProperties.AutomationId="ArmDateRangeStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="8,0"
+                        Spacing="6">
+              <TextBlock Text="Numeric range" />
+              <TextBox x:Name="ArmNumericRangeFrom"
+                       Text="10"
+                       automation:AutomationProperties.AutomationId="ArmNumericRangeFrom" />
+              <TextBox x:Name="ArmNumericRangeTo"
+                       Text="20"
+                       automation:AutomationProperties.AutomationId="ArmNumericRangeTo" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <Button x:Name="ArmNumericRangeOpenButton"
+                        Content="Open"
+                        Click="OnArmNumericRangeOpenClick"
+                        automation:AutomationProperties.AutomationId="ArmNumericRangeOpenButton" />
+                <Button x:Name="ArmNumericRangeApplyButton"
+                        Content="Apply"
+                        Click="OnArmNumericRangeApplyClick"
+                        automation:AutomationProperties.AutomationId="ArmNumericRangeApplyButton" />
+                <Button x:Name="ArmNumericRangeCancelButton"
+                        Content="Cancel"
+                        Click="OnArmNumericRangeCancelClick"
+                        automation:AutomationProperties.AutomationId="ArmNumericRangeCancelButton" />
+              </StackPanel>
+              <Label x:Name="ArmNumericRangeStatusLabel"
+                     Content="Numeric filter idle"
+                     automation:AutomationProperties.AutomationId="ArmNumericRangeStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="8,0"
+                        Spacing="6">
+              <TextBlock Text="Dialog and notification" />
+              <Label x:Name="ArmDialogMessage"
+                     Content="Delete selected Arm record?"
+                     automation:AutomationProperties.AutomationId="ArmDialogMessage" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <Button x:Name="ArmDialogConfirmButton"
+                        Content="Confirm"
+                        Click="OnArmDialogConfirmClick"
+                        automation:AutomationProperties.AutomationId="ArmDialogConfirmButton" />
+                <Button x:Name="ArmDialogCancelButton"
+                        Content="Cancel"
+                        Click="OnArmDialogCancelClick"
+                        automation:AutomationProperties.AutomationId="ArmDialogCancelButton" />
+                <Button x:Name="ArmDialogDismissButton"
+                        Content="Dismiss"
+                        Click="OnArmDialogDismissClick"
+                        automation:AutomationProperties.AutomationId="ArmDialogDismissButton" />
+              </StackPanel>
+              <Label x:Name="ArmDialogResultLabel"
+                     Content="Dialog idle"
+                     automation:AutomationProperties.AutomationId="ArmDialogResultLabel" />
+              <Label x:Name="ArmNotificationText"
+                     Content="Export ready"
+                     automation:AutomationProperties.AutomationId="ArmNotificationText" />
+              <Button x:Name="ArmNotificationDismissButton"
+                      Content="Dismiss notification"
+                      Click="OnArmNotificationDismissClick"
+                      automation:AutomationProperties.AutomationId="ArmNotificationDismissButton" />
+              <Label x:Name="ArmNotificationStatusLabel"
+                     Content="Notification visible"
+                     automation:AutomationProperties.AutomationId="ArmNotificationStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="8,0,0,0"
+                        Spacing="6">
+              <TextBlock Text="Folder export" />
+              <Button x:Name="ArmFolderExportOpenButton"
+                      Content="Open folder"
+                      Click="OnArmFolderExportOpenClick"
+                      automation:AutomationProperties.AutomationId="ArmFolderExportOpenButton" />
+              <TextBox x:Name="ArmFolderExportPathInput"
+                       Watermark="Target folder"
+                       automation:AutomationProperties.AutomationId="ArmFolderExportPathInput" />
+              <StackPanel Orientation="Horizontal"
+                          Spacing="6">
+                <Button x:Name="ArmFolderExportSelectButton"
+                        Content="Select"
+                        Click="OnArmFolderExportSelectClick"
+                        automation:AutomationProperties.AutomationId="ArmFolderExportSelectButton" />
+                <Button x:Name="ArmFolderExportCancelButton"
+                        Content="Cancel"
+                        Click="OnArmFolderExportCancelClick"
+                        automation:AutomationProperties.AutomationId="ArmFolderExportCancelButton" />
+              </StackPanel>
+              <Label x:Name="ArmFolderExportStatusLabel"
+                     Content="Export idle"
+                     automation:AutomationProperties.AutomationId="ArmFolderExportStatusLabel" />
+            </StackPanel>
+          </UniformGrid>
+        </StackPanel>
+      </Border>
+
+      <Border BorderBrush="#D0D7DE"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="12">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Shell, loading, approval and CRUD"
+                     FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,*,*"
+                RowDefinitions="Auto">
+            <StackPanel Grid.Column="0"
+                        Margin="0,0,8,0"
+                        Spacing="6">
+              <ListBox x:Name="ArmShellNavigationList"
+                       Height="96"
+                       SelectionChanged="OnArmShellNavigationChanged"
+                       automation:AutomationProperties.AutomationId="ArmShellNavigationList">
+                <ListBoxItem Content="Customers"
+                             automation:AutomationProperties.AutomationId="ArmShellNavigationCustomers"
+                             automation:AutomationProperties.Name="Customers" />
+                <ListBoxItem Content="Orders"
+                             automation:AutomationProperties.AutomationId="ArmShellNavigationOrders"
+                             automation:AutomationProperties.Name="Orders" />
+                <ListBoxItem Content="Reports"
+                             automation:AutomationProperties.AutomationId="ArmShellNavigationReports"
+                             automation:AutomationProperties.Name="Reports" />
+              </ListBox>
+              <TabControl x:Name="ArmShellPaneTabs"
+                          SelectionChanged="OnArmShellPaneChanged"
+                          automation:AutomationProperties.AutomationId="ArmShellPaneTabs">
+                <TabItem Header="Customers"
+                         automation:AutomationProperties.AutomationId="ArmShellPaneCustomers">
+                  <TextBlock Text="Customers pane" />
+                </TabItem>
+                <TabItem Header="Orders"
+                         automation:AutomationProperties.AutomationId="ArmShellPaneOrders">
+                  <TextBlock Text="Orders pane" />
+                </TabItem>
+                <TabItem Header="Reports"
+                         automation:AutomationProperties.AutomationId="ArmShellPaneReports">
+                  <TextBlock Text="Reports pane" />
+                </TabItem>
+              </TabControl>
+              <Label x:Name="ArmShellActivePaneLabel"
+                     Content="Customers"
+                     automation:AutomationProperties.AutomationId="ArmShellActivePaneLabel" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1"
+                        Margin="8,0"
+                        Spacing="6">
+              <ProgressBar x:Name="ArmLoadingProgressBar"
+                           Minimum="0"
+                           Maximum="100"
+                           Value="0"
+                           automation:AutomationProperties.AutomationId="ArmLoadingProgressBar" />
+              <Button x:Name="ArmReloadButton"
+                      Content="Reload"
+                      Click="OnArmReloadClick"
+                      automation:AutomationProperties.AutomationId="ArmReloadButton" />
+              <Label x:Name="ArmLoadingStatusLabel"
+                     Content="Loading idle"
+                     automation:AutomationProperties.AutomationId="ArmLoadingStatusLabel" />
+              <ToggleButton x:Name="ArmStatusExpanderToggle"
+                            Content="Status details"
+                            Click="OnArmStatusExpanderClick"
+                            automation:AutomationProperties.AutomationId="ArmStatusExpanderToggle" />
+              <Label x:Name="ArmStatusLabel"
+                     Content="Status expanded: False"
+                     automation:AutomationProperties.AutomationId="ArmStatusLabel" />
+              <ToggleButton x:Name="ArmMetadataToggle"
+                            Content="Metadata"
+                            Click="OnArmMetadataToggleClick"
+                            automation:AutomationProperties.AutomationId="ArmMetadataToggle" />
+              <Label x:Name="ArmMetadataStatusLabel"
+                     Content="Metadata visible: False"
+                     automation:AutomationProperties.AutomationId="ArmMetadataStatusLabel" />
+              <ToggleButton x:Name="ArmApprovalToggle"
+                            Content="Approve"
+                            Click="OnArmApprovalToggleClick"
+                            automation:AutomationProperties.AutomationId="ArmApprovalToggle" />
+              <Label x:Name="ArmApprovalStatusLabel"
+                     Content="Approval: pending"
+                     automation:AutomationProperties.AutomationId="ArmApprovalStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="2"
+                        Margin="8,0,0,0"
+                        Spacing="6">
+              <Button x:Name="ArmCrudAddButton"
+                      Content="Add"
+                      Click="OnArmCrudAddClick"
+                      automation:AutomationProperties.AutomationId="ArmCrudAddButton" />
+              <Button x:Name="ArmCrudEditButton"
+                      Content="Edit"
+                      Click="OnArmCrudEditClick"
+                      automation:AutomationProperties.AutomationId="ArmCrudEditButton" />
+              <Button x:Name="ArmCrudDeleteButton"
+                      Content="Delete"
+                      Click="OnArmCrudDeleteClick"
+                      automation:AutomationProperties.AutomationId="ArmCrudDeleteButton" />
+              <Button x:Name="ArmSaveButton"
+                      Content="Save"
+                      Click="OnArmSaveClick"
+                      automation:AutomationProperties.AutomationId="ArmSaveButton" />
+              <Button x:Name="ArmSaveCloseButton"
+                      Content="Save and close"
+                      Click="OnArmSaveCloseClick"
+                      automation:AutomationProperties.AutomationId="ArmSaveCloseButton" />
+              <Button x:Name="ArmCloseButton"
+                      Content="Close"
+                      Click="OnArmCloseClick"
+                      automation:AutomationProperties.AutomationId="ArmCloseButton" />
+              <Label x:Name="ArmActionStatusLabel"
+                     Content="Action idle"
+                     automation:AutomationProperties.AutomationId="ArmActionStatusLabel" />
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

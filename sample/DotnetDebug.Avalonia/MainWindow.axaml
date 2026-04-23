@@ -571,6 +571,12 @@
                            FontWeight="SemiBold" />
             </Grid>
         </TabItem>
+
+        <TabItem x:Name="ArmDesktopTabItem"
+                 Header="Arm Desktop"
+                 automation:AutomationProperties.AutomationId="ArmDesktopTabItem">
+            <local:ArmDesktopControl />
+        </TabItem>
     </TabControl>
 </Window>
 
