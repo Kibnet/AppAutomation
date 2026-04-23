@@ -40,7 +40,7 @@ internal static class RecorderCaptureDiagnostics
         AppendFindings(builder, findings);
         AppendControlSnapshot(builder, source);
         AppendPaths(builder, source);
-        AppendSupportSuggestion(builder, step, findings, failureMessage);
+        AppendSupportSuggestion(builder, source, step, findings, failureMessage);
         return builder.ToString().TrimEnd();
     }
 
@@ -176,20 +176,38 @@ internal static class RecorderCaptureDiagnostics
 
     private static void AppendSupportSuggestion(
         StringBuilder builder,
+        Control? source,
         RecordedStep? step,
         IReadOnlyList<RecorderRuntimeValidationFinding> findings,
         string? failureMessage)
     {
         builder.AppendLine("SupportContext:");
-        builder.Append("  SuggestedArea: ").Append(ResolveSuggestedArea(step, findings, failureMessage)).AppendLine();
+        builder.Append("  SuggestedArea: ").Append(ResolveSuggestedArea(source, step, findings, failureMessage)).AppendLine();
         builder.Append("  Notes: ").Append(ResolveSupportNotes(findings)).AppendLine();
     }
 
     private static string ResolveSuggestedArea(
+        Control? source,
         RecordedStep? step,
         IReadOnlyList<RecorderRuntimeValidationFinding> findings,
         string? failureMessage)
     {
+        if (HasRelatedControl<DatePicker>(source) || HasRelatedControl<global::Avalonia.Controls.Calendar>(source))
+        {
+            return "DatePicker template event or date filter recorder mapping";
+        }
+
+        if (source is TextBox { Name: "PART_EditableTextBox" } || HasRelatedControl<ComboBox>(source))
+        {
+            return "editable ComboBox or search picker recorder mapping";
+        }
+
+        if (source is TextBox { Name: "PART_RealEditor" }
+            || step?.Control.ControlType is UiControlType.Grid or UiControlType.DataGridView)
+        {
+            return "grid cell editor or grid action adapter";
+        }
+
         if (findings.Any(static finding => finding.Code.Contains("control-type-mismatch", StringComparison.Ordinal)))
         {
             return "action mapping or recorder control hint";
@@ -306,6 +324,58 @@ internal static class RecorderCaptureDiagnostics
     private static bool? IsFocused(Control control)
     {
         return SafeRead(() => ReferenceEquals(TopLevel.GetTopLevel(control)?.FocusManager?.GetFocusedElement(), control));
+    }
+
+    private static bool HasRelatedControl<TControl>(Control? source)
+        where TControl : Control
+    {
+        foreach (var control in EnumerateRelatedControls(source))
+        {
+            if (control is TControl)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Control> EnumerateRelatedControls(Control? source)
+    {
+        if (source is null)
+        {
+            yield break;
+        }
+
+        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<Control>();
+        queue.Enqueue(source);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!seen.Add(current))
+            {
+                continue;
+            }
+
+            yield return current;
+
+            if (current.GetVisualParent() is Control visualParent)
+            {
+                queue.Enqueue(visualParent);
+            }
+
+            if (current is ILogical { LogicalParent: Control logicalParent })
+            {
+                queue.Enqueue(logicalParent);
+            }
+
+            if (current is StyledElement { TemplatedParent: Control templatedParent })
+            {
+                queue.Enqueue(templatedParent);
+            }
+        }
     }
 
     private static string? NullIfWhiteSpace(string? value)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -759,6 +760,36 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RuntimeValidator_InvalidActionValidation_DoesNotReportTargetSupported()
+    {
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var step = new RecordedStep(
+            RecordedActionKind.ClickButton,
+            new RecordedControlDescriptor(
+                "RunButton",
+                UiControlType.AutomationElement,
+                "RunButton",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+                Warning: null),
+            ValidationStatus: RecorderValidationStatus.Invalid,
+            ValidationMessage: "Captured source is not compatible with action ClickButton.",
+            CanPersist: false);
+
+        var result = validator.Validate(step);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(result.CanPersist).IsEqualTo(false);
+            await Assert.That(result.ValidationMessage).IsEqualTo("Captured source is not compatible with action ClickButton.");
+            await Assert.That(result.RuntimeValidationFindings).IsNotNull();
+            await Assert.That(result.RuntimeValidationFindings!.Count).IsEqualTo(0);
+        }
+    }
+
+    [Test]
     public async Task RuntimeValidation_MissingPayload_BlocksAllTargetsAndLogsDiagnostics()
     {
         var logger = new TestLogger();
@@ -1013,6 +1044,69 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.EnterText(static page => page.QueryBox, \"\");");
             await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(true);
         }
+    }
+
+    [Test]
+    public async Task RecorderSession_SuppressesConfiguredGridCellEditorTextEntry()
+    {
+        var options = CreateEremexGridOptions();
+        var root = new StackPanel();
+        var grid = new RecorderGridHost();
+        var editor = new TextBox { Name = "PART_RealEditor" };
+        AutomationProperties.SetAutomationId(grid, "EremexDemoDataGridControl");
+        grid.Children.Add(editor);
+        root.Children.Add(grid);
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(editor);
+        editor.Text = "Edited grid value";
+        session.FlushPendingStateForTesting();
+
+        await Assert.That(details.StepJournal.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RecorderSession_SuppressesComboBoxTemplateTextEntry()
+    {
+        var root = new StackPanel();
+        var comboBox = new ComboBox();
+        var templateTextBox = new TextBox { Name = "PART_EditableTextBox" };
+        AutomationProperties.SetAutomationId(comboBox, "ArmSearchResults");
+        SetTemplatedParentForTesting(templateTextBox, comboBox);
+        root.Children.Add(comboBox);
+        root.Children.Add(templateTextBox);
+        var session = new RecorderSession(CreateWindowStub(), new AppAutomationRecorderOptions { ShowOverlay = false }, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(templateTextBox);
+        templateTextBox.Text = "Template text";
+        session.FlushPendingStateForTesting();
+
+        await Assert.That(details.StepJournal.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RecorderSession_SuppressesDatePickerTemplateButtonClick()
+    {
+        var root = new StackPanel();
+        var datePicker = new DatePicker();
+        var flyoutButton = new Button { Name = "PART_FlyoutButton" };
+        AutomationProperties.SetAutomationId(datePicker, "ArmDateRangeTo");
+        SetTemplatedParentForTesting(flyoutButton, datePicker);
+        root.Children.Add(datePicker);
+        root.Children.Add(flyoutButton);
+        var session = new RecorderSession(CreateWindowStub(), new AppAutomationRecorderOptions { ShowOverlay = false }, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(flyoutButton);
+
+        await Assert.That(details.StepJournal.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -1897,6 +1991,13 @@ public sealed class RecorderTests
 #pragma warning disable SYSLIB0050
         return (Window)FormatterServices.GetUninitializedObject(typeof(TestRecorderWindow));
 #pragma warning restore SYSLIB0050
+    }
+
+    private static void SetTemplatedParentForTesting(Control child, Control parent)
+    {
+        typeof(StyledElement)
+            .GetProperty(nameof(StyledElement.TemplatedParent))!
+            .SetValue(child, parent);
     }
 
     private static void CreateAuthoringProject(

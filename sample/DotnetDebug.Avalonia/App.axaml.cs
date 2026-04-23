@@ -60,10 +60,30 @@ public partial class App : Application
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
             UiControlType.Grid));
+        options.LocatorAliases.Add(new RecorderLocatorAlias(
+            "ArmEremexDataGridControl",
+            "ArmGridAutomationBridge",
+            UiControlType.Grid));
         options.GridHints.Add(new RecorderGridHint(
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
             ["EremexRow", "EremexValue", "EremexParity"]));
+        options.GridHints.Add(new RecorderGridHint(
+            "ArmEremexDataGridControl",
+            "ArmGridAutomationBridge",
+            ["Key", "Value", "State"]));
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "ArmSearchPicker",
+            SearchPickerParts.ByAutomationIds(
+                "ArmSearchInput",
+                "ArmSearchResults",
+                applyButtonAutomationId: "ArmSearchApplyButton")));
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "ArmServerSearchPicker",
+            SearchPickerParts.ByAutomationIds(
+                "ArmServerPickerInput",
+                "ArmServerPickerResults",
+                expandButtonAutomationId: "ArmServerPickerOpenButton")));
 
         var session = AppAutomationRecorder.Attach(mainWindow, options);
         session.Start();

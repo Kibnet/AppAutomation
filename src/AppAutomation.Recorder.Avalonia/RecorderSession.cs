@@ -1,6 +1,8 @@
+using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -351,6 +353,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
     internal void CaptureButtonClickForTesting(Control? source)
     {
+        if (IsDatePickerTemplateButton(source))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(source);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
@@ -562,6 +569,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (ShouldSuppressTemplateTextEntry(textBox))
+        {
+            return;
+        }
+
         _pendingTextBox = textBox;
         RegisterKeyboardInput(textBox);
         RestartTextDebounce();
@@ -645,6 +657,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         var eventSource = e.Source as Control;
+        if (IsDatePickerTemplateButton(eventSource))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(eventSource);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
@@ -810,6 +827,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (ShouldSuppressTemplateTextEntry(textBox))
+        {
+            return;
+        }
+
         _pendingTextBox = textBox;
         RestartTextDebounce();
     }
@@ -838,6 +860,81 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         var now = DateTimeOffset.UtcNow;
         return now - _recentKeyboardAt <= RecentInputWindow
             || now - _recentPointerAt <= RecentInputWindow;
+    }
+
+    private bool ShouldSuppressTemplateTextEntry(TextBox textBox)
+    {
+        if (IsComboBoxTemplateTextBox(textBox))
+        {
+            return true;
+        }
+
+        return IsInsideConfiguredGrid(textBox);
+    }
+
+    private bool IsInsideConfiguredGrid(Control source)
+    {
+        if (_options.GridHints.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            foreach (var hint in _options.GridHints)
+            {
+                if (TryGetLocator(current, hint.SourceLocatorKind, out var locator)
+                    && string.Equals(hint.SourceLocatorValue.Trim(), locator, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsComboBoxTemplateTextBox(TextBox textBox)
+    {
+        if (!string.Equals(textBox.Name, "PART_EditableTextBox", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (TryGetLocator(textBox, UiLocatorKind.AutomationId, out _))
+        {
+            return false;
+        }
+
+        var hasComboBoxOwner = false;
+        foreach (var current in EnumerateRelatedControls(textBox))
+        {
+            if (ReferenceEquals(current, textBox))
+            {
+                continue;
+            }
+
+            if (current is ComboBox)
+            {
+                hasComboBoxOwner = true;
+                break;
+            }
+        }
+
+        return hasComboBoxOwner;
+    }
+
+    private static bool TryGetLocator(Control control, UiLocatorKind locatorKind, out string locator)
+    {
+        locator = locatorKind switch
+        {
+            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(control) ?? string.Empty,
+            UiLocatorKind.Name => AutomationProperties.GetName(control) ?? control.Name ?? string.Empty,
+            _ => string.Empty
+        };
+
+        locator = locator.Trim();
+        return !string.IsNullOrWhiteSpace(locator);
     }
 
     private void RestartTextDebounce()
@@ -1166,6 +1263,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         var textBox = _pendingTextBox;
         _pendingTextBox = null;
+        if (ShouldSuppressTemplateTextEntry(textBox))
+        {
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
     }
 
@@ -1298,6 +1400,35 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         return null;
+    }
+
+    private static bool IsDatePickerTemplateButton(Control? control)
+    {
+        var button = FindAncestorOrSelf<Button>(control);
+        if (button is null || !IsKnownPickerTemplateButton(button))
+        {
+            return false;
+        }
+
+        foreach (var candidate in EnumerateRelatedControls(button))
+        {
+            if (ReferenceEquals(candidate, button))
+            {
+                continue;
+            }
+
+            if (candidate is DatePicker or Calendar)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsKnownPickerTemplateButton(Button button)
+    {
+        return button.Name is "PART_FlyoutButton" or "PART_AcceptButton" or "PART_DismissButton";
     }
 
     private static TControl? FindAncestorOrSelf<TControl>(Control? control)

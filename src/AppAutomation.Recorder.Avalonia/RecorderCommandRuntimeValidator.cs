@@ -17,7 +17,10 @@ internal sealed class RecorderCommandRuntimeValidator
         ArgumentNullException.ThrowIfNull(step);
 
         var targets = GetSelectedTargets();
-        if (!_options.ValidateRuntimeTargets || targets.Count == 0)
+        if (!_options.ValidateRuntimeTargets
+            || targets.Count == 0
+            || !step.CanPersist
+            || step.ValidationStatus == RecorderValidationStatus.Invalid)
         {
             return step with { RuntimeValidationFindings = Array.Empty<RecorderRuntimeValidationFinding>() };
         }

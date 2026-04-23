@@ -544,6 +544,24 @@ ids are required.
   projects and existing `CA1859` suggestions in recorder tests remain outside
   this change.
 
+### Post-EXEC Review: Diagnostic Log Follow-up
+- Статус: PASS
+- Что исправлено до завершения:
+  - invalid action/source validation no longer receives misleading
+    `target-supported` runtime findings;
+  - DatePicker template buttons are suppressed so date changes are recorded
+    through `SetDate`, not `ClickButton` over internal `PART_*` controls;
+  - configured grid internal text editors are suppressed, and ARM sample grid
+    aliases/hints now match `ArmEremexDataGridControl` -> `ArmGridAutomationBridge`;
+  - editable ComboBox template text boxes are suppressed, while ARM search
+    picker hints allow recording composite `SearchAndSelect` commands;
+  - diagnostic support suggestions now point at DatePicker/search picker/grid
+    mapping areas for these cases.
+- Verification:
+  - `dotnet test --project .\tests\AppAutomation.Recorder.Avalonia.Tests\AppAutomation.Recorder.Avalonia.Tests.csproj --no-restore` -> first run hit a transient Avalonia metadata concurrency failure in an existing overlay test; retry with `--no-build` passed 51/51.
+  - `dotnet build .\AppAutomation.sln` -> PASS, 0 errors.
+  - `dotnet test --solution .\AppAutomation.sln --no-build` -> PASS, 220/220.
+
 ## Approval
 Подтверждено пользователем фразой: "Спеку подтверждаю".
 
@@ -560,3 +578,5 @@ ids are required.
 | EXEC | UX follow-up: diagnostic file toggle | 0.93 | Нет | Запустить targeted/full verification | Нет | Да, пользователь уточнил, что включение диагностики должно писать в файл | Добавлены options, session API, overlay checkbox/path/copy action and file append path for detailed diagnostics | `src/AppAutomation.Recorder.Avalonia/AppAutomationRecorderOptions.cs`, `src/AppAutomation.Recorder.Avalonia/IAppAutomationRecorderSessionDetails.cs`, `src/AppAutomation.Recorder.Avalonia/RecorderSession.cs`, `src/AppAutomation.Recorder.Avalonia/UI/RecorderOverlay.*`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
 | EXEC | Targeted verification после file diagnostics | 0.94 | Нет | Запустить solution build/tests | Нет | Нет | Recorder tests passed 47/47; existing analyzer warnings remain unrelated | `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
 | EXEC | Broader verification после file diagnostics | 0.9 | Нет | Зафиксировать известный FlaUI sample failure и завершить/опубликовать follow-up | Нет | Нет | Solution build passed; full solution tests failed only in sample FlaUI UIA scenarios unrelated to recorder file logging, retry of FlaUI project left the same DataGrid scenario failing | `specs/2026-04-23-recorder-headless-flaui-command-validation.md` |
+| EXEC | Исправления по реальному diagnostic log | 0.9 | Результаты повторных тестов | Запустить targeted tests recorder и затем broader verification | Нет | Да, пользователь попросил исправить найденные по логу проблемы | Подавлены внутренние DatePicker/ComboBox/grid template события, убран ложный runtime target-supported для невалидных action/source шагов, sample recorder получил ARM search picker hints | `src/AppAutomation.Recorder.Avalonia/RecorderSession.cs`, `src/AppAutomation.Recorder.Avalonia/RecorderCommandRuntimeValidator.cs`, `src/AppAutomation.Recorder.Avalonia/RecorderCaptureDiagnostics.cs`, `sample/DotnetDebug.Avalonia/App.axaml.cs`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` |
+| EXEC | Verification после исправлений по diagnostic log | 0.96 | Нет | Сделать финальный diff-review, commit/push | Нет | Нет | Recorder targeted retry passed 51/51 after transient Avalonia overlay concurrency failure; solution build passed; full solution tests passed 220/220 | `specs/2026-04-23-recorder-headless-flaui-command-validation.md`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs`, `AppAutomation.sln` |
