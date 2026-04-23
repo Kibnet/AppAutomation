@@ -23,6 +23,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private readonly RecorderStepFactory _stepFactory;
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
+    private readonly RecorderCommandRuntimeValidator _runtimeValidator;
     private readonly AuthoringCodeGenerator _codeGenerator;
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _saveOperation;
     private readonly List<RecordedStep> _steps = new();
@@ -71,6 +72,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _stepFactory = new RecorderStepFactory(options, _validationRootProvider);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
         _stepValidator = new RecorderStepValidator();
+        _runtimeValidator = new RecorderCommandRuntimeValidator(options);
         _codeGenerator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), _logger);
         _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
             _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
@@ -242,6 +244,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         var revalidatedStep = RevalidateStep(_steps[index]);
+        LogRecordedStepDiagnostics("RetryStepValidation", null, revalidatedStep);
         _steps[index] = revalidatedStep;
         LatestPreview = _codeGenerator.GeneratePreview(revalidatedStep);
         SetStatus(ResolveJournalStatusMessage(revalidatedStep), revalidatedStep.ValidationStatus);
@@ -319,7 +322,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
-        AddStep(_stepFactory.TryCreateButtonStep(control));
+        AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
     }
 
     internal void CaptureComboBoxSelectionForTesting(ComboBox comboBox)
@@ -604,7 +607,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
-        var control = ResolveButtonActionOwner(e.Source as Control);
+        var eventSource = e.Source as Control;
+        var control = ResolveButtonActionOwner(eventSource);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         if (TryRecordGridAction(control))
@@ -612,7 +616,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
-        AddStep(_stepFactory.TryCreateButtonStep(control));
+        AddStep(_stepFactory.TryCreateButtonStep(control), control ?? eventSource, "ButtonClick");
     }
 
     private void OnComboBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -637,7 +641,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         FlushPendingTextIfSwitchingTo(comboBox);
         FlushPendingSliderIfSwitchingTo(comboBox);
-        AddStep(_stepFactory.TryCreateComboBoxStep(comboBox));
+        AddStep(_stepFactory.TryCreateComboBoxStep(comboBox), comboBox, "ComboBoxSelection");
     }
 
     private bool TryRecordSearchPickerSelection(ComboBox comboBox)
@@ -656,7 +660,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _textDebounceTimer.Stop();
         _pendingTextBox = null;
         FlushPendingSliderIfSwitchingTo(comboBox);
-        AddStep(result);
+        AddStep(result, comboBox, "SearchPickerSelection");
         return true;
     }
 
@@ -677,7 +681,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         FlushPendingTextIfSwitchingTo(listBox);
         FlushPendingSliderIfSwitchingTo(listBox);
-        AddStep(_stepFactory.TryCreateListBoxStep(listBox));
+        AddStep(_stepFactory.TryCreateListBoxStep(listBox), listBox, "ListBoxSelection");
     }
 
     private void OnTabControlSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -689,7 +693,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         FlushPendingTextIfSwitchingTo(tabControl);
         FlushPendingSliderIfSwitchingTo(tabControl);
-        AddStep(_stepFactory.TryCreateTabSelectionStep(tabControl));
+        AddStep(_stepFactory.TryCreateTabSelectionStep(tabControl), tabControl, "TabSelection");
     }
 
     private void OnTreeViewSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -701,7 +705,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         FlushPendingTextIfSwitchingTo(treeView);
         FlushPendingSliderIfSwitchingTo(treeView);
-        AddStep(_stepFactory.TryCreateTreeSelectionStep(treeView));
+        AddStep(_stepFactory.TryCreateTreeSelectionStep(treeView), treeView, "TreeSelection");
     }
 
     private void OnSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -733,7 +737,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         {
             FlushPendingTextIfSwitchingTo(datePicker);
             FlushPendingSliderIfSwitchingTo(datePicker);
-            AddStep(_stepFactory.TryCreateDatePickerStep(datePicker));
+            AddStep(_stepFactory.TryCreateDatePickerStep(datePicker), datePicker, "DatePickerSelection");
         }
     }
 
@@ -748,7 +752,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         {
             FlushPendingTextIfSwitchingTo(calendar);
             FlushPendingSliderIfSwitchingTo(calendar);
-            AddStep(_stepFactory.TryCreateCalendarStep(calendar));
+            AddStep(_stepFactory.TryCreateCalendarStep(calendar), calendar, "CalendarSelection");
         }
     }
 
@@ -810,15 +814,16 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         var control = _lastHoveredControl ?? TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
-        AddStep(_stepFactory.TryCreateAssertionStep(control, mode));
+        AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
     }
 
-    private void AddStep(StepCreationResult result)
+    private void AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
     {
         if (!result.Success || result.Step is null)
         {
             if (!string.IsNullOrWhiteSpace(result.Message))
             {
+                LogCaptureFailure(captureAction, source, result.Message);
                 SetStatus(result.Message, RecorderValidationStatus.Invalid);
             }
 
@@ -826,6 +831,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         var recordedStep = RevalidateStep(result.Step);
+        LogRecordedStepDiagnostics(captureAction, source, recordedStep);
         var preview = _codeGenerator.GeneratePreview(recordedStep);
         if (!recordedStep.CanPersist && !_options.Validation.CaptureInvalidSteps)
         {
@@ -858,7 +864,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         var result = _stepFactory.TryCreateGridActionStep(source);
         if (result.Success)
         {
-            AddStep(result);
+            AddStep(result, source, "GridAction");
             return true;
         }
 
@@ -867,8 +873,107 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return false;
         }
 
-        AddStep(result);
+        AddStep(result, source, "GridAction");
         return true;
+    }
+
+    private void LogCaptureFailure(string captureAction, Control? source, string message)
+    {
+        LogRecorderDiagnostic(
+            RecorderDiagnosticsEventIds.CaptureFailed,
+            captureAction,
+            source,
+            step: null,
+            findings: Array.Empty<RecorderRuntimeValidationFinding>(),
+            message);
+    }
+
+    private void LogRecordedStepDiagnostics(string captureAction, Control? source, RecordedStep step)
+    {
+        var runtimeFindings = step.RuntimeValidationFindings ?? Array.Empty<RecorderRuntimeValidationFinding>();
+        var surfacedRuntimeFindings = runtimeFindings
+            .Where(static finding => finding.ShouldSurface)
+            .ToArray();
+        if (surfacedRuntimeFindings.Length > 0)
+        {
+            LogRecorderDiagnostic(
+                surfacedRuntimeFindings.Any(static finding => finding.BlocksTarget)
+                    ? RecorderDiagnosticsEventIds.RuntimeValidationFailed
+                    : RecorderDiagnosticsEventIds.RuntimeValidationWarning,
+                captureAction,
+                source,
+                step,
+                surfacedRuntimeFindings,
+                step.ValidationMessage);
+        }
+
+        if (!step.CanPersist && !RuntimeFindingsBlockAllTargets(runtimeFindings))
+        {
+            LogRecorderDiagnostic(
+                IsActionValidationFailure(step)
+                    ? RecorderDiagnosticsEventIds.ActionValidationFailed
+                    : RecorderDiagnosticsEventIds.SelectorValidationFailed,
+                captureAction,
+                source,
+                step,
+                runtimeFindings,
+                step.ValidationMessage);
+        }
+    }
+
+    private void LogRecorderDiagnostic(
+        EventId eventId,
+        string captureAction,
+        Control? source,
+        RecordedStep? step,
+        IReadOnlyList<RecorderRuntimeValidationFinding> findings,
+        string? message)
+    {
+        try
+        {
+            var diagnostic = RecorderCaptureDiagnostics.Build(
+                _options.ScenarioName,
+                _state,
+                captureAction,
+                source,
+                step,
+                findings,
+                message);
+            _logger.LogWarning(eventId, "{RecorderDiagnostic}", diagnostic);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed,
+                ex,
+                "Failed to build recorder diagnostic for capture action '{CaptureAction}': {Message}",
+                captureAction,
+                ex.Message);
+        }
+    }
+
+    private static bool RuntimeFindingsBlockAllTargets(IReadOnlyList<RecorderRuntimeValidationFinding> findings)
+    {
+        var targets = findings
+            .Select(static finding => finding.Target)
+            .Distinct()
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            return false;
+        }
+
+        var blockedTargets = findings
+            .Where(static finding => finding.BlocksTarget)
+            .Select(static finding => finding.Target)
+            .Distinct()
+            .ToHashSet();
+        return blockedTargets.Count > 0 && targets.All(blockedTargets.Contains);
+    }
+
+    private static bool IsActionValidationFailure(RecordedStep step)
+    {
+        return step.ValidationMessage?.Contains("not compatible", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static string CreateFingerprint(RecordedStep step)
@@ -924,7 +1029,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         var textBox = _pendingTextBox;
         _pendingTextBox = null;
-        AddStep(_stepFactory.TryCreateTextEntryStep(textBox));
+        AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
     }
 
     private void FlushPendingSlider()
@@ -937,7 +1042,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         var slider = _pendingSlider;
         _pendingSlider = null;
-        AddStep(_stepFactory.TryCreateSliderStep(slider));
+        AddStep(_stepFactory.TryCreateSliderStep(slider), slider, "SliderValue");
     }
 
     private void FlushPendingTextIfSwitchingTo(Control? control)
@@ -1188,11 +1293,17 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     {
         if (!_options.Validation.ValidateSelectors)
         {
-            return step with
+            var selectorValidationDisabledStep = _runtimeValidator.Validate(step with
             {
                 LastValidationAt = DateTimeOffset.UtcNow,
                 ReviewState = ResolveReviewState(step),
                 FailureCode = ResolveFailureCode(step)
+            });
+
+            return selectorValidationDisabledStep with
+            {
+                ReviewState = ResolveReviewState(selectorValidationDisabledStep),
+                FailureCode = ResolveFailureCode(selectorValidationDisabledStep)
             };
         }
 
@@ -1209,6 +1320,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         {
             revalidated = _stepValidator.Validate(revalidated, validation.MatchedControl);
         }
+
+        revalidated = _runtimeValidator.Validate(revalidated);
 
         return revalidated with
         {

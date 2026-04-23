@@ -13,6 +13,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using AppAutomation.Recorder.Avalonia.UI;
+using Microsoft.Extensions.Logging;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -725,7 +726,165 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal.Count).IsEqualTo(1);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);");
             await Assert.That(details.StepJournal[0].Preview.Contains("Page.ClickButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(true);
+            await Assert.That(details.StepJournal[0].Preview).Contains("grid-user-action-adapter-required");
+        }
+    }
+
+    [Test]
+    public async Task RuntimeValidator_ButtonCommand_PassesHeadlessAndFlaUIReadiness()
+    {
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var step = new RecordedStep(
+            RecordedActionKind.ClickButton,
+            new RecordedControlDescriptor(
+                "RunButton",
+                UiControlType.Button,
+                "RunButton",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+                Warning: null));
+
+        var result = validator.Validate(step);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(result.CanPersist).IsEqualTo(true);
+            await Assert.That(result.RuntimeValidationFindings?.Count).IsEqualTo(2);
+            await Assert.That(result.RuntimeValidationFindings!.All(static finding => finding.Severity == RecorderRuntimeValidationSeverity.Info)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RuntimeValidation_MissingPayload_BlocksAllTargetsAndLogsDiagnostics()
+    {
+        var logger = new TestLogger();
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false, Logger = logger };
+        var root = new StackPanel();
+        var button = new Button { Content = "Run" };
+        AutomationProperties.SetAutomationId(button, "RunButton");
+        root.Children.Add(button);
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+        var stepId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(
+            new RecordedStep(
+                RecordedActionKind.WaitUntilIsEnabled,
+                new RecordedControlDescriptor(
+                    "RunButton",
+                    UiControlType.Button,
+                    "RunButton",
+                    UiLocatorKind.AutomationId,
+                    FallbackToName: false,
+                    AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+                    Warning: null),
+                StepId: stepId));
+
+        var retried = details.RetryStepValidation(stepId);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(retried).IsEqualTo(true);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].StatusMessage).Contains("Headless validation failed");
+            await Assert.That(details.StepJournal[0].StatusMessage).Contains("FlaUI validation failed");
+            await Assert.That(logger.Entries.Any(static entry =>
+                entry.EventId.Id == RecorderDiagnosticsEventIds.RuntimeValidationFailed.Id
+                && entry.Message.Contains("payload-missing-bool", StringComparison.Ordinal)
+                && entry.Message.Contains("RecordedCommand", StringComparison.Ordinal))).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_UnsupportedCapture_LogsControlSnapshotAndTreePaths()
+    {
+        var logger = new TestLogger();
+        var root = new StackPanel();
+        var unsupported = new Border();
+        AutomationProperties.SetAutomationId(unsupported, "UnsupportedBorder");
+        root.Children.Add(unsupported);
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false, Logger = logger },
+            () => root,
+            attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(unsupported);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(0);
+            await Assert.That(logger.Entries.Any(static entry =>
+                entry.EventId.Id == RecorderDiagnosticsEventIds.CaptureFailed.Id
+                && entry.Message.Contains("UnsupportedBorder", StringComparison.Ordinal)
+                && entry.Message.Contains("ControlSnapshot", StringComparison.Ordinal)
+                && entry.Message.Contains("VisualPath", StringComparison.Ordinal)
+                && entry.Message.Contains("LogicalPath", StringComparison.Ordinal))).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_ActionValidationFailure_LogsDiagnosticsAndRemainsNonPersistable()
+    {
+        var logger = new TestLogger();
+        var root = new StackPanel();
+        var container = new Border();
+        var button = new Button { Content = "Run" };
+        AutomationProperties.SetAutomationId(container, "RunButton");
+        container.Child = button;
+        root.Children.Add(container);
+
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false, Logger = logger },
+            () => root,
+            attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(button);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(false);
+            await Assert.That(logger.Entries.Any(static entry =>
+                entry.EventId.Id == RecorderDiagnosticsEventIds.ActionValidationFailed.Id
+                && entry.Message.Contains("not compatible", StringComparison.OrdinalIgnoreCase)
+                && entry.Message.Contains("RecordedCommand", StringComparison.Ordinal))).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_RuntimeValidationCanBeDisabled_ForLegacyValidationOutcome()
+    {
+        var options = CreateEremexGridActionOptions(validateRuntimeTargets: false);
+        var root = new StackPanel();
+        var bridge = new Border();
+        var exportButton = new Button { Content = "Export" };
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(exportButton, "EremexDemoDataGridExportButton");
+        root.Children.Add(exportButton);
+        root.Children.Add(bridge);
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(exportButton);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
             await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(true);
+            await Assert.That(details.StepJournal[0].Preview).DoesNotContain("grid-user-action-adapter-required");
         }
     }
 
@@ -1371,6 +1530,155 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task SaveAsync_EmitsRuntimeWarningComment_ForPersistableTargetGap()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("EremexDemoDataGridAutomationBridge", UiControlType.Grid, "EremexDemoDataGridAutomationBridge", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var gridDescriptor = new RecordedControlDescriptor(
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid,
+            "EremexDemoDataGridAutomationBridge",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: null);
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(
+                RecordedActionKind.ExportGrid,
+                gridDescriptor,
+                ValidationStatus: RecorderValidationStatus.Warning,
+                ValidationMessage: "Headless validation warning: headless-grid-user-action-adapter-required.",
+                RuntimeValidationFindings:
+                [
+                    new RecorderRuntimeValidationFinding(
+                        RecorderRuntimeValidationTarget.Headless,
+                        RecorderRuntimeValidationSeverity.Warning,
+                        "headless-grid-user-action-adapter-required",
+                        "Grid user action requires a runtime grid action adapter.",
+                        BlocksTarget: false)
+                ])
+        ];
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Runtime Warning Comment");
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains("// AppAutomation recorder warning: Headless target warning (headless-grid-user-action-adapter-required): Grid user action requires a runtime grid action adapter.", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);", StringComparison.Ordinal)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_EmitsUnsupportedRuntimeComment_AndPersistsWhenAnotherTargetWorks()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("RunButton", UiControlType.Button, "RunButton", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var buttonDescriptor = new RecordedControlDescriptor(
+            "RunButton",
+            UiControlType.Button,
+            "RunButton",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+            Warning: null);
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(
+                RecordedActionKind.ClickButton,
+                buttonDescriptor,
+                ValidationStatus: RecorderValidationStatus.Warning,
+                ValidationMessage: "Headless validation failed: headless-action-unsupported.",
+                RuntimeValidationFindings:
+                [
+                    new RecorderRuntimeValidationFinding(
+                        RecorderRuntimeValidationTarget.Headless,
+                        RecorderRuntimeValidationSeverity.Invalid,
+                        "headless-action-unsupported",
+                        "Recorded action is not supported by Headless.",
+                        BlocksTarget: true),
+                    new RecorderRuntimeValidationFinding(
+                        RecorderRuntimeValidationTarget.FlaUI,
+                        RecorderRuntimeValidationSeverity.Info,
+                        "flaui-target-supported",
+                        "Recorded action is supported by FlaUI readiness validation.",
+                        BlocksTarget: false)
+                ])
+        ];
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Runtime Unsupported Comment");
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains("// AppAutomation recorder warning: Headless target unsupported (headless-action-unsupported): Recorded action is not supported by Headless.", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ClickButton(static page => page.RunButton);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("flaui-target-supported", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
     public async Task SaveAsync_SkipsInvalidSteps_AndReportsCounts()
     {
         using var directory = new TemporaryDirectory();
@@ -1538,9 +1846,25 @@ public sealed class RecorderTests
         return options;
     }
 
-    private static AppAutomationRecorderOptions CreateEremexGridActionOptions()
+    private static AppAutomationRecorderOptions CreateEremexGridActionOptions(bool validateRuntimeTargets = true)
     {
-        var options = CreateEremexGridOptions();
+        var options = validateRuntimeTargets
+            ? CreateEremexGridOptions()
+            : new AppAutomationRecorderOptions
+            {
+                Validation = new RecorderValidationOptions
+                {
+                    ValidateRuntimeTargets = false
+                }
+            };
+        if (!validateRuntimeTargets)
+        {
+            options.GridHints.Add(new RecorderGridHint(
+                "EremexDemoDataGridControl",
+                "EremexDemoDataGridAutomationBridge",
+                ["EremexRow", "EremexValue", "EremexParity"]));
+        }
+
         options.GridActionHints.Add(new RecorderGridActionHint(
             "EremexDemoDataGridAutomationBridge_Row2_Cell0",
             "EremexDemoDataGridAutomationBridge",
@@ -1758,6 +2082,34 @@ public sealed class RecorderTests
             }
         }
     }
+
+    private sealed class TestLogger : ILogger
+    {
+        public List<TestLogEntry> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+        {
+            return null;
+        }
+
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            return true;
+        }
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new TestLogEntry(logLevel, eventId, formatter(state, exception), exception));
+        }
+    }
+
+    private sealed record TestLogEntry(LogLevel LogLevel, EventId EventId, string Message, Exception? Exception);
 
     private sealed class TestRecorderWindow : Window
     {

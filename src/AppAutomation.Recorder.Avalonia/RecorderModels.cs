@@ -75,7 +75,31 @@ internal sealed record RecordedStep(
     int? IntValue = null,
     int? RowIndex = null,
     int? ColumnIndex = null,
-    string? ItemValue = null);
+    string? ItemValue = null,
+    IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null);
+
+internal enum RecorderRuntimeValidationTarget
+{
+    Headless = 0,
+    FlaUI = 1
+}
+
+internal enum RecorderRuntimeValidationSeverity
+{
+    Info = 0,
+    Warning = 1,
+    Invalid = 2
+}
+
+internal sealed record RecorderRuntimeValidationFinding(
+    RecorderRuntimeValidationTarget Target,
+    RecorderRuntimeValidationSeverity Severity,
+    string Code,
+    string Message,
+    bool BlocksTarget)
+{
+    public bool ShouldSurface => Severity != RecorderRuntimeValidationSeverity.Info || BlocksTarget;
+}
 
 internal sealed record StepCreationResult(bool Success, RecordedStep? Step, string Message)
 {

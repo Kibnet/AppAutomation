@@ -144,4 +144,17 @@ public sealed class RecorderValidationOptions
     public bool ValidateSelectors { get; init; } = true;
 
     public bool CaptureInvalidSteps { get; init; } = true;
+
+    public bool ValidateRuntimeTargets { get; init; } = true;
+
+    public RecorderRuntimeValidationTargets RuntimeTargets { get; init; } = RecorderRuntimeValidationTargets.All;
+}
+
+[Flags]
+public enum RecorderRuntimeValidationTargets
+{
+    None = 0,
+    Headless = 1,
+    FlaUI = 2,
+    All = Headless | FlaUI
 }
