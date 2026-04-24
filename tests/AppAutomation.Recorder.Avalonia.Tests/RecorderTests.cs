@@ -199,6 +199,35 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateSearchPickerStep_WithConfiguredListBackedParts_CapturesCompositeAction()
+    {
+        var options = CreateListSearchPickerOptions();
+        var factory = new RecorderStepFactory(options);
+        var searchInput = new TextBox { Text = "least" };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "Greatest Common Divisor", "Least Common Multiple" },
+            SelectedItem = "Least Common Multiple"
+        };
+        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
+        AutomationProperties.SetAutomationId(results, "OperationResults");
+
+        var result = factory.TryCreateSearchPickerStep(searchInput, results);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SearchAndSelect);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.SearchPicker);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("HistoryOperationPicker");
+            await Assert.That(result.Step.StringValue).IsEqualTo("least");
+            await Assert.That(result.Step.ItemValue).IsEqualTo("Least Common Multiple");
+            await Assert.That(result.Step.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
     public async Task TryCreateSearchPickerStep_WithoutHint_ReturnsUnsupported()
     {
         var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
@@ -280,6 +309,97 @@ public sealed class RecorderTests
             await Assert.That(scenarioSource.Contains(
                 "Page.SearchAndSelect(static page => page.HistoryOperationPicker, \"least\", \"Least Common Multiple\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_UsesCompositeWorkflowActions_InGeneratedScenario()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            namespace Sample.Authoring.Pages;
+
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Composite Flow");
+        var dialogDescriptor = new RecordedControlDescriptor(
+            "DeleteDialog",
+            UiControlType.Dialog,
+            "DeleteDialog",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: "Recorded dialog action from configured parts.");
+        var notificationDescriptor = new RecordedControlDescriptor(
+            "ExportToast",
+            UiControlType.Notification,
+            "ExportToast",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: "Recorded notification action from configured parts.");
+        var shellDescriptor = new RecordedControlDescriptor(
+            "Shell",
+            UiControlType.ShellNavigation,
+            "Shell",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: "Recorded shell navigation action from configured parts.");
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(RecordedActionKind.ConfirmDialog, dialogDescriptor),
+            new RecordedStep(RecordedActionKind.CancelDialog, dialogDescriptor),
+            new RecordedStep(RecordedActionKind.DismissDialog, dialogDescriptor),
+            new RecordedStep(RecordedActionKind.DismissNotification, notificationDescriptor),
+            new RecordedStep(RecordedActionKind.OpenOrActivateShellPane, shellDescriptor, StringValue: "Customers"),
+            new RecordedStep(RecordedActionKind.ActivateShellPane, shellDescriptor, StringValue: "Orders")
+        ];
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNotNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var pageSource = await File.ReadAllTextAsync(result.PageFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"DeleteDialog\", UiControlType.Dialog, \"DeleteDialog\", FallbackToName = false)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"ExportToast\", UiControlType.Notification, \"ExportToast\", FallbackToName = false)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"Shell\", UiControlType.ShellNavigation, \"Shell\", FallbackToName = false)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ConfirmDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.CancelDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.DismissDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.DismissNotification(static page => page.ExportToast);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.OpenOrActivateShellPane(static page => page.Shell, \"Customers\");", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.ActivateShellPane(static page => page.Shell, \"Orders\");", StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
 
@@ -1153,7 +1273,8 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal.Count).IsEqualTo(1);
             await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
             await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(false);
-            await Assert.That(details.StepJournal[0].StatusMessage.Contains("not compatible", StringComparison.OrdinalIgnoreCase)).IsEqualTo(true);
+            await Assert.That(details.StepJournal[0].StatusMessage.Contains("wrapper", StringComparison.OrdinalIgnoreCase)).IsEqualTo(true);
+            await Assert.That(details.StepJournal[0].StatusMessage.Contains("stable part", StringComparison.OrdinalIgnoreCase)).IsEqualTo(true);
         }
     }
 
@@ -1190,6 +1311,112 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal.Count).IsEqualTo(2);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.SelectComboItem(static page => page.OperationCombo, \"LCM\");");
             await Assert.That(details.StepJournal[1].Preview).Contains("Page.SelectListBoxItem(static page => page.SeriesList, \"Fibonacci\");");
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_SuppressesConfiguredSearchPickerButtons_AndCapturesListSelectionAsComposite()
+    {
+        var options = CreateListSearchPickerOptions();
+        var root = new StackPanel();
+        var searchInput = new TextBox();
+        var applyButton = new Button { Content = "Apply" };
+        var expandButton = new Button { Content = "Open" };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "Greatest Common Divisor", "Least Common Multiple" }
+        };
+        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
+        AutomationProperties.SetAutomationId(applyButton, "ApplyFilterButton");
+        AutomationProperties.SetAutomationId(expandButton, "ExpandFilterButton");
+        AutomationProperties.SetAutomationId(results, "OperationResults");
+        root.Children.Add(searchInput);
+        root.Children.Add(applyButton);
+        root.Children.Add(expandButton);
+        root.Children.Add(results);
+
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(searchInput);
+        searchInput.Text = "least";
+        session.CaptureButtonClickForTesting(applyButton);
+        session.CaptureButtonClickForTesting(expandButton);
+        session.RegisterPointerInputFromSourceForTesting(results);
+        results.SelectedItem = "Least Common Multiple";
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.HistoryOperationPicker, \"least\", \"Least Common Multiple\");");
+            await Assert.That(details.StepJournal[0].Preview.Contains("ApplyFilterButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].Preview.Contains("ExpandFilterButton", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesConfiguredDialogAndNotificationButtons_AsCompositeSteps()
+    {
+        var options = CreateCompositeRecorderOptions();
+        var root = new StackPanel();
+        var confirmButton = new Button { Content = "Yes" };
+        var dismissNotificationButton = new Button { Content = "Close" };
+        AutomationProperties.SetAutomationId(confirmButton, "DeleteDialogConfirmButton");
+        AutomationProperties.SetAutomationId(dismissNotificationButton, "ExportToastDismissButton");
+        root.Children.Add(confirmButton);
+        root.Children.Add(dismissNotificationButton);
+
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.CaptureButtonClickForTesting(confirmButton);
+        session.CaptureButtonClickForTesting(dismissNotificationButton);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(2);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.ConfirmDialog(static page => page.DeleteDialog);");
+            await Assert.That(details.StepJournal[1].Preview).Contains("Page.DismissNotification(static page => page.ExportToast);");
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesConfiguredShellNavigation_FromListAndPaneTabs()
+    {
+        var options = CreateCompositeRecorderOptions();
+        var root = new StackPanel();
+        var navigationList = new ListBox
+        {
+            ItemsSource = new[] { "Customers", "Orders" }
+        };
+        var paneTabs = new TabControl();
+        var customersTab = new TabItem { Header = "Customers" };
+        var ordersTab = new TabItem { Header = "Orders" };
+        paneTabs.Items.Add(customersTab);
+        paneTabs.Items.Add(ordersTab);
+        AutomationProperties.SetAutomationId(navigationList, "ShellNavigationList");
+        AutomationProperties.SetAutomationId(paneTabs, "ShellPaneTabs");
+        root.Children.Add(navigationList);
+        root.Children.Add(paneTabs);
+
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterPointerInputFromSourceForTesting(navigationList);
+        navigationList.SelectedItem = "Customers";
+        session.RegisterPointerInputFromSourceForTesting(paneTabs);
+        paneTabs.SelectedItem = ordersTab;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(2);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.OpenOrActivateShellPane(static page => page.Shell, \"Customers\");");
+            await Assert.That(details.StepJournal[1].Preview).Contains("Page.ActivateShellPane(static page => page.Shell, \"Orders\");");
         }
     }
 
@@ -2071,8 +2298,46 @@ public sealed class RecorderTests
             "HistoryOperationPicker",
             SearchPickerParts.ByAutomationIds(
                 "HistoryFilterInput",
-                "OperationCombo",
-                applyButtonAutomationId: "ApplyFilterButton")));
+                    "OperationCombo",
+                    applyButtonAutomationId: "ApplyFilterButton")));
+        return options;
+    }
+
+    private static AppAutomationRecorderOptions CreateListSearchPickerOptions()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "HistoryOperationPicker",
+            SearchPickerParts.ByAutomationIds(
+                "HistoryFilterInput",
+                "OperationResults",
+                applyButtonAutomationId: "ApplyFilterButton",
+                expandButtonAutomationId: "ExpandFilterButton",
+                resultsKind: SearchPickerResultsKind.ListBox)));
+        return options;
+    }
+
+    private static AppAutomationRecorderOptions CreateCompositeRecorderOptions()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.DialogHints.Add(new RecorderDialogHint(
+            "DeleteDialog",
+            DialogControlParts.ByAutomationIds(
+                "DeleteDialogMessage",
+                "DeleteDialogConfirmButton",
+                cancelButtonAutomationId: "DeleteDialogCancelButton",
+                dismissButtonAutomationId: "DeleteDialogDismissButton")));
+        options.NotificationHints.Add(new RecorderNotificationHint(
+            "ExportToast",
+            NotificationControlParts.ByAutomationIds(
+                "ExportToastText",
+                dismissButtonAutomationId: "ExportToastDismissButton")));
+        options.ShellNavigationHints.Add(new RecorderShellNavigationHint(
+            "Shell",
+            ShellNavigationParts.ByAutomationIds(
+                "ShellNavigationList",
+                paneTabsAutomationId: "ShellPaneTabs",
+                navigationKind: ShellNavigationSourceKind.ListBox)));
         return options;
     }
 

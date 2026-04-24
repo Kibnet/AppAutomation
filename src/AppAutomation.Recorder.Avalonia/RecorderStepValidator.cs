@@ -21,7 +21,7 @@ internal sealed class RecorderStepValidator
             ? step
             : MarkInvalid(
                 step,
-                $"Recorded action '{step.ActionKind}' is not compatible with control '{source.GetType().Name}'.");
+                BuildUnsupportedActionMessage(step.ActionKind, source));
     }
 
     private static bool SupportsAction(RecordedActionKind actionKind, Control source)
@@ -45,14 +45,27 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
             RecordedActionKind.WaitUntilIsEnabled => true,
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
-            RecordedActionKind.SearchAndSelect => source is ComboBox,
+            RecordedActionKind.SearchAndSelect => true,
             RecordedActionKind.OpenGridRow
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd
                 or RecordedActionKind.CopyGridCell
                 or RecordedActionKind.ExportGrid => true,
+            RecordedActionKind.ConfirmDialog
+                or RecordedActionKind.CancelDialog
+                or RecordedActionKind.DismissDialog
+                or RecordedActionKind.DismissNotification
+                or RecordedActionKind.OpenOrActivateShellPane
+                or RecordedActionKind.ActivateShellPane => true,
             _ => false
         };
+    }
+
+    private static string BuildUnsupportedActionMessage(RecordedActionKind actionKind, Control source)
+    {
+        return $"Recorded action '{actionKind}' is not compatible with control '{source.GetType().Name}'."
+            + " The stable locator resolves to a wrapper/composite control instead of the interactive part."
+            + " Configure a composite recorder hint for this pattern or expose stable part locators on the real input/button.";
     }
 
     private static RecordedStep MarkInvalid(RecordedStep step, string message)

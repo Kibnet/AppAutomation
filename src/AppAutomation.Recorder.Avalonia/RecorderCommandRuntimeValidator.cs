@@ -152,6 +152,13 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
                 .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index")),
             RecordedActionKind.ExportGrid => ValidateGridUserAction(step, target),
+            RecordedActionKind.ConfirmDialog
+                or RecordedActionKind.CancelDialog
+                or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
+            RecordedActionKind.DismissNotification => ValidateControlType(step, target, UiControlType.Notification),
+            RecordedActionKind.OpenOrActivateShellPane
+                or RecordedActionKind.ActivateShellPane => ValidateControlType(step, target, UiControlType.ShellNavigation)
+                    .Concat(RequireString(step, target, allowEmpty: false, "shell pane name")),
             _ => [Invalid(target, "action-unsupported", $"Recorded action '{step.ActionKind}' is not supported by {target}.")]
         };
     }

@@ -29,7 +29,13 @@ public enum RecordedActionKind
     SortGridByColumn = 21,
     ScrollGridToEnd = 22,
     CopyGridCell = 23,
-    ExportGrid = 24
+    ExportGrid = 24,
+    ConfirmDialog = 25,
+    CancelDialog = 26,
+    DismissDialog = 27,
+    DismissNotification = 28,
+    OpenOrActivateShellPane = 29,
+    ActivateShellPane = 30
 }
 
 public enum RecorderAssertionMode
