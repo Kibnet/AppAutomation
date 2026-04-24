@@ -358,10 +358,20 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TrySuppressSearchPickerButtonClick(source))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(source);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         if (TryRecordGridAction(control))
+        {
+            return;
+        }
+
+        if (TryRecordCompositeButtonAction(control ?? source))
         {
             return;
         }
@@ -662,10 +672,20 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TrySuppressSearchPickerButtonClick(eventSource))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(eventSource);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         if (TryRecordGridAction(control))
+        {
+            return;
+        }
+
+        if (TryRecordCompositeButtonAction(control ?? eventSource))
         {
             return;
         }
@@ -718,6 +738,26 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         return true;
     }
 
+    private bool TryRecordSearchPickerSelection(ListBox listBox)
+    {
+        if (_pendingTextBox is null)
+        {
+            return false;
+        }
+
+        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, listBox);
+        if (!result.Success)
+        {
+            return false;
+        }
+
+        _textDebounceTimer.Stop();
+        _pendingTextBox = null;
+        FlushPendingSliderIfSwitchingTo(listBox);
+        AddStep(result, listBox, "SearchPickerSelection");
+        return true;
+    }
+
     private void OnListBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (sender is ListBox listBox)
@@ -729,6 +769,16 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private void RecordListBoxSelection(ListBox listBox)
     {
         if (_state != RecorderSessionState.Recording || !WasRecentlyTriggeredByUser(listBox))
+        {
+            return;
+        }
+
+        if (TryRecordSearchPickerSelection(listBox))
+        {
+            return;
+        }
+
+        if (TryRecordShellNavigation(listBox))
         {
             return;
         }
@@ -745,6 +795,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TryRecordShellNavigation(tabControl))
+        {
+            return;
+        }
+
         FlushPendingTextIfSwitchingTo(tabControl);
         FlushPendingSliderIfSwitchingTo(tabControl);
         AddStep(_stepFactory.TryCreateTabSelectionStep(tabControl), tabControl, "TabSelection");
@@ -757,9 +812,57 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TryRecordShellNavigation(treeView))
+        {
+            return;
+        }
+
         FlushPendingTextIfSwitchingTo(treeView);
         FlushPendingSliderIfSwitchingTo(treeView);
         AddStep(_stepFactory.TryCreateTreeSelectionStep(treeView), treeView, "TreeSelection");
+    }
+
+    private bool TrySuppressSearchPickerButtonClick(Control? source)
+    {
+        return source is not null && _stepFactory.ShouldSuppressSearchPickerButton(source);
+    }
+
+    private bool TryRecordCompositeButtonAction(Control? source)
+    {
+        if (source is null)
+        {
+            return false;
+        }
+
+        var dialogResult = _stepFactory.TryCreateDialogActionStep(source);
+        if (dialogResult.Success)
+        {
+            AddStep(dialogResult, source, "DialogAction");
+            return true;
+        }
+
+        var notificationResult = _stepFactory.TryCreateNotificationActionStep(source);
+        if (notificationResult.Success)
+        {
+            AddStep(notificationResult, source, "NotificationAction");
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryRecordShellNavigation(Control source)
+    {
+        var result = _stepFactory.TryCreateShellNavigationStep(source);
+        if (!result.Success)
+        {
+            return false;
+        }
+
+        FlushPendingTextIfSwitchingTo(source);
+        FlushPendingSliderIfSwitchingTo(source);
+        AddStep(result, source, "ShellNavigation");
+        return true;
     }
 
     private void OnSliderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)

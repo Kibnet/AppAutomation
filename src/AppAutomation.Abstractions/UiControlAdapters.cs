@@ -43,8 +43,9 @@ public interface IUiControlAdapter
 /// A search picker is a composite control that combines a search input, results list,
 /// and optionally expand and apply buttons. This record specifies the locators for each component.
 /// </remarks>
+/// <param name="ResultsKind">The primitive control kind used by the results surface.</param>
 /// <param name="SearchInputLocator">The locator for the search text input control.</param>
-/// <param name="ResultsLocator">The locator for the results combo box control.</param>
+/// <param name="ResultsLocator">The locator for the results control.</param>
 /// <param name="ApplyButtonLocator">Optional locator for an apply/submit button.</param>
 /// <param name="ExpandButtonLocator">Optional locator for an expand/dropdown button.</param>
 /// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
@@ -55,28 +56,48 @@ public sealed record SearchPickerParts(
     string? ApplyButtonLocator = null,
     string? ExpandButtonLocator = null,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = true)
+    bool FallbackToName = true,
+    SearchPickerResultsKind ResultsKind = SearchPickerResultsKind.ComboBox)
 {
     /// <summary>
     /// Creates a <see cref="SearchPickerParts"/> configuration using automation IDs.
     /// </summary>
     /// <param name="searchInputAutomationId">The automation ID of the search input.</param>
-    /// <param name="resultsAutomationId">The automation ID of the results combo box.</param>
+    /// <param name="resultsAutomationId">The automation ID of the results control.</param>
     /// <param name="applyButtonAutomationId">Optional automation ID of the apply button.</param>
     /// <param name="expandButtonAutomationId">Optional automation ID of the expand button.</param>
+    /// <param name="resultsKind">The primitive results control kind.</param>
     /// <returns>A configured <see cref="SearchPickerParts"/> instance.</returns>
     public static SearchPickerParts ByAutomationIds(
         string searchInputAutomationId,
         string resultsAutomationId,
         string? applyButtonAutomationId = null,
-        string? expandButtonAutomationId = null)
+        string? expandButtonAutomationId = null,
+        SearchPickerResultsKind resultsKind = SearchPickerResultsKind.ComboBox)
     {
         return new SearchPickerParts(
             searchInputAutomationId,
             resultsAutomationId,
             applyButtonAutomationId,
-            expandButtonAutomationId);
+            expandButtonAutomationId,
+            ResultsKind: resultsKind);
     }
+}
+
+/// <summary>
+/// Specifies the primitive control kind used by a composed search-picker results surface.
+/// </summary>
+public enum SearchPickerResultsKind
+{
+    /// <summary>
+    /// Results are exposed through a combo-box-like surface.
+    /// </summary>
+    ComboBox = 0,
+
+    /// <summary>
+    /// Results are exposed through a list-box-like surface.
+    /// </summary>
+    ListBox = 1
 }
 
 /// <summary>
@@ -573,7 +594,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(innerResolver);
 
         var searchInput = innerResolver.Resolve<ITextBoxControl>(CreateDefinition("SearchInput", UiControlType.TextBox, _parts.SearchInputLocator));
-        var results = innerResolver.Resolve<IComboBoxControl>(CreateDefinition("Results", UiControlType.ComboBox, _parts.ResultsLocator));
+        var results = ResolveResults(innerResolver);
         var applyButton = string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator)
             ? null
             : innerResolver.Resolve<IButtonControl>(CreateDefinition("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator));
@@ -582,6 +603,18 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             : innerResolver.Resolve<IButtonControl>(CreateDefinition("ExpandButton", UiControlType.Button, _parts.ExpandButtonLocator));
 
         return new SearchPickerControl(definition.PropertyName, searchInput, results, applyButton, expandButton);
+    }
+
+    private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver)
+    {
+        return _parts.ResultsKind switch
+        {
+            SearchPickerResultsKind.ComboBox => new ComboBoxResultsSurface(
+                innerResolver.Resolve<IComboBoxControl>(CreateDefinition("Results", UiControlType.ComboBox, _parts.ResultsLocator))),
+            SearchPickerResultsKind.ListBox => new ListBoxResultsSurface(
+                innerResolver.Resolve<ISelectableListBoxControl>(CreateDefinition("Results", UiControlType.ListBox, _parts.ResultsLocator))),
+            _ => throw new NotSupportedException($"Search picker '{_propertyName}' does not support results kind '{_parts.ResultsKind}'.")
+        };
     }
 
     private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
@@ -597,14 +630,14 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
     private sealed class SearchPickerControl : ISearchPickerControl
     {
         private readonly ITextBoxControl _searchInput;
-        private readonly IComboBoxControl _results;
+        private readonly ISearchPickerResultsSurface _results;
         private readonly IButtonControl? _applyButton;
         private readonly IButtonControl? _expandButton;
 
         public SearchPickerControl(
             string automationId,
             ITextBoxControl searchInput,
-            IComboBoxControl results,
+            ISearchPickerResultsSurface results,
             IButtonControl? applyButton,
             IButtonControl? expandButton)
         {
@@ -627,10 +660,9 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string SearchText => _searchInput.Text;
 
-        public string? SelectedItemText => _results.SelectedItem?.Text ?? _results.SelectedItem?.Name;
+        public string? SelectedItemText => _results.SelectedItemText;
 
-        public IReadOnlyList<string> Items =>
-            _results.Items.Select(static item => item.Text ?? item.Name).ToArray();
+        public IReadOnlyList<string> Items => _results.Items;
 
         public void Search(string value)
         {
@@ -656,9 +688,51 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
             Expand();
+            _results.SelectItem(itemText);
+        }
+    }
+
+    private interface ISearchPickerResultsSurface
+    {
+        string Name { get; }
+
+        bool IsEnabled { get; }
+
+        string? SelectedItemText { get; }
+
+        IReadOnlyList<string> Items { get; }
+
+        void Expand();
+
+        void SelectItem(string itemText);
+    }
+
+    private sealed class ComboBoxResultsSurface : ISearchPickerResultsSurface
+    {
+        private readonly IComboBoxControl _comboBox;
+
+        public ComboBoxResultsSurface(IComboBoxControl comboBox)
+        {
+            _comboBox = comboBox;
+        }
+
+        public string Name => _comboBox.Name;
+
+        public bool IsEnabled => _comboBox.IsEnabled;
+
+        public string? SelectedItemText => _comboBox.SelectedItem?.Text ?? _comboBox.SelectedItem?.Name;
+
+        public IReadOnlyList<string> Items =>
+            _comboBox.Items.Select(static item => item.Text ?? item.Name).ToArray();
+
+        public void Expand() => _comboBox.Expand();
+
+        public void SelectItem(string itemText)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
             var normalizedTarget = Normalize(itemText);
-            var index = _results.Items
+            var index = _comboBox.Items
                 .Select((item, candidateIndex) => (Item: item, Index: candidateIndex))
                 .Where(candidate =>
                     string.Equals(Normalize(candidate.Item.Text), normalizedTarget, StringComparison.OrdinalIgnoreCase)
@@ -671,13 +745,38 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
                 throw new InvalidOperationException($"Search picker item '{itemText}' was not found.");
             }
 
-            _results.SelectByIndex(index.Value);
+            _comboBox.SelectByIndex(index.Value);
+        }
+    }
+
+    private sealed class ListBoxResultsSurface : ISearchPickerResultsSurface
+    {
+        private readonly ISelectableListBoxControl _listBox;
+
+        public ListBoxResultsSurface(ISelectableListBoxControl listBox)
+        {
+            _listBox = listBox;
         }
 
-        private static string Normalize(string? value)
+        public string Name => _listBox.Name;
+
+        public bool IsEnabled => _listBox.IsEnabled;
+
+        public string? SelectedItemText => _listBox.SelectedItemText;
+
+        public IReadOnlyList<string> Items =>
+            _listBox.Items.Select(static item => item.Text ?? item.Name ?? string.Empty).ToArray();
+
+        public void Expand()
         {
-            return value?.Trim() ?? string.Empty;
         }
+
+        public void SelectItem(string itemText) => _listBox.SelectItem(itemText);
+    }
+
+    private static string Normalize(string? value)
+    {
+        return value?.Trim() ?? string.Empty;
     }
 }
 

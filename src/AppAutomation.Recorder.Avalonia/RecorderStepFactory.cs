@@ -171,41 +171,111 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(searchInput);
         ArgumentNullException.ThrowIfNull(results);
 
-        if (!TryResolveSearchPickerHint(searchInput, results, out var hint))
+        return TryCreateSearchPickerStepCore(
+            searchInput,
+            results,
+            SearchPickerResultsKind.ComboBox,
+            ExtractSelectionText(results.SelectedItem));
+    }
+
+    public StepCreationResult TryCreateSearchPickerStep(TextBox searchInput, ListBox results)
+    {
+        ArgumentNullException.ThrowIfNull(searchInput);
+        ArgumentNullException.ThrowIfNull(results);
+
+        return TryCreateSearchPickerStepCore(
+            searchInput,
+            results,
+            SearchPickerResultsKind.ListBox,
+            ExtractSelectionText(results.SelectedItem));
+    }
+
+    public bool ShouldSuppressSearchPickerButton(Control? source)
+    {
+        return source is not null && TryResolveSearchPickerButton(source, out _);
+    }
+
+    public StepCreationResult TryCreateDialogActionStep(Control? source)
+    {
+        if (source is null)
         {
-            return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
+            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
         }
 
-        var searchText = searchInput.Text?.Trim();
-        if (string.IsNullOrWhiteSpace(searchText))
+        if (!TryResolveDialogHint(source, out var hint, out var actionKind))
         {
-            return StepCreationResult.Unsupported("Search picker search text is empty.");
+            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
         }
 
-        var selectedText = results.SelectedItem?.ToString()?.Trim();
-        if (string.IsNullOrWhiteSpace(selectedText))
-        {
-            return StepCreationResult.Unsupported("Search picker does not have a selected result to record.");
-        }
-
-        var warning = "Recorded composite search picker from configured parts.";
-        var descriptor = new RecordedControlDescriptor(
-            RecorderNaming.CreateControlPropertyName(hint.LocatorValue, UiControlType.SearchPicker),
-            UiControlType.SearchPicker,
-            hint.LocatorValue.Trim(),
+        var warning = $"Recorded dialog action '{actionKind}' from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.Dialog,
             hint.LocatorKind,
             hint.FallbackToName,
-            results.GetType().FullName ?? results.GetType().Name,
+            source,
             warning);
 
         return CreateStep(
-            results,
-            new RecordedStep(
-                RecordedActionKind.SearchAndSelect,
-                descriptor,
-                StringValue: searchText,
-                Warning: warning,
-                ItemValue: selectedText),
+            source,
+            new RecordedStep(actionKind, descriptor, Warning: warning),
+            warning);
+    }
+
+    public StepCreationResult TryCreateNotificationActionStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a notification hint for this button.");
+        }
+
+        if (!TryResolveNotificationHint(source, out var hint))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a notification hint for this button.");
+        }
+
+        var warning = "Recorded notification dismiss action from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.Notification,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(RecordedActionKind.DismissNotification, descriptor, Warning: warning),
+            warning);
+    }
+
+    public StepCreationResult TryCreateShellNavigationStep(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (!TryResolveShellNavigationHint(source, out var hint, out var actionKind))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a shell navigation hint for this selection.");
+        }
+
+        var paneName = TryReadShellPaneName(source, hint, actionKind);
+        if (string.IsNullOrWhiteSpace(paneName))
+        {
+            return StepCreationResult.Unsupported("Shell navigation selection does not expose a stable pane name.");
+        }
+
+        var warning = $"Recorded shell navigation action '{actionKind}' from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.ShellNavigation,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(actionKind, descriptor, StringValue: paneName.Trim(), Warning: warning),
             warning);
     }
 
@@ -262,7 +332,7 @@ internal sealed class RecorderStepFactory
     {
         ArgumentNullException.ThrowIfNull(listBox);
 
-        var selectedText = listBox.SelectedItem?.ToString();
+        var selectedText = ExtractSelectionText(listBox.SelectedItem);
         if (string.IsNullOrWhiteSpace(selectedText))
         {
             return StepCreationResult.Unsupported("ListBox does not have a selected item to record.");
@@ -731,15 +801,59 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private StepCreationResult TryCreateSearchPickerStepCore(
+        TextBox searchInput,
+        Control results,
+        SearchPickerResultsKind resultsKind,
+        string? selectedText)
+    {
+        if (!TryResolveSearchPickerHint(searchInput, results, resultsKind, out var hint))
+        {
+            return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
+        }
+
+        var searchText = searchInput.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return StepCreationResult.Unsupported("Search picker search text is empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return StepCreationResult.Unsupported("Search picker does not have a selected result to record.");
+        }
+
+        var warning = "Recorded composite search picker from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.SearchPicker,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            results,
+            warning);
+
+        return CreateStep(
+            results,
+            new RecordedStep(
+                RecordedActionKind.SearchAndSelect,
+                descriptor,
+                StringValue: searchText,
+                Warning: warning,
+                ItemValue: selectedText.Trim()),
+            warning);
+    }
+
     private bool TryResolveSearchPickerHint(
         TextBox searchInput,
-        ComboBox results,
+        Control results,
+        SearchPickerResultsKind resultsKind,
         out RecorderSearchPickerHint hint)
     {
         foreach (var candidate in _options.SearchPickerHints)
         {
             var parts = candidate.Parts;
             if (TryGetLocator(searchInput, parts.LocatorKind, out var searchInputLocator)
+                && parts.ResultsKind == resultsKind
                 && TryGetLocator(results, parts.LocatorKind, out var resultsLocator)
                 && string.Equals(parts.SearchInputLocator.Trim(), searchInputLocator, StringComparison.Ordinal)
                 && string.Equals(parts.ResultsLocator.Trim(), resultsLocator, StringComparison.Ordinal)
@@ -752,6 +866,137 @@ internal sealed class RecorderStepFactory
 
         hint = null!;
         return false;
+    }
+
+    private bool TryResolveSearchPickerButton(Control source, out RecorderSearchPickerHint hint)
+    {
+        foreach (var candidate in _options.SearchPickerHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesAnyLocator(source, parts.LocatorKind, parts.ApplyButtonLocator, parts.ExpandButtonLocator)
+                && !string.IsNullOrWhiteSpace(candidate.LocatorValue))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private bool TryResolveDialogHint(
+        Control source,
+        out RecorderDialogHint hint,
+        out RecordedActionKind actionKind)
+    {
+        foreach (var candidate in _options.DialogHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesLocator(source, parts.LocatorKind, parts.ConfirmButtonLocator))
+            {
+                hint = candidate;
+                actionKind = RecordedActionKind.ConfirmDialog;
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(parts.CancelButtonLocator)
+                && MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
+            {
+                hint = candidate;
+                actionKind = RecordedActionKind.CancelDialog;
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(parts.DismissButtonLocator)
+                && MatchesLocator(source, parts.LocatorKind, parts.DismissButtonLocator))
+            {
+                hint = candidate;
+                actionKind = RecordedActionKind.DismissDialog;
+                return true;
+            }
+        }
+
+        hint = null!;
+        actionKind = default;
+        return false;
+    }
+
+    private bool TryResolveNotificationHint(Control source, out RecorderNotificationHint hint)
+    {
+        foreach (var candidate in _options.NotificationHints)
+        {
+            var dismissLocator = candidate.Parts.DismissButtonLocator;
+            if (!string.IsNullOrWhiteSpace(dismissLocator)
+                && MatchesLocator(source, candidate.Parts.LocatorKind, dismissLocator))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private bool TryResolveShellNavigationHint(
+        Control source,
+        out RecorderShellNavigationHint hint,
+        out RecordedActionKind actionKind)
+    {
+        foreach (var candidate in _options.ShellNavigationHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesLocator(source, parts.LocatorKind, parts.NavigationLocator)
+                && MatchesShellNavigationSource(source, parts.NavigationKind))
+            {
+                hint = candidate;
+                actionKind = RecordedActionKind.OpenOrActivateShellPane;
+                return true;
+            }
+
+            if (source is TabControl
+                && !string.IsNullOrWhiteSpace(parts.PaneTabsLocator)
+                && MatchesLocator(source, parts.LocatorKind, parts.PaneTabsLocator))
+            {
+                hint = candidate;
+                actionKind = RecordedActionKind.ActivateShellPane;
+                return true;
+            }
+        }
+
+        hint = null!;
+        actionKind = default;
+        return false;
+    }
+
+    private string? TryReadShellPaneName(
+        Control source,
+        RecorderShellNavigationHint hint,
+        RecordedActionKind actionKind)
+    {
+        var paneName = source switch
+        {
+            ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
+            TreeView treeView => ExtractTreeSelectionText(treeView.SelectedItem),
+            TabControl tabControl => ExtractTabSelectionText(tabControl),
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(paneName))
+        {
+            return paneName;
+        }
+
+        if (source is TabControl
+            && actionKind == RecordedActionKind.ActivateShellPane
+            && !string.IsNullOrWhiteSpace(hint.Parts.ActivePaneLabelLocator)
+            && TryFindControl(hint.Parts.ActivePaneLabelLocator!, hint.Parts.LocatorKind, out var control))
+        {
+            return ExtractTextValue(control);
+        }
+
+        return null;
     }
 
     private bool TryResolveGridRowIndex(Control source, RecorderGridActionHint hint, out int rowIndex)
@@ -1064,6 +1309,45 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
+    private RecordedControlDescriptor CreateCompositeDescriptor(
+        string locatorValue,
+        UiControlType controlType,
+        UiLocatorKind locatorKind,
+        bool fallbackToName,
+        Control source,
+        string warning)
+    {
+        return new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(locatorValue, controlType),
+            controlType,
+            locatorValue.Trim(),
+            locatorKind,
+            fallbackToName,
+            source.GetType().FullName ?? source.GetType().Name,
+            warning);
+    }
+
+    private bool TryFindControl(string locatorValue, UiLocatorKind locatorKind, out Control control)
+    {
+        control = null!;
+        var descriptor = new RecordedControlDescriptor(
+            "TemporaryLookup",
+            UiControlType.AutomationElement,
+            locatorValue.Trim(),
+            locatorKind,
+            FallbackToName: locatorKind == UiLocatorKind.Name,
+            AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
+            Warning: null);
+        var resolved = _selectorResolver.ResolveExisting(descriptor);
+        if (resolved.MatchedControl is null)
+        {
+            return false;
+        }
+
+        control = resolved.MatchedControl;
+        return true;
+    }
+
     private static bool TryGetLocator(Control control, UiLocatorKind locatorKind, out string locator)
     {
         locator = locatorKind switch
@@ -1075,6 +1359,30 @@ internal sealed class RecorderStepFactory
 
         locator = locator.Trim();
         return !string.IsNullOrWhiteSpace(locator);
+    }
+
+    private static bool MatchesLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
+    {
+        if (string.IsNullOrWhiteSpace(locatorValue))
+        {
+            return false;
+        }
+
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (TryGetLocator(current, locatorKind, out var currentLocator)
+                && string.Equals(currentLocator, locatorValue.Trim(), StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MatchesAnyLocator(Control source, UiLocatorKind locatorKind, params string?[] locatorValues)
+    {
+        return locatorValues.Any(locatorValue => !string.IsNullOrWhiteSpace(locatorValue) && MatchesLocator(source, locatorKind, locatorValue!));
     }
 
     private static string? FirstNonWhiteSpace(params string?[] values)
@@ -1127,7 +1435,55 @@ internal sealed class RecorderStepFactory
             TreeViewItem treeViewItem when !string.IsNullOrWhiteSpace(treeViewItem.Header?.ToString()) => treeViewItem.Header?.ToString(),
             TreeViewItem treeViewItem when !string.IsNullOrWhiteSpace(AutomationProperties.GetAutomationId(treeViewItem)) => AutomationProperties.GetAutomationId(treeViewItem),
             Control control when !string.IsNullOrWhiteSpace(AutomationProperties.GetName(control)) => AutomationProperties.GetName(control),
+            _ => ExtractSelectionText(selectedItem)
+        };
+    }
+
+    private static string? ExtractTabSelectionText(TabControl tabControl)
+    {
+        if (tabControl.SelectedItem is TabItem tabItem)
+        {
+            return FirstNonWhiteSpace(
+                tabItem.Header?.ToString(),
+                ExtractTextValue(tabItem),
+                AutomationProperties.GetAutomationId(tabItem),
+                tabItem.Name);
+        }
+
+        return ExtractSelectionText(tabControl.SelectedItem);
+    }
+
+    private static string? ExtractSelectionText(object? selectedItem)
+    {
+        return selectedItem switch
+        {
+            null => null,
+            string value => value,
+            TabItem tabItem => FirstNonWhiteSpace(
+                tabItem.Header?.ToString(),
+                ExtractTextValue(tabItem),
+                AutomationProperties.GetAutomationId(tabItem),
+                tabItem.Name),
+            Control control => FirstNonWhiteSpace(
+                ExtractTextValue(control),
+                AutomationProperties.GetAutomationId(control),
+                control.Name),
+            _ when TryReadPropertyValue(selectedItem, "Header", out var header) && !string.IsNullOrWhiteSpace(header) => header,
+            _ when TryReadPropertyValue(selectedItem, "Title", out var title) && !string.IsNullOrWhiteSpace(title) => title,
+            _ when TryReadPropertyValue(selectedItem, "Text", out var text) && !string.IsNullOrWhiteSpace(text) => text,
+            _ when TryReadPropertyValue(selectedItem, "Name", out var name) && !string.IsNullOrWhiteSpace(name) => name,
             _ => selectedItem?.ToString()
+        };
+    }
+
+    private static bool MatchesShellNavigationSource(Control source, ShellNavigationSourceKind navigationKind)
+    {
+        return navigationKind switch
+        {
+            ShellNavigationSourceKind.Tree => source is TreeView,
+            ShellNavigationSourceKind.ListBox => source is ListBox,
+            ShellNavigationSourceKind.Tab => source is TabControl,
+            _ => false
         };
     }
 

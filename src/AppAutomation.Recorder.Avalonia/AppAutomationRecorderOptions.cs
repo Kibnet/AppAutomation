@@ -43,6 +43,12 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
+    public IList<RecorderDialogHint> DialogHints { get; } = new List<RecorderDialogHint>();
+
+    public IList<RecorderNotificationHint> NotificationHints { get; } = new List<RecorderNotificationHint>();
+
+    public IList<RecorderShellNavigationHint> ShellNavigationHints { get; } = new List<RecorderShellNavigationHint>();
+
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
 
     public IList<IRecorderAssertionExtractor> AssertionExtractors { get; } = new List<IRecorderAssertionExtractor>();
@@ -91,6 +97,24 @@ public sealed record RecorderGridActionHint(
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderDialogHint(
+    string LocatorValue,
+    DialogControlParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderNotificationHint(
+    string LocatorValue,
+    NotificationControlParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderShellNavigationHint(
+    string LocatorValue,
+    ShellNavigationParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 

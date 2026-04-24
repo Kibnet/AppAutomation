@@ -48,6 +48,50 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task SearchPickerAdapter_SupportsListBackedResultsFlow()
+    {
+        var searchInput = new FakeTextBoxControl("HistoryFilterInput");
+        var applyButton = new FakeButtonControl("ApplyFilterButton");
+        var expandButton = new FakeButtonControl("ExpandFilterButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "OperationResults",
+            new[]
+            {
+                new FakeListBoxItem("Greatest Common Divisor", "Greatest Common Divisor"),
+                new FakeListBoxItem("Least Common Multiple", "Least Common Multiple")
+            });
+
+        var resolver = new FakeResolver(
+            ("HistoryFilterInput", searchInput),
+            ("ApplyFilterButton", applyButton),
+            ("ExpandFilterButton", expandButton),
+            ("OperationResults", listBox))
+            .WithSearchPicker(
+                "HistoryOperationPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "HistoryFilterInput",
+                    "OperationResults",
+                    applyButtonAutomationId: "ApplyFilterButton",
+                    expandButtonAutomationId: "ExpandFilterButton",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new SearchPickerPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.HistoryOperationPicker,
+            "least",
+            "Least Common Multiple");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.HistoryOperationPicker.SearchText).IsEqualTo("least");
+            await Assert.That(page.HistoryOperationPicker.SelectedItemText).IsEqualTo("Least Common Multiple");
+            await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task DateRangeFilterAdapter_OpensSetsDateValuesAndApplies()
     {
         var openButton = new FakeButtonControl("OpenCreatedAtFilterButton");

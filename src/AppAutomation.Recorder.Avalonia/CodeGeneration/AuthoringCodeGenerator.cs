@@ -373,6 +373,12 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
             RecordedActionKind.CopyGridCell => $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
             RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
+            RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
+            RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
+            RecordedActionKind.DismissDialog => $"Page.DismissDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
+            RecordedActionKind.DismissNotification => $"Page.DismissNotification(static page => page.{propertyName});",
+            RecordedActionKind.OpenOrActivateShellPane => $"Page.OpenOrActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.ActivateShellPane => $"Page.ActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
@@ -428,6 +434,13 @@ internal sealed class AuthoringCodeGenerator
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal)
             .Trim();
+    }
+
+    private static string FormatOptionalStringArgument(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : $", \"{EscapeString(value)}\"";
     }
 
     private static string EscapeString(string value)
