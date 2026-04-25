@@ -41,6 +41,8 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderGridActionHint> GridActionHints { get; } = new List<RecorderGridActionHint>();
 
+    public IList<RecorderGridSearchPickerHint> GridSearchPickerHints { get; } = new List<RecorderGridSearchPickerHint>();
+
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
     public IList<RecorderDialogHint> DialogHints { get; } = new List<RecorderDialogHint>();
@@ -94,6 +96,16 @@ public sealed record RecorderGridActionHint(
     int? RowIndex = null,
     int? ColumnIndex = null);
 
+public sealed record RecorderGridSearchPickerHint(
+    string SourceLocatorValue,
+    string TargetGridLocatorValue,
+    SearchPickerParts Parts,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetGridLocatorKind = UiLocatorKind.AutomationId,
+    bool TargetFallbackToName = false,
+    string? ColumnName = null,
+    int? ColumnIndex = null);
+
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
@@ -116,7 +128,11 @@ public sealed record RecorderShellNavigationHint(
     string LocatorValue,
     ShellNavigationParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = false);
+    bool FallbackToName = false,
+    string? NavigationCaptureLocator = null,
+    string? PaneTabsCaptureLocator = null,
+    UiLocatorKind? NavigationCaptureLocatorKind = null,
+    UiLocatorKind? PaneTabsCaptureLocatorKind = null);
 
 public enum RecorderGridUserActionKind
 {

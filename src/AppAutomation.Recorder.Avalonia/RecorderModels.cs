@@ -35,7 +35,8 @@ public enum RecordedActionKind
     DismissDialog = 27,
     DismissNotification = 28,
     OpenOrActivateShellPane = 29,
-    ActivateShellPane = 30
+    ActivateShellPane = 30,
+    SearchAndSelectGridCell = 31
 }
 
 public enum RecorderAssertionMode
