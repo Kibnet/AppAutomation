@@ -45,7 +45,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
             RecordedActionKind.WaitUntilIsEnabled => true,
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
-            RecordedActionKind.SearchAndSelect => true,
+            RecordedActionKind.SearchAndSelect or RecordedActionKind.SearchAndSelectGridCell => true,
             RecordedActionKind.OpenGridRow
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd

@@ -12,6 +12,7 @@ namespace AppAutomation.Recorder.Avalonia;
 internal sealed class RecorderStepFactory
 {
     internal const string NoGridActionHintMessage = "Recorder does not have a grid action hint for this source.";
+    internal const string NoGridSearchPickerHintMessage = "Recorder does not have a grid search picker hint for this editor.";
 
     private readonly AppAutomationRecorderOptions _options;
     private readonly RecorderSelectorResolver _selectorResolver;
@@ -192,7 +193,9 @@ internal sealed class RecorderStepFactory
 
     public bool ShouldSuppressSearchPickerButton(Control? source)
     {
-        return source is not null && TryResolveSearchPickerButton(source, out _);
+        return source is not null
+            && (TryResolveSearchPickerButton(source, out _)
+                || TryResolveGridSearchPickerButton(source, out _));
     }
 
     public StepCreationResult TryCreateDialogActionStep(Control? source)
@@ -261,7 +264,12 @@ internal sealed class RecorderStepFactory
         var paneName = TryReadShellPaneName(source, hint, actionKind);
         if (string.IsNullOrWhiteSpace(paneName))
         {
-            return StepCreationResult.Unsupported("Shell navigation selection does not expose a stable pane name.");
+            return StepCreationResult.Unsupported(
+                actionKind == RecordedActionKind.ActivateShellPane
+                && !CanReadShellPaneNameFromSource(source)
+                && string.IsNullOrWhiteSpace(hint.Parts.ActivePaneLabelLocator)
+                    ? "Shell navigation activation capture requires ActivePaneLabelLocator when pane tabs are recorded from a non-tab capture surface."
+                    : "Shell navigation selection does not expose a stable pane name.");
         }
 
         var warning = $"Recorded shell navigation action '{actionKind}' from configured parts.";
@@ -807,6 +815,16 @@ internal sealed class RecorderStepFactory
         SearchPickerResultsKind resultsKind,
         string? selectedText)
     {
+        if (TryResolveGridSearchPickerHint(searchInput, results, resultsKind, out var gridHint))
+        {
+            return TryCreateGridSearchPickerStep(searchInput, results, selectedText, gridHint);
+        }
+
+        if (TryResolveGridHint(searchInput, out _, out _))
+        {
+            return StepCreationResult.Unsupported(NoGridSearchPickerHintMessage);
+        }
+
         if (!TryResolveSearchPickerHint(searchInput, results, resultsKind, out var hint))
         {
             return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
@@ -843,6 +861,52 @@ internal sealed class RecorderStepFactory
             warning);
     }
 
+    private StepCreationResult TryCreateGridSearchPickerStep(
+        TextBox searchInput,
+        Control results,
+        string? selectedText,
+        RecorderGridSearchPickerHint hint)
+    {
+        var searchText = searchInput.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return StepCreationResult.Unsupported("Grid search picker search text is empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return StepCreationResult.Unsupported("Grid search picker does not have a selected result to record.");
+        }
+
+        if (!TryResolveGridSearchPickerContext(searchInput, hint, out var rowIndex, out var columnIndex))
+        {
+            return StepCreationResult.Unsupported(
+                "Grid search picker requires row and column context. Configure RecorderGridSearchPickerHint column metadata or expose stable row context on the editor.");
+        }
+
+        var warning = "Recorded grid search picker from configured hint.";
+        var descriptor = new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(hint.TargetGridLocatorValue, UiControlType.Grid),
+            UiControlType.Grid,
+            hint.TargetGridLocatorValue.Trim(),
+            hint.TargetGridLocatorKind,
+            hint.TargetFallbackToName,
+            results.GetType().FullName ?? results.GetType().Name,
+            warning);
+
+        return CreateStep(
+            results,
+            new RecordedStep(
+                RecordedActionKind.SearchAndSelectGridCell,
+                descriptor,
+                StringValue: searchText,
+                Warning: warning,
+                RowIndex: rowIndex,
+                ColumnIndex: columnIndex,
+                ItemValue: selectedText.Trim()),
+            warning);
+    }
+
     private bool TryResolveSearchPickerHint(
         TextBox searchInput,
         Control results,
@@ -868,6 +932,33 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private bool TryResolveGridSearchPickerHint(
+        TextBox searchInput,
+        Control results,
+        SearchPickerResultsKind resultsKind,
+        out RecorderGridSearchPickerHint hint)
+    {
+        foreach (var candidate in _options.GridSearchPickerHints)
+        {
+            var parts = candidate.Parts;
+            if (TryGetLocator(searchInput, parts.LocatorKind, out var searchInputLocator)
+                && parts.ResultsKind == resultsKind
+                && TryGetLocator(results, parts.LocatorKind, out var resultsLocator)
+                && string.Equals(parts.SearchInputLocator.Trim(), searchInputLocator, StringComparison.Ordinal)
+                && string.Equals(parts.ResultsLocator.Trim(), resultsLocator, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(candidate.SourceLocatorValue)
+                && !string.IsNullOrWhiteSpace(candidate.TargetGridLocatorValue)
+                && MatchesLocator(searchInput, candidate.SourceLocatorKind, candidate.SourceLocatorValue))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
     private bool TryResolveSearchPickerButton(Control source, out RecorderSearchPickerHint hint)
     {
         foreach (var candidate in _options.SearchPickerHints)
@@ -875,6 +966,24 @@ internal sealed class RecorderStepFactory
             var parts = candidate.Parts;
             if (MatchesAnyLocator(source, parts.LocatorKind, parts.ApplyButtonLocator, parts.ExpandButtonLocator)
                 && !string.IsNullOrWhiteSpace(candidate.LocatorValue))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private bool TryResolveGridSearchPickerButton(Control source, out RecorderGridSearchPickerHint hint)
+    {
+        foreach (var candidate in _options.GridSearchPickerHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesAnyLocator(source, parts.LocatorKind, parts.ApplyButtonLocator, parts.ExpandButtonLocator)
+                && MatchesLocator(source, candidate.SourceLocatorKind, candidate.SourceLocatorValue)
+                && !string.IsNullOrWhiteSpace(candidate.TargetGridLocatorValue))
             {
                 hint = candidate;
                 return true;
@@ -947,17 +1056,22 @@ internal sealed class RecorderStepFactory
         foreach (var candidate in _options.ShellNavigationHints)
         {
             var parts = candidate.Parts;
-            if (MatchesLocator(source, parts.LocatorKind, parts.NavigationLocator)
-                && MatchesShellNavigationSource(source, parts.NavigationKind))
+            var navigationCaptureLocator = FirstNonWhiteSpace(candidate.NavigationCaptureLocator, parts.NavigationLocator);
+            var navigationCaptureLocatorKind = candidate.NavigationCaptureLocatorKind ?? parts.LocatorKind;
+            if (!string.IsNullOrWhiteSpace(navigationCaptureLocator)
+                && MatchesLocator(source, navigationCaptureLocatorKind, navigationCaptureLocator)
+                && (UsesCustomNavigationCapture(candidate) || MatchesShellNavigationSource(source, parts.NavigationKind)))
             {
                 hint = candidate;
                 actionKind = RecordedActionKind.OpenOrActivateShellPane;
                 return true;
             }
 
-            if (source is TabControl
-                && !string.IsNullOrWhiteSpace(parts.PaneTabsLocator)
-                && MatchesLocator(source, parts.LocatorKind, parts.PaneTabsLocator))
+            var paneTabsCaptureLocator = FirstNonWhiteSpace(candidate.PaneTabsCaptureLocator, parts.PaneTabsLocator);
+            var paneTabsCaptureLocatorKind = candidate.PaneTabsCaptureLocatorKind ?? parts.LocatorKind;
+            if (!string.IsNullOrWhiteSpace(paneTabsCaptureLocator)
+                && MatchesLocator(source, paneTabsCaptureLocatorKind, paneTabsCaptureLocator)
+                && (UsesCustomPaneTabsCapture(candidate) || source is TabControl))
             {
                 hint = candidate;
                 actionKind = RecordedActionKind.ActivateShellPane;
@@ -988,8 +1102,7 @@ internal sealed class RecorderStepFactory
             return paneName;
         }
 
-        if (source is TabControl
-            && actionKind == RecordedActionKind.ActivateShellPane
+        if (actionKind == RecordedActionKind.ActivateShellPane
             && !string.IsNullOrWhiteSpace(hint.Parts.ActivePaneLabelLocator)
             && TryFindControl(hint.Parts.ActivePaneLabelLocator!, hint.Parts.LocatorKind, out var control))
         {
@@ -997,6 +1110,84 @@ internal sealed class RecorderStepFactory
         }
 
         return null;
+    }
+
+    private bool TryResolveGridSearchPickerContext(
+        Control searchInput,
+        RecorderGridSearchPickerHint hint,
+        out int rowIndex,
+        out int columnIndex)
+    {
+        rowIndex = -1;
+        columnIndex = -1;
+
+        if (!TryResolveGridSearchPickerGridSource(hint, out var gridHint, out var gridSource))
+        {
+            return false;
+        }
+
+        if (TryReadItemsSource(gridSource, out var items)
+            && TryResolveGridRow(searchInput, gridSource, items, out rowIndex, out _))
+        {
+            // Row resolved from the live grid context.
+        }
+        else if (!TryResolveGridRowIndexFromAutomationId(searchInput, out rowIndex))
+        {
+            return false;
+        }
+
+        if (hint.ColumnIndex is >= 0)
+        {
+            columnIndex = hint.ColumnIndex.Value;
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(hint.ColumnName))
+        {
+            columnIndex = FindColumnIndex(gridHint.ColumnPropertyNames, hint.ColumnName);
+            return columnIndex >= 0;
+        }
+
+        if (TryResolveGridColumnIndex(searchInput, gridSource, gridHint.ColumnPropertyNames.Count, out columnIndex))
+        {
+            return true;
+        }
+
+        return TryResolveGridColumnIndexFromAutomationId(searchInput, out columnIndex);
+    }
+
+    private bool TryResolveGridSearchPickerGridSource(
+        RecorderGridSearchPickerHint hint,
+        out RecorderGridHint gridHint,
+        out Control gridSource)
+    {
+        foreach (var candidate in _options.GridHints)
+        {
+            if (candidate.TargetLocatorKind == hint.TargetGridLocatorKind
+                && string.Equals(candidate.TargetLocatorValue.Trim(), hint.TargetGridLocatorValue.Trim(), StringComparison.Ordinal)
+                && TryFindControl(candidate.SourceLocatorValue, candidate.SourceLocatorKind, out gridSource))
+            {
+                gridHint = candidate;
+                return true;
+            }
+        }
+
+        gridHint = null!;
+        gridSource = null!;
+        return false;
+    }
+
+    private static int FindColumnIndex(IReadOnlyList<string> columnNames, string columnName)
+    {
+        for (var i = 0; i < columnNames.Count; i++)
+        {
+            if (string.Equals(columnNames[i], columnName.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private bool TryResolveGridRowIndex(Control source, RecorderGridActionHint hint, out int rowIndex)
@@ -1474,6 +1665,23 @@ internal sealed class RecorderStepFactory
             _ when TryReadPropertyValue(selectedItem, "Name", out var name) && !string.IsNullOrWhiteSpace(name) => name,
             _ => selectedItem?.ToString()
         };
+    }
+
+    private static bool CanReadShellPaneNameFromSource(Control source)
+    {
+        return source is ListBox or TreeView or TabControl;
+    }
+
+    private static bool UsesCustomNavigationCapture(RecorderShellNavigationHint hint)
+    {
+        return !string.IsNullOrWhiteSpace(hint.NavigationCaptureLocator)
+            || hint.NavigationCaptureLocatorKind is not null;
+    }
+
+    private static bool UsesCustomPaneTabsCapture(RecorderShellNavigationHint hint)
+    {
+        return !string.IsNullOrWhiteSpace(hint.PaneTabsCaptureLocator)
+            || hint.PaneTabsCaptureLocatorKind is not null;
     }
 
     private static bool MatchesShellNavigationSource(Control source, ShellNavigationSourceKind navigationKind)

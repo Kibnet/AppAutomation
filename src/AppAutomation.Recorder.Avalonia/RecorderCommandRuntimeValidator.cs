@@ -143,6 +143,11 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SearchAndSelect => ValidateControlType(step, target, UiControlType.SearchPicker)
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
+            RecordedActionKind.SearchAndSelectGridCell => ValidateGridUserAction(step, target)
+                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
+                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                .Concat(RequireString(step, target, allowEmpty: false, "search text"))
+                .Concat(RequireItemValue(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
                 .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index")),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)

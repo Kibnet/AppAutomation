@@ -463,6 +463,51 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task ShellNavigationAdapter_ActivatesPaneWithoutNavigationSource_WhenPaneTabsAreConfigured()
+    {
+        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers");
+        var reportsTab = new FakeTabItemControl("ReportsPaneTab", "Reports") { IsSelected = true };
+        var paneTabs = new FakeTabControl("DockPaneTabs", reportsTab, customersTab);
+        var resolver = new FakeResolver(("DockPaneTabs", paneTabs))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    navigationAutomationId: null,
+                    paneTabsAutomationId: "DockPaneTabs"));
+        var page = new WorkflowPage(resolver);
+
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers", ShellPaneNavigationMode.Activate));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(customersTab.IsSelected).IsEqualTo(true);
+            await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
+            await Assert.That(page.Shell.IsEnabled).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task ShellNavigationAdapter_OpenOrActivateWithoutNavigationSource_ThrowsExplicitDiagnostic()
+    {
+        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers");
+        var reportsTab = new FakeTabItemControl("ReportsPaneTab", "Reports") { IsSelected = true };
+        var paneTabs = new FakeTabControl("DockPaneTabs", reportsTab, customersTab);
+        var resolver = new FakeResolver(("DockPaneTabs", paneTabs))
+            .WithShellNavigation(
+                "Shell",
+                ShellNavigationParts.ByAutomationIds(
+                    navigationAutomationId: null,
+                    paneTabsAutomationId: "DockPaneTabs"));
+        var page = new WorkflowPage(resolver);
+
+        var exception = await Assert.That(() => page.Shell.OpenOrActivate(
+                new ShellPaneNavigationRequest("Invoices", ShellPaneNavigationMode.OpenOrActivate)))
+            .Throws<NotSupportedException>();
+
+        await Assert.That(exception!.Message).Contains("navigation source is not configured");
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()

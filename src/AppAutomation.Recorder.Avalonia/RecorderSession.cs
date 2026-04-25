@@ -972,6 +972,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return true;
         }
 
+        if (IsConfiguredGridSearchPickerTextBox(textBox))
+        {
+            return false;
+        }
+
         return IsInsideConfiguredGrid(textBox);
     }
 
@@ -991,6 +996,21 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsConfiguredGridSearchPickerTextBox(TextBox textBox)
+    {
+        foreach (var hint in _options.GridSearchPickerHints)
+        {
+            if (TryGetLocator(textBox, hint.Parts.LocatorKind, out var locator)
+                && string.Equals(hint.Parts.SearchInputLocator.Trim(), locator, StringComparison.Ordinal)
+                && MatchesLocator(textBox, hint.SourceLocatorKind, hint.SourceLocatorValue))
+            {
+                return true;
             }
         }
 
@@ -1038,6 +1058,25 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         locator = locator.Trim();
         return !string.IsNullOrWhiteSpace(locator);
+    }
+
+    private static bool MatchesLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
+    {
+        if (string.IsNullOrWhiteSpace(locatorValue))
+        {
+            return false;
+        }
+
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (TryGetLocator(current, locatorKind, out var currentLocator)
+                && string.Equals(currentLocator, locatorValue.Trim(), StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void RestartTextDebounce()
