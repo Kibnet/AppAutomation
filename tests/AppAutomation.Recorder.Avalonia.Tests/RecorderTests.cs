@@ -228,6 +228,51 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateSearchPickerStep_WithConfiguredGridSearchPicker_CapturesGridAction()
+    {
+        var options = CreateGridSearchPickerOptions(validateRuntimeTargets: false);
+        var root = new StackPanel();
+        var rows = CreateEremexRows();
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var bridge = new Border();
+        var editor = new StackPanel { DataContext = rows[1] };
+        var searchInput = new TextBox { Text = "prod", DataContext = rows[1] };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "EX-11", "EX-12" },
+            SelectedItem = "EX-12",
+            DataContext = rows[1]
+        };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(editor, "OrderPositionProductEditor");
+        AutomationProperties.SetAutomationId(searchInput, "OrderPositionProductEditor_Input");
+        AutomationProperties.SetAutomationId(results, "OrderPositionProductEditor_Results");
+        editor.Children.Add(searchInput);
+        editor.Children.Add(results);
+        eremexVisualControl.Children.Add(editor);
+        root.Children.Add(eremexVisualControl);
+        root.Children.Add(bridge);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateSearchPickerStep(searchInput, results);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SearchAndSelectGridCell);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.Grid);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("EremexDemoDataGridAutomationBridge");
+            await Assert.That(result.Step.RowIndex).IsEqualTo(1);
+            await Assert.That(result.Step.ColumnIndex).IsEqualTo(1);
+            await Assert.That(result.Step.StringValue).IsEqualTo("prod");
+            await Assert.That(result.Step.ItemValue).IsEqualTo("EX-12");
+            await Assert.That(result.Step.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
     public async Task TryCreateSearchPickerStep_WithoutHint_ReturnsUnsupported()
     {
         var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
@@ -246,6 +291,40 @@ public sealed class RecorderTests
         {
             await Assert.That(result.Success).IsEqualTo(false);
             await Assert.That(result.Message).Contains("not configured");
+        }
+    }
+
+    [Test]
+    public async Task TryCreateSearchPickerStep_InsideConfiguredGridWithoutGridHint_ReturnsExplicitDiagnostic()
+    {
+        var options = CreateEremexGridOptions();
+        var root = new StackPanel();
+        var rows = CreateEremexRows();
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var editor = new StackPanel { DataContext = rows[0] };
+        var searchInput = new TextBox { Text = "prod", DataContext = rows[0] };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "EX-11" },
+            SelectedItem = "EX-11",
+            DataContext = rows[0]
+        };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(editor, "OrderPositionProductEditor");
+        AutomationProperties.SetAutomationId(searchInput, "OrderPositionProductEditor_Input");
+        AutomationProperties.SetAutomationId(results, "OrderPositionProductEditor_Results");
+        editor.Children.Add(searchInput);
+        editor.Children.Add(results);
+        eremexVisualControl.Children.Add(editor);
+        root.Children.Add(eremexVisualControl);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateSearchPickerStep(searchInput, results);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(false);
+            await Assert.That(result.Message).Contains("grid search picker hint");
         }
     }
 
@@ -1357,6 +1436,59 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_SuppressesConfiguredGridSearchPickerButtons_AndCapturesGridSelectionAsComposite()
+    {
+        var options = CreateGridSearchPickerOptions(validateRuntimeTargets: false);
+        var root = new StackPanel();
+        var rows = CreateEremexRows();
+        var eremexVisualControl = new RecorderGridHost { ItemsSource = rows };
+        var bridge = new Border();
+        var editor = new StackPanel { DataContext = rows[1] };
+        var searchInput = new TextBox { DataContext = rows[1] };
+        var applyButton = new Button { Content = "Apply", DataContext = rows[1] };
+        var expandButton = new Button { Content = "Open", DataContext = rows[1] };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "EX-11", "EX-12" },
+            DataContext = rows[1]
+        };
+        AutomationProperties.SetAutomationId(eremexVisualControl, "EremexDemoDataGridControl");
+        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(editor, "OrderPositionProductEditor");
+        AutomationProperties.SetAutomationId(searchInput, "OrderPositionProductEditor_Input");
+        AutomationProperties.SetAutomationId(applyButton, "OrderPositionProductEditor_ApplyButton");
+        AutomationProperties.SetAutomationId(expandButton, "OrderPositionProductEditor_ExpandButton");
+        AutomationProperties.SetAutomationId(results, "OrderPositionProductEditor_Results");
+        editor.Children.Add(searchInput);
+        editor.Children.Add(applyButton);
+        editor.Children.Add(expandButton);
+        editor.Children.Add(results);
+        eremexVisualControl.Children.Add(editor);
+        root.Children.Add(eremexVisualControl);
+        root.Children.Add(bridge);
+
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(searchInput);
+        searchInput.Text = "prod";
+        session.CaptureButtonClickForTesting(applyButton);
+        session.CaptureButtonClickForTesting(expandButton);
+        session.RegisterPointerInputFromSourceForTesting(results);
+        results.SelectedItem = "EX-12";
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelectGridCell(static page => page.EremexDemoDataGridAutomationBridge, 1, 1, \"prod\", \"EX-12\");");
+            await Assert.That(details.StepJournal[0].Preview.Contains("OrderPositionProductEditor_ApplyButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].Preview.Contains("OrderPositionProductEditor_ExpandButton", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_CapturesConfiguredDialogAndNotificationButtons_AsCompositeSteps()
     {
         var options = CreateCompositeRecorderOptions();
@@ -1417,6 +1549,34 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal.Count).IsEqualTo(2);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.OpenOrActivateShellPane(static page => page.Shell, \"Customers\");");
             await Assert.That(details.StepJournal[1].Preview).Contains("Page.ActivateShellPane(static page => page.Shell, \"Orders\");");
+        }
+    }
+
+    [Test]
+    public async Task TryCreateShellNavigationStep_WithConfiguredCaptureHost_UsesActivePaneLabelFallback()
+    {
+        var options = CreateCompositeRecorderOptions(useCustomShellCaptureHost: true);
+        var root = new StackPanel();
+        var captureHost = new TabControl();
+        var bridgeTabs = new TabControl();
+        var activePaneLabel = new TextBlock { Text = "Orders" };
+        AutomationProperties.SetAutomationId(captureHost, "DockPaneTabsCaptureHost");
+        AutomationProperties.SetAutomationId(bridgeTabs, "ShellPaneTabs");
+        AutomationProperties.SetAutomationId(activePaneLabel, "ShellActivePaneLabel");
+        root.Children.Add(captureHost);
+        root.Children.Add(bridgeTabs);
+        root.Children.Add(activePaneLabel);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateShellNavigationStep(captureHost);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.ActivateShellPane);
+            await Assert.That(result.Step.StringValue).IsEqualTo("Orders");
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("Shell");
         }
     }
 
@@ -1926,6 +2086,71 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task SaveAsync_UsesGridSearchPickerAction_InGeneratedScenario()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("EremexDemoDataGridAutomationBridge", UiControlType.Grid, "EremexDemoDataGridAutomationBridge", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var gridDescriptor = new RecordedControlDescriptor(
+            "EremexDemoDataGridAutomationBridge",
+            UiControlType.Grid,
+            "EremexDemoDataGridAutomationBridge",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: "Recorded grid search picker from configured hint.");
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(
+                RecordedActionKind.SearchAndSelectGridCell,
+                gridDescriptor,
+                StringValue: "prod",
+                RowIndex: 1,
+                ColumnIndex: 1,
+                ItemValue: "EX-12")
+        ];
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Eremex Grid Search Picker");
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains("Page.SearchAndSelectGridCell(static page => page.EremexDemoDataGridAutomationBridge, 1, 1, \"prod\", \"EX-12\");", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.SearchAndSelect(static page => page.EremexDemoDataGridAutomationBridge", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
     public async Task SaveAsync_EmitsRuntimeWarningComment_ForPersistableTargetGap()
     {
         using var directory = new TemporaryDirectory();
@@ -2291,6 +2516,38 @@ public sealed class RecorderTests
         return options;
     }
 
+    private static AppAutomationRecorderOptions CreateGridSearchPickerOptions(bool validateRuntimeTargets = true)
+    {
+        var options = validateRuntimeTargets
+            ? CreateEremexGridOptions()
+            : new AppAutomationRecorderOptions
+            {
+                Validation = new RecorderValidationOptions
+                {
+                    ValidateRuntimeTargets = false
+                }
+            };
+        if (!validateRuntimeTargets)
+        {
+            options.GridHints.Add(new RecorderGridHint(
+                "EremexDemoDataGridControl",
+                "EremexDemoDataGridAutomationBridge",
+                ["EremexRow", "EremexValue", "EremexParity"]));
+        }
+
+        options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
+            "OrderPositionProductEditor",
+            "EremexDemoDataGridAutomationBridge",
+            SearchPickerParts.ByAutomationIds(
+                "OrderPositionProductEditor_Input",
+                "OrderPositionProductEditor_Results",
+                applyButtonAutomationId: "OrderPositionProductEditor_ApplyButton",
+                expandButtonAutomationId: "OrderPositionProductEditor_ExpandButton",
+                resultsKind: SearchPickerResultsKind.ListBox),
+            ColumnName: "EremexValue"));
+        return options;
+    }
+
     private static AppAutomationRecorderOptions CreateSearchPickerOptions()
     {
         var options = new AppAutomationRecorderOptions();
@@ -2317,7 +2574,7 @@ public sealed class RecorderTests
         return options;
     }
 
-    private static AppAutomationRecorderOptions CreateCompositeRecorderOptions()
+    private static AppAutomationRecorderOptions CreateCompositeRecorderOptions(bool useCustomShellCaptureHost = false)
     {
         var options = new AppAutomationRecorderOptions();
         options.DialogHints.Add(new RecorderDialogHint(
@@ -2337,7 +2594,16 @@ public sealed class RecorderTests
             ShellNavigationParts.ByAutomationIds(
                 "ShellNavigationList",
                 paneTabsAutomationId: "ShellPaneTabs",
+                activePaneLabelAutomationId: "ShellActivePaneLabel",
                 navigationKind: ShellNavigationSourceKind.ListBox)));
+        if (useCustomShellCaptureHost)
+        {
+            options.ShellNavigationHints[0] = options.ShellNavigationHints[0] with
+            {
+                PaneTabsCaptureLocator = "DockPaneTabsCaptureHost"
+            };
+        }
+
         return options;
     }
 

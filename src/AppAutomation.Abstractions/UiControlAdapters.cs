@@ -283,14 +283,14 @@ public sealed record FolderExportControlParts(
 /// <summary>
 /// Configuration for composing shell navigation from stable primitive controls.
 /// </summary>
-/// <param name="NavigationLocator">The locator for the navigation source used to open panes.</param>
+/// <param name="NavigationLocator">Optional locator for the navigation source used to open panes.</param>
 /// <param name="PaneTabsLocator">Optional locator for the tab control containing open panes.</param>
 /// <param name="ActivePaneLabelLocator">Optional locator for a label containing the active pane title.</param>
 /// <param name="NavigationKind">The primitive control kind used by the navigation source.</param>
 /// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
 /// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
 public sealed record ShellNavigationParts(
-    string NavigationLocator,
+    string? NavigationLocator = null,
     string? PaneTabsLocator = null,
     string? ActivePaneLabelLocator = null,
     ShellNavigationSourceKind NavigationKind = ShellNavigationSourceKind.Tree,
@@ -301,7 +301,7 @@ public sealed record ShellNavigationParts(
     /// Creates a <see cref="ShellNavigationParts"/> configuration using automation IDs.
     /// </summary>
     public static ShellNavigationParts ByAutomationIds(
-        string navigationAutomationId,
+        string? navigationAutomationId = null,
         string? paneTabsAutomationId = null,
         string? activePaneLabelAutomationId = null,
         ShellNavigationSourceKind navigationKind = ShellNavigationSourceKind.Tree)
@@ -1599,7 +1599,28 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         public string Name => ActivePaneName ?? AutomationId;
 
-        public bool IsEnabled => ResolveNavigationSource().IsEnabled;
+        public bool IsEnabled
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(_parts.NavigationLocator))
+                {
+                    return ResolveNavigationSource().IsEnabled;
+                }
+
+                if (ResolvePaneTabsOrDefault() is { } paneTabs)
+                {
+                    return paneTabs.IsEnabled;
+                }
+
+                if (!string.IsNullOrWhiteSpace(_parts.ActivePaneLabelLocator))
+                {
+                    return ResolveLabel("ActivePaneLabel", _parts.ActivePaneLabelLocator!).IsEnabled;
+                }
+
+                return false;
+            }
+        }
 
         public string? ActivePaneName
         {
@@ -1669,16 +1690,23 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private void OpenPane(string paneName)
         {
+            if (string.IsNullOrWhiteSpace(_parts.NavigationLocator))
+            {
+                throw new NotSupportedException(
+                    $"Shell navigation '{AutomationId}' cannot open panes because a navigation source is not configured.");
+            }
+
+            var navigationLocator = _parts.NavigationLocator;
             switch (_parts.NavigationKind)
             {
                 case ShellNavigationSourceKind.Tree:
-                    SelectTreeItem(ResolveTree("Navigation", _parts.NavigationLocator), paneName);
+                    SelectTreeItem(ResolveTree("Navigation", navigationLocator), paneName);
                     break;
                 case ShellNavigationSourceKind.ListBox:
-                    SelectListItem(ResolveListBox("Navigation", _parts.NavigationLocator), paneName);
+                    SelectListItem(ResolveListBox("Navigation", navigationLocator), paneName);
                     break;
                 case ShellNavigationSourceKind.Tab:
-                    ResolveTab("Navigation", _parts.NavigationLocator).SelectTabItem(paneName);
+                    ResolveTab("Navigation", navigationLocator).SelectTabItem(paneName);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -1697,11 +1725,18 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private IUiControl ResolveNavigationSource()
         {
+            if (string.IsNullOrWhiteSpace(_parts.NavigationLocator))
+            {
+                throw new NotSupportedException(
+                    $"Shell navigation '{AutomationId}' cannot open panes because a navigation source is not configured.");
+            }
+
+            var navigationLocator = _parts.NavigationLocator;
             return _parts.NavigationKind switch
             {
-                ShellNavigationSourceKind.Tree => ResolveTree("Navigation", _parts.NavigationLocator),
-                ShellNavigationSourceKind.ListBox => ResolveListBox("Navigation", _parts.NavigationLocator),
-                ShellNavigationSourceKind.Tab => ResolveTab("Navigation", _parts.NavigationLocator),
+                ShellNavigationSourceKind.Tree => ResolveTree("Navigation", navigationLocator),
+                ShellNavigationSourceKind.ListBox => ResolveListBox("Navigation", navigationLocator),
+                ShellNavigationSourceKind.Tab => ResolveTab("Navigation", navigationLocator),
                 _ => throw new NotSupportedException(
                     $"Shell navigation '{AutomationId}' does not support navigation kind '{_parts.NavigationKind}'.")
             };
