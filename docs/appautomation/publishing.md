@@ -28,6 +28,16 @@ GitHub release path:
 
 - tag `<version>` or `appautomation-v<version>`
 
+## Canonical Release Flow
+
+The canonical publish boundary is a GitHub release transition to `published`.
+
+- create the release/tag first;
+- publish the release;
+- let `.github/workflows/publish-packages.yml` run from the `release.published` event.
+
+If that release-triggered workflow does not appear, use the recovery path below instead of uploading release assets manually.
+
 ## Local Pack
 
 ```powershell
@@ -63,6 +73,16 @@ pwsh -File eng/publish-nuget.ps1 `
 ```
 
 `publish-nuget.ps1` publishes packages only. It does not run post-publish consumer verification automatically because NuGet feed propagation can lag behind a successful push.
+
+## Release Recovery
+
+`publish-packages.yml` also supports an explicit repair path through `workflow_dispatch`.
+
+Use `publish=true` only for an already existing GitHub release of that version:
+
+- the workflow re-runs restore/build/test/pack/smoke/publish;
+- then it attaches `.nupkg` and `.snupkg` files to the existing release;
+- it does not create a new release for an arbitrary ref and should fail if the canonical release/tag does not exist.
 
 ## Published Consumer Verification
 
@@ -134,6 +154,16 @@ Publishing without these steps is not considered validated.
 
 - тег `<version>` или `appautomation-v<version>`
 
+## Канонический путь релиза
+
+Каноническая граница публикации в этом репозитории: перевод GitHub release в состояние `published`.
+
+- сначала создайте release/tag;
+- затем опубликуйте release;
+- после этого должен запуститься `.github/workflows/publish-packages.yml` по событию `release.published`.
+
+Если release-triggered workflow не появился, используйте recovery path ниже, а не загружайте release assets вручную.
+
 ## Локальная упаковка
 
 ```powershell
@@ -169,6 +199,16 @@ pwsh -File eng/publish-nuget.ps1 `
 ```
 
 `publish-nuget.ps1` только публикует пакеты. Он не запускает post-publish проверку consumer flow автоматически, потому что распространение пакетов по NuGet feed может отставать от успешного push.
+
+## Recovery релиза
+
+`publish-packages.yml` поддерживает явный recovery path через `workflow_dispatch`.
+
+Используйте `publish=true` только для уже существующего GitHub release нужной версии:
+
+- workflow повторно выполняет restore/build/test/pack/smoke/publish;
+- затем прикрепляет `.nupkg` и `.snupkg` к уже существующему release;
+- workflow не должен создавать новый release для произвольного ref и обязан падать, если канонический release/tag отсутствует.
 
 ## Проверка опубликованного consumer flow
 

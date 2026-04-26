@@ -65,6 +65,7 @@ jobs:
 
           "full=$value" >> $env:GITHUB_OUTPUT
           "packages_path=artifacts/packages/$value" >> $env:GITHUB_OUTPUT
+          "release_tag=$($arguments.Tag ?? $value)" >> $env:GITHUB_OUTPUT
 
       - name: Restore
         run: dotnet restore AppAutomation.sln
@@ -90,6 +91,51 @@ jobs:
           path: ${{ steps.version.outputs.packages_path }}
           if-no-files-found: error
 
+      - name: Resolve existing GitHub release target
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        id: release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+          RESOLVED_VERSION: ${{ steps.version.outputs.full }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_EVENT_TAG)) {
+            "tag=$($env:RELEASE_EVENT_TAG.Trim())" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $candidateTags = @(
+            $env:RESOLVED_VERSION,
+            "v$($env:RESOLVED_VERSION)",
+            "appautomation-v$($env:RESOLVED_VERSION)"
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+          foreach ($candidateTag in $candidateTags) {
+            $escapedTag = [System.Uri]::EscapeDataString($candidateTag)
+            $uri = "$($env:GITHUB_API_URL)/repos/$($env:GITHUB_REPOSITORY)/releases/tags/$escapedTag"
+            $response = Invoke-WebRequest -Uri $uri -Headers $headers -SkipHttpErrorCheck
+            if ($response.StatusCode -eq 200) {
+              $release = $response.Content | ConvertFrom-Json
+              "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
+              exit 0
+            }
+
+            if ($response.StatusCode -ne 404) {
+              throw "Failed to resolve existing GitHub release for tag '$candidateTag'. Status code: $($response.StatusCode)."
+            }
+          }
+
+          throw "No existing GitHub release was found for version '$($env:RESOLVED_VERSION)'. Create and publish the canonical release first, then rerun workflow_dispatch with publish=true."
+
       - name: Publish packages
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         shell: pwsh
@@ -109,10 +155,27 @@ jobs:
           NUGET_SYMBOL_SOURCE: ''
         run: pwsh -File eng/publish-nuget.ps1 -Version '${{ steps.version.outputs.full }}'
 
-      - name: Attach NuGet packages to GitHub release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ steps.version.outputs.packages_path }}/*.nupkg
-            ${{ steps.version.outputs.packages_path }}/*.snupkg
+      - name: Attach NuGet packages to existing GitHub release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          PACKAGES_PATH: ${{ steps.version.outputs.packages_path }}
+        run: |
+          $packageFiles = Get-ChildItem -Path $env:PACKAGES_PATH -File |
+            Where-Object { $_.Extension -in '.nupkg', '.snupkg' } |
+            Sort-Object Name
+
+          if ($packageFiles.Count -eq 0) {
+            throw "No release assets were found in $($env:PACKAGES_PATH)."
+          }
+
+          foreach ($package in $packageFiles) {
+            Write-Host "Uploading $($package.Name) to release '$($env:RELEASE_TAG)'"
+            & gh release upload $env:RELEASE_TAG $package.FullName --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) {
+              throw "gh release upload failed for $($package.FullName)"
+            }
+          }
