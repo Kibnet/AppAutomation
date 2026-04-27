@@ -535,6 +535,64 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task ConfigureProxy_MapsInnerPartCapture_BackToTypedLogicalLocator()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.ConfigureProxy(
+            "ServerFilterEditor",
+            "ServerFilterEditorInput",
+            UiControlType.TextBox);
+        var root = new StackPanel();
+        var wrapper = new Border();
+        var innerTextBox = new TextBox();
+        AutomationProperties.SetAutomationId(wrapper, "ServerFilterEditor");
+        AutomationProperties.SetAutomationId(innerTextBox, "ServerFilterEditorInput");
+        wrapper.Child = innerTextBox;
+        root.Children.Add(wrapper);
+        var resolver = new RecorderSelectorResolver(options, validationRoot: root);
+
+        var result = resolver.Resolve(innerTextBox, UiControlType.AutomationElement);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Control).IsNotNull();
+            await Assert.That(result.Control!.LocatorValue).IsEqualTo("ServerFilterEditor");
+            await Assert.That(result.Control.ControlType).IsEqualTo(UiControlType.TextBox);
+            await Assert.That(result.Control.Warning).Contains("Mapped recorder locator");
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(result.CanPersist).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task ConfigureSpinnerProxy_CapturesNumericInnerTextBox_AsLogicalSpinnerStep()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.ConfigureSpinnerProxy("MixCountEditor", "MixCountEditorInput");
+        var root = new StackPanel();
+        var wrapper = new Border();
+        var innerTextBox = new TextBox { Text = "10.5" };
+        AutomationProperties.SetAutomationId(wrapper, "MixCountEditor");
+        AutomationProperties.SetAutomationId(innerTextBox, "MixCountEditorInput");
+        wrapper.Child = innerTextBox;
+        root.Children.Add(wrapper);
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateTextEntryStep(innerTextBox);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SetSpinnerValue);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("MixCountEditor");
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.TextBox);
+            await Assert.That(result.Step.DoubleValue).IsEqualTo(10.5);
+        }
+    }
+
+    [Test]
     public async Task Resolve_MapsGridHint_ToTypedAutomationBridge()
     {
         var options = CreateEremexGridOptions();

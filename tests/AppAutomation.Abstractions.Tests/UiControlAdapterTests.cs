@@ -508,6 +508,60 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task PrimitiveProxyAdapter_WithGenericProxy_ResolvesTextBoxThroughInnerLocator()
+    {
+        var textBox = new FakeTextBoxControl("ServerFilterInput");
+        var resolver = new FakeResolver(("ServerFilterInput", textBox))
+            .WithProxy(
+                "ServerFilterEditor",
+                PrimitiveProxyTarget.ByAutomationId("ServerFilterInput", UiControlType.TextBox));
+        var page = new ProxyPage(resolver);
+
+        page.EnterText(static candidate => candidate.ServerFilterEditor, "prod");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(textBox.Text).IsEqualTo("prod");
+            await Assert.That(page.ServerFilterEditor.AutomationId).IsEqualTo("ServerFilterInput");
+        }
+    }
+
+    [Test]
+    public async Task PrimitiveProxyAdapter_WithButtonProxy_InvokesInnerButton()
+    {
+        var button = new FakeButtonControl("SplitButtonPrimaryPart");
+        var resolver = new FakeResolver(("SplitButtonPrimaryPart", button))
+            .WithButtonProxy("SplitPrimaryAction", "SplitButtonPrimaryPart");
+        var page = new ProxyPage(resolver);
+
+        page.ClickButton(static candidate => candidate.SplitPrimaryAction);
+
+        await Assert.That(button.InvokeCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task PrimitiveProxyAdapter_WithListBoxProxy_PreservesSelectableListBehavior()
+    {
+        var listBox = new FakeSelectableListBoxControl(
+            "ListViewItemsSurface",
+            [
+                new FakeListBoxItem("Customers", "Customers"),
+                new FakeListBoxItem("Reports", "Reports")
+            ]);
+        var resolver = new FakeResolver(("ListViewItemsSurface", listBox))
+            .WithListBoxProxy("ListGallery", "ListViewItemsSurface");
+        var page = new ProxyPage(resolver);
+
+        page.SelectListBoxItem(static candidate => candidate.ListGallery, "Reports");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Reports");
+            await Assert.That(page.ListGallery.AutomationId).IsEqualTo("ListViewItemsSurface");
+        }
+    }
+
+    [Test]
     public async Task WithAdaptersFromAssembly_RegistersAdaptersFromAssembly()
     {
         var resolver = new MinimalResolver()
@@ -591,6 +645,44 @@ public sealed class UiControlAdapterTests
         }
 
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
+    }
+
+    public static class ProxyPageDefinitions
+    {
+        public static UiControlDefinition ServerFilterEditor { get; } = new(
+            "ServerFilterEditor",
+            UiControlType.TextBox,
+            "ServerFilterEditor",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition SplitPrimaryAction { get; } = new(
+            "SplitPrimaryAction",
+            UiControlType.Button,
+            "SplitPrimaryAction",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+
+        public static UiControlDefinition ListGallery { get; } = new(
+            "ListGallery",
+            UiControlType.ListBox,
+            "ListGallery",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    private sealed class ProxyPage : UiPage
+    {
+        public ProxyPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ITextBoxControl ServerFilterEditor => Resolve<ITextBoxControl>(ProxyPageDefinitions.ServerFilterEditor);
+
+        public IButtonControl SplitPrimaryAction => Resolve<IButtonControl>(ProxyPageDefinitions.SplitPrimaryAction);
+
+        public IListBoxControl ListGallery => Resolve<IListBoxControl>(ProxyPageDefinitions.ListGallery);
     }
 
     public static class FilterPageDefinitions

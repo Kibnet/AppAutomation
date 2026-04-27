@@ -317,7 +317,7 @@ public sealed record ShellNavigationParts(
 /// <summary>
 /// Extension methods for configuring <see cref="IUiControlResolver"/> with adapters.
 /// </summary>
-public static class UiControlResolverExtensions
+public static partial class UiControlResolverExtensions
 {
     /// <summary>
     /// Wraps the resolver with custom control adapters.

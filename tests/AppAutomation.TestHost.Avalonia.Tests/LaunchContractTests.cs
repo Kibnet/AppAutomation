@@ -301,6 +301,22 @@ public sealed class LaunchContractTests
     }
 
     [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessProxyTextBox_ResolvesLogicalWrapperThroughInnerPart()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(CreateProxyEditorWindow);
+        var page = new ProxyEditorPage(
+            new HeadlessControlResolver(window)
+                .WithTextBoxProxy("ServerFilterEditor", "ServerFilterEditorInput", fallbackToName: false));
+
+        page.EnterText(static candidate => candidate.ServerFilterEditor, "Updated");
+
+        var updatedValue = page.ServerFilterEditor.Text;
+        await Assert.That(updatedValue).IsEqualTo("Updated");
+    }
+
+    [Test]
     public async Task AvaloniaDesktopLaunchHost_CreateLaunchOptions_WithScenario_AddsEnvironmentVariables_AndCleansUp()
     {
         using var workspace = TemporaryWorkspace.Create();
@@ -598,6 +614,17 @@ Console.WriteLine("Fake desktop");
         return new Window { Content = bridge };
     }
 
+    private static Window CreateProxyEditorWindow()
+    {
+        var wrapper = new Border();
+        var innerEditor = new TextBox { Text = "Initial" };
+        AutomationProperties.SetAutomationId(wrapper, "ServerFilterEditor");
+        AutomationProperties.SetAutomationId(innerEditor, "ServerFilterEditorInput");
+        wrapper.Child = innerEditor;
+
+        return new Window { Content = wrapper };
+    }
+
     private sealed record LaunchPayload(string UserName);
 
     private sealed class VisualGridPage : UiPage
@@ -617,6 +644,25 @@ Console.WriteLine("Fake desktop");
             "EremexDemoDataGridAutomationBridge",
             UiControlType.Grid,
             "EremexDemoDataGridAutomationBridge");
+    }
+
+    private sealed class ProxyEditorPage : UiPage
+    {
+        public ProxyEditorPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ITextBoxControl ServerFilterEditor =>
+            Resolve<ITextBoxControl>(ProxyEditorPageDefinitions.ServerFilterEditor);
+    }
+
+    public static class ProxyEditorPageDefinitions
+    {
+        public static UiControlDefinition ServerFilterEditor { get; } = new(
+            "ServerFilterEditor",
+            UiControlType.TextBox,
+            "ServerFilterEditor");
     }
 
     private sealed class TestAvaloniaApp : global::Avalonia.Application
