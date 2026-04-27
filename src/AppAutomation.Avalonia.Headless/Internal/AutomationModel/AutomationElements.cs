@@ -41,7 +41,7 @@ internal class AutomationElement
                     toggleButton.IsChecked = !(toggleButton.IsChecked ?? false);
                     break;
                 case global::Avalonia.Controls.Button button:
-                    button.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
+                    InvokeButton(button);
                     break;
                 default:
                     throw new InvalidOperationException($"Control '{Control.GetType().Name}' does not support click interaction.");
@@ -78,7 +78,7 @@ internal class AutomationElement
         });
     }
 
-    public TextBox AsTextBox() => this as TextBox ?? new TextBox(RequireControl<global::Avalonia.Controls.TextBox>());
+    public TextBox AsTextBox() => this as TextBox ?? new TextBox(RequireControlOrDescendant<global::Avalonia.Controls.TextBox>());
 
     public Button AsButton() => this as Button ?? new Button(RequireControl<global::Avalonia.Controls.Button>());
 
@@ -151,6 +151,25 @@ internal class AutomationElement
             if (Control is T typed)
             {
                 return typed;
+            }
+
+            throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
+        });
+    }
+
+    protected T RequireControlOrDescendant<T>() where T : Control
+    {
+        return Ui(() =>
+        {
+            if (Control is T typed)
+            {
+                return typed;
+            }
+
+            var descendant = ControlTree.EnumerateDescendants(Control).OfType<T>().FirstOrDefault();
+            if (descendant is not null)
+            {
+                return descendant;
             }
 
             throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
@@ -240,6 +259,16 @@ internal class AutomationElement
             _ => ControlType.Custom
         };
     }
+
+    protected static void InvokeButton(global::Avalonia.Controls.Button button)
+    {
+        if (button.Command?.CanExecute(button.CommandParameter) == true)
+        {
+            button.Command.Execute(button.CommandParameter);
+        }
+
+        button.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
+    }
 }
 
 internal sealed class Window : AutomationElement
@@ -287,7 +316,7 @@ internal class Button : AutomationElement
     {
         Ui(() =>
         {
-            Native.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
+            InvokeButton(Native);
             return true;
         });
     }

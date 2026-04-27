@@ -4,6 +4,7 @@ using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using System.Collections;
 using System.Text;
+using Avalonia.Automation;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
 
@@ -164,18 +165,29 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
     private AutomationElement? SearchByAutomationId(string locatorValue)
     {
         var normalized = locatorValue.Trim();
-        return _window.FindAllDescendants()
-            .FirstOrDefault(candidate =>
-                string.Equals(candidate.AutomationId, normalized, StringComparison.Ordinal));
+        return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+        {
+            var match = ControlTree.EnumerateDescendants(_window.Native)
+                .FirstOrDefault(candidate =>
+                    string.Equals(AutomationProperties.GetAutomationId(candidate) ?? string.Empty, normalized, StringComparison.Ordinal));
+            return match is null ? null : AutomationElement.WrapControl(match);
+        });
     }
 
     private AutomationElement? SearchByName(string locatorValue)
     {
         var normalized = locatorValue.Trim();
-        return _window.FindAllDescendants()
-            .FirstOrDefault(candidate =>
-                string.Equals(candidate.Name, normalized, StringComparison.Ordinal)
-                || string.Equals(candidate.Name, normalized, StringComparison.OrdinalIgnoreCase));
+        return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+        {
+            var match = ControlTree.EnumerateDescendants(_window.Native)
+                .FirstOrDefault(candidate =>
+                {
+                    var name = AutomationProperties.GetName(candidate) ?? candidate.Name ?? string.Empty;
+                    return string.Equals(name, normalized, StringComparison.Ordinal)
+                           || string.Equals(name, normalized, StringComparison.OrdinalIgnoreCase);
+                });
+            return match is null ? null : AutomationElement.WrapControl(match);
+        });
     }
 
     private string BuildLogicalTreeSnapshot()

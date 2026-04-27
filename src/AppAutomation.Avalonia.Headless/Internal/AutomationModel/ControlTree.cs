@@ -1,3 +1,4 @@
+using System.Collections;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
@@ -11,18 +12,7 @@ internal static class ControlTree
         var seen = new HashSet<Control>();
         var queue = new Queue<object>();
 
-        foreach (var child in root.GetVisualChildren())
-        {
-            queue.Enqueue(child);
-        }
-
-        if (root is ILogical logicalRoot)
-        {
-            foreach (var child in logicalRoot.LogicalChildren)
-            {
-                queue.Enqueue(child);
-            }
-        }
+        EnqueueChildren(root, queue);
 
         while (queue.Count > 0)
         {
@@ -39,17 +29,63 @@ internal static class ControlTree
 
             yield return control;
 
-            foreach (var visualChild in control.GetVisualChildren())
-            {
-                queue.Enqueue(visualChild);
-            }
+            EnqueueChildren(control, queue);
+        }
+    }
 
-            if (control is ILogical logical)
+    private static void EnqueueChildren(Control control, Queue<object> queue)
+    {
+        foreach (var visualChild in control.GetVisualChildren())
+        {
+            queue.Enqueue(visualChild);
+        }
+
+        if (control is ILogical logical)
+        {
+            foreach (var logicalChild in logical.LogicalChildren)
             {
-                foreach (var logicalChild in logical.LogicalChildren)
-                {
-                    queue.Enqueue(logicalChild);
-                }
+                queue.Enqueue(logicalChild);
+            }
+        }
+
+        switch (control)
+        {
+            case ContentControl { Content: not null } contentControl:
+                queue.Enqueue(contentControl.Content);
+                break;
+            case Decorator { Child: not null } decorator:
+                queue.Enqueue(decorator.Child);
+                break;
+        }
+
+        EnqueuePropertyValue(control, "Root", queue);
+        EnqueuePropertyValue(control, "Content", queue);
+        EnqueueEnumerablePropertyValues(control, "Items", queue);
+    }
+
+    private static void EnqueuePropertyValue(Control control, string propertyName, Queue<object> queue)
+    {
+        var property = control.GetType().GetProperty(propertyName);
+        var value = property?.GetValue(control);
+        if (value is not null)
+        {
+            queue.Enqueue(value);
+        }
+    }
+
+    private static void EnqueueEnumerablePropertyValues(Control control, string propertyName, Queue<object> queue)
+    {
+        var property = control.GetType().GetProperty(propertyName);
+        if (property?.GetValue(control) is not IEnumerable values)
+        {
+            return;
+        }
+
+        foreach (var value in values)
+        {
+            if (value is not null)
+            {
+                queue.Enqueue(value);
             }
         }
     }
