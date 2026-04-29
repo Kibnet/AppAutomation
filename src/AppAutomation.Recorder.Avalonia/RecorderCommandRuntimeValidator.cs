@@ -140,6 +140,14 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
                 .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
                 .Concat(RequireString(step, target, allowEmpty: true, "grid cell value")),
+            RecordedActionKind.WaitUntilProgressAtLeast => ValidateControlType(step, target, UiControlType.ProgressBar)
+                .Concat(RequireDouble(step, target)),
+            RecordedActionKind.WaitUntilListBoxContains => ValidateControlType(step, target, UiControlType.ListBox)
+                .Concat(RequireString(step, target, allowEmpty: false, "list item text")),
+            RecordedActionKind.WaitUntilHasItemsAtLeast => ValidateControlType(step, target, UiControlType.ListBox)
+                .Concat(RequireNonNegativeInt(step.IntValue, target, "list item count")),
+            RecordedActionKind.WaitUntilNotificationContains => ValidateControlType(step, target, UiControlType.Notification)
+                .Concat(RequireString(step, target, allowEmpty: false, "notification text")),
             RecordedActionKind.SearchAndSelect => ValidateControlType(step, target, UiControlType.SearchPicker)
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
@@ -157,6 +165,24 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
                 .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index")),
             RecordedActionKind.ExportGrid => ValidateGridUserAction(step, target),
+            RecordedActionKind.SetDateRangeFilter => ValidateControlType(step, target, UiControlType.DateRangeFilter)
+                .Concat(RequireAtLeastOneDateBound(step, target)),
+            RecordedActionKind.SetNumericRangeFilter => ValidateControlType(step, target, UiControlType.NumericRangeFilter)
+                .Concat(RequireAtLeastOneNumericBound(step, target)),
+            RecordedActionKind.SelectExportFolder => ValidateControlType(step, target, UiControlType.FolderExport)
+                .Concat(RequireString(step, target, allowEmpty: false, "folder path")),
+            RecordedActionKind.EditGridCellText => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireString(step, target, allowEmpty: true, "grid cell text value")),
+            RecordedActionKind.EditGridCellNumber => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireDouble(step, target)),
+            RecordedActionKind.EditGridCellDate => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireDate(step, target)),
+            RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
@@ -296,6 +322,32 @@ internal sealed class RecorderCommandRuntimeValidator
         return step.DateValue.HasValue
             ? []
             : [Invalid(target, "payload-missing-date", $"Recorded action '{step.ActionKind}' requires a date payload.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireAtLeastOneDateBound(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.DateValue.HasValue || step.SecondDateValue.HasValue
+            ? []
+            : [Invalid(target, "payload-missing-date", $"Recorded action '{step.ActionKind}' requires at least one date bound.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireAtLeastOneNumericBound(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.DoubleValue.HasValue || step.SecondDoubleValue.HasValue
+            ? []
+            : [Invalid(target, "payload-missing-double", $"Recorded action '{step.ActionKind}' requires at least one numeric bound.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireGridCellEditIndexes(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return RequireNonNegativeInt(step.RowIndex, target, "grid row index")
+            .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"));
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireString(

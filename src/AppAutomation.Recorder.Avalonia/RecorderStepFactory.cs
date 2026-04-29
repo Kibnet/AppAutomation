@@ -198,6 +198,23 @@ internal sealed class RecorderStepFactory
                 || TryResolveGridSearchPickerButton(source, out _));
     }
 
+    public bool ShouldSuppressCompositeWorkflowButton(Control? source)
+    {
+        if (source is null)
+        {
+            return false;
+        }
+
+        return _options.DateRangeFilterHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
+            || _options.NumericRangeFilterHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
+            || _options.FolderExportHints.Any(hint =>
+                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator));
+    }
+
     public StepCreationResult TryCreateDialogActionStep(Control? source)
     {
         if (source is null)
@@ -250,6 +267,213 @@ internal sealed class RecorderStepFactory
             source,
             new RecordedStep(RecordedActionKind.DismissNotification, descriptor, Warning: warning),
             warning);
+    }
+
+    public StepCreationResult TryCreateDateRangeFilterStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a date range filter hint for this button.");
+        }
+
+        if (!TryResolveDateRangeFilterHint(source, out var hint, out var commitMode))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a date range filter hint for this button.");
+        }
+
+        if (!TryReadDateRangeValues(hint.Parts, out var from, out var to, out var message))
+        {
+            return StepCreationResult.Unsupported(message);
+        }
+
+        var warning = "Recorded date range filter action from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.DateRangeFilter,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SetDateRangeFilter,
+                descriptor,
+                DateValue: from,
+                Warning: warning,
+                SecondDateValue: to,
+                FilterCommitMode: commitMode),
+            warning);
+    }
+
+    public StepCreationResult TryCreateNumericRangeFilterStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a numeric range filter hint for this button.");
+        }
+
+        if (!TryResolveNumericRangeFilterHint(source, out var hint, out var commitMode))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a numeric range filter hint for this button.");
+        }
+
+        if (!TryReadNumericRangeValues(hint.Parts, out var from, out var to, out var message))
+        {
+            return StepCreationResult.Unsupported(message);
+        }
+
+        var warning = "Recorded numeric range filter action from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.NumericRangeFilter,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SetNumericRangeFilter,
+                descriptor,
+                DoubleValue: from,
+                Warning: warning,
+                SecondDoubleValue: to,
+                FilterCommitMode: commitMode),
+            warning);
+    }
+
+    public StepCreationResult TryCreateFolderExportStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a folder export hint for this button.");
+        }
+
+        if (!TryResolveFolderExportHint(source, out var hint, out var commitMode))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a folder export hint for this button.");
+        }
+
+        if (!TryFindControl(hint.Parts.FolderPathInputLocator, hint.Parts.LocatorKind, out var folderInput)
+            || folderInput is not TextBox textBox)
+        {
+            return StepCreationResult.Unsupported("Folder export path input was not found or is not a TextBox.");
+        }
+
+        var folderPath = textBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return StepCreationResult.Unsupported("Folder export path is empty.");
+        }
+
+        var warning = "Recorded folder export action from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.FolderExport,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SelectExportFolder,
+                descriptor,
+                StringValue: folderPath,
+                Warning: warning,
+                FolderExportCommitMode: commitMode),
+            warning);
+    }
+
+    public StepCreationResult TryCreateGridEditStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a grid edit hint for this source.");
+        }
+
+        if (!TryResolveGridEditHint(source, out var hint))
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a grid edit hint for this source.");
+        }
+
+        if (hint.RowIndex < 0 || hint.ColumnIndex < 0)
+        {
+            return StepCreationResult.Unsupported("Grid edit hint requires non-negative row and column indexes.");
+        }
+
+        var warning = $"Recorded grid cell edit action '{hint.EditorKind}' from configured hint.";
+        var descriptor = new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(hint.TargetGridLocatorValue, UiControlType.Grid),
+            UiControlType.Grid,
+            hint.TargetGridLocatorValue.Trim(),
+            hint.TargetGridLocatorKind,
+            hint.TargetFallbackToName,
+            source.GetType().FullName ?? source.GetType().Name,
+            warning);
+
+        return hint.EditorKind switch
+        {
+            GridCellEditorKind.Text => TryCreateGridEditTextStep(source, descriptor, warning, hint),
+            GridCellEditorKind.Number => TryCreateGridEditNumberStep(source, descriptor, warning, hint),
+            GridCellEditorKind.Date => TryCreateGridEditDateStep(source, descriptor, warning, hint),
+            GridCellEditorKind.ComboBox => TryCreateGridEditComboStep(source, descriptor, warning, hint),
+            GridCellEditorKind.SearchPicker => StepCreationResult.Unsupported(
+                "Grid search picker edit is recorded through RecorderGridSearchPickerHint."),
+            _ => StepCreationResult.Unsupported($"Unsupported grid edit hint '{hint.EditorKind}'.")
+        };
+    }
+
+    public bool ShouldSuppressCompositeTextEntry(TextBox textBox)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+
+        return MatchesDateRangeTextPart(textBox)
+            || MatchesNumericRangeTextPart(textBox)
+            || MatchesFolderExportPathPart(textBox)
+            || MatchesGridEditValuePart(textBox);
+    }
+
+    public bool ShouldRetainPendingTextForCompositeSelection(TextBox textBox)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+
+        return MatchesSearchPickerTextPart(textBox)
+            || MatchesGridSearchPickerTextPart(textBox);
+    }
+
+    public bool IsCompositeSelectionPair(TextBox searchInput, Control results)
+    {
+        ArgumentNullException.ThrowIfNull(searchInput);
+        ArgumentNullException.ThrowIfNull(results);
+
+        return results switch
+        {
+            ComboBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _)
+                || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _),
+            ListBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _)
+                || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _),
+            _ => false
+        };
+    }
+
+    public bool ShouldSuppressCompositeDateSelection(DatePicker datePicker)
+    {
+        ArgumentNullException.ThrowIfNull(datePicker);
+
+        return MatchesDateRangeDatePart(datePicker)
+            || MatchesGridEditValuePart(datePicker);
+    }
+
+    public bool ShouldSuppressCompositeSelection(Control control)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+
+        return MatchesGridEditValuePart(control);
     }
 
     public StepCreationResult TryCreateShellNavigationStep(Control source)
@@ -512,6 +736,11 @@ internal sealed class RecorderStepFactory
             return gridResult;
         }
 
+        if (TryCreateNotificationAssertionStep(source, mode, out var notificationResult))
+        {
+            return notificationResult;
+        }
+
         foreach (var extractor in _assertionExtractors)
         {
             if (!extractor.TryCreate(source, mode, out var candidate) || candidate is null)
@@ -537,7 +766,8 @@ internal sealed class RecorderStepFactory
                     Warning: CombineMessage(locatorResult.Control.Warning, candidate.Warning),
                     ValidationStatus: locatorResult.ValidationStatus,
                     ValidationMessage: locatorResult.ValidationMessage,
-                    CanPersist: locatorResult.CanPersist),
+                    CanPersist: locatorResult.CanPersist,
+                    IntValue: candidate.IntValue),
                 locatorResult.Message);
         }
 
@@ -599,6 +829,51 @@ internal sealed class RecorderStepFactory
                 CanPersist: locatorResult.CanPersist,
                 IntValue: items.Count),
             locatorResult.Message);
+        return true;
+    }
+
+    private bool TryCreateNotificationAssertionStep(Control source, RecorderAssertionMode mode, out StepCreationResult result)
+    {
+        result = StepCreationResult.Unsupported("Recorder could not derive a supported notification assertion for this control.");
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        {
+            return false;
+        }
+
+        if (!TryResolveNotificationTextHint(source, out var hint))
+        {
+            return false;
+        }
+
+        if (!TryFindControl(hint.Parts.TextLocator, hint.Parts.LocatorKind, out var textControl))
+        {
+            result = StepCreationResult.Unsupported("Notification text part was not found.");
+            return true;
+        }
+
+        var text = ExtractTextValue(textControl);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            result = StepCreationResult.Unsupported("Notification text part does not expose text.");
+            return true;
+        }
+
+        var warning = "Recorded notification text assertion from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.Notification,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+        result = CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.WaitUntilNotificationContains,
+                descriptor,
+                StringValue: text.Trim(),
+                Warning: warning),
+            warning);
         return true;
     }
 
@@ -959,6 +1234,20 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private bool MatchesSearchPickerTextPart(TextBox textBox)
+    {
+        return _options.SearchPickerHints.Any(hint =>
+            TryGetLocator(textBox, hint.Parts.LocatorKind, out var locatorValue)
+            && string.Equals(hint.Parts.SearchInputLocator.Trim(), locatorValue, StringComparison.Ordinal));
+    }
+
+    private bool MatchesGridSearchPickerTextPart(TextBox textBox)
+    {
+        return _options.GridSearchPickerHints.Any(hint =>
+            TryGetLocator(textBox, hint.Parts.LocatorKind, out var locatorValue)
+            && string.Equals(hint.Parts.SearchInputLocator.Trim(), locatorValue, StringComparison.Ordinal));
+    }
+
     private bool TryResolveSearchPickerButton(Control source, out RecorderSearchPickerHint hint)
     {
         foreach (var candidate in _options.SearchPickerHints)
@@ -1041,6 +1330,124 @@ internal sealed class RecorderStepFactory
             {
                 hint = candidate;
                 return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private bool TryResolveNotificationTextHint(Control source, out RecorderNotificationHint hint)
+    {
+        foreach (var candidate in _options.NotificationHints)
+        {
+            if (MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.TextLocator))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private bool TryResolveDateRangeFilterHint(
+        Control source,
+        out RecorderDateRangeFilterHint hint,
+        out FilterPopupCommitMode commitMode)
+    {
+        foreach (var candidate in _options.DateRangeFilterHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesLocator(source, parts.LocatorKind, parts.ApplyButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FilterPopupCommitMode.Apply;
+                return true;
+            }
+
+            if (MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FilterPopupCommitMode.Cancel;
+                return true;
+            }
+        }
+
+        hint = null!;
+        commitMode = default;
+        return false;
+    }
+
+    private bool TryResolveNumericRangeFilterHint(
+        Control source,
+        out RecorderNumericRangeFilterHint hint,
+        out FilterPopupCommitMode commitMode)
+    {
+        foreach (var candidate in _options.NumericRangeFilterHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesLocator(source, parts.LocatorKind, parts.ApplyButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FilterPopupCommitMode.Apply;
+                return true;
+            }
+
+            if (MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FilterPopupCommitMode.Cancel;
+                return true;
+            }
+        }
+
+        hint = null!;
+        commitMode = default;
+        return false;
+    }
+
+    private bool TryResolveFolderExportHint(
+        Control source,
+        out RecorderFolderExportHint hint,
+        out FolderExportCommitMode commitMode)
+    {
+        foreach (var candidate in _options.FolderExportHints)
+        {
+            var parts = candidate.Parts;
+            if (MatchesLocator(source, parts.LocatorKind, parts.SelectButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FolderExportCommitMode.Select;
+                return true;
+            }
+
+            if (MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
+            {
+                hint = candidate;
+                commitMode = FolderExportCommitMode.Cancel;
+                return true;
+            }
+        }
+
+        hint = null!;
+        commitMode = default;
+        return false;
+    }
+
+    private bool TryResolveGridEditHint(Control source, out RecorderGridEditHint hint)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            foreach (var candidate in _options.GridEditHints)
+            {
+                if (TryGetLocator(current, candidate.SourceLocatorKind, out var locatorValue)
+                    && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
+                {
+                    hint = candidate;
+                    return true;
+                }
             }
         }
 
@@ -1500,6 +1907,260 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
+    private StepCreationResult TryCreateGridEditTextStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+            || valueControl is not TextBox textBox)
+        {
+            return StepCreationResult.Unsupported("Grid text edit hint value locator was not found or is not a TextBox.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.EditGridCellText,
+                descriptor,
+                StringValue: textBox.Text ?? string.Empty,
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode),
+            warning);
+    }
+
+    private StepCreationResult TryCreateGridEditNumberStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+            || !TryReadNumericValue(valueControl, out var value))
+        {
+            return StepCreationResult.Unsupported("Grid numeric edit hint value locator does not expose a numeric value.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.EditGridCellNumber,
+                descriptor,
+                DoubleValue: value,
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode),
+            warning);
+    }
+
+    private StepCreationResult TryCreateGridEditDateStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+            || !TryReadDateValue(valueControl, out var value))
+        {
+            return StepCreationResult.Unsupported("Grid date edit hint value locator does not expose a date value.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.EditGridCellDate,
+                descriptor,
+                DateValue: value,
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode),
+            warning);
+    }
+
+    private StepCreationResult TryCreateGridEditComboStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl))
+        {
+            return StepCreationResult.Unsupported("Grid combo edit hint value locator was not found.");
+        }
+
+        var selectedText = valueControl switch
+        {
+            ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
+            ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
+            _ => null
+        };
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return StepCreationResult.Unsupported("Grid combo edit hint value locator does not have a selected item.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SelectGridCellComboItem,
+                descriptor,
+                StringValue: selectedText.Trim(),
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode),
+            warning);
+    }
+
+    private bool TryReadDateRangeValues(
+        DateRangeFilterParts parts,
+        out DateTime? from,
+        out DateTime? to,
+        out string message)
+    {
+        if (!TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
+            || !TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
+        {
+            from = null;
+            to = null;
+            message = "Date range filter endpoints were not found.";
+            return false;
+        }
+
+        var hasFrom = TryReadDateValue(fromControl, out var fromValue);
+        var hasTo = TryReadDateValue(toControl, out var toValue);
+        from = hasFrom ? fromValue : null;
+        to = hasTo ? toValue : null;
+        if (from.HasValue || to.HasValue)
+        {
+            message = string.Empty;
+            return true;
+        }
+
+        message = "Date range filter endpoints do not expose date values.";
+        return false;
+    }
+
+    private bool TryReadNumericRangeValues(
+        NumericRangeFilterParts parts,
+        out double? from,
+        out double? to,
+        out string message)
+    {
+        if (!TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
+            || !TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
+        {
+            from = null;
+            to = null;
+            message = "Numeric range filter endpoints were not found.";
+            return false;
+        }
+
+        var hasFrom = TryReadNumericValue(fromControl, out var fromValue);
+        var hasTo = TryReadNumericValue(toControl, out var toValue);
+        from = hasFrom ? fromValue : null;
+        to = hasTo ? toValue : null;
+        if (from.HasValue || to.HasValue)
+        {
+            message = string.Empty;
+            return true;
+        }
+
+        message = "Numeric range filter endpoints do not expose numeric values.";
+        return false;
+    }
+
+    private static bool TryReadDateValue(Control control, out DateTime value)
+    {
+        switch (control)
+        {
+            case DatePicker datePicker when datePicker.SelectedDate is { } selectedDate:
+                value = selectedDate.Date;
+                return true;
+            case Calendar calendar when calendar.SelectedDate is { } selectedDate:
+                value = selectedDate.Date;
+                return true;
+            case TextBox textBox:
+                return DateTime.TryParse(
+                    textBox.Text,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeLocal,
+                    out value)
+                    || DateTime.TryParse(textBox.Text, out value);
+            default:
+                value = default;
+                return false;
+        }
+    }
+
+    private static bool TryReadNumericValue(Control control, out double value)
+    {
+        if (control is TextBox textBox)
+        {
+            return double.TryParse(
+                textBox.Text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        var valueProperty = control.GetType().GetProperty("Value");
+        var propertyValue = valueProperty?.GetValue(control);
+        switch (propertyValue)
+        {
+            case double doubleValue:
+                value = doubleValue;
+                return true;
+            case decimal decimalValue:
+                value = (double)decimalValue;
+                return true;
+            case int intValue:
+                value = intValue;
+                return true;
+            default:
+                value = default;
+                return false;
+        }
+    }
+
+    private bool MatchesDateRangeTextPart(TextBox textBox)
+    {
+        return _options.DateRangeFilterHints.Any(hint =>
+            hint.Parts.EditorKind == FilterValueEditorKind.TextBox
+            && MatchesAnyLocator(textBox, hint.Parts.LocatorKind, hint.Parts.FromLocator, hint.Parts.ToLocator));
+    }
+
+    private bool MatchesDateRangeDatePart(DatePicker datePicker)
+    {
+        return _options.DateRangeFilterHints.Any(hint =>
+            hint.Parts.EditorKind == FilterValueEditorKind.DateTimePicker
+            && MatchesAnyLocator(datePicker, hint.Parts.LocatorKind, hint.Parts.FromLocator, hint.Parts.ToLocator));
+    }
+
+    private bool MatchesNumericRangeTextPart(TextBox textBox)
+    {
+        return _options.NumericRangeFilterHints.Any(hint =>
+            hint.Parts.EditorKind is FilterValueEditorKind.TextBox or FilterValueEditorKind.Spinner
+            && MatchesAnyLocator(textBox, hint.Parts.LocatorKind, hint.Parts.FromLocator, hint.Parts.ToLocator));
+    }
+
+    private bool MatchesFolderExportPathPart(TextBox textBox)
+    {
+        return _options.FolderExportHints.Any(hint =>
+            MatchesLocator(textBox, hint.Parts.LocatorKind, hint.Parts.FolderPathInputLocator));
+    }
+
+    private bool MatchesGridEditValuePart(Control control)
+    {
+        return _options.GridEditHints.Any(hint =>
+            MatchesLocator(control, hint.ValueLocatorKind, hint.ValueLocatorValue));
+    }
+
     private RecordedControlDescriptor CreateCompositeDescriptor(
         string locatorValue,
         UiControlType controlType,
@@ -1730,6 +2391,8 @@ internal sealed class RecorderStepFactory
     {
         return
         [
+            new ProgressAssertionExtractor(),
+            new ListBoxAssertionExtractor(),
             new TextAssertionExtractor(),
             new CheckedAssertionExtractor(),
             new EnabledAssertionExtractor(),
@@ -1786,6 +2449,60 @@ internal sealed class RecorderStepFactory
                 RecordedActionKind.WaitUntilTextEquals,
                 StringValue: text.Trim());
             return true;
+        }
+    }
+
+    private sealed class ProgressAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text)
+                || control is not ProgressBar progressBar)
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                UiControlType.ProgressBar,
+                RecordedActionKind.WaitUntilProgressAtLeast,
+                DoubleValue: progressBar.Value);
+            return true;
+        }
+    }
+
+    private sealed class ListBoxAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text)
+                || control is not ListBox listBox)
+            {
+                return false;
+            }
+
+            var selectedText = ExtractSelectionText(listBox.SelectedItem);
+            if (!string.IsNullOrWhiteSpace(selectedText))
+            {
+                candidate = new RecorderAssertionCandidate(
+                    UiControlType.ListBox,
+                    RecordedActionKind.WaitUntilListBoxContains,
+                    StringValue: selectedText.Trim());
+                return true;
+            }
+
+            var itemCount = listBox.ItemCount;
+            if (itemCount > 0)
+            {
+                candidate = new RecorderAssertionCandidate(
+                    UiControlType.ListBox,
+                    RecordedActionKind.WaitUntilHasItemsAtLeast,
+                    IntValue: itemCount);
+                return true;
+            }
+
+            return false;
         }
     }
 

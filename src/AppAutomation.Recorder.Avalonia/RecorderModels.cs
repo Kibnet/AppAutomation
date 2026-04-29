@@ -36,7 +36,18 @@ public enum RecordedActionKind
     DismissNotification = 28,
     OpenOrActivateShellPane = 29,
     ActivateShellPane = 30,
-    SearchAndSelectGridCell = 31
+    SearchAndSelectGridCell = 31,
+    WaitUntilProgressAtLeast = 32,
+    WaitUntilListBoxContains = 33,
+    WaitUntilHasItemsAtLeast = 34,
+    WaitUntilNotificationContains = 35,
+    SetDateRangeFilter = 36,
+    SetNumericRangeFilter = 37,
+    SelectExportFolder = 38,
+    EditGridCellText = 39,
+    EditGridCellNumber = 40,
+    EditGridCellDate = 41,
+    SelectGridCellComboItem = 42
 }
 
 public enum RecorderAssertionMode
@@ -83,6 +94,11 @@ internal sealed record RecordedStep(
     int? RowIndex = null,
     int? ColumnIndex = null,
     string? ItemValue = null,
+    DateTime? SecondDateValue = null,
+    double? SecondDoubleValue = null,
+    FilterPopupCommitMode? FilterCommitMode = null,
+    FolderExportCommitMode? FolderExportCommitMode = null,
+    GridCellEditCommitMode? GridCellEditCommitMode = null,
     IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null);
 
 internal enum RecorderRuntimeValidationTarget

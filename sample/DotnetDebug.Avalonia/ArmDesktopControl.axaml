@@ -38,7 +38,8 @@
             </StackPanel>
 
             <StackPanel Margin="8,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmSearchPicker">
               <TextBlock Text="Search picker" />
               <TextBox x:Name="ArmSearchInput"
                        Watermark="Search"
@@ -67,7 +68,8 @@
             </StackPanel>
 
             <StackPanel Margin="8,0,0,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmServerSearchPicker">
               <TextBlock Text="Server picker" />
               <TextBox x:Name="ArmServerPickerInput"
                        Watermark="Lookup"
@@ -210,7 +212,8 @@
           <UniformGrid Columns="4"
                        Rows="1">
             <StackPanel Margin="0,0,8,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmDateRangeFilter">
               <TextBlock Text="Date range" />
               <DatePicker x:Name="ArmDateRangeFrom"
                           automation:AutomationProperties.AutomationId="ArmDateRangeFrom" />
@@ -237,7 +240,8 @@
             </StackPanel>
 
             <StackPanel Margin="8,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmNumericRangeFilter">
               <TextBlock Text="Numeric range" />
               <TextBox x:Name="ArmNumericRangeFrom"
                        Text="10"
@@ -268,41 +272,48 @@
             <StackPanel Margin="8,0"
                         Spacing="6">
               <TextBlock Text="Dialog and notification" />
-              <Label x:Name="ArmDialogMessage"
-                     Content="Delete selected Arm record?"
-                     automation:AutomationProperties.AutomationId="ArmDialogMessage" />
-              <StackPanel Orientation="Horizontal"
-                          Spacing="6">
-                <Button x:Name="ArmDialogConfirmButton"
-                        Content="Confirm"
-                        Click="OnArmDialogConfirmClick"
-                        automation:AutomationProperties.AutomationId="ArmDialogConfirmButton" />
-                <Button x:Name="ArmDialogCancelButton"
-                        Content="Cancel"
-                        Click="OnArmDialogCancelClick"
-                        automation:AutomationProperties.AutomationId="ArmDialogCancelButton" />
-                <Button x:Name="ArmDialogDismissButton"
-                        Content="Dismiss"
-                        Click="OnArmDialogDismissClick"
-                        automation:AutomationProperties.AutomationId="ArmDialogDismissButton" />
+              <StackPanel Spacing="6"
+                          automation:AutomationProperties.AutomationId="ArmDialog">
+                <Label x:Name="ArmDialogMessage"
+                       Content="Delete selected Arm record?"
+                       automation:AutomationProperties.AutomationId="ArmDialogMessage" />
+                <StackPanel Orientation="Horizontal"
+                            Spacing="6">
+                  <Button x:Name="ArmDialogConfirmButton"
+                          Content="Confirm"
+                          Click="OnArmDialogConfirmClick"
+                          automation:AutomationProperties.AutomationId="ArmDialogConfirmButton" />
+                  <Button x:Name="ArmDialogCancelButton"
+                          Content="Cancel"
+                          Click="OnArmDialogCancelClick"
+                          automation:AutomationProperties.AutomationId="ArmDialogCancelButton" />
+                  <Button x:Name="ArmDialogDismissButton"
+                          Content="Dismiss"
+                          Click="OnArmDialogDismissClick"
+                          automation:AutomationProperties.AutomationId="ArmDialogDismissButton" />
+                </StackPanel>
+                <Label x:Name="ArmDialogResultLabel"
+                       Content="Dialog idle"
+                       automation:AutomationProperties.AutomationId="ArmDialogResultLabel" />
               </StackPanel>
-              <Label x:Name="ArmDialogResultLabel"
-                     Content="Dialog idle"
-                     automation:AutomationProperties.AutomationId="ArmDialogResultLabel" />
-              <Label x:Name="ArmNotificationText"
-                     Content="Export ready"
-                     automation:AutomationProperties.AutomationId="ArmNotificationText" />
-              <Button x:Name="ArmNotificationDismissButton"
-                      Content="Dismiss notification"
-                      Click="OnArmNotificationDismissClick"
-                      automation:AutomationProperties.AutomationId="ArmNotificationDismissButton" />
-              <Label x:Name="ArmNotificationStatusLabel"
-                     Content="Notification visible"
-                     automation:AutomationProperties.AutomationId="ArmNotificationStatusLabel" />
+              <StackPanel Spacing="6"
+                          automation:AutomationProperties.AutomationId="ArmNotification">
+                <Label x:Name="ArmNotificationText"
+                       Content="Export ready"
+                       automation:AutomationProperties.AutomationId="ArmNotificationText" />
+                <Button x:Name="ArmNotificationDismissButton"
+                        Content="Dismiss notification"
+                        Click="OnArmNotificationDismissClick"
+                        automation:AutomationProperties.AutomationId="ArmNotificationDismissButton" />
+                <Label x:Name="ArmNotificationStatusLabel"
+                       Content="Notification visible"
+                       automation:AutomationProperties.AutomationId="ArmNotificationStatusLabel" />
+              </StackPanel>
             </StackPanel>
 
             <StackPanel Margin="8,0,0,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmFolderExport">
               <TextBlock Text="Folder export" />
               <Button x:Name="ArmFolderExportOpenButton"
                       Content="Open folder"
@@ -341,7 +352,8 @@
                 RowDefinitions="Auto">
             <StackPanel Grid.Column="0"
                         Margin="0,0,8,0"
-                        Spacing="6">
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmShellNavigation">
               <ListBox x:Name="ArmShellNavigationList"
                        Height="96"
                        SelectionChanged="OnArmShellNavigationChanged"

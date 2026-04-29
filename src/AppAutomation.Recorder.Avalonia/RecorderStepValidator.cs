@@ -44,13 +44,23 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilIsToggled => source is ToggleButton and not CheckBox and not RadioButton,
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
             RecordedActionKind.WaitUntilIsEnabled => true,
+            RecordedActionKind.WaitUntilProgressAtLeast => source is ProgressBar,
+            RecordedActionKind.WaitUntilListBoxContains or RecordedActionKind.WaitUntilHasItemsAtLeast => source is ListBox,
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
+            RecordedActionKind.WaitUntilNotificationContains => true,
             RecordedActionKind.SearchAndSelect or RecordedActionKind.SearchAndSelectGridCell => true,
             RecordedActionKind.OpenGridRow
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd
                 or RecordedActionKind.CopyGridCell
                 or RecordedActionKind.ExportGrid => true,
+            RecordedActionKind.SetDateRangeFilter
+                or RecordedActionKind.SetNumericRangeFilter
+                or RecordedActionKind.SelectExportFolder
+                or RecordedActionKind.EditGridCellText
+                or RecordedActionKind.EditGridCellNumber
+                or RecordedActionKind.EditGridCellDate
+                or RecordedActionKind.SelectGridCellComboItem => true,
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog

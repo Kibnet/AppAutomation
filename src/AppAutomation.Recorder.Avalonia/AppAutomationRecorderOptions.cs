@@ -43,11 +43,19 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderGridSearchPickerHint> GridSearchPickerHints { get; } = new List<RecorderGridSearchPickerHint>();
 
+    public IList<RecorderGridEditHint> GridEditHints { get; } = new List<RecorderGridEditHint>();
+
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
+
+    public IList<RecorderDateRangeFilterHint> DateRangeFilterHints { get; } = new List<RecorderDateRangeFilterHint>();
+
+    public IList<RecorderNumericRangeFilterHint> NumericRangeFilterHints { get; } = new List<RecorderNumericRangeFilterHint>();
 
     public IList<RecorderDialogHint> DialogHints { get; } = new List<RecorderDialogHint>();
 
     public IList<RecorderNotificationHint> NotificationHints { get; } = new List<RecorderNotificationHint>();
+
+    public IList<RecorderFolderExportHint> FolderExportHints { get; } = new List<RecorderFolderExportHint>();
 
     public IList<RecorderShellNavigationHint> ShellNavigationHints { get; } = new List<RecorderShellNavigationHint>();
 
@@ -106,9 +114,34 @@ public sealed record RecorderGridSearchPickerHint(
     string? ColumnName = null,
     int? ColumnIndex = null);
 
+public sealed record RecorderGridEditHint(
+    string SourceLocatorValue,
+    string TargetGridLocatorValue,
+    string ValueLocatorValue,
+    int RowIndex,
+    int ColumnIndex,
+    GridCellEditorKind EditorKind = GridCellEditorKind.Text,
+    GridCellEditCommitMode CommitMode = GridCellEditCommitMode.Commit,
+    UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind TargetGridLocatorKind = UiLocatorKind.AutomationId,
+    UiLocatorKind ValueLocatorKind = UiLocatorKind.AutomationId,
+    bool TargetFallbackToName = false);
+
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderDateRangeFilterHint(
+    string LocatorValue,
+    DateRangeFilterParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderNumericRangeFilterHint(
+    string LocatorValue,
+    NumericRangeFilterParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 
@@ -121,6 +154,12 @@ public sealed record RecorderDialogHint(
 public sealed record RecorderNotificationHint(
     string LocatorValue,
     NotificationControlParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderFolderExportHint(
+    string LocatorValue,
+    FolderExportControlParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 

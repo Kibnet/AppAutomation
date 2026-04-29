@@ -363,9 +363,12 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TrySuppressCompositeWorkflowButtonClick(source))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(source);
-        FlushPendingTextIfSwitchingTo(control);
-        FlushPendingSliderIfSwitchingTo(control);
         if (TryRecordGridAction(control))
         {
             return;
@@ -376,6 +379,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        FlushPendingTextIfSwitchingTo(control);
+        FlushPendingSliderIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
     }
 
@@ -402,6 +407,20 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 ? RecorderValidationStatus.Warning
                 : RecorderValidationStatus.Valid;
         SetStatus(result.Message, status);
+        if (!result.Success)
+        {
+            var message = result.Diagnostics.Count == 0
+                ? result.Message
+                : $"{result.Message} {string.Join(" ", result.Diagnostics)}";
+            LogRecorderDiagnostic(
+                RecorderDiagnosticsEventIds.SaveFailed,
+                "Save",
+                source: null,
+                step: null,
+                findings: Array.Empty<RecorderRuntimeValidationFinding>(),
+                message);
+        }
+
         if (result.Success && result.ScenarioFilePath is not null)
         {
             _lastScenarioFilePath = result.ScenarioFilePath;
@@ -417,7 +436,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _window.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
         _window.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
         _window.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
-        _window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Bubble);
+        _window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
         _window.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
         _window.PropertyChanged += OnWindowPropertyChanged;
 
@@ -586,7 +605,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
         _pendingTextBox = textBox;
         RegisterKeyboardInput(textBox);
-        RestartTextDebounce();
+        RestartTextDebounceUnlessCompositeSelection(textBox);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -620,6 +639,15 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
     private void HandleRecorderCommand(RecorderCommandKind command)
     {
+        var focused = TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
+        LogRecorderDiagnostic(
+            RecorderDiagnosticsEventIds.CommandHandled,
+            $"Command:{command}",
+            focused,
+            step: null,
+            findings: Array.Empty<RecorderRuntimeValidationFinding>(),
+            message: null);
+
         switch (command)
         {
             case RecorderCommandKind.StartStop:
@@ -677,9 +705,12 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (TrySuppressCompositeWorkflowButtonClick(eventSource))
+        {
+            return;
+        }
+
         var control = ResolveButtonActionOwner(eventSource);
-        FlushPendingTextIfSwitchingTo(control);
-        FlushPendingSliderIfSwitchingTo(control);
         if (TryRecordGridAction(control))
         {
             return;
@@ -690,6 +721,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        FlushPendingTextIfSwitchingTo(control);
+        FlushPendingSliderIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? eventSource, "ButtonClick");
     }
 
@@ -704,6 +737,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private void RecordComboBoxSelection(ComboBox comboBox)
     {
         if (_state != RecorderSessionState.Recording || !WasRecentlyTriggeredByUser(comboBox))
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressCompositeSelection(comboBox))
         {
             return;
         }
@@ -773,6 +811,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (_stepFactory.ShouldSuppressCompositeSelection(listBox))
+        {
+            return;
+        }
+
         if (TryRecordSearchPickerSelection(listBox))
         {
             return;
@@ -827,11 +870,52 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         return source is not null && _stepFactory.ShouldSuppressSearchPickerButton(source);
     }
 
+    private bool TrySuppressCompositeWorkflowButtonClick(Control? source)
+    {
+        return source is not null && _stepFactory.ShouldSuppressCompositeWorkflowButton(source);
+    }
+
     private bool TryRecordCompositeButtonAction(Control? source)
     {
         if (source is null)
         {
             return false;
+        }
+
+        var gridEditResult = _stepFactory.TryCreateGridEditStep(source);
+        if (gridEditResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(gridEditResult, source, "GridEdit");
+            return true;
+        }
+
+        var dateRangeResult = _stepFactory.TryCreateDateRangeFilterStep(source);
+        if (dateRangeResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(dateRangeResult, source, "DateRangeFilter");
+            return true;
+        }
+
+        var numericRangeResult = _stepFactory.TryCreateNumericRangeFilterStep(source);
+        if (numericRangeResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(numericRangeResult, source, "NumericRangeFilter");
+            return true;
+        }
+
+        var folderExportResult = _stepFactory.TryCreateFolderExportStep(source);
+        if (folderExportResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(folderExportResult, source, "FolderExport");
+            return true;
         }
 
         var dialogResult = _stepFactory.TryCreateDialogActionStep(source);
@@ -890,6 +974,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return;
         }
 
+        if (_stepFactory.ShouldSuppressCompositeDateSelection(datePicker))
+        {
+            return;
+        }
+
         if (string.Equals(e.Property.Name, nameof(DatePicker.SelectedDate), StringComparison.Ordinal))
         {
             FlushPendingTextIfSwitchingTo(datePicker);
@@ -936,13 +1025,18 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         _pendingTextBox = textBox;
-        RestartTextDebounce();
+        RestartTextDebounceUnlessCompositeSelection(textBox);
     }
 
     private void OnTextBoxLostFocus(object? sender, RoutedEventArgs e)
     {
         if (sender is TextBox textBox && ReferenceEquals(textBox, _pendingTextBox))
         {
+            if (_stepFactory.ShouldRetainPendingTextForCompositeSelection(textBox))
+            {
+                return;
+            }
+
             FlushPendingText();
         }
     }
@@ -975,6 +1069,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         if (IsConfiguredGridSearchPickerTextBox(textBox))
         {
             return false;
+        }
+
+        if (_stepFactory.ShouldSuppressCompositeTextEntry(textBox))
+        {
+            return true;
         }
 
         return IsInsideConfiguredGrid(textBox);
@@ -1083,6 +1182,21 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     {
         _textDebounceTimer.Stop();
         _textDebounceTimer.Start();
+    }
+
+    private void RestartTextDebounceUnlessCompositeSelection(TextBox textBox)
+    {
+        _textDebounceTimer.Stop();
+        if (!_stepFactory.ShouldRetainPendingTextForCompositeSelection(textBox))
+        {
+            _textDebounceTimer.Start();
+        }
+    }
+
+    private void DiscardPendingText()
+    {
+        _textDebounceTimer.Stop();
+        _pendingTextBox = null;
     }
 
     private void CaptureAssertion(RecorderAssertionMode mode)
@@ -1364,8 +1478,14 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             step.BoolValue?.ToString() ?? string.Empty,
             step.DoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.DateValue?.ToString("O") ?? string.Empty,
+            step.SecondDoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.SecondDateValue?.ToString("O") ?? string.Empty,
             step.RowIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.ColumnIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.IntValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.FilterCommitMode?.ToString() ?? string.Empty,
+            step.FolderExportCommitMode?.ToString() ?? string.Empty,
+            step.GridCellEditCommitMode?.ToString() ?? string.Empty,
             step.CanPersist);
     }
 
@@ -1434,6 +1554,11 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
 
         if (control is not null && AreRelated(_pendingTextBox, control))
+        {
+            return;
+        }
+
+        if (control is not null && _stepFactory.IsCompositeSelectionPair(_pendingTextBox, control))
         {
             return;
         }

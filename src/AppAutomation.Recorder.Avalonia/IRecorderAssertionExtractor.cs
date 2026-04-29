@@ -15,4 +15,5 @@ public sealed record RecorderAssertionCandidate(
     bool? BoolValue = null,
     double? DoubleValue = null,
     DateTime? DateValue = null,
+    int? IntValue = null,
     string? Warning = null);
