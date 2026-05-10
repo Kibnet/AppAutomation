@@ -481,6 +481,7 @@ Design decisions for approval:
   - Removed a new nullable warning in `DesktopWindowPlacementService`.
   - Follow-up review fixes: recorder launch option cloning now preserves `WindowPlacement`; placement runtime smoke now skips on desktop sessions whose primary working area cannot fit the requested smoke geometry.
   - Centralized sample/template FlaUI defaults now use `DesktopMonitorSelector.LastAvailable`, so UI tests that call the shared launch host run on the last monitor in the stable order without per-test placement setup.
+  - Clarified and tested that central default placement omits `Size`, so the app's current outer size is preserved unless the caller passes an explicit size.
 - Verification:
   - `dotnet test --project .\tests\AppAutomation.TestHost.Avalonia.Tests\AppAutomation.TestHost.Avalonia.Tests.csproj --no-build` -> PASS, 15/15.
   - `dotnet run --project .\sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj --no-build -- --treenode-filter "/*/*/DesktopWindowPlacementTests/*" --no-progress --output Detailed --timeout 180s` -> PASS, 9/9.
@@ -502,6 +503,10 @@ Design decisions for approval:
     - `dotnet test --project .\sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj --no-build` -> PASS, 43/43.
     - First `dotnet test --solution .\AppAutomation.sln --no-build` attempt failed once in unrelated `AppAutomation.Recorder.Avalonia.Tests/Overlay_Attach_AppliesDarkPaletteResources` with Avalonia concurrent collection error; immediate recorder assembly rerun passed 68/68.
     - Repeated `dotnet test --solution .\AppAutomation.sln --no-build` -> PASS, 267/267.
+  - Explicit-size follow-up verification:
+    - `dotnet test --project .\sample\DotnetDebug.Tests\DotnetDebug.Tests.csproj` -> PASS, 21/21.
+    - `dotnet build .\sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj --no-restore` -> PASS.
+    - `dotnet run --project .\sample\DotnetDebug.AppAutomation.FlaUI.Tests\DotnetDebug.AppAutomation.FlaUI.Tests.csproj --no-build -- --treenode-filter "/*/*/DesktopWindowPlacementTests/*" --no-progress --output Detailed --timeout 180s` -> PASS.
 - Остаточные риски / follow-ups:
   - Existing dependency/analyzer warnings remain outside this change.
 
@@ -523,3 +528,4 @@ Design decisions for approval:
 | EXEC | Финальная проверка и post-EXEC review | 0.97 | Нет | Завершить задачу | Нет | Нет | Targeted tests, build tests, solution build and full solution tests passed; follow-up review findings were handled in the next EXEC step | `specs/2026-05-09-flaui-window-placement.md`, changed code/tests/docs |
 | EXEC | Follow-up review fixes | 0.96 | Нет | Завершить задачу | Нет | Да, пользователь подтвердил исправление review findings | Preserved `WindowPlacement` through recorder option cloning and made runtime placement smoke tolerant of small primary work areas; targeted and full FlaUI assembly checks passed | `sample/DotnetDebug.AppAutomation.FlaUI.Tests/Tests/DotnetDebugRecorderDesktopSmokeTests.cs`, `sample/DotnetDebug.AppAutomation.FlaUI.Tests/Tests/DesktopWindowPlacementTests.cs`, `src/AppAutomation.FlaUI/Session/DesktopWindowPlacementService.cs`, `specs/2026-05-09-flaui-window-placement.md` |
 | EXEC | Central last-monitor UI default | 0.95 | Нет | Завершить задачу | Нет | Да, пользователь попросил централизованно запускать UI tests on last available monitor | Added `DesktopMonitorSelector.LastAvailable`, resolved it in FlaUI using existing stable monitor ordering, and made sample/template desktop launch hosts use it as the central default while preserving per-call overrides | `src/AppAutomation.Session.Contracts/DesktopWindowPlacement.cs`, `src/AppAutomation.FlaUI/Session/DesktopWindowPlacementService.cs`, `sample/DotnetDebug.AppAutomation.TestHost/DotnetDebugAppLaunchHost.cs`, `src/AppAutomation.Templates/content/AppAutomation.Avalonia.Consumer/tests/SampleApp.AppAutomation.TestHost/SampleAppAppLaunchHost.cs`, `README.md`, tests |
+| EXEC | Explicit size invariant follow-up | 0.97 | Нет | Обновить PR branch | Нет | Да, пользователь уточнил поведение when caller does not pass explicit size | Added tests and README wording that central last-monitor placement does not set `Size`; resolver preserves current outer size unless caller passes explicit size | `sample/DotnetDebug.Tests/LaunchOptionsDefaultsTests.cs`, `sample/DotnetDebug.AppAutomation.FlaUI.Tests/Tests/DesktopWindowPlacementTests.cs`, `README.md`, `specs/2026-05-09-flaui-window-placement.md` |

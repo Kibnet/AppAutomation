@@ -148,6 +148,26 @@ public sealed class DesktopWindowPlacementTests
     }
 
     [Test]
+    public async Task ResolvePlacement_KeepsCurrentWindowSize_WhenNoExplicitSizeIsProvided()
+    {
+        var placement = new DesktopWindowPlacement
+        {
+            Monitor = DesktopMonitorSelector.LastAvailable
+        };
+
+        var result = DesktopWindowPlacementService.ResolvePlacement(
+            placement,
+            currentWindowBounds: new Rectangle(20, 30, 720, 540),
+            CreateMonitors());
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.TargetBounds.Size).IsEqualTo(new Size(720, 540));
+            await Assert.That(result.Monitor.DeviceName).IsEqualTo("DISPLAY2");
+        }
+    }
+
+    [Test]
     public async Task ResolvePlacement_RejectsUnknownEnumValues()
     {
         var placement = new DesktopWindowPlacement

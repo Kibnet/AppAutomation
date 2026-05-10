@@ -53,6 +53,7 @@ public class LaunchOptionsDefaultsTests
             await Assert.That(options.WindowPlacement).IsNotNull();
             await Assert.That(options.WindowPlacement!.Monitor).IsEqualTo(DesktopMonitorSelector.LastAvailable);
             await Assert.That(options.WindowPlacement.Anchor).IsEqualTo(DesktopWindowAnchor.Center);
+            await Assert.That(options.WindowPlacement.Size).IsNull();
         }
     }
 
