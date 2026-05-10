@@ -66,4 +66,18 @@ public sealed class DesktopAppLaunchOptions
     /// </summary>
     /// <value>The poll interval. Defaults to 200 milliseconds.</value>
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Gets the optional window placement to apply after the main window is discovered.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Placement is interpreted by desktop runtime adapters. The FlaUI adapter uses Windows desktop pixels
+    /// and applies the final rectangle before the launched session is returned to test code.
+    /// </para>
+    /// <para>
+    /// A <see langword="null"/> value preserves the adapter's existing launch behavior.
+    /// </para>
+    /// </remarks>
+    public DesktopWindowPlacement? WindowPlacement { get; init; }
 }

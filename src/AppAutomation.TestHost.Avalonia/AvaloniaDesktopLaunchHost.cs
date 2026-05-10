@@ -85,6 +85,7 @@ public static class AvaloniaDesktopLaunchHost
             MainWindowTimeout = launchOptions.MainWindowTimeout,
             PollInterval = launchOptions.PollInterval,
             Arguments = launchOptions.Arguments,
+            WindowPlacement = launchOptions.WindowPlacement,
             EnvironmentVariables = MergeEnvironmentVariables(
                 launchOptions.EnvironmentVariables,
                 scenarioTransport?.Context.ToEnvironmentVariables()),

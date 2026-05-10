@@ -1,3 +1,5 @@
+using AppAutomation.Session.Contracts;
+
 namespace AppAutomation.TestHost.Avalonia;
 
 public sealed class AvaloniaDesktopLaunchOptions
@@ -18,6 +20,8 @@ public sealed class AvaloniaDesktopLaunchOptions
 
     public IReadOnlyDictionary<string, string?> EnvironmentVariables { get; init; } =
         new Dictionary<string, string?>(StringComparer.Ordinal);
+
+    public DesktopWindowPlacement? WindowPlacement { get; init; }
 
     public bool UseIsolatedBuildOutput { get; init; }
 

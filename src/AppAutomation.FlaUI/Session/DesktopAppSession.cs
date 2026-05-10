@@ -83,6 +83,7 @@ public sealed class DesktopAppSession : IDisposable
                 throw new TimeoutException("Main window was not found within timeout.");
             }
 
+            DesktopWindowPlacementService.Apply(application, mainWindowResult.Result, options);
             WaitForAutomationTree(mainWindowResult.Result, options.MainWindowTimeout, options.PollInterval);
 
             var conditionFactory = new ConditionFactory(new UIA3PropertyLibrary());
