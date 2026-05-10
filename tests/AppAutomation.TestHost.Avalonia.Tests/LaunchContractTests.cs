@@ -358,6 +358,34 @@ public sealed class LaunchContractTests
     }
 
     [Test]
+    public async Task AvaloniaDesktopLaunchHost_CreateLaunchOptions_CopiesWindowPlacement()
+    {
+        using var workspace = TemporaryWorkspace.Create();
+        WriteFakeDesktopRepo(workspace.FullPath, includeExecutable: true, includeSource: false);
+
+        var descriptor = new AvaloniaDesktopAppDescriptor(
+            solutionFileNames: ["FakeDesktop.sln"],
+            desktopProjectRelativePaths: ["src\\FakeDesktop\\FakeDesktop.csproj"],
+            desktopTargetFramework: "net8.0",
+            executableName: "FakeDesktop.exe");
+        var placement = DesktopWindowPlacement.Centered(
+            DesktopMonitorSelector.FromIndex(1),
+            width: 1280,
+            height: 900);
+
+        var options = AvaloniaDesktopLaunchHost.CreateLaunchOptions(
+            descriptor,
+            new AvaloniaDesktopLaunchOptions
+            {
+                BuildBeforeLaunch = false,
+                WindowPlacement = placement
+            },
+            repositoryRoot: workspace.FullPath);
+
+        await Assert.That(options.WindowPlacement).IsEqualTo(placement);
+    }
+
+    [Test]
     public async Task AvaloniaDesktopLaunchHost_IsolatedBuildOutput_PreservesBuildOnceSemantics_AcrossLaunches()
     {
         using var workspace = TemporaryWorkspace.Create();

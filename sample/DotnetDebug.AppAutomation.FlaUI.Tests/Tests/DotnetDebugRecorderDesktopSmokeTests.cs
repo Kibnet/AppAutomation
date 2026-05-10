@@ -28,6 +28,10 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     public async Task RecorderLaunchOptionsMergeRecorderEnvironmentAndPreserveBaseOptions()
     {
         var disposeCalled = false;
+        var windowPlacement = DesktopWindowPlacement.Centered(
+            DesktopMonitorSelector.LastAvailable,
+            width: 800,
+            height: 600);
         var baseOptions = new DesktopAppLaunchOptions
         {
             ExecutablePath = Path.Combine(Path.GetTempPath(), "DotnetDebug.Avalonia.exe"),
@@ -39,7 +43,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             },
             DisposeCallback = () => disposeCalled = true,
             MainWindowTimeout = TimeSpan.FromSeconds(11),
-            PollInterval = TimeSpan.FromMilliseconds(123)
+            PollInterval = TimeSpan.FromMilliseconds(123),
+            WindowPlacement = windowPlacement
         };
 
         var options = CreateRecorderLaunchOptions(baseOptions, "ScenarioA", @"C:\Temp\RecorderOut");
@@ -52,6 +57,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             await Assert.That(options.Arguments).IsEqualTo(baseOptions.Arguments);
             await Assert.That(options.MainWindowTimeout).IsEqualTo(baseOptions.MainWindowTimeout);
             await Assert.That(options.PollInterval).IsEqualTo(baseOptions.PollInterval);
+            await Assert.That(options.WindowPlacement).IsEqualTo(windowPlacement);
             await Assert.That(options.EnvironmentVariables["EXISTING_VALUE"]).IsEqualTo("42");
             await Assert.That(options.EnvironmentVariables[RecorderEnabledEnvironmentVariable]).IsEqualTo("1");
             await Assert.That(options.EnvironmentVariables[RecorderScenarioEnvironmentVariable]).IsEqualTo("ScenarioA");
@@ -303,7 +309,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             EnvironmentVariables = environmentVariables,
             DisposeCallback = baseOptions.DisposeCallback,
             MainWindowTimeout = baseOptions.MainWindowTimeout,
-            PollInterval = baseOptions.PollInterval
+            PollInterval = baseOptions.PollInterval,
+            WindowPlacement = baseOptions.WindowPlacement
         };
     }
 
