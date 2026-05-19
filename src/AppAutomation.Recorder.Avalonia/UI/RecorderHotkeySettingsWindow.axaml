@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="AppAutomation.Recorder.Avalonia.UI.RecorderHotkeySettingsWindow"
+        Title="Recorder Hotkeys"
+        Width="560"
+        Height="520"
+        MinWidth="520"
+        MinHeight="420"
+        WindowStartupLocation="CenterOwner">
+    <Border Padding="16"
+            Background="{DynamicResource RecorderOverlayBackground}">
+        <Grid RowDefinitions="Auto,*,Auto,Auto"
+              RowSpacing="12">
+            <TextBlock Grid.Row="0"
+                       Text="Hotkeys"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource RecorderText}" />
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="HotkeyRowsPanel"
+                            Spacing="8" />
+            </ScrollViewer>
+
+            <TextBlock x:Name="ErrorText"
+                       Grid.Row="2"
+                       Foreground="{DynamicResource RecorderDanger}"
+                       TextWrapping="Wrap" />
+
+            <StackPanel Grid.Row="3"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="8">
+                <Button x:Name="ResetButton"
+                        Padding="10,4"
+                        Content="Reset defaults" />
+                <Button x:Name="CancelButton"
+                        Padding="10,4"
+                        Content="Cancel" />
+                <Button x:Name="SaveButton"
+                        Padding="10,4"
+                        Content="Save" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

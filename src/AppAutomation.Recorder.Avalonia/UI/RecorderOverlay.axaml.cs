@@ -19,6 +19,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _clearButton;
     private Button? _saveButton;
     private Button? _exportButton;
+    private Button? _settingsButton;
     private Button? _minimizeButton;
     private Button? _restoreButton;
     private Button? _copyDiagnosticLogPathButton;
@@ -63,7 +64,17 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_shortcutText is not null)
         {
             _shortcutText.IsVisible = options.Overlay.ShowShortcutLegend;
-            _shortcutText.Text = RecorderHotkeyMap.Create(options.Hotkeys).BuildLegend();
+            RefreshShortcutLegend();
+        }
+
+        if (_settingsButton is not null)
+        {
+            _settingsButton.IsEnabled = session is RecorderSession;
+        }
+
+        if (session is RecorderSession recorderSession)
+        {
+            recorderSession.HotkeysChanged += OnHotkeysChanged;
         }
 
         if (_exportButton is not null)
@@ -133,12 +144,18 @@ internal sealed partial class RecorderOverlay : UserControl
         Dispatcher.UIThread.Post(Refresh);
     }
 
+    private void OnHotkeysChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.UIThread.Post(RefreshShortcutLegend);
+    }
+
     private void InitializeControls()
     {
         _recordButton = this.FindControl<Button>("RecordButton");
         _clearButton = this.FindControl<Button>("ClearButton");
         _saveButton = this.FindControl<Button>("SaveButton");
         _exportButton = this.FindControl<Button>("ExportButton");
+        _settingsButton = this.FindControl<Button>("SettingsButton");
         _minimizeButton = this.FindControl<Button>("MinimizeButton");
         _restoreButton = this.FindControl<Button>("RestoreButton");
         _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
@@ -175,6 +192,11 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_exportButton is not null)
         {
             _exportButton.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
+        }
+
+        if (_settingsButton is not null)
+        {
+            _settingsButton.Click += OnSettingsClick;
         }
 
         if (_minimizeButton is not null)
@@ -227,6 +249,58 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         _ = await _session.SaveAsync();
+        Refresh();
+    }
+
+    private async void OnSettingsClick(object? sender, RoutedEventArgs e)
+    {
+        if (_session is not RecorderSession recorderSession || _options is null)
+        {
+            return;
+        }
+
+        var dialog = new RecorderHotkeySettingsWindow(recorderSession.HotkeySettings, _options.Hotkeys);
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        var result = owner is not null
+            ? await dialog.ShowDialog<RecorderHotkeySettingsWindowResult?>(owner)
+            : await ShowStandaloneDialogAsync(dialog);
+        if (result is null)
+        {
+            return;
+        }
+
+        var validation = result.Settings.Validate();
+        if (!validation.IsValid)
+        {
+            ShowSettingsError(validation.ErrorMessage);
+            return;
+        }
+
+        var store = new RecorderHotkeySettingsStore();
+        try
+        {
+            if (result.ResetToDefaults)
+            {
+                store.Reset();
+            }
+            else
+            {
+                await store.SaveAsync(result.Settings.CreateOverridesAgainst(_options.Hotkeys));
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            ShowSettingsError($"Hotkey settings were not saved: {exception.Message}");
+            return;
+        }
+
+        if (!recorderSession.TryApplyHotkeySettings(result.Settings, out var error))
+        {
+            ShowSettingsError(error ?? "Hotkey settings were not applied.");
+            return;
+        }
+
+        RefreshShortcutLegend();
         Refresh();
     }
 
@@ -297,6 +371,7 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_statusText is not null)
         {
             _statusText.Text = _session.LatestStatus;
+            _statusText.Foreground = GetBrush("RecorderMuted");
         }
 
         if (_minimizedStatusText is not null)
@@ -341,6 +416,36 @@ internal sealed partial class RecorderOverlay : UserControl
 
         RenderStepJournal();
         UpdateValidationBadge(_session.LatestValidationStatus);
+    }
+
+    private void RefreshShortcutLegend()
+    {
+        if (_shortcutText is null || _options is null)
+        {
+            return;
+        }
+
+        _shortcutText.IsVisible = _options.Overlay.ShowShortcutLegend;
+        _shortcutText.Text = _session is RecorderSession recorderSession
+            ? recorderSession.HotkeyMap.BuildLegend()
+            : RecorderHotkeyMap.Create(_options.Hotkeys).BuildLegend();
+    }
+
+    private void ShowSettingsError(string message)
+    {
+        if (_statusText is not null)
+        {
+            _statusText.Text = message;
+            _statusText.Foreground = GetBrush("RecorderDanger");
+        }
+    }
+
+    private static Task<RecorderHotkeySettingsWindowResult?> ShowStandaloneDialogAsync(RecorderHotkeySettingsWindow dialog)
+    {
+        var completion = new TaskCompletionSource<RecorderHotkeySettingsWindowResult?>();
+        dialog.Closed += (_, _) => completion.TrySetResult(dialog.Result);
+        dialog.Show();
+        return completion.Task;
     }
 
     private void RenderStepJournal()
