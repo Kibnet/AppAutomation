@@ -13,6 +13,7 @@ The following go into the local package folder:
 - `AppAutomation.Session.Contracts`
 - `AppAutomation.TUnit`
 - `AppAutomation.Avalonia.Headless`
+- `AppAutomation.Recorder.Avalonia`
 - `AppAutomation.FlaUI`
 - `AppAutomation.TestHost.Avalonia`
 - `AppAutomation.Tooling`
@@ -139,6 +140,7 @@ Publishing without these steps is not considered validated.
 - `AppAutomation.Session.Contracts`
 - `AppAutomation.TUnit`
 - `AppAutomation.Avalonia.Headless`
+- `AppAutomation.Recorder.Avalonia`
 - `AppAutomation.FlaUI`
 - `AppAutomation.TestHost.Avalonia`
 - `AppAutomation.Tooling`

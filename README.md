@@ -34,6 +34,7 @@ Supported baseline:
 | `AppAutomation.TUnit` | `net8.0+` |
 | `AppAutomation.TestHost.Avalonia` | `net8.0+` |
 | `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` |
+| `AppAutomation.Recorder.Avalonia` | `net8.0`, `net10.0` |
 | `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` |
 | `FlaUI` runtime | Windows only |
 | Template package | `dotnet new` |
@@ -355,6 +356,7 @@ tests/
 | `AppAutomation.TUnit` | `net8.0+` |
 | `AppAutomation.TestHost.Avalonia` | `net8.0+` |
 | `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` |
+| `AppAutomation.Recorder.Avalonia` | `net8.0`, `net10.0` |
 | `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` |
 | Среда выполнения `FlaUI` | только Windows |
 | Пакет шаблонов | `dotnet new` |

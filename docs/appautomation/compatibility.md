@@ -12,6 +12,7 @@
 | `AppAutomation.TUnit` | `net8.0+` | shared UI test base |
 | `AppAutomation.TestHost.Avalonia` | `net8.0`, `net10.0` | reusable Avalonia test-host helpers |
 | `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` | Avalonia headless runtime |
+| `AppAutomation.Recorder.Avalonia` | `net8.0`, `net10.0` | interactive Avalonia recorder |
 | `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` | Windows desktop runtime |
 | `AppAutomation.Tooling` | `.NET tool`, `net8.0` | command `appautomation` |
 | `AppAutomation.Templates` | `dotnet new` template package | canonical consumer topology |
@@ -59,6 +60,7 @@
 | `AppAutomation.TUnit` | `net8.0+` | общий базовый класс для UI тестов |
 | `AppAutomation.TestHost.Avalonia` | `net8.0`, `net10.0` | переиспользуемые вспомогательные классы `TestHost` для Avalonia |
 | `AppAutomation.Avalonia.Headless` | `net8.0`, `net10.0` | среда выполнения Avalonia Headless |
+| `AppAutomation.Recorder.Avalonia` | `net8.0`, `net10.0` | интерактивный recorder для Avalonia |
 | `AppAutomation.FlaUI` | `net8.0-windows7.0`, `net10.0-windows7.0` | настольная среда выполнения Windows |
 | `AppAutomation.Tooling` | `.NET tool`, `net8.0` | команда `appautomation` |
 | `AppAutomation.Templates` | пакет шаблонов `dotnet new` | стандартная структура репозитория-потребителя |

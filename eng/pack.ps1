@@ -24,6 +24,7 @@ $projects = @(
     "src\AppAutomation.TUnit\AppAutomation.TUnit.csproj",
     "src\AppAutomation.FlaUI\AppAutomation.FlaUI.csproj",
     "src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj",
+    "src\AppAutomation.Recorder.Avalonia\AppAutomation.Recorder.Avalonia.csproj",
     "src\AppAutomation.TestHost.Avalonia\AppAutomation.TestHost.Avalonia.csproj",
     "src\AppAutomation.Tooling\AppAutomation.Tooling.csproj",
     "src\AppAutomation.Templates\AppAutomation.Templates.csproj"

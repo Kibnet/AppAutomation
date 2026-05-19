@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-05-19
+
+### Fixed
+
+- Include `AppAutomation.Recorder.Avalonia` in release packaging so it is published to NuGet, GitHub Packages, and GitHub release assets.
+
 ## [2.1.0] - 2026-03-17
 
 ### Added

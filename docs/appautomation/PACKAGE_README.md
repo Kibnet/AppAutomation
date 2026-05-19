@@ -10,6 +10,7 @@ Packages:
 - `AppAutomation.Authoring`: source generator/analyzers for `[UiControl]`-based page objects.
 - `AppAutomation.TUnit`: `UiTestBase` and shared test helpers for `TUnit`.
 - `AppAutomation.Avalonia.Headless`: in-process Avalonia Headless runtime.
+- `AppAutomation.Recorder.Avalonia`: interactive Avalonia recorder that generates authoring partials.
 - `AppAutomation.FlaUI`: Windows desktop runtime on top of FlaUI.
 
 Recommended test-solution topology:
@@ -40,6 +41,7 @@ Full setup guide:
 - `AppAutomation.Authoring`: анализатор и генератор исходного кода для объектов страниц на основе `[UiControl]`.
 - `AppAutomation.TUnit`: `UiTestBase` и общие вспомогательные средства тестирования для `TUnit`.
 - `AppAutomation.Avalonia.Headless`: встроенная в процесс среда выполнения Avalonia Headless.
+- `AppAutomation.Recorder.Avalonia`: интерактивный recorder Avalonia, который генерирует authoring partials.
 - `AppAutomation.FlaUI`: настольная среда выполнения Windows поверх FlaUI.
 
 Рекомендуемая структура тестового решения:
