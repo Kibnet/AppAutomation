@@ -583,7 +583,8 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
 
         return requestedType == typeof(ISearchPickerControl)
-            && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
+            && (string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal)
+                || IsSearchInputPartDefinition(definition));
     }
 
     /// <inheritdoc />
@@ -625,6 +626,15 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             locatorValue,
             _parts.LocatorKind,
             _parts.FallbackToName);
+    }
+
+    private bool IsSearchInputPartDefinition(UiControlDefinition definition)
+    {
+        return definition.LocatorKind == _parts.LocatorKind
+            && string.Equals(
+                definition.LocatorValue.Trim(),
+                _parts.SearchInputLocator.Trim(),
+                StringComparison.Ordinal);
     }
 
     private sealed class SearchPickerControl : ISearchPickerControl

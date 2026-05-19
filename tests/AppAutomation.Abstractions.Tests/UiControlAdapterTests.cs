@@ -92,6 +92,41 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task SearchPickerAdapter_WithInputPartTarget_StillResolvesCompositeControl()
+    {
+        var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
+        var listBox = new FakeSelectableListBoxControl(
+            "OrderCustomerSearch_Results",
+            [
+                new FakeListBoxItem("Customer Alpha", "Customer Alpha"),
+                new FakeListBoxItem("Customer Beta", "Customer Beta")
+            ]);
+
+        var resolver = new FakeResolver(
+            ("OrderCustomerSearch_Input", searchInput),
+            ("OrderCustomerSearch_Results", listBox))
+            .WithSearchPicker(
+                "OrderCustomerSearch",
+                SearchPickerParts.ByAutomationIds(
+                    "OrderCustomerSearch_Input",
+                    "OrderCustomerSearch_Results",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new SearchPickerInputPartPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.OrderCustomerSearch_Input,
+            "alpha",
+            "Customer Alpha");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(searchInput.Text).IsEqualTo("alpha");
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Customer Alpha");
+            await Assert.That(page.OrderCustomerSearch_Input.SelectedItemText).IsEqualTo("Customer Alpha");
+        }
+    }
+
+    [Test]
     public async Task DateRangeFilterAdapter_OpensSetsDateValuesAndApplies()
     {
         var openButton = new FakeButtonControl("OpenCreatedAtFilterButton");
@@ -637,6 +672,16 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class SearchPickerInputPartPageDefinitions
+    {
+        public static UiControlDefinition OrderCustomerSearch_Input { get; } = new(
+            "OrderCustomerSearch_Input",
+            UiControlType.SearchPicker,
+            "OrderCustomerSearch_Input",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class SearchPickerPage : UiPage
     {
         public SearchPickerPage(IUiControlResolver resolver)
@@ -645,6 +690,17 @@ public sealed class UiControlAdapterTests
         }
 
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
+    }
+
+    private sealed class SearchPickerInputPartPage : UiPage
+    {
+        public SearchPickerInputPartPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl OrderCustomerSearch_Input =>
+            Resolve<ISearchPickerControl>(SearchPickerInputPartPageDefinitions.OrderCustomerSearch_Input);
     }
 
     public static class ProxyPageDefinitions
