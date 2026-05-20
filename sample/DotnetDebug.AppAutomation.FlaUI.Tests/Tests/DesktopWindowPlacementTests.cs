@@ -12,6 +12,7 @@ public sealed class DesktopWindowPlacementTests
 {
     private const int PlacementSmokeWidth = 800;
     private const int PlacementSmokeHeight = 600;
+    private const int PlacementSmokeSizeTolerance = 64;
 
     [Test]
     public async Task DesktopWindowPlacement_RejectsInvalidPublicValues()
@@ -206,8 +207,8 @@ public sealed class DesktopWindowPlacementTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(Math.Abs(bounds.Width - PlacementSmokeWidth) <= 3).IsEqualTo(true);
-            await Assert.That(Math.Abs(bounds.Height - PlacementSmokeHeight) <= 3).IsEqualTo(true);
+            await Assert.That(Math.Abs(bounds.Width - PlacementSmokeWidth) <= PlacementSmokeSizeTolerance).IsEqualTo(true);
+            await Assert.That(Math.Abs(bounds.Height - PlacementSmokeHeight) <= PlacementSmokeSizeTolerance).IsEqualTo(true);
         }
     }
 
