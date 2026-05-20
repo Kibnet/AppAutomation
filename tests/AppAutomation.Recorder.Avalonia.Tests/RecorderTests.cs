@@ -1253,6 +1253,350 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task HotkeySettings_RejectsDuplicateNormalizedGestures()
+    {
+        var settings = RecorderHotkeySettings.FromGestures(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "Ctrl+Alt+R",
+            [RecorderCommandKind.Save] = "Alt+Ctrl+R"
+        });
+
+        var result = settings.Validate();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.IsValid).IsEqualTo(false);
+            await Assert.That(result.ErrorMessage).Contains("multiple commands");
+            await Assert.That(result.ErrorMessage).Contains("Start/Stop");
+            await Assert.That(result.ErrorMessage).Contains("Save");
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettings_CreateEffective_IgnoresNullPersistedGestures()
+    {
+        var defaults = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var overrides = new RecorderHotkeySettings { Gestures = null! };
+
+        var settings = RecorderHotkeySettings.CreateEffective(defaults.Hotkeys, overrides);
+        var resolved = settings.ToMap().TryGetCommand(
+            Key.R,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var command);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolved).IsEqualTo(true);
+            await Assert.That(command).IsEqualTo(RecorderCommandKind.StartStop);
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettingsStore_PersistsOverridesInConfiguredFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hotkeys.json");
+        var store = new RecorderHotkeySettingsStore(path);
+        var settings = RecorderHotkeySettings.FromGestures(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "Alt+R",
+            [RecorderCommandKind.Save] = null
+        });
+
+        await store.SaveAsync(settings);
+        var loaded = await store.LoadAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(File.Exists(path)).IsEqualTo(true);
+            await Assert.That(loaded).IsNotNull();
+            await Assert.That(loaded!.Gestures[RecorderCommandKind.StartStop]).IsEqualTo("Alt+R");
+            await Assert.That(loaded.Gestures[RecorderCommandKind.Save]).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettingsStore_TryLoad_ReturnsErrorForCorruptJson()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hotkeys.json");
+        File.WriteAllText(path, "{ invalid json");
+        var store = new RecorderHotkeySettingsStore(path);
+
+        var loaded = store.TryLoad(out var settings, out var error);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(loaded).IsEqualTo(false);
+            await Assert.That(settings).IsNull();
+            await Assert.That(error).IsNotNull();
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_IgnoresInvalidPersistedHotkeys_AndReportsLoadError()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hotkeys.json");
+        File.WriteAllText(
+            path,
+            """
+            {
+              "Gestures": {
+                "StartStop": "Alt+R",
+                "Save": "Alt+R"
+              }
+            }
+            """);
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            options,
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            hotkeySettingsStore: new RecorderHotkeySettingsStore(path));
+
+        var invalidOverrideResolved = session.HotkeyMap.TryGetCommand(Key.R, KeyModifiers.Alt, out _);
+        var defaultResolved = session.HotkeyMap.TryGetCommand(
+            Key.R,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var defaultCommand);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(invalidOverrideResolved).IsEqualTo(false);
+            await Assert.That(defaultResolved).IsEqualTo(true);
+            await Assert.That(defaultCommand).IsEqualTo(RecorderCommandKind.StartStop);
+            await Assert.That(session.LatestStatus).Contains("User hotkey settings were ignored");
+            await Assert.That(session.LatestStatus).Contains("multiple commands");
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_ApplyHotkeySettings_UpdatesCommandMapImmediately()
+    {
+        var defaults = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var initialSettings = RecorderHotkeySettings.CreateEffective(defaults.Hotkeys, overrides: null);
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            defaults,
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            initialHotkeySettings: initialSettings);
+        var updatedSettings = RecorderHotkeySettings.FromGestures(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "Alt+R",
+            [RecorderCommandKind.Save] = "Ctrl+Shift+S"
+        });
+
+        var applied = session.TryApplyHotkeySettings(updatedSettings, out var error);
+        var oldResolved = session.HotkeyMap.TryGetCommand(Key.R, KeyModifiers.Control | KeyModifiers.Shift, out _);
+        var newResolved = session.HotkeyMap.TryGetCommand(Key.R, KeyModifiers.Alt, out var command);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(applied).IsEqualTo(true);
+            await Assert.That(error).IsNull();
+            await Assert.That(oldResolved).IsEqualTo(false);
+            await Assert.That(newResolved).IsEqualTo(true);
+            await Assert.That(command).IsEqualTo(RecorderCommandKind.StartStop);
+            await Assert.That(session.HotkeyMap.BuildLegend()).Contains("Alt+R: Start/Stop");
+        }
+    }
+
+    [Test]
+    public async Task Overlay_Attach_UsesRecorderSessionHotkeyMap_ForShortcutLegend()
+    {
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var settings = RecorderHotkeySettings.FromGestures(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "Alt+R",
+            [RecorderCommandKind.Save] = "Ctrl+Shift+S"
+        });
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            options,
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            initialHotkeySettings: settings);
+        var overlay = new RecorderOverlay();
+
+        overlay.Attach(session, options);
+
+        var shortcutText = overlay.FindControl<TextBlock>("ShortcutText");
+        var settingsButton = overlay.FindControl<Button>("SettingsButton");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(shortcutText).IsNotNull();
+            await Assert.That(shortcutText!.Text).Contains("Alt+R: Start/Stop");
+            await Assert.That(settingsButton).IsNotNull();
+            await Assert.That(settingsButton!.IsEnabled).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettingsWindow_CapturesShortcutGestures_AndClearsWithDelete()
+    {
+        var captured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.R,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var gesture);
+        var tabCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.Tab,
+            KeyModifiers.Control,
+            out var tabGesture);
+        var deleteWithModifierCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.Delete,
+            KeyModifiers.Control,
+            out var deleteWithModifierGesture);
+        var altLetterCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.None,
+            PhysicalKey.Z,
+            KeyModifiers.Alt,
+            out var altLetterGesture);
+        var systemAltLetterCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.System,
+            PhysicalKey.Z,
+            KeyModifiers.None,
+            out var systemAltLetterGesture);
+        var plainLetterCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.A,
+            PhysicalKey.A,
+            KeyModifiers.None,
+            out var plainLetterGesture);
+        var plainDigitCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.D1,
+            PhysicalKey.Digit1,
+            KeyModifiers.None,
+            out var plainDigitGesture);
+        var cyrillicLayoutCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.None,
+            PhysicalKey.F,
+            KeyModifiers.Control,
+            out var cyrillicLayoutGesture);
+        var modifierOnlyCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.LeftCtrl,
+            KeyModifiers.Control,
+            out var modifierOnlyGesture);
+        var noneCaptured = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.None,
+            KeyModifiers.Control,
+            out var noneGesture);
+        var cleared = RecorderHotkeySettingsWindow.TryCaptureShortcut(
+            Key.Delete,
+            KeyModifiers.None,
+            out var clearedGesture);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsEqualTo(true);
+            await Assert.That(gesture).IsEqualTo("Ctrl+Shift+R");
+            await Assert.That(tabCaptured).IsEqualTo(true);
+            await Assert.That(tabGesture).IsEqualTo("Ctrl+Tab");
+            await Assert.That(deleteWithModifierCaptured).IsEqualTo(true);
+            await Assert.That(deleteWithModifierGesture).IsEqualTo("Ctrl+Delete");
+            await Assert.That(altLetterCaptured).IsEqualTo(true);
+            await Assert.That(altLetterGesture).IsEqualTo("Alt+Z");
+            await Assert.That(systemAltLetterCaptured).IsEqualTo(true);
+            await Assert.That(systemAltLetterGesture).IsEqualTo("Alt+Z");
+            await Assert.That(plainLetterCaptured).IsEqualTo(true);
+            await Assert.That(plainLetterGesture).IsEqualTo("A");
+            await Assert.That(plainDigitCaptured).IsEqualTo(true);
+            await Assert.That(plainDigitGesture).IsEqualTo("1");
+            await Assert.That(cyrillicLayoutCaptured).IsEqualTo(true);
+            await Assert.That(cyrillicLayoutGesture).IsEqualTo("Ctrl+F");
+            await Assert.That(modifierOnlyCaptured).IsEqualTo(false);
+            await Assert.That(modifierOnlyGesture).IsNull();
+            await Assert.That(noneCaptured).IsEqualTo(false);
+            await Assert.That(noneGesture).IsNull();
+            await Assert.That(cleared).IsEqualTo(true);
+            await Assert.That(clearedGesture).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task HotkeyMap_MatchesPhysicalQwertyKeys_ForLayoutIndependentShortcuts()
+    {
+        var map = RecorderHotkeyMap.Create(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "Alt+Z",
+            [RecorderCommandKind.Save] = "1"
+        });
+
+        var altResolved = map.TryGetCommand(
+            Key.None,
+            PhysicalKey.Z,
+            KeyModifiers.Alt,
+            out var altCommand);
+        var digitResolved = map.TryGetCommand(
+            Key.None,
+            PhysicalKey.Digit1,
+            KeyModifiers.None,
+            out var digitCommand);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(altResolved).IsEqualTo(true);
+            await Assert.That(altCommand).IsEqualTo(RecorderCommandKind.StartStop);
+            await Assert.That(digitResolved).IsEqualTo(true);
+            await Assert.That(digitCommand).IsEqualTo(RecorderCommandKind.Save);
+            await Assert.That(map.BuildLegend()).Contains("Alt+Z: Start/Stop");
+            await Assert.That(map.BuildLegend()).Contains("1: Save");
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettingsWindow_CapturesTextInput_ForPlainLettersDigitsAndSymbols()
+    {
+        var letterCaptured = RecorderShortcut.TryCreateFromText("a", out var letter);
+        var digitCaptured = RecorderShortcut.TryCreateFromText("1", out var digit);
+        var dashCaptured = RecorderShortcut.TryCreateFromText("-", out var dash);
+        var slashCaptured = RecorderShortcut.TryCreateFromText("/", out var slash);
+        var bangCaptured = RecorderShortcut.TryCreateFromText("!", out var bang);
+        var cyrillicCaptured = RecorderShortcut.TryCreateFromText("ф", out var cyrillic);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(letterCaptured).IsEqualTo(true);
+            await Assert.That(letter.NormalizedText).IsEqualTo("A");
+            await Assert.That(digitCaptured).IsEqualTo(true);
+            await Assert.That(digit.NormalizedText).IsEqualTo("1");
+            await Assert.That(dashCaptured).IsEqualTo(true);
+            await Assert.That(dash.NormalizedText).IsEqualTo("-");
+            await Assert.That(slashCaptured).IsEqualTo(true);
+            await Assert.That(slash.NormalizedText).IsEqualTo("/");
+            await Assert.That(bangCaptured).IsEqualTo(true);
+            await Assert.That(bang.NormalizedText).IsEqualTo("Shift+1");
+            await Assert.That(cyrillicCaptured).IsEqualTo(true);
+            await Assert.That(cyrillic.NormalizedText).IsEqualTo("A");
+        }
+    }
+
+    [Test]
+    public async Task HotkeyMap_ParsesSymbolGestures_ForRuntimeMatching()
+    {
+        var map = RecorderHotkeyMap.Create(new Dictionary<RecorderCommandKind, string?>
+        {
+            [RecorderCommandKind.StartStop] = "/",
+            [RecorderCommandKind.Save] = "Shift+1"
+        });
+
+        var slashResolved = map.TryGetCommand(Key.OemQuestion, KeyModifiers.None, out var slashCommand);
+        var bangResolved = map.TryGetCommand(Key.D1, KeyModifiers.Shift, out var bangCommand);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(slashResolved).IsEqualTo(true);
+            await Assert.That(slashCommand).IsEqualTo(RecorderCommandKind.StartStop);
+            await Assert.That(bangResolved).IsEqualTo(true);
+            await Assert.That(bangCommand).IsEqualTo(RecorderCommandKind.Save);
+            await Assert.That(map.BuildLegend()).Contains("/: Start/Stop");
+            await Assert.That(map.BuildLegend()).Contains("Shift+1: Save");
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_CapturesTextFromLateAttachedObservedControls()
     {
         var root = new StackPanel();

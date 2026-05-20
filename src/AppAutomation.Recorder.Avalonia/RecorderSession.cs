@@ -35,7 +35,8 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private readonly DispatcherTimer _sliderDebounceTimer;
     private readonly DispatcherTimer? _observationTimer;
     private readonly AppAutomationRecorderOptions _options;
-    private readonly RecorderHotkeyMap _hotkeyMap;
+    private RecorderHotkeyMap _hotkeyMap;
+    private RecorderHotkeySettings _hotkeySettings;
     private readonly Func<Control?> _validationRootProvider;
     private readonly object _operationSync = new();
 
@@ -68,14 +69,19 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         AppAutomationRecorderOptions options,
         Func<Control?>? validationRootProvider,
         bool attachWindowHandlers,
-        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? saveOperation = null)
+        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? saveOperation = null,
+        RecorderHotkeySettings? initialHotkeySettings = null,
+        RecorderHotkeySettingsStore? hotkeySettingsStore = null)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _validationRootProvider = validationRootProvider ?? (() => window.Content as Control);
         _logger = options.Logger ?? NullLogger.Instance;
         _hasConfiguredLogger = options.Logger is not null;
-        _hotkeyMap = RecorderHotkeyMap.Create(options.Hotkeys);
+        string? hotkeySettingsLoadError = null;
+        _hotkeySettings = initialHotkeySettings
+            ?? LoadEffectiveHotkeySettings(options, hotkeySettingsStore ?? new RecorderHotkeySettingsStore(), out hotkeySettingsLoadError);
+        _hotkeyMap = _hotkeySettings.ToMap();
         _stepFactory = new RecorderStepFactory(options, _validationRootProvider);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
         _stepValidator = new RecorderStepValidator();
@@ -103,7 +109,9 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         };
         _sliderDebounceTimer.Tick += (_, _) => FlushPendingSlider();
 
-        LatestStatus = "Recorder attached. Use configured hotkeys or overlay controls to start.";
+        LatestStatus = hotkeySettingsLoadError is null
+            ? "Recorder attached. Use configured hotkeys or overlay controls to start."
+            : $"Recorder attached. User hotkey settings were ignored: {hotkeySettingsLoadError}";
         if (attachWindowHandlers)
         {
             AttachHandlers();
@@ -117,11 +125,34 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         }
     }
 
+    private static RecorderHotkeySettings LoadEffectiveHotkeySettings(
+        AppAutomationRecorderOptions options,
+        RecorderHotkeySettingsStore store,
+        out string? loadError)
+    {
+        if (!store.TryLoad(out var overrides, out loadError))
+        {
+            return RecorderHotkeySettings.CreateEffective(options.Hotkeys, overrides: null);
+        }
+
+        var effective = RecorderHotkeySettings.CreateEffective(options.Hotkeys, overrides);
+        var validation = effective.Validate();
+        if (validation.IsValid)
+        {
+            return effective;
+        }
+
+        loadError = $"Invalid hotkey settings: {validation.ErrorMessage}";
+        return RecorderHotkeySettings.CreateEffective(options.Hotkeys, overrides: null);
+    }
+
     public event EventHandler? SessionChanged;
 
     internal event EventHandler? OverlayToggleRequested;
 
     internal event EventHandler? ExportRequested;
+
+    internal event EventHandler? HotkeysChanged;
 
     public RecorderSessionState State => _state;
 
@@ -156,6 +187,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     public IReadOnlyList<RecorderStepJournalEntry> StepJournal => _steps.Select(CreateJournalEntry).ToArray();
 
     public string CurrentScenarioFilePath => _lastScenarioFilePath ?? _defaultOutputDescription.ScenarioFilePathDisplay;
+
+    internal RecorderHotkeySettings HotkeySettings => _hotkeySettings;
+
+    internal RecorderHotkeyMap HotkeyMap => _hotkeyMap;
 
     public void Start()
     {
@@ -196,6 +231,25 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 ? $"Diagnostic log file enabled: {_diagnosticLogFilePath}"
                 : "Diagnostic log file disabled.",
             LatestValidationStatus);
+    }
+
+    internal bool TryApplyHotkeySettings(RecorderHotkeySettings hotkeySettings, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(hotkeySettings);
+
+        var validation = hotkeySettings.Validate();
+        if (!validation.IsValid)
+        {
+            error = validation.ErrorMessage;
+            return false;
+        }
+
+        _hotkeySettings = hotkeySettings;
+        _hotkeyMap = hotkeySettings.ToMap();
+        error = null;
+        SetStatus("Recorder hotkeys updated.", LatestValidationStatus);
+        HotkeysChanged?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     public string ExportPreview()
@@ -610,7 +664,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_hotkeyMap.TryGetCommand(e.Key, e.KeyModifiers, out var command))
+        if (_hotkeyMap.TryGetCommand(e.Key, e.PhysicalKey, e.KeyModifiers, out var command))
         {
             HandleRecorderCommand(command);
             e.Handled = true;
