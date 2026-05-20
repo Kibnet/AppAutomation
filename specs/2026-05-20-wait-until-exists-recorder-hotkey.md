@@ -379,16 +379,16 @@ Stop rules для test/retrieval/tool/validation loops:
 - Fixed before final report: blocking implementation findings отсутствуют.
 - Checks rerun:
   - `dotnet test --project tests/AppAutomation.Abstractions.Tests/AppAutomation.Abstractions.Tests.csproj -- --treenode-filter "/*/*/UiPageExtensionsTests/*"` -> PASS 34/34 after review fixes.
-  - `dotnet test --project tests/AppAutomation.Recorder.Avalonia.Tests/AppAutomation.Recorder.Avalonia.Tests.csproj -- --treenode-filter "/*/*/RecorderTests/*"` -> PASS 65/65.
+  - `dotnet test --project tests/AppAutomation.Recorder.Avalonia.Tests/AppAutomation.Recorder.Avalonia.Tests.csproj -- --treenode-filter "/*/*/RecorderTests/*"` -> PASS 76/76 after rebase onto master hotkey settings changes.
   - `dotnet test --project tests/AppAutomation.Recorder.Avalonia.Tests/AppAutomation.Recorder.Avalonia.Tests.csproj -- --treenode-filter "/*/*/RecorderFullCaptureCoverageTests/*"` -> PASS 5/5.
   - `dotnet build AppAutomation.sln` -> PASS, 0 errors, existing analyzer/NU1903 warnings.
   - `dotnet build sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Release` -> PASS, 0 errors, existing analyzer/NU1903 warnings.
-  - `dotnet test --project AppAutomation.sln` -> first sandbox run failed on NuGet `NU1301` TLS/credentials; escalated run before Release sample prerequisite failed in `sample/DotnetDebug.Tests` because Release executable was absent; final escalated run after prerequisite: 273/274 PASS, 1 unrelated FlaUI sample failure.
+  - `dotnet test --project AppAutomation.sln` -> pre-rebase final escalated run after Release sample prerequisite: 273/274 PASS, 1 unrelated FlaUI sample failure; post-rebase retry timed out after 10 minutes without useful stdout, residual `dotnet`/`DotnetDebug` processes were stopped.
   - `git diff --check` -> PASS, only line-ending normalization warnings.
-- Validation evidence: Targeted green and build green; full solution residual documented above.
+- Validation evidence: Targeted green and build green after rebase; full solution residual/timeout documented above.
 - Unrelated changes: None detected in tracked files outside expected scope. Generated SDK/tooling artifacts from local setup are ignored/not present in `git status --short`.
 - Needs human: Нет.
-- Residual risks / follow-ups: investigate existing `Hierarchy_SelectTreeItem_ShowsSelectionInResult` FlaUI timing/selection issue separately if full-suite green is required.
+- Residual risks / follow-ups: investigate existing `Hierarchy_SelectTreeItem_ShowsSelectionInResult` FlaUI timing/selection issue and post-rebase full-suite timeout separately if full-suite green is required.
 
 ## Approval
 Ожидается фраза: "Спеку подтверждаю"
@@ -410,3 +410,4 @@ Stop rules для test/retrieval/tool/validation loops:
 | EXEC | Post-EXEC review | 0.9 | Нет | Финальный отчёт | Нет | Нет | Дифф и evidence проверены; blocking findings по `WaitUntilExists`/recorder support не найдено; residual full-suite failure задокументирован | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `src/AppAutomation.Recorder.Avalonia/*`, `tests/*`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
 | EXEC | Review fix | 0.95 | Нет | Финальный отчёт | Нет | Да, пользователь попросил исправить finding | `WaitUntilExists` сделан generic по `TControl : class`, добавлен regression test на generated-style `IGridCellControl`; targeted abstractions 33/33 и solution build PASS | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `tests/AppAutomation.Abstractions.Tests/UiPageExtensionsTests.cs`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
 | EXEC | PR review fix | 0.95 | Нет | Запушить fix в PR | Нет | Да, пользователь попросил решить review comments | Учтён P1 reviewer comment: FlaUI `ElementNotAvailableException` теперь retryable при not-found markers; добавлен regression test; targeted abstractions 34/34 | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `tests/AppAutomation.Abstractions.Tests/UiPageExtensionsTests.cs`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
+| EXEC | Rebase on master | 0.9 | Full solution timeout root cause | Force-push rebased PR and report remaining work | Нет | Да, пользователь попросил rebase and reassessment | Rebased onto `origin/master`/`d213471`; master added hotkey settings dialog, so `CaptureAssertExists` was wired into `CreateGestureMap`; targeted checks and build PASS, full solution retry timed out after 10 minutes | `src/AppAutomation.Recorder.Avalonia/RecorderHotkeyMap.cs`, `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
