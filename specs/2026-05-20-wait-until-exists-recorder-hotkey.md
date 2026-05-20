@@ -84,7 +84,7 @@ Outcome contract:
   - Перехватывать и retry-ить только распознанные resolve failures со смыслом "элемент ещё не найден".
   - Type mismatch, bad selector, invalid cast, adapter/configuration errors и read failures, которые не являются not-found, fail fast через `UiOperationException` вместо ожидания timeout.
   - `IsRetryableResolveFailure(Exception ex)` contract:
-    - Retryable только `InvalidOperationException`, если message содержит один из existing not-found markers: `Unknown control`, `not found`, `cannot be found`, `was not found`.
+    - Retryable только known resolve failure exception (`InvalidOperationException` или FlaUI-compatible `ElementNotAvailableException` по имени типа), если message содержит один из existing not-found markers: `Unknown control`, `not found`, `cannot be found`, `was not found`.
     - Non-retryable: type mismatch marker `not of expected type`, `InvalidCastException`, `ArgumentException`, `NotSupportedException`, adapter/configuration failures и read failures без not-found marker.
     - `OperationCanceledException` всегда пробрасывается.
     - Message matching считается bounded compatibility approach из-за отсутствия typed not-found exception в текущем resolver API; typed exception можно рассмотреть отдельным future API change.
@@ -155,6 +155,7 @@ Acceptance Criteria:
 Какие тесты добавить/изменить:
 - `tests/AppAutomation.Abstractions.Tests/UiPageExtensionsTests.cs`
   - success when initially missing then appears
+  - success when FlaUI-style `ElementNotAvailableException` appears before the control resolves
   - compile/runtime regression for generated-style `IGridCellControl` property
   - timeout diagnostics when still missing
   - non-retryable resolve failure fails fast and does not wait until timeout
@@ -377,7 +378,7 @@ Stop rules для test/retrieval/tool/validation loops:
 
 - Fixed before final report: blocking implementation findings отсутствуют.
 - Checks rerun:
-  - `dotnet test --project tests/AppAutomation.Abstractions.Tests/AppAutomation.Abstractions.Tests.csproj -- --treenode-filter "/*/*/UiPageExtensionsTests/*"` -> PASS 33/33 after review fix.
+  - `dotnet test --project tests/AppAutomation.Abstractions.Tests/AppAutomation.Abstractions.Tests.csproj -- --treenode-filter "/*/*/UiPageExtensionsTests/*"` -> PASS 34/34 after review fixes.
   - `dotnet test --project tests/AppAutomation.Recorder.Avalonia.Tests/AppAutomation.Recorder.Avalonia.Tests.csproj -- --treenode-filter "/*/*/RecorderTests/*"` -> PASS 65/65.
   - `dotnet test --project tests/AppAutomation.Recorder.Avalonia.Tests/AppAutomation.Recorder.Avalonia.Tests.csproj -- --treenode-filter "/*/*/RecorderFullCaptureCoverageTests/*"` -> PASS 5/5.
   - `dotnet build AppAutomation.sln` -> PASS, 0 errors, existing analyzer/NU1903 warnings.
@@ -408,3 +409,4 @@ Stop rules для test/retrieval/tool/validation loops:
 | EXEC | Build and full validation | 0.85 | Полная suite имеет unrelated FlaUI residual | Выполнить post-EXEC review | Нет | Нет | Solution build зелёный; full test после Release sample prerequisite прошёл 273/274 и упал только в existing FlaUI sample hierarchy scenario, вне scope фичи | `AppAutomation.sln`, `sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj`, `sample/DotnetDebug.AppAutomation.FlaUI.Tests` |
 | EXEC | Post-EXEC review | 0.9 | Нет | Финальный отчёт | Нет | Нет | Дифф и evidence проверены; blocking findings по `WaitUntilExists`/recorder support не найдено; residual full-suite failure задокументирован | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `src/AppAutomation.Recorder.Avalonia/*`, `tests/*`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
 | EXEC | Review fix | 0.95 | Нет | Финальный отчёт | Нет | Да, пользователь попросил исправить finding | `WaitUntilExists` сделан generic по `TControl : class`, добавлен regression test на generated-style `IGridCellControl`; targeted abstractions 33/33 и solution build PASS | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `tests/AppAutomation.Abstractions.Tests/UiPageExtensionsTests.cs`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |
+| EXEC | PR review fix | 0.95 | Нет | Запушить fix в PR | Нет | Да, пользователь попросил решить review comments | Учтён P1 reviewer comment: FlaUI `ElementNotAvailableException` теперь retryable при not-found markers; добавлен regression test; targeted abstractions 34/34 | `src/AppAutomation.Abstractions/UiPageExtensions.cs`, `tests/AppAutomation.Abstractions.Tests/UiPageExtensionsTests.cs`, `specs/2026-05-20-wait-until-exists-recorder-hotkey.md` |

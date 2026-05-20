@@ -242,6 +242,26 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task WaitUntilExists_ReturnsPage_WhenFlaUiNotFoundExceptionAppearsThenResolves()
+    {
+        var label = new FakeLabelControl("ResultLabel", "Ready");
+        var resolver = new AppearingResolver(
+            "ResultLabel",
+            label,
+            failuresBeforeSuccess: 1,
+            propertyName => new ElementNotAvailableException($"Element with locator [AutomationId:{propertyName}] was not found."));
+        var page = new DiagnosticsPage(resolver);
+
+        var returnedPage = page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(resolver.ResolveAttempts).IsEqualTo(2);
+        }
+    }
+
+    [Test]
     public async Task WaitUntilExists_ReturnsPage_ForGeneratedGridCellControlProperty()
     {
         var cell = new FakeGridCellControl("EX-R1");
@@ -1121,12 +1141,19 @@ public sealed class UiPageExtensionsTests
         private readonly string _propertyName;
         private readonly object _control;
         private readonly int _failuresBeforeSuccess;
+        private readonly Func<string, Exception> _notFoundExceptionFactory;
 
-        public AppearingResolver(string propertyName, object control, int failuresBeforeSuccess)
+        public AppearingResolver(
+            string propertyName,
+            object control,
+            int failuresBeforeSuccess,
+            Func<string, Exception>? notFoundExceptionFactory = null)
         {
             _propertyName = propertyName;
             _control = control;
             _failuresBeforeSuccess = failuresBeforeSuccess;
+            _notFoundExceptionFactory = notFoundExceptionFactory
+                ?? (static propertyName => new InvalidOperationException($"Unknown control '{propertyName}'."));
         }
 
         public int ResolveAttempts { get; private set; }
@@ -1140,11 +1167,19 @@ public sealed class UiPageExtensionsTests
             if (!string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal)
                 || ResolveAttempts <= _failuresBeforeSuccess)
             {
-                throw new InvalidOperationException($"Unknown control '{definition.PropertyName}'.");
+                throw _notFoundExceptionFactory(definition.PropertyName);
             }
 
             return _control as TControl
                 ?? throw new InvalidOperationException($"Control '{definition.PropertyName}' is not of expected type.");
+        }
+    }
+
+    private sealed class ElementNotAvailableException : Exception
+    {
+        public ElementNotAvailableException(string message)
+            : base(message)
+        {
         }
     }
 

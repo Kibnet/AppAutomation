@@ -2455,7 +2455,7 @@ public static class UiPageExtensions
 
     private static bool IsRetryableResolveFailure(Exception exception)
     {
-        if (exception is not InvalidOperationException || string.IsNullOrWhiteSpace(exception.Message))
+        if (!IsKnownResolveFailureException(exception) || string.IsNullOrWhiteSpace(exception.Message))
         {
             return false;
         }
@@ -2469,6 +2469,12 @@ public static class UiPageExtensions
             || exception.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
             || exception.Message.Contains("cannot be found", StringComparison.OrdinalIgnoreCase)
             || exception.Message.Contains("was not found", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsKnownResolveFailureException(Exception exception)
+    {
+        return exception is InvalidOperationException
+            || string.Equals(exception.GetType().Name, "ElementNotAvailableException", StringComparison.Ordinal);
     }
 
     private static string DescribeResolvedControl<TControl>(TControl control)
