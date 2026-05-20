@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -19,6 +20,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 {
     private static readonly TimeSpan RecentInputWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ObservationRefreshInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly string[] DetachedContentPropertyNames = ["PopupContent", "Child", "Content"];
 
     private readonly Window _window;
     private readonly ILogger _logger;
@@ -565,15 +567,53 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             return controls;
         }
 
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        CollectObservableControls(root, controls, visited);
+
+        return controls;
+    }
+
+    private static void CollectObservableControls(
+        Control root,
+        ISet<Control> controls,
+        ISet<Control> visited)
+    {
         foreach (var control in root.GetVisualDescendants().OfType<Control>().Prepend(root))
         {
+            if (!visited.Add(control))
+            {
+                continue;
+            }
+
             if (IsObservableControl(control))
             {
                 controls.Add(control);
             }
-        }
 
-        return controls;
+            foreach (var detachedRoot in EnumerateDetachedContentRoots(control))
+            {
+                CollectObservableControls(detachedRoot, controls, visited);
+            }
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateDetachedContentRoots(Control control)
+    {
+        foreach (var propertyName in DetachedContentPropertyNames)
+        {
+            var property = control.GetType().GetProperty(
+                propertyName,
+                BindingFlags.Instance | BindingFlags.Public);
+            if (property is null || property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            if (property.GetValue(control) is Control contentRoot)
+            {
+                yield return contentRoot;
+            }
+        }
     }
 
     private Action AttachObservedControl(Control control)

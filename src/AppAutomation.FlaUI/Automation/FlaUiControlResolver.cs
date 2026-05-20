@@ -173,8 +173,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
         }
 
+        var detached = SearchDetachedProcessRootsByAutomationId(locatorValue);
+        if (detached is not null)
+        {
+            return detached;
+        }
+
         var normalized = locatorValue.Trim().ToLowerInvariant();
-        return _window.FindAllDescendants()
+        var descendant = _window.FindAllDescendants()
             .FirstOrDefault(candidate =>
             {
                 if (!candidate.IsAvailable)
@@ -185,6 +191,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 var automationId = TryRead(() => candidate.AutomationId)?.ToLowerInvariant();
                 return automationId is not null && (automationId == normalized || automationId.StartsWith(normalized, StringComparison.Ordinal));
             });
+
+        return descendant ?? SearchDetachedProcessRootsByAutomationIdPrefix(normalized);
     }
 
     private AutomationElement? SearchByName(string locatorValue)
@@ -195,8 +203,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
         }
 
+        var detached = SearchDetachedProcessRootsByName(locatorValue);
+        if (detached is not null)
+        {
+            return detached;
+        }
+
         var normalized = locatorValue.Trim().ToLowerInvariant();
-        return _window.FindAllDescendants()
+        var descendant = _window.FindAllDescendants()
             .FirstOrDefault(candidate =>
             {
                 if (!candidate.IsAvailable)
@@ -207,6 +221,124 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 var name = TryRead(() => candidate.Name)?.ToLowerInvariant();
                 return name is not null && (name == normalized || name.Contains(normalized, StringComparison.Ordinal));
             });
+
+        return descendant ?? SearchDetachedProcessRootsByNameContains(normalized);
+    }
+
+    private AutomationElement? SearchDetachedProcessRootsByAutomationId(string locatorValue)
+    {
+        foreach (var root in EnumerateDetachedProcessRoots())
+        {
+            var direct = TryRead(() => root.FindAllDescendants(factory => factory.ByAutomationId(locatorValue)))
+                ?? Array.Empty<AutomationElement>();
+            var match = direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private AutomationElement? SearchDetachedProcessRootsByName(string locatorValue)
+    {
+        foreach (var root in EnumerateDetachedProcessRoots())
+        {
+            var direct = TryRead(() => root.FindAllDescendants(factory => factory.ByName(locatorValue)))
+                ?? Array.Empty<AutomationElement>();
+            var match = direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private AutomationElement? SearchDetachedProcessRootsByAutomationIdPrefix(string normalizedLocatorValue)
+    {
+        foreach (var root in EnumerateDetachedProcessRoots())
+        {
+            var match = FindAutomationDescendants(root)
+                .FirstOrDefault(candidate =>
+                {
+                    if (!candidate.IsAvailable)
+                    {
+                        return false;
+                    }
+
+                    var automationId = TryRead(() => candidate.AutomationId)?.ToLowerInvariant();
+                    return automationId is not null
+                        && (automationId == normalizedLocatorValue || automationId.StartsWith(normalizedLocatorValue, StringComparison.Ordinal));
+                });
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private AutomationElement? SearchDetachedProcessRootsByNameContains(string normalizedLocatorValue)
+    {
+        foreach (var root in EnumerateDetachedProcessRoots())
+        {
+            var match = FindAutomationDescendants(root)
+                .FirstOrDefault(candidate =>
+                {
+                    if (!candidate.IsAvailable)
+                    {
+                        return false;
+                    }
+
+                    var name = TryRead(() => candidate.Name)?.ToLowerInvariant();
+                    return name is not null
+                        && (name == normalizedLocatorValue || name.Contains(normalizedLocatorValue, StringComparison.Ordinal));
+                });
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private AutomationElement[] EnumerateDetachedProcessRoots()
+    {
+        var processId = TryRead(() => _window.FrameworkAutomationElement.ProcessId.ValueOrDefault);
+        if (processId <= 0)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+
+        var desktop = TryRead(() => _window.Automation.GetDesktop());
+        if (desktop is null)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+
+        var windowHandle = TryRead(() => _window.FrameworkAutomationElement.NativeWindowHandle.ValueOrDefault);
+        var roots = TryRead(() => desktop.FindAllChildren(factory => factory.ByProcessId(processId)))
+            ?? Array.Empty<AutomationElement>();
+
+        return roots
+            .Where(candidate => candidate?.IsAvailable == true && !IsSameNativeWindow(candidate, windowHandle))
+            .ToArray();
+    }
+
+    private static bool IsSameNativeWindow(AutomationElement candidate, IntPtr windowHandle)
+    {
+        if (windowHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var candidateHandle = TryRead(() => candidate.FrameworkAutomationElement.NativeWindowHandle.ValueOrDefault);
+        return candidateHandle != IntPtr.Zero && candidateHandle == windowHandle;
     }
 
     private static T? TryRead<T>(Func<T> accessor)
@@ -390,7 +522,43 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void Invoke()
         {
-            Inner.Invoke();
+            if (Inner.Patterns.Toggle.IsSupported && IsOpenToggleButton(Inner))
+            {
+                var togglePattern = Inner.Patterns.Toggle.Pattern;
+                if (togglePattern.ToggleState.Value != ToggleState.On)
+                {
+                    togglePattern.Toggle();
+                }
+
+                return;
+            }
+
+            if (Inner.Patterns.Invoke.IsSupported)
+            {
+                Inner.Invoke();
+                return;
+            }
+
+            if (Inner.Patterns.Toggle.IsSupported)
+            {
+                Inner.Patterns.Toggle.Pattern.Toggle();
+                return;
+            }
+
+            Inner.Click();
+        }
+
+        private static bool IsOpenToggleButton(AutomationElement element)
+        {
+            return IsOpenToggleToken(TryRead(() => element.AutomationId))
+                || IsOpenToggleToken(TryRead(() => element.Name));
+        }
+
+        private static bool IsOpenToggleToken(string? value)
+        {
+            return !string.IsNullOrWhiteSpace(value)
+                && (value.EndsWith("OpenButton", StringComparison.OrdinalIgnoreCase)
+                    || value.Contains("PopupOpenButton", StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -425,7 +593,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public string? SelectedItemText => ReadSelectedText();
 
-        private IReadOnlyList<IListBoxItem> ReadItems()
+        private IListBoxItem[] ReadItems()
         {
             return GetSelectableItems()
                 .Select(candidate =>
@@ -455,12 +623,12 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
             }
 
-            if (TrySelect(candidate) && SelectionMatches(normalizedTarget))
+            if (TrySelect(candidate) && (SelectionMatches(normalizedTarget) || SelectionStateUnavailable()))
             {
                 return;
             }
 
-            if (TryClick(candidate) && SelectionMatches(normalizedTarget))
+            if (TryClick(candidate) && (SelectionMatches(normalizedTarget) || SelectionStateUnavailable()))
             {
                 return;
             }
@@ -487,7 +655,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 // Some providers do not expose direct list items.
             }
 
-            foreach (var candidate in Inner.FindAllDescendants())
+            foreach (var candidate in FindAutomationDescendants(Inner))
             {
                 if (candidate is null || candidate == Inner || items.Contains(candidate) || !IsListItemCandidate(candidate))
                 {
@@ -531,10 +699,31 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return true;
             }
 
-            return string.Equals(
-                NormalizeLookupText(ReadSelectedText()),
-                expectedText,
-                StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                return string.Equals(
+                    NormalizeLookupText(ReadSelectedText()),
+                    expectedText,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool SelectionStateUnavailable()
+        {
+            try
+            {
+                _ = Inner.IsAvailable;
+                _ = Inner.FindAllDescendants();
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         private static bool IsListItemCandidate(AutomationElement candidate)
@@ -714,15 +903,22 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
             var items = new List<AutomationElement>();
 
-            foreach (var item in Inner.Items)
+            try
             {
-                if (item is not null && !items.Contains(item))
+                foreach (var item in Inner.Items)
                 {
-                    items.Add(item);
+                    if (item is not null && !items.Contains(item))
+                    {
+                        items.Add(item);
+                    }
                 }
             }
+            catch
+            {
+                // Some providers do not expose direct combo box items.
+            }
 
-            foreach (var candidate in Inner.FindAllDescendants())
+            foreach (var candidate in FindAutomationDescendants(Inner))
             {
                 if (candidate is null || items.Contains(candidate) || !IsComboItemCandidate(candidate))
                 {
@@ -1624,7 +1820,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             // Ignore pattern access errors and continue with fallbacks.
         }
 
-        var textChild = element.FindAllDescendants()
+        var descendants = FindAutomationDescendants(element);
+        var textChild = descendants
             .FirstOrDefault(candidate => candidate.ControlType == ControlType.Text);
         if (textChild is not null)
         {
@@ -1635,7 +1832,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
-        var namedDescendant = element.FindAllDescendants()
+        var namedDescendant = descendants
             .Select(static candidate => TryRead(() => candidate.Name))
             .FirstOrDefault(IsUsefulAutomationText);
         if (!string.IsNullOrWhiteSpace(namedDescendant))

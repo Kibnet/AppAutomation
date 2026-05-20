@@ -92,6 +92,155 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task SearchPickerAdapter_SelectedItemText_DoesNotFallbackToSearchInputBeforeSelection()
+    {
+        var searchInput = new FakeTextBoxControl("HistoryFilterInput");
+        var expandButton = new FakeButtonControl("ExpandFilterButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "OperationResults",
+            new[]
+            {
+                new FakeListBoxItem("Least Common Multiple", "Least Common Multiple")
+            });
+
+        var resolver = new FakeResolver(
+            ("HistoryFilterInput", searchInput),
+            ("ExpandFilterButton", expandButton),
+            ("OperationResults", listBox))
+            .WithSearchPicker(
+                "HistoryOperationPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "HistoryFilterInput",
+                    "OperationResults",
+                    expandButtonAutomationId: "ExpandFilterButton",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new SearchPickerPage(resolver);
+        var picker = page.HistoryOperationPicker;
+
+        picker.Search("Least Common Multiple");
+
+        await Assert.That(picker.SelectedItemText).IsNull();
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_WaitsForDelayedListBackedResultsAfterExpand()
+    {
+        var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
+        var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
+        var listBox = new DelayedFakeSelectableListBoxControl(
+            "OrderCustomerSearch_Results",
+            expandButton,
+            [
+                new FakeListBoxItem("АЭРОСКАН ООО", "АЭРОСКАН ООО")
+            ]);
+
+        var resolver = new FakeResolver(
+            ("OrderCustomerSearch_Input", searchInput),
+            ("OrderCustomerSearch_OpenButton", expandButton),
+            ("OrderCustomerSearch_Results", listBox))
+            .WithSearchPicker(
+                "OrderCustomerSearch",
+                SearchPickerParts.ByAutomationIds(
+                    "OrderCustomerSearch_Input",
+                    "OrderCustomerSearch_Results",
+                    expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new OrderCustomerSearchPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.OrderCustomerSearch,
+            "АЭРОСКАН ООО",
+            "АЭРОСКАН ООО",
+            timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(searchInput.Text).IsEqualTo("АЭРОСКАН ООО");
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(listBox.ItemsReadCount >= 2).IsEqualTo(true);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_DefersDetachedListBackedResultsUntilExpand()
+    {
+        var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
+        var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "OrderCustomerSearch_Results",
+            [
+                new FakeListBoxItem("АЭРОСКАН ООО", "АЭРОСКАН ООО")
+            ]);
+
+        var innerResolver = new PopupResultsFakeResolver(
+            expandButton,
+            ("OrderCustomerSearch_Input", searchInput),
+            ("OrderCustomerSearch_OpenButton", expandButton),
+            ("OrderCustomerSearch_Results", listBox));
+        var resolver = innerResolver
+            .WithSearchPicker(
+                "OrderCustomerSearch",
+                SearchPickerParts.ByAutomationIds(
+                    "OrderCustomerSearch_Input",
+                    "OrderCustomerSearch_Results",
+                    expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new OrderCustomerSearchPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.OrderCustomerSearch,
+            "АЭРОСКАН ООО",
+            "АЭРОСКАН ООО",
+            timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(innerResolver.ResultsResolveAttemptsBeforeExpand).IsEqualTo(0);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_SelectItemDirectly_ExpandsDetachedListBackedResultsOnce()
+    {
+        var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
+        var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "OrderCustomerSearch_Results",
+            [
+                new FakeListBoxItem("АЭРОСКАН ООО", "АЭРОСКАН ООО")
+            ]);
+
+        var innerResolver = new PopupResultsFakeResolver(
+            expandButton,
+            ("OrderCustomerSearch_Input", searchInput),
+            ("OrderCustomerSearch_OpenButton", expandButton),
+            ("OrderCustomerSearch_Results", listBox));
+        var resolver = innerResolver
+            .WithSearchPicker(
+                "OrderCustomerSearch",
+                SearchPickerParts.ByAutomationIds(
+                    "OrderCustomerSearch_Input",
+                    "OrderCustomerSearch_Results",
+                    expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
+                    resultsKind: SearchPickerResultsKind.ListBox));
+        var page = new OrderCustomerSearchPage(resolver);
+
+        page.OrderCustomerSearch.Search("АЭРОСКАН ООО");
+        page.OrderCustomerSearch.SelectItem("АЭРОСКАН ООО");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(searchInput.Text).IsEqualTo("АЭРОСКАН ООО");
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(innerResolver.ResultsResolveAttemptsBeforeExpand).IsEqualTo(0);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+        }
+    }
+
+    [Test]
     public async Task SearchPickerAdapter_WithInputPartTarget_StillResolvesCompositeControl()
     {
         var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
@@ -682,6 +831,16 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class OrderCustomerSearchPageDefinitions
+    {
+        public static UiControlDefinition OrderCustomerSearch { get; } = new(
+            "OrderCustomerSearch",
+            UiControlType.SearchPicker,
+            "OrderCustomerSearch",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class SearchPickerPage : UiPage
     {
         public SearchPickerPage(IUiControlResolver resolver)
@@ -690,6 +849,17 @@ public sealed class UiControlAdapterTests
         }
 
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
+    }
+
+    private sealed class OrderCustomerSearchPage : UiPage
+    {
+        public OrderCustomerSearchPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl OrderCustomerSearch =>
+            Resolve<ISearchPickerControl>(OrderCustomerSearchPageDefinitions.OrderCustomerSearch);
     }
 
     private sealed class SearchPickerInputPartPage : UiPage
@@ -831,6 +1001,38 @@ public sealed class UiControlAdapterTests
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
+            return _controls.TryGetValue(definition.LocatorValue, out var control)
+                ? (control as TControl
+                    ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
+                : throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+        }
+    }
+
+    private sealed class PopupResultsFakeResolver : IUiControlResolver
+    {
+        private readonly FakeButtonControl _expandButton;
+        private readonly Dictionary<string, object> _controls;
+
+        public PopupResultsFakeResolver(FakeButtonControl expandButton, params (string LocatorValue, object Control)[] controls)
+        {
+            _expandButton = expandButton;
+            _controls = controls.ToDictionary(static entry => entry.LocatorValue, static entry => entry.Control, StringComparer.Ordinal);
+        }
+
+        public int ResultsResolveAttemptsBeforeExpand { get; private set; }
+
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
+
+        public TControl Resolve<TControl>(UiControlDefinition definition)
+            where TControl : class
+        {
+            if (string.Equals(definition.LocatorValue, "OrderCustomerSearch_Results", StringComparison.Ordinal)
+                && _expandButton.InvokeCount == 0)
+            {
+                ResultsResolveAttemptsBeforeExpand++;
+                throw new InvalidOperationException("Popup results are not attached before expand.");
+            }
+
             return _controls.TryGetValue(definition.LocatorValue, out var control)
                 ? (control as TControl
                     ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
@@ -1065,6 +1267,51 @@ public sealed class UiControlAdapterTests
         }
 
         public IReadOnlyList<IListBoxItem> Items { get; }
+
+        public string? SelectedItemText { get; private set; }
+
+        public void SelectItem(string itemText)
+        {
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var item = Items.FirstOrDefault(candidate =>
+                string.Equals(NormalizeLookupText(candidate.Text), normalizedTarget, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(NormalizeLookupText(candidate.Name), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"List item '{itemText}' was not found.");
+
+            SelectedItemText = item.Text ?? item.Name;
+        }
+    }
+
+    private sealed class DelayedFakeSelectableListBoxControl : FakeControlBase, ISelectableListBoxControl
+    {
+        private readonly FakeButtonControl _expandButton;
+        private readonly IReadOnlyList<IListBoxItem> _items;
+
+        public DelayedFakeSelectableListBoxControl(
+            string automationId,
+            FakeButtonControl expandButton,
+            IReadOnlyList<IListBoxItem> items)
+            : base(automationId)
+        {
+            _expandButton = expandButton;
+            _items = items;
+        }
+
+        public int ItemsReadCount { get; private set; }
+
+        public IReadOnlyList<IListBoxItem> Items
+        {
+            get
+            {
+                if (_expandButton.InvokeCount == 0)
+                {
+                    return Array.Empty<IListBoxItem>();
+                }
+
+                ItemsReadCount++;
+                return ItemsReadCount >= 2 ? _items : Array.Empty<IListBoxItem>();
+            }
+        }
 
         public string? SelectedItemText { get; private set; }
 

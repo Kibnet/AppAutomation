@@ -395,7 +395,7 @@ public static class UiPageExtensions
         Expression<Func<TSelf, ISearchPickerControl>> selector,
         string searchText,
         string itemText,
-        int timeoutMs = 5000)
+        int timeoutMs = 20000)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchText);
@@ -420,6 +420,17 @@ public static class UiPageExtensions
             $"Search picker '{searchPicker.AutomationId}' did not accept search text.",
             expectedValue: searchText,
             lastObservedValueFactory: () => searchPicker.SearchText);
+
+        searchPicker.Expand();
+        var expectedItem = NormalizeLookupText(itemText);
+        WaitUntil(
+            page,
+            selector,
+            () => searchPicker.Items.Any(item => string.Equals(NormalizeLookupText(item), expectedItem, StringComparison.OrdinalIgnoreCase)),
+            timeoutMs,
+            $"Search picker '{searchPicker.AutomationId}' did not show expected item.",
+            expectedValue: itemText,
+            lastObservedValueFactory: () => $"Items: [{string.Join(", ", searchPicker.Items)}]");
 
         searchPicker.SelectItem(itemText);
         WaitUntil(

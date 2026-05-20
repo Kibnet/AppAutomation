@@ -38,7 +38,7 @@ internal class AutomationElement
             switch (Control)
             {
                 case global::Avalonia.Controls.Primitives.ToggleButton toggleButton:
-                    toggleButton.IsChecked = !(toggleButton.IsChecked ?? false);
+                    InvokeButton(toggleButton);
                     break;
                 case global::Avalonia.Controls.Button button:
                     InvokeButton(button);
@@ -262,12 +262,18 @@ internal class AutomationElement
 
     protected static void InvokeButton(global::Avalonia.Controls.Button button)
     {
+        if (button is global::Avalonia.Controls.Primitives.ToggleButton toggleButton)
+        {
+            toggleButton.IsChecked = !(toggleButton.IsChecked ?? false);
+        }
+
         if (button.Command?.CanExecute(button.CommandParameter) == true)
         {
             button.Command.Execute(button.CommandParameter);
         }
 
         button.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
     }
 }
 
@@ -294,6 +300,7 @@ internal class TextBox : AutomationElement
         set => Ui(() =>
         {
             Native.Text = value;
+            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
             return true;
         });
     }
@@ -365,11 +372,16 @@ internal class ListBox : AutomationElement
 
     public ListBoxItem[] Items => Ui(() =>
     {
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         var values = ReadItems(Native.Items);
         return values.Select(item => new ListBoxItem(item)).ToArray();
     });
 
-    public string? SelectedItemText => Ui(() => Native.SelectedItem?.ToString());
+    public string? SelectedItemText => Ui(() =>
+    {
+        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        return Native.SelectedItem?.ToString();
+    });
 
     public void SelectItem(string itemText)
     {
@@ -377,6 +389,7 @@ internal class ListBox : AutomationElement
 
         Ui(() =>
         {
+            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
             var normalizedTarget = NormalizeLookupText(itemText);
             var values = ReadItems(Native.Items);
             var match = values.FirstOrDefault(candidate =>
@@ -390,6 +403,7 @@ internal class ListBox : AutomationElement
             }
 
             Native.SelectedItem = match;
+            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
             return true;
         });
     }

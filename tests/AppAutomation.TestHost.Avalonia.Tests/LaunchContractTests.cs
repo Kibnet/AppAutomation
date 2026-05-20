@@ -5,6 +5,7 @@ using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -314,6 +315,53 @@ public sealed class LaunchContractTests
 
         var updatedValue = page.ServerFilterEditor.Text;
         await Assert.That(updatedValue).IsEqualTo("Updated");
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessSearchPicker_ResolvesListResultsFromDetachedPopupContent()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(() => CreatePopupContentSearchPickerWindow(loadResultsOnToggle: false));
+        var page = new PopupSearchPickerPage(
+            new HeadlessControlResolver(window)
+                .WithSearchPicker(
+                    "OrderCustomerSearch",
+                    SearchPickerParts.ByAutomationIds(
+                        "OrderCustomerSearch_Input",
+                        "OrderCustomerSearch_Results",
+                        resultsKind: SearchPickerResultsKind.ListBox)));
+
+        page.SearchAndSelect(
+            static candidate => candidate.OrderCustomerSearch,
+            "АЭРОСКАН ООО",
+            "АЭРОСКАН ООО");
+
+        await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessSearchPicker_InvokesToggleExpandButtonBeforeResolvingListResults()
+    {
+        using var headless = StartHeadlessRuntime();
+        var window = HeadlessRuntime.Dispatch(() => CreatePopupContentSearchPickerWindow(loadResultsOnToggle: true));
+        var page = new PopupSearchPickerPage(
+            new HeadlessControlResolver(window)
+                .WithSearchPicker(
+                    "OrderCustomerSearch",
+                    SearchPickerParts.ByAutomationIds(
+                        "OrderCustomerSearch_Input",
+                        "OrderCustomerSearch_Results",
+                        expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
+                        resultsKind: SearchPickerResultsKind.ListBox)));
+
+        page.SearchAndSelect(
+            static candidate => candidate.OrderCustomerSearch,
+            "АЭРОСКАН ООО",
+            "АЭРОСКАН ООО");
+
+        await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
     }
 
     [Test]
@@ -653,6 +701,42 @@ Console.WriteLine("Fake desktop");
         return new Window { Content = wrapper };
     }
 
+    private static Window CreatePopupContentSearchPickerWindow(bool loadResultsOnToggle)
+    {
+        var root = new StackPanel();
+        var input = new TextBox();
+        AutomationProperties.SetAutomationId(input, "OrderCustomerSearch_Input");
+        root.Children.Add(input);
+
+        var resultItems = new[]
+        {
+            "АЭРОСКАН ООО",
+            "БЕТА ООО"
+        };
+        var results = new ListBox
+        {
+            ItemsSource = loadResultsOnToggle ? Array.Empty<string>() : resultItems
+        };
+        AutomationProperties.SetAutomationId(results, "OrderCustomerSearch_Results");
+
+        if (loadResultsOnToggle)
+        {
+            var expandButton = new ToggleButton();
+            AutomationProperties.SetAutomationId(expandButton, "OrderCustomerSearch_OpenButton");
+            expandButton.PropertyChanged += (_, args) =>
+            {
+                if (args.Property == ToggleButton.IsCheckedProperty && expandButton.IsChecked == true)
+                {
+                    global::Avalonia.Threading.Dispatcher.UIThread.Post(() => results.ItemsSource = resultItems);
+                }
+            };
+            root.Children.Add(expandButton);
+        }
+
+        root.Children.Add(new PopupContentHost { PopupContent = results });
+        return new Window { Content = root };
+    }
+
     private sealed record LaunchPayload(string UserName);
 
     private sealed class VisualGridPage : UiPage
@@ -691,6 +775,30 @@ Console.WriteLine("Fake desktop");
             "ServerFilterEditor",
             UiControlType.TextBox,
             "ServerFilterEditor");
+    }
+
+    private sealed class PopupSearchPickerPage : UiPage
+    {
+        public PopupSearchPickerPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl OrderCustomerSearch =>
+            Resolve<ISearchPickerControl>(PopupSearchPickerPageDefinitions.OrderCustomerSearch);
+    }
+
+    public static class PopupSearchPickerPageDefinitions
+    {
+        public static UiControlDefinition OrderCustomerSearch { get; } = new(
+            "OrderCustomerSearch",
+            UiControlType.SearchPicker,
+            "OrderCustomerSearch");
+    }
+
+    private sealed class PopupContentHost : Control
+    {
+        public object? PopupContent { get; init; }
     }
 
     private sealed class TestAvaloniaApp : global::Avalonia.Application
