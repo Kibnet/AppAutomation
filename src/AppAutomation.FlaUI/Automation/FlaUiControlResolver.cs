@@ -353,11 +353,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiControl : FlaUiControlBase<AutomationElement>
+    private sealed class FlaUiControl : FlaUiControlBase<AutomationElement>, IReadableTextControl
     {
         public FlaUiControl(AutomationElement inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
     }
 
     private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, ITextBoxControl
@@ -378,11 +380,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiButtonControl : FlaUiControlBase<Button>, IButtonControl
+    private sealed class FlaUiButtonControl : FlaUiControlBase<Button>, IButtonControl, IReadableTextControl
     {
         public FlaUiButtonControl(Button inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public void Invoke()
         {
@@ -396,10 +400,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
         }
 
-        public string Text => TryRead(() => Inner.Text) ?? Name;
+        public string Text => TryRead(() => Inner.Text) ?? ReadAutomationElementVisibleText(Inner) ?? string.Empty;
     }
 
-    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, ISelectableListBoxControl
+    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, ISelectableListBoxControl, IReadableTextControl
     {
         public FlaUiListBoxControl(ListBox inner) : base(inner)
         {
@@ -407,6 +411,17 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public IReadOnlyList<IListBoxItem> Items =>
             ReadItems();
+
+        public string Text
+        {
+            get
+            {
+                var selectedText = SelectedItemText;
+                return !string.IsNullOrWhiteSpace(selectedText)
+                    ? selectedText
+                    : string.Join(" ", Items.Select(static item => item.Text).Where(static text => !string.IsNullOrWhiteSpace(text)));
+            }
+        }
 
         public string? SelectedItemText => ReadSelectedText();
 
@@ -586,11 +601,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public string? Name { get; }
     }
 
-    private sealed class FlaUiCheckBoxControl : FlaUiControlBase<CheckBox>, ICheckBoxControl
+    private sealed class FlaUiCheckBoxControl : FlaUiControlBase<CheckBox>, ICheckBoxControl, IReadableTextControl
     {
         public FlaUiCheckBoxControl(CheckBox inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public bool? IsChecked
         {
@@ -599,7 +616,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiComboBoxControl : FlaUiControlBase<ComboBox>, IComboBoxControl
+    private sealed class FlaUiComboBoxControl : FlaUiControlBase<ComboBox>, IComboBoxControl, IReadableTextControl
     {
         public FlaUiComboBoxControl(ComboBox inner) : base(inner)
         {
@@ -623,6 +640,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return new FlaUiComboBoxTextItem(selectedText, selectedText);
             }
         }
+
+        public string Text => SelectedItem?.Text ?? string.Empty;
 
         public int SelectedIndex
         {
@@ -849,11 +868,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
     private sealed record FlaUiComboBoxTextItem(string Text, string Name) : IComboBoxItem;
 
-    private sealed class FlaUiRadioButtonControl : FlaUiControlBase<RadioButton>, IRadioButtonControl
+    private sealed class FlaUiRadioButtonControl : FlaUiControlBase<RadioButton>, IRadioButtonControl, IReadableTextControl
     {
         public FlaUiRadioButtonControl(RadioButton inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public bool? IsChecked
         {
@@ -862,11 +883,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiToggleButtonControl : FlaUiControlBase<ToggleButton>, IToggleButtonControl
+    private sealed class FlaUiToggleButtonControl : FlaUiControlBase<ToggleButton>, IToggleButtonControl, IReadableTextControl
     {
         public FlaUiToggleButtonControl(ToggleButton inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public bool IsToggled => TryRead(() => Inner.IsToggled) == true;
 
@@ -1060,11 +1083,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiTabItemControl : FlaUiControlBase<TabItem>, ITabItemControl
+    private sealed class FlaUiTabItemControl : FlaUiControlBase<TabItem>, ITabItemControl, IReadableTextControl
     {
         public FlaUiTabItemControl(TabItem inner) : base(inner)
         {
         }
+
+        public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public bool IsSelected => TryRead(() => Inner.IsSelected) == true;
 
@@ -1093,7 +1118,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiTreeItemControl : FlaUiControlBase<TreeItem>, ITreeItemControl
+    private sealed class FlaUiTreeItemControl : FlaUiControlBase<TreeItem>, ITreeItemControl, IReadableTextControl
     {
         private bool _selectedByInteraction;
 
@@ -1146,7 +1171,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
-        public string Text => TryRead(() => Inner.Text) ?? ReadAutomationElementText(Inner) ?? Name;
+        public string Text => TryRead(() => Inner.Text) ?? ReadAutomationElementVisibleText(Inner) ?? string.Empty;
 
         public IReadOnlyList<ITreeItemControl> Items =>
             Inner.Items.Select(item => (ITreeItemControl)new FlaUiTreeItemControl(item)).ToArray();
@@ -1620,6 +1645,51 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         var automationId = TryRead(() => element.AutomationId);
         return string.IsNullOrWhiteSpace(automationId) ? name : automationId;
+    }
+
+    private static string? ReadAutomationElementVisibleText(AutomationElement element)
+    {
+        if (element is null)
+        {
+            return null;
+        }
+
+        var name = TryRead(() => element.Name);
+        if (IsUsefulAutomationText(name))
+        {
+            return name;
+        }
+
+        try
+        {
+            if (element.Patterns.Value.IsSupported)
+            {
+                var value = element.Patterns.Value.Pattern.Value;
+                if (IsUsefulAutomationText(value))
+                {
+                    return value;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore pattern access errors and continue with text descendants.
+        }
+
+        var textChild = FindAutomationDescendants(element)
+            .FirstOrDefault(candidate => candidate.ControlType == ControlType.Text);
+        if (textChild is not null)
+        {
+            var textChildName = TryRead(() => textChild.Name);
+            if (IsUsefulAutomationText(textChildName))
+            {
+                return textChildName;
+            }
+        }
+
+        return FindAutomationDescendants(element)
+            .Select(static candidate => TryRead(() => candidate.Name))
+            .FirstOrDefault(IsUsefulAutomationText);
     }
 
     private static bool IsUsefulAutomationText(string? value)

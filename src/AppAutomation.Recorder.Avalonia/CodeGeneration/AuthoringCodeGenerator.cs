@@ -82,8 +82,14 @@ internal sealed class AuthoringCodeGenerator
             cancellationToken.ThrowIfCancellationRequested();
 
             var key = AuthoringProjectScanner.CreateControlKey(step.Control.LocatorKind, step.Control.LocatorValue);
-            if (!snapshot.ExistingControlsByKey.TryGetValue(key, out var controlInfo)
-                && !generatedControlsByKey.TryGetValue(key, out controlInfo))
+            var typedKey = CreateGeneratedControlKey(step.Control.LocatorKind, step.Control.LocatorValue, step.Control.ControlType);
+            var hasExistingControl = snapshot.ExistingControlsByKey.TryGetValue(key, out var existingControl);
+            ExistingControlInfo? controlInfo = null;
+            if (hasExistingControl && existingControl!.ControlType == step.Control.ControlType)
+            {
+                controlInfo = existingControl;
+            }
+            else if (!generatedControlsByKey.TryGetValue(typedKey, out controlInfo))
             {
                 var propertyName = RecorderNaming.EnsureUniqueName(step.Control.ProposedPropertyName, reservedPropertyNames);
                 controlInfo = new ExistingControlInfo(
@@ -92,8 +98,14 @@ internal sealed class AuthoringCodeGenerator
                     step.Control.LocatorValue,
                     step.Control.LocatorKind,
                     step.Control.FallbackToName);
-                generatedControlsByKey.Add(key, controlInfo);
+                generatedControlsByKey.Add(typedKey, controlInfo);
                 generatedControls.Add(controlInfo);
+
+                if (hasExistingControl)
+                {
+                    diagnostics.Add(
+                        $"Existing control '{existingControl!.PropertyName}' for locator '{step.Control.LocatorKind}:{step.Control.LocatorValue}' has incompatible UiControlType.{existingControl.ControlType}; generated '{propertyName}' as UiControlType.{step.Control.ControlType}.");
+                }
 
                 if (!string.Equals(propertyName, step.Control.ProposedPropertyName, StringComparison.Ordinal))
                 {
@@ -232,6 +244,11 @@ internal sealed class AuthoringCodeGenerator
         }
 
         return null;
+    }
+
+    private static string CreateGeneratedControlKey(UiLocatorKind locatorKind, string locatorValue, UiControlType controlType)
+    {
+        return $"{AuthoringProjectScanner.CreateControlKey(locatorKind, locatorValue)}:{controlType}";
     }
 
     private static AuthoringTargetConfiguration ResolveTargetConfiguration(

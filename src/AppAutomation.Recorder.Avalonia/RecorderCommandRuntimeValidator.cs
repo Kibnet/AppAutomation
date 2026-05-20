@@ -237,7 +237,28 @@ internal sealed class RecorderCommandRuntimeValidator
         foreach (var finding in ValidateControlType(
                      step,
                      target,
-                     [UiControlType.TextBox, UiControlType.Label, UiControlType.Button, UiControlType.AutomationElement]))
+                     [
+                         UiControlType.AutomationElement,
+                         UiControlType.TextBox,
+                         UiControlType.Label,
+                         UiControlType.Button,
+                         UiControlType.ListBox,
+                         UiControlType.CheckBox,
+                         UiControlType.ComboBox,
+                         UiControlType.RadioButton,
+                         UiControlType.ToggleButton,
+                         UiControlType.Tab,
+                         UiControlType.Tree,
+                         UiControlType.TreeItem,
+                         UiControlType.DataGridView,
+                         UiControlType.TabItem,
+                         UiControlType.Grid,
+                         UiControlType.SearchPicker,
+                         UiControlType.Dialog,
+                         UiControlType.Notification,
+                         UiControlType.FolderExport,
+                         UiControlType.ShellNavigation
+                     ]))
         {
             yield return finding;
         }

@@ -1215,6 +1215,33 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Waits until a control's visible text equals the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the control.</param>
+    /// <param name="expectedText">The expected text value.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control does not reach the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IUiControl>> selector,
+        string expectedText,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            ReadVisibleText,
+            text => string.Equals(text, expectedText, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            expectedText);
+    }
+
+    /// <summary>
     /// Waits until a label's text contains the expected text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1262,6 +1289,33 @@ public static class UiPageExtensions
             page,
             selector,
             static control => control.Text,
+            text => text.Contains(expectedPart, StringComparison.Ordinal),
+            timeoutMs,
+            "text",
+            $"Contains '{expectedPart}'");
+    }
+
+    /// <summary>
+    /// Waits until a control's visible text contains the expected text.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the control.</param>
+    /// <param name="expectedPart">The text that should appear in the control.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control does not contain the expected text within the timeout.</exception>
+    public static TSelf WaitUntilTextContains<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IUiControl>> selector,
+        string expectedPart,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return WaitUntilText(
+            page,
+            selector,
+            ReadVisibleText,
             text => text.Contains(expectedPart, StringComparison.Ordinal),
             timeoutMs,
             "text",
@@ -2322,6 +2376,70 @@ public static class UiPageExtensions
             expectedValue: expectedValue,
             lastObservedValueFactory: () => textAccessor(control));
         return page;
+    }
+
+    private static string ReadVisibleText(IUiControl control)
+    {
+        var text = control switch
+        {
+            ILabelControl label => label.Text,
+            ITextBoxControl textBox => textBox.Text,
+            IComboBoxControl comboBox => comboBox.SelectedItem?.Text ?? string.Empty,
+            ISelectableListBoxControl selectableListBox => FirstNonWhiteSpace(
+                selectableListBox.SelectedItemText,
+                JoinVisibleText(selectableListBox.Items.Select(static item => item.Text))),
+            IListBoxControl listBox => JoinVisibleText(listBox.Items.Select(static item => item.Text)),
+            ISearchPickerControl searchPicker => FirstNonWhiteSpace(
+                searchPicker.SelectedItemText,
+                searchPicker.SearchText,
+                JoinVisibleText(searchPicker.Items)),
+            INotificationControl notification => notification.Text,
+            IDialogControl dialog => dialog.MessageText,
+            IFolderExportControl export => FirstNonWhiteSpace(export.StatusText, export.SelectedFolderPath),
+            IShellNavigationControl shell => FirstNonWhiteSpace(
+                shell.ActivePaneName,
+                JoinVisibleText(shell.OpenPaneNames)),
+            ITreeItemControl treeItem => treeItem.Text,
+            ITreeControl tree => ReadTreeVisibleText(tree),
+            ITabControl tab => JoinVisibleText(tab.Items.Select(ReadTabItemVisibleText)),
+            IGridControl grid => ReadGridVisibleText(grid),
+            IReadableTextControl readable => readable.Text,
+            _ => null
+        };
+
+        return text ?? throw new InvalidOperationException(
+            $"Control '{control.AutomationId}' does not expose readable visible text in adapter contract.");
+    }
+
+    private static string? ReadTreeVisibleText(ITreeControl tree)
+    {
+        return FirstNonWhiteSpace(
+            tree.SelectedTreeItem is null ? null : ReadTreeItemVisibleText(tree.SelectedTreeItem),
+            JoinVisibleText(tree.Items.Select(ReadTreeItemVisibleText)));
+    }
+
+    private static string ReadTreeItemVisibleText(ITreeItemControl item)
+    {
+        var nestedText = JoinVisibleText(item.Items.Select(ReadTreeItemVisibleText));
+        return JoinVisibleText([item.Text, nestedText]);
+    }
+
+    private static string ReadTabItemVisibleText(ITabItemControl item)
+    {
+        return item is IReadableTextControl readable
+            ? readable.Text
+            : throw new InvalidOperationException(
+                $"Control '{item.AutomationId}' does not expose readable visible text in adapter contract.");
+    }
+
+    private static string ReadGridVisibleText(IGridControl grid)
+    {
+        return JoinVisibleText(grid.Rows.SelectMany(static row => row.Cells.Select(static cell => cell.Value)));
+    }
+
+    private static string JoinVisibleText(IEnumerable<string?> values)
+    {
+        return string.Join(" ", values.Where(static value => !string.IsNullOrWhiteSpace(value)));
     }
 
     private static void WaitUntil<TSelf, TControl>(

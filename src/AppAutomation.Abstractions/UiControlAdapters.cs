@@ -637,7 +637,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
                 StringComparison.Ordinal);
     }
 
-    private sealed class SearchPickerControl : ISearchPickerControl
+    private sealed class SearchPickerControl : ISearchPickerControl, IReadableTextControl
     {
         private readonly ITextBoxControl _searchInput;
         private readonly ISearchPickerResultsSurface _results;
@@ -673,6 +673,24 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         public string? SelectedItemText => _results.SelectedItemText;
 
         public IReadOnlyList<string> Items => _results.Items;
+
+        public string Text
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(SelectedItemText))
+                {
+                    return SelectedItemText!;
+                }
+
+                if (!string.IsNullOrWhiteSpace(SearchText))
+                {
+                    return SearchText;
+                }
+
+                return string.Join(" ", Items.Where(static item => !string.IsNullOrWhiteSpace(item)));
+            }
+        }
 
         public void Search(string value)
         {
@@ -1238,7 +1256,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         return new DialogControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class DialogControl : IDialogControl
+    private sealed class DialogControl : IDialogControl, IReadableTextControl
     {
         private readonly DialogControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1257,6 +1275,8 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         public bool IsEnabled => ResolveLabel("Message", _parts.MessageLocator).IsEnabled;
 
         public string MessageText => ResolveLabel("Message", _parts.MessageLocator).Text;
+
+        public string Text => MessageText;
 
         public void Complete(DialogActionKind actionKind = DialogActionKind.Confirm)
         {
@@ -1354,7 +1374,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         return new NotificationControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class NotificationControl : INotificationControl
+    private sealed class NotificationControl : INotificationControl, IReadableTextControl
     {
         private readonly NotificationControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1463,7 +1483,7 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
         return new FolderExportControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class FolderExportControl : IFolderExportControl
+    private sealed class FolderExportControl : IFolderExportControl, IReadableTextControl
     {
         private readonly FolderExportControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1486,6 +1506,10 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
         public string? StatusText => string.IsNullOrWhiteSpace(_parts.StatusLocator)
             ? null
             : ResolveLabel("Status", _parts.StatusLocator).Text;
+
+        public string Text => !string.IsNullOrWhiteSpace(StatusText)
+            ? StatusText!
+            : SelectedFolderPath ?? string.Empty;
 
         public void SelectFolder(string folderPath, FolderExportCommitMode commitMode = FolderExportCommitMode.Select)
         {
@@ -1593,7 +1617,7 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
         return new ShellNavigationControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class ShellNavigationControl : IShellNavigationControl
+    private sealed class ShellNavigationControl : IShellNavigationControl, IReadableTextControl
     {
         private readonly ShellNavigationParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1653,6 +1677,10 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
                 .Where(static value => !string.IsNullOrWhiteSpace(value))
                 .ToArray()
             ?? Array.Empty<string>();
+
+        public string Text => !string.IsNullOrWhiteSpace(ActivePaneName)
+            ? ActivePaneName!
+            : string.Join(" ", OpenPaneNames);
 
         public void OpenOrActivate(ShellPaneNavigationRequest request)
         {

@@ -995,7 +995,8 @@ internal sealed class RecorderStepFactory
         return control switch
         {
             TextBox => UiControlType.TextBox,
-            TextBlock or Label or Button => UiControlType.Label,
+            TextBlock or Label => UiControlType.Label,
+            _ when control is Button => ClassifyControlType(control),
             _ => null
         };
     }

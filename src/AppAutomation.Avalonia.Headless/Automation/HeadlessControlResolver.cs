@@ -301,7 +301,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     private static string? ReadVisualGridCellText(AutomationElement element)
     {
-        var directValue = TryRead(() => ReadVisualGridControlText(element.Control));
+        var directValue = TryRead(() => ReadControlVisibleText(element.Control));
         if (!string.IsNullOrWhiteSpace(directValue))
         {
             return directValue;
@@ -313,19 +313,27 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
 
         return element.FindAllDescendants()
-            .Select(static candidate => TryRead(() => ReadVisualGridControlText(candidate.Control)) ?? candidate.Name)
+            .Select(static candidate => TryRead(() => ReadControlVisibleText(candidate.Control)) ?? candidate.Name)
             .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name));
     }
 
-    private static string? ReadVisualGridControlText(global::Avalonia.Controls.Control control)
+    private static string? ReadControlVisibleText(global::Avalonia.Controls.Control control)
     {
         return control switch
         {
             global::Avalonia.Controls.TextBox textBox => textBox.Text,
             global::Avalonia.Controls.TextBlock textBlock => textBlock.Text,
             global::Avalonia.Controls.Label label => label.Content?.ToString(),
+            global::Avalonia.Controls.CheckBox checkBox => checkBox.Content?.ToString(),
+            global::Avalonia.Controls.RadioButton radioButton => radioButton.Content?.ToString(),
+            global::Avalonia.Controls.Primitives.ToggleButton toggleButton => toggleButton.Content?.ToString(),
+            global::Avalonia.Controls.Button button => button.Content?.ToString(),
             global::Avalonia.Controls.ComboBox comboBox => ReadComboBoxItemText(comboBox.SelectedItem),
             global::Avalonia.Controls.DatePicker datePicker => datePicker.SelectedDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            global::Avalonia.Controls.TabItem tabItem => tabItem.Header?.ToString(),
+            global::Avalonia.Controls.TreeViewItem treeViewItem => treeViewItem.Header?.ToString(),
+            global::Avalonia.Controls.Slider slider => slider.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            global::Avalonia.Controls.ProgressBar progressBar => progressBar.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
             _ => null
         };
     }
@@ -395,11 +403,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public bool IsEnabled => Inner.IsEnabled;
     }
 
-    private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>
+    private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>, IReadableTextControl
     {
         public HeadlessUiControl(AutomationElement inner) : base(inner)
         {
         }
+
+        public string Text => ReadControlVisibleText(Inner.Control) ?? string.Empty;
     }
 
     private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, ITextBoxControl
@@ -420,11 +430,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessButtonControl : HeadlessControlBase<Button>, IButtonControl
+    private sealed class HeadlessButtonControl : HeadlessControlBase<Button>, IButtonControl, IReadableTextControl
     {
         public HeadlessButtonControl(Button inner) : base(inner)
         {
         }
+
+        public string Text => Inner.Text;
 
         public void Invoke()
         {
@@ -472,11 +484,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public string? Name => _inner.Name;
     }
 
-    private sealed class HeadlessCheckBoxControl : HeadlessControlBase<CheckBox>, ICheckBoxControl
+    private sealed class HeadlessCheckBoxControl : HeadlessControlBase<CheckBox>, ICheckBoxControl, IReadableTextControl
     {
         public HeadlessCheckBoxControl(CheckBox inner) : base(inner)
         {
         }
+
+        public string Text => Inner.Text;
 
         public bool? IsChecked
         {
@@ -485,7 +499,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessComboBoxControl : HeadlessControlBase<ComboBox>, IComboBoxControl
+    private sealed class HeadlessComboBoxControl : HeadlessControlBase<ComboBox>, IComboBoxControl, IReadableTextControl
     {
         public HeadlessComboBoxControl(ComboBox inner) : base(inner)
         {
@@ -500,6 +514,8 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             null => null,
             _ => new HeadlessComboBoxTextItem(Inner.SelectedItem?.ToString() ?? string.Empty, Inner.SelectedItem?.ToString() ?? string.Empty)
         };
+
+        public string Text => SelectedItem?.Text ?? string.Empty;
 
         public int SelectedIndex
         {
@@ -534,11 +550,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     private sealed record HeadlessComboBoxTextItem(string Text, string Name) : IComboBoxItem;
 
-    private sealed class HeadlessRadioButtonControl : HeadlessControlBase<RadioButton>, IRadioButtonControl
+    private sealed class HeadlessRadioButtonControl : HeadlessControlBase<RadioButton>, IRadioButtonControl, IReadableTextControl
     {
         public HeadlessRadioButtonControl(RadioButton inner) : base(inner)
         {
         }
+
+        public string Text => Inner.Text;
 
         public bool? IsChecked
         {
@@ -547,11 +565,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessToggleButtonControl : HeadlessControlBase<ToggleButton>, IToggleButtonControl
+    private sealed class HeadlessToggleButtonControl : HeadlessControlBase<ToggleButton>, IToggleButtonControl, IReadableTextControl
     {
         public HeadlessToggleButtonControl(ToggleButton inner) : base(inner)
         {
         }
+
+        public string Text => Inner.Text;
 
         public bool IsToggled => Inner.IsToggled;
 
@@ -638,11 +658,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessTabItemControl : HeadlessControlBase<TabItem>, ITabItemControl
+    private sealed class HeadlessTabItemControl : HeadlessControlBase<TabItem>, ITabItemControl, IReadableTextControl
     {
         public HeadlessTabItemControl(TabItem inner) : base(inner)
         {
         }
+
+        public string Text => Inner.Text;
 
         public bool IsSelected => Inner.IsSelected;
 
@@ -666,7 +688,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             : new HeadlessTreeItemControl(Inner.SelectedTreeItem);
     }
 
-    private sealed class HeadlessTreeItemControl : HeadlessControlBase<TreeItem>, ITreeItemControl
+    private sealed class HeadlessTreeItemControl : HeadlessControlBase<TreeItem>, ITreeItemControl, IReadableTextControl
     {
         public HeadlessTreeItemControl(TreeItem inner) : base(inner)
         {

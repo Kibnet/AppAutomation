@@ -30,6 +30,17 @@ public interface IUiControl
 }
 
 /// <summary>
+/// Represents a control that exposes visible read-only text.
+/// </summary>
+public interface IReadableTextControl : IUiControl
+{
+    /// <summary>
+    /// Gets the text currently displayed by the control.
+    /// </summary>
+    string Text { get; }
+}
+
+/// <summary>
 /// Represents a text input control such as a TextBox or text field.
 /// </summary>
 public interface ITextBoxControl : IUiControl

@@ -273,6 +273,17 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task WaitUntilTextEquals_OnTypedControl_ReturnsPage_WhenVisibleTextMatches()
+    {
+        var button = new FakeButtonControl("SaveButton", name: "Automation Name", text: "Save");
+        var page = new StatePage(new FakeResolver(("SaveButton", button)));
+
+        var returnedPage = page.WaitUntilTextEquals(static candidate => candidate.SaveButton, "Save");
+
+        await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
     public async Task WaitUntilExists_ThrowsUiOperationException_WhenControlNeverAppears()
     {
         var page = new DiagnosticsPage(new FakeResolver());
@@ -296,6 +307,56 @@ public sealed class UiPageExtensionsTests
             await Assert.That(exception.FailureContext.ExpectedValue).IsEqualTo("Exists=true");
             await Assert.That(exception.FailureContext.LastObservedValue).Contains("Unknown control 'ResultLabel'");
             await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilTextAssertions_OnControlsWithVisibleText_UseVisibleTextContracts()
+    {
+        var combo = new FakeComboBoxControl(
+            "OperationCombo",
+            [
+                new FakeComboBoxItem("GCD", "operation-gcd"),
+                new FakeComboBoxItem("LCM", "operation-lcm")
+            ])
+        {
+            SelectedIndex = 1
+        };
+        var listBox = new FakeListBoxControl(
+            "HierarchySelectionList",
+            [
+                new FakeListBoxItem("Prime", "Prime"),
+                new FakeListBoxItem("Fibonacci", "Fibonacci")
+            ]);
+        var tabItem = new FakeTabItemControl("TasksTabItem", "Tasks");
+        var tree = new FakeTreeControl("DemoTree");
+        tree.SetItems(new FakeTreeItemControl("RootNode", "RootNode", "Root"));
+        tree.SelectedTreeItem = new FakeTreeItemControl("LeafNode", "LeafNode", "Leaf");
+        var notification = new FakeNotificationControl("ExportToast", "Export complete");
+
+        var comboPage = new ComboPage(new FakeResolver(("OperationCombo", combo)));
+        var listPage = new ListPage(new FakeResolver(("HierarchySelectionList", listBox)));
+        var tabsPage = new TabsPage(new FakeResolver(("TasksTabItem", tabItem)));
+        var treePage = new TreePage(new FakeResolver(("DemoTree", tree)));
+        var workflowPage = new WorkflowPage(new FakeResolver(("ExportToast", notification)));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(
+                comboPage.WaitUntilTextEquals(static candidate => candidate.OperationCombo, "LCM"),
+                comboPage)).IsEqualTo(true);
+            await Assert.That(ReferenceEquals(
+                listPage.WaitUntilTextContains(static candidate => candidate.HierarchySelectionList, "Fibonacci"),
+                listPage)).IsEqualTo(true);
+            await Assert.That(ReferenceEquals(
+                tabsPage.WaitUntilTextEquals(static candidate => candidate.TasksTabItem, "Tasks"),
+                tabsPage)).IsEqualTo(true);
+            await Assert.That(ReferenceEquals(
+                treePage.WaitUntilTextEquals(static candidate => candidate.DemoTree, "Leaf"),
+                treePage)).IsEqualTo(true);
+            await Assert.That(ReferenceEquals(
+                workflowPage.WaitUntilTextContains(static candidate => candidate.ExportToast, "complete"),
+                workflowPage)).IsEqualTo(true);
         }
     }
 
@@ -325,6 +386,31 @@ public sealed class UiPageExtensionsTests
             await Assert.That(exception.Message).Contains("not of expected type");
             await Assert.That(stopwatch.ElapsedMilliseconds < 500).IsEqualTo(true);
         }
+    }
+
+    [Test]
+    public async Task WaitUntilTextEquals_OnTypedControl_DoesNotUseNameAsTextFallback()
+    {
+        var button = new FakeNameOnlyButtonControl("SaveButton", "Save");
+        var page = new StatePage(new FakeResolver(("SaveButton", button)));
+
+        var exception = await Assert.ThrowsAsync<UiOperationException>(
+            () => Task.FromResult(page.WaitUntilTextEquals(static candidate => candidate.SaveButton, "Save", timeoutMs: 1)));
+
+        await Assert.That(exception!.Message.Contains("does not expose readable visible text", StringComparison.Ordinal)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilTextEquals_OnValueOnlyControl_DoesNotUseSyntheticValueAsText()
+    {
+        var filter = new FakeDateRangeFilterControl("CreatedAtFilter");
+        filter.SetRange(new DateRangeFilterRequest(new DateTime(2026, 1, 1), null, FilterPopupCommitMode.Apply));
+        var page = new FilterPage(new FakeResolver(("CreatedAtFilter", filter)));
+
+        var exception = await Assert.ThrowsAsync<UiOperationException>(
+            () => Task.FromResult(page.WaitUntilTextEquals(static candidate => candidate.CreatedAtFilter, "2026-01-01", timeoutMs: 1)));
+
+        await Assert.That(exception!.Message.Contains("does not expose readable visible text", StringComparison.Ordinal)).IsEqualTo(true);
     }
 
     [Test]
@@ -1474,12 +1560,15 @@ public sealed class UiPageExtensionsTests
         public bool? IsChecked { get; set; }
     }
 
-    private sealed class FakeButtonControl : FakeControlBase, IButtonControl
+    private sealed class FakeButtonControl : FakeControlBase, IButtonControl, IReadableTextControl
     {
-        public FakeButtonControl(string automationId)
-            : base(automationId, automationId)
+        public FakeButtonControl(string automationId, string? name = null, string? text = null)
+            : base(automationId, name ?? automationId)
         {
+            Text = text ?? name ?? automationId;
         }
+
+        public string Text { get; }
 
         public int InvokeCount { get; private set; }
 
@@ -1489,12 +1578,27 @@ public sealed class UiPageExtensionsTests
         }
     }
 
-    private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl
+    private sealed class FakeNameOnlyButtonControl : FakeControlBase, IButtonControl
     {
-        public FakeTabItemControl(string automationId)
-            : base(automationId, automationId)
+        public FakeNameOnlyButtonControl(string automationId, string name)
+            : base(automationId, name)
         {
         }
+
+        public void Invoke()
+        {
+        }
+    }
+
+    private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl, IReadableTextControl
+    {
+        public FakeTabItemControl(string automationId, string? text = null)
+            : base(automationId, automationId)
+        {
+            Text = text ?? automationId;
+        }
+
+        public string Text { get; }
 
         public bool IsSelected { get; private set; }
 
