@@ -39,7 +39,7 @@ public class LaunchOptionsDefaultsTests
     }
 
     [Test]
-    public async Task DotnetDebugDesktopLaunchOptions_ResolveCurrentRepositoryLayout()
+    public async Task DotnetDebugDesktopLaunchOptions_ResolveCurrentRepositoryLayoutWithoutImplicitPlacement()
     {
         var options = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
             buildConfiguration: "Release",
@@ -50,10 +50,30 @@ public class LaunchOptionsDefaultsTests
             await Assert.That(Path.GetFileName(options.ExecutablePath)).IsEqualTo("DotnetDebug.Avalonia.exe");
             await Assert.That(File.Exists(options.ExecutablePath)).IsEqualTo(true);
             await Assert.That(Directory.Exists(options.WorkingDirectory!)).IsEqualTo(true);
-            await Assert.That(options.WindowPlacement).IsNotNull();
+            await Assert.That(options.WindowPlacement).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task DotnetDebugDesktopLaunchOptions_PreserveExplicitWindowPlacement()
+    {
+        var placement = DesktopWindowPlacement.Centered(
+            DesktopMonitorSelector.LastAvailable,
+            width: 800,
+            height: 600);
+
+        var options = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(
+            buildConfiguration: "Release",
+            buildBeforeLaunch: false,
+            windowPlacement: placement);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(options.WindowPlacement).IsSameReferenceAs(placement);
             await Assert.That(options.WindowPlacement!.Monitor).IsEqualTo(DesktopMonitorSelector.LastAvailable);
             await Assert.That(options.WindowPlacement.Anchor).IsEqualTo(DesktopWindowAnchor.Center);
-            await Assert.That(options.WindowPlacement.Size).IsNull();
+            await Assert.That(options.WindowPlacement.Size!.Width).IsEqualTo(800);
+            await Assert.That(options.WindowPlacement.Size.Height).IsEqualTo(600);
         }
     }
 

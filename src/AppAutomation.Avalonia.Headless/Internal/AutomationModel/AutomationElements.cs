@@ -312,6 +312,8 @@ internal class Button : AutomationElement
 
     private global::Avalonia.Controls.Button Native => (global::Avalonia.Controls.Button)Control;
 
+    public string Text => Ui(() => Native.Content?.ToString() ?? string.Empty);
+
     public void Invoke()
     {
         Ui(() =>
@@ -421,6 +423,8 @@ internal class CheckBox : AutomationElement
 
     private global::Avalonia.Controls.CheckBox Native => (global::Avalonia.Controls.CheckBox)Control;
 
+    public string Text => Ui(() => Native.Content?.ToString() ?? string.Empty);
+
     public bool? IsChecked
     {
         get => Ui(() => Native.IsChecked);
@@ -495,6 +499,8 @@ internal class RadioButton : AutomationElement
 
     private global::Avalonia.Controls.RadioButton Native => (global::Avalonia.Controls.RadioButton)Control;
 
+    public string Text => Ui(() => Native.Content?.ToString() ?? string.Empty);
+
     public bool? IsChecked
     {
         get => Ui(() => Native.IsChecked);
@@ -513,6 +519,8 @@ internal class ToggleButton : AutomationElement
     }
 
     private global::Avalonia.Controls.Primitives.ToggleButton Native => (global::Avalonia.Controls.Primitives.ToggleButton)Control;
+
+    public string Text => Ui(() => Native.Content?.ToString() ?? string.Empty);
 
     public bool IsToggled
     {
@@ -673,6 +681,8 @@ internal class TabItem : AutomationElement
     private global::Avalonia.Controls.TabItem Native => (global::Avalonia.Controls.TabItem)Control;
 
     public bool IsSelected => Ui(() => Native.IsSelected);
+
+    public string Text => Ui(() => Native.Header?.ToString() ?? string.Empty);
 
     public override string Name => Ui(() => Native.Header?.ToString() ?? base.Name);
 

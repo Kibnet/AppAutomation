@@ -6,6 +6,7 @@ using System.Runtime.Serialization;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -764,6 +765,44 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateAssertionStep_TextAssertion_PreservesActualButtonControlTypes()
+    {
+        var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
+        var button = new Button { Content = "Run" };
+        var checkBox = new CheckBox { Content = "Agree" };
+        var radioButton = new RadioButton { Content = "Primary" };
+        var toggleButton = new ToggleButton { Content = "Pinned" };
+        AutomationProperties.SetAutomationId(button, "RunButton");
+        AutomationProperties.SetAutomationId(checkBox, "AgreeCheckBox");
+        AutomationProperties.SetAutomationId(radioButton, "PrimaryRadioButton");
+        AutomationProperties.SetAutomationId(toggleButton, "PinnedToggleButton");
+
+        var buttonResult = factory.TryCreateAssertionStep(button, RecorderAssertionMode.Text);
+        var checkBoxResult = factory.TryCreateAssertionStep(checkBox, RecorderAssertionMode.Text);
+        var radioButtonResult = factory.TryCreateAssertionStep(radioButton, RecorderAssertionMode.Text);
+        var toggleButtonResult = factory.TryCreateAssertionStep(toggleButton, RecorderAssertionMode.Text);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(buttonResult.Success).IsEqualTo(true);
+            await Assert.That(buttonResult.Step!.Control.ControlType).IsEqualTo(UiControlType.Button);
+            await Assert.That(buttonResult.Step.StringValue).IsEqualTo("Run");
+
+            await Assert.That(checkBoxResult.Success).IsEqualTo(true);
+            await Assert.That(checkBoxResult.Step!.Control.ControlType).IsEqualTo(UiControlType.CheckBox);
+            await Assert.That(checkBoxResult.Step.StringValue).IsEqualTo("Agree");
+
+            await Assert.That(radioButtonResult.Success).IsEqualTo(true);
+            await Assert.That(radioButtonResult.Step!.Control.ControlType).IsEqualTo(UiControlType.RadioButton);
+            await Assert.That(radioButtonResult.Step.StringValue).IsEqualTo("Primary");
+
+            await Assert.That(toggleButtonResult.Success).IsEqualTo(true);
+            await Assert.That(toggleButtonResult.Step!.Control.ControlType).IsEqualTo(UiControlType.ToggleButton);
+            await Assert.That(toggleButtonResult.Step.StringValue).IsEqualTo("Pinned");
+        }
+    }
+
+    [Test]
     public async Task TryCreateAssertionStep_WithGridHintRoot_CapturesRowsAtLeast()
     {
         var options = CreateEremexGridOptions();
@@ -1032,6 +1071,35 @@ public sealed class RecorderTests
             await Assert.That(result.CanPersist).IsEqualTo(true);
             await Assert.That(result.RuntimeValidationFindings?.Count).IsEqualTo(2);
             await Assert.That(result.RuntimeValidationFindings!.All(static finding => finding.Severity == RecorderRuntimeValidationSeverity.Info)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task RuntimeValidator_TextAssertion_OnValueOnlyControl_IsUnsupported()
+    {
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var step = new RecordedStep(
+            RecordedActionKind.WaitUntilTextEquals,
+            new RecordedControlDescriptor(
+                "CreatedAtPicker",
+                UiControlType.DateTimePicker,
+                "CreatedAtPicker",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(DatePicker).FullName ?? nameof(DatePicker),
+                Warning: null),
+            StringValue: "2026-01-01");
+
+        var result = validator.Validate(step);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(result.CanPersist).IsEqualTo(false);
+            await Assert.That(result.RuntimeValidationFindings?.Count).IsEqualTo(2);
+            await Assert.That(result.RuntimeValidationFindings!.All(static finding => finding.Severity == RecorderRuntimeValidationSeverity.Invalid)).IsEqualTo(true);
+            await Assert.That(result.RuntimeValidationFindings!.All(static finding => finding.Code.EndsWith("-control-type-mismatch", StringComparison.Ordinal))).IsEqualTo(true);
+            await Assert.That(result.RuntimeValidationFindings!.All(static finding => finding.Message.Contains("UiControlType.DateTimePicker", StringComparison.Ordinal))).IsEqualTo(true);
         }
     }
 
@@ -2388,6 +2456,80 @@ public sealed class RecorderTests
             await Assert.That(pageSource.Contains("ResultText", StringComparison.Ordinal)).IsEqualTo(false);
             await Assert.That(scenarioSource.Contains("Page.WaitUntilTextEquals(static page => page.ExistingResult, \"Ready\");", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.ClickButton(static page => page.ExistingResult2);", StringComparison.Ordinal)).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_DoesNotReuseExistingControl_WhenLocatorMatchesButControlTypeDiffers()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("RunLabel", UiControlType.Label, "RunButton", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Button Type Flow");
+        var runButton = new RecordedControlDescriptor(
+            "RunButton",
+            UiControlType.Button,
+            "RunButton",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+            Warning: null);
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(
+                RecordedActionKind.WaitUntilTextEquals,
+                runButton,
+                StringValue: "Run"),
+            new RecordedStep(
+                RecordedActionKind.ClickButton,
+                runButton)
+        ];
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNotNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+            await Assert.That(result.Diagnostics.Any(static message => message.Contains("incompatible", StringComparison.OrdinalIgnoreCase))).IsEqualTo(true);
+        }
+
+        var pageSource = await File.ReadAllTextAsync(result.PageFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(pageSource.Contains(
+                "[UiControl(\"RunButton\", UiControlType.Button, \"RunButton\", FallbackToName = false)]",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains(
+                "Page.WaitUntilTextEquals(static page => page.RunButton, \"Run\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains(
+                "Page.ClickButton(static page => page.RunButton);",
+                StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
 
