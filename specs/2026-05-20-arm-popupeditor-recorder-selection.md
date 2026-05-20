@@ -382,6 +382,54 @@ Outcome contract:
 - Residual risks / follow-ups: `1.5.9` packages were packed locally for validation; actual shared feed publication is still required before another machine can restore Arm.Srv package-mode without local package source.
 - Decision: previous HIGH/MEDIUM review findings are fixed in source; release pipeline still needs to publish `1.5.9`.
 
+### Post-EXEC Review Fix Pass 3
+- Статус: PASS with blocked full smoke rerun
+- Scope reviewed: отказ от project-specific customer bridge в Arm.Srv Headless и перенос общей поддержки detached popup/content roots в AppAutomation Headless resolver.
+- Fixed before final report:
+  - AppAutomation Headless `ControlTree` теперь обходит common detached roots через `Root`, `Content`, `Child`, `PopupContent` и `Items`, чтобы `ListBox` из popup мог резолвиться без кода consumer project.
+  - Добавлен AppAutomation regression, который сначала падал на detached `PopupContent` results, а после фикса проходит через обычный `.WithSearchPicker(...)`.
+  - Arm.Srv customer-specific bridge удалён: нет ручной фильтрации контрагентов, нет прямого `OrderCardViewModel.Customer`, нет business-specific selection code в headless session.
+  - Arm.Srv Headless теперь монтирует реальный `OrderCardControl` и добавляет только generic popup-open proxy, если template не даёт automation-visible `OrderCustomerSearch_OpenButton`.
+- Checks rerun:
+  - `dotnet test --project tests\AppAutomation.TestHost.Avalonia.Tests\AppAutomation.TestHost.Avalonia.Tests.csproj -c Release --no-restore -- --treenode-filter "/*/*/LaunchContractTests/HeadlessSearchPicker_ResolvesListResultsFromDetachedPopupContent"` -> PASS 1/1.
+  - `dotnet test --project tests\AppAutomation.Abstractions.Tests\AppAutomation.Abstractions.Tests.csproj -c Release --no-restore -- --treenode-filter "/*/*/UiControlAdapterTests/*SearchPicker*"` -> PASS 7/7.
+  - `dotnet build AppAutomation.sln -c Release -v minimal` -> PASS with existing warnings.
+  - `pwsh -File eng\pack.ps1 -Version 1.5.9` -> PASS.
+  - `dotnet build tests\Arm.UiTests.Headless\Arm.UiTests.Headless.csproj -c Debug --no-restore -v quiet -p:AppAutomationRootDir=` -> PASS with existing warnings.
+  - `dotnet run --project tests\Arm.UiTests.Headless\Arm.UiTests.Headless.csproj -c Debug --no-build -p:AppAutomationRootDir= -- --treenode-filter "/*/*/ArmHeadlessTests/AutomationContract_OrderEditorsExposeStablePartAutomationIds"` -> PASS 1/1.
+  - `git diff --check` in AppAutomation and Arm.Srv -> PASS; only CRLF normalization warnings.
+- Blocked validation:
+  - Full Arm.Srv Headless recorded smoke could not be rerun to completion after the generic proxy change because the test environment failed before opening the order card: `LDAP-сервер недоступен` and `Рабочая область заказов не стала готова в headless-сессии`.
+- Re-review after fixes:
+  - The original high-risk bridge is removed; AppAutomation owns generic popup-content traversal.
+  - The remaining Arm.Srv code is still project-side headless hosting, but it mounts the real control and contains no customer-specific business selection logic.
+  - Residual risk: generic popup-open proxy needs one successful recorded-smoke rerun when LDAP/auth is available.
+- Decision: source-level cleanup is materially better than the old bridge and is safe to commit with the documented external smoke blocker.
+
+### Post-EXEC Review Fix Pass 4
+- Статус: PASS
+- Scope reviewed: финальная замена customer-specific Headless bridge после восстановления полного Arm.Srv recorded smoke.
+- Fixed before final report:
+  - AppAutomation Headless теперь не только видит detached `PopupContent`, но и корректно вызывает `ToggleButton` open button и прогоняет UI jobs после ввода/клика и перед чтением/выбором `ListBox`.
+  - Arm.Srv Headless больше не содержит ручного customer selection bridge. Остался project-side test-host код, который монтирует реальный `OrderCardControl`, даёт generic popup-open proxy и синхронизирует customer-dependent поля через реальный `OrderCardViewModel.Refresh()` перед save.
+  - `ServerSearchComboBox` больше не отбрасывает успешный search result, если контрол подключён к logical tree, но не считается visual-attached в Headless.
+  - Recorded smoke ждёт готовность `CreateOrderButton` во FlaUI до 20 секунд, чтобы закрыть timing после авторизации/загрузки рабочей области.
+- Checks rerun:
+  - `dotnet test --project tests\AppAutomation.TestHost.Avalonia.Tests\AppAutomation.TestHost.Avalonia.Tests.csproj -c Release --no-restore -- --treenode-filter "/*/*/LaunchContractTests/HeadlessSearchPicker_*"` -> PASS 2/2.
+  - `dotnet test --project tests\AppAutomation.Abstractions.Tests\AppAutomation.Abstractions.Tests.csproj -c Release --no-restore -- --treenode-filter "/*/*/UiControlAdapterTests/*SearchPicker*"` -> PASS 7/7.
+  - `dotnet build AppAutomation.sln -c Release -v minimal` -> PASS with existing warnings.
+  - `pwsh -File eng\pack.ps1 -Version 1.5.9` -> PASS.
+  - `dotnet build tests\Arm.UiTests.Headless\Arm.UiTests.Headless.csproj -c Debug -v quiet /p:AppAutomationRootDir=C:\Users\Kibnet\.codex\worktrees\ea58\AppAutomation` -> PASS with existing warnings.
+  - `dotnet run --project tests\Arm.UiTests.Headless\Arm.UiTests.Headless.csproj -c Debug --no-build /p:AppAutomationRootDir=C:\Users\Kibnet\.codex\worktrees\ea58\AppAutomation -- --treenode-filter "/*/*/ArmHeadlessTests/Recorded_RecordedSmoke_20260519_171429"` -> PASS 1/1.
+  - `dotnet build tests\Arm.UiTests.FlaUI\Arm.UiTests.FlaUI.csproj -c Debug -v quiet /p:AppAutomationRootDir=C:\Users\Kibnet\.codex\worktrees\ea58\AppAutomation` -> PASS with existing warnings.
+  - `dotnet run --project tests\Arm.UiTests.FlaUI\Arm.UiTests.FlaUI.csproj -c Debug --no-build /p:AppAutomationRootDir=C:\Users\Kibnet\.codex\worktrees\ea58\AppAutomation -- --treenode-filter "/*/*/ArmFlaUiTests/Recorded_RecordedSmoke_20260519_171429"` -> PASS 1/1.
+- Re-review after fixes:
+  - Previous LDAP/full-smoke blocker is no longer current; full Headless recorded smoke passed.
+  - The most concerning bridge risk is closed: no per-project fake customer selection code remains.
+  - Residual project-specific Headless code is still needed to host the real Arm.Srv order card and provide domain data/services; that is test-host infrastructure, not a reusable AppAutomation bridge.
+  - Remaining risk: `ServerSearchComboBox.IsConnectedToTree()` broadens the stale-result guard from visual-only to visual-or-logical attachment. This is intentional for Headless hidden hosts, but should be watched if detached logical-only controls are used elsewhere.
+- Decision: implementation satisfies the confirmed spec and the follow-up concern about avoiding a reusable-per-project customer bridge.
+
 ## Approval
 Подтверждено пользователем: "Спеку подтверждаю"
 
@@ -397,3 +445,6 @@ Outcome contract:
 | EXEC | Выполнить acceptance и финальный review | 0.9 | Нет | Дать финальный отчёт | Нет | Нет | Headless/FlaUI smoke прошли; diff-check чистый, остаточный риск только full-suite desktop timing | Этот spec, оба репозитория |
 | EXEC | Исправить findings после ревью | 0.93 | Нет | Дать финальный отчёт | Нет | Пользователь сказал `Делай` | Убрали false-positive selected state от search input и заменили silent auth fall-through на явный timeout с runtime-aware headless completion | AppAutomation adapter/test, Arm.Srv recorded smoke, этот spec |
 | EXEC | Исправить EXEC review findings | 0.94 | Нет | Дать финальный отчёт | Нет | Пользователь выбрал package bump и согласовал idempotent expand | Default Arm.Srv path переведён на AppAutomation `1.5.9` packages; direct `Search(); SelectItem()` снова раскрывает picker безопасно | AppAutomation version/changelog/adapter/tests, Arm.Srv package refs, этот spec |
+| EXEC | Убрать project-specific Headless bridge, если его можно заменить общим traversal | 0.78 | Нужна проверка Headless smoke без bridge | Добавить Headless regression на `PopupContent`, удалить Arm.Srv bridge и прогнать smoke | Нет | Пользователь сказал `Выполняй` после обсуждения риска bridge | Чистое решение должно жить в AppAutomation Headless resolver, а не повторяться в каждом consumer project | AppAutomation Headless `ControlTree`, Arm.Srv HeadlessRuntimeSession, этот spec |
+| EXEC | Заменить customer bridge на generic headless popup support | 0.82 | Полный recorded smoke заблокирован недоступным LDAP | Commit/push changes and document blocker | Нет | Нет | AppAutomation теперь резолвит detached popup roots; Arm.Srv удалил business bridge и использует реальный `OrderCardControl` плюс generic open proxy | AppAutomation Headless/test/spec, Arm.Srv HeadlessRuntimeSession |
+| EXEC | Завершить замену bridge и подтвердить оба runtime режима | 0.9 | Нет | Commit/push changes | Нет | Нет | Headless/FlaUI recorded smoke прошли; customer-specific bridge заменён generic popup support + реальной VM-синхронизацией | AppAutomation Headless/test/spec, Arm.Srv ServerSearchComboBox/HeadlessRuntimeSession/recorded smoke |
