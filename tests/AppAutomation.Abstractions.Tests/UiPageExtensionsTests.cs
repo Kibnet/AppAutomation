@@ -242,6 +242,21 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task LateAppearingControl_WithWaitUntilExists_Passes()
+    {
+        var result = RunLateAppearingControlScenario_WithWaitUntilExists();
+
+        await Assert.That(result).IsEqualTo("Ready");
+    }
+
+    [Test]
+    public async Task LateAppearingControl_WithoutWaitUntilExists_Fails()
+    {
+        await Assert.That(() => RunLateAppearingControlScenario_WithoutWaitUntilExists())
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task WaitUntilExists_ReturnsPage_WhenFlaUiNotFoundExceptionAppearsThenResolves()
     {
         var label = new FakeLabelControl("ResultLabel", "Ready");
@@ -863,6 +878,27 @@ public sealed class UiPageExtensionsTests
             await Assert.That(exception.Message).Contains("pane tabs are not configured");
             await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
         }
+    }
+
+    private static string RunLateAppearingControlScenario_WithWaitUntilExists()
+    {
+        var page = CreateLateAppearingDiagnosticsPage();
+        page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000);
+
+        return page.ResultLabel.Name;
+    }
+
+    private static string RunLateAppearingControlScenario_WithoutWaitUntilExists()
+    {
+        var page = CreateLateAppearingDiagnosticsPage();
+
+        return page.ResultLabel.Name;
+    }
+
+    private static DiagnosticsPage CreateLateAppearingDiagnosticsPage()
+    {
+        var label = new FakeLabelControl("ResultLabel", "Ready");
+        return new DiagnosticsPage(new AppearingResolver("ResultLabel", label, failuresBeforeSuccess: 1));
     }
 
     public static class ComboPageDefinitions
