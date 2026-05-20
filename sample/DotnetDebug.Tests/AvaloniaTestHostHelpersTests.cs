@@ -52,4 +52,17 @@ public sealed class AvaloniaTestHostHelpersTests
 
         await Assert.That(configuration).IsEqualTo(expected);
     }
+
+    [Test]
+    public async Task RecorderDiagnostics_DefaultsToEnabledUnlessExplicitlyDisabled()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(App.ShouldWriteRecorderDiagnosticsToFile(null)).IsEqualTo(true);
+            await Assert.That(App.ShouldWriteRecorderDiagnosticsToFile(string.Empty)).IsEqualTo(true);
+            await Assert.That(App.ShouldWriteRecorderDiagnosticsToFile("1")).IsEqualTo(true);
+            await Assert.That(App.ShouldWriteRecorderDiagnosticsToFile("0")).IsEqualTo(false);
+            await Assert.That(App.ShouldWriteRecorderDiagnosticsToFile("false")).IsEqualTo(false);
+        }
+    }
 }

@@ -63,7 +63,8 @@ public partial class App : Application
             ShowOverlay = !string.Equals(Environment.GetEnvironmentVariable(RecorderOverlayEnvironmentVariable), "0", StringComparison.Ordinal),
             DiagnosticLog = new RecorderDiagnosticLogOptions
             {
-                WriteToFile = string.Equals(Environment.GetEnvironmentVariable(RecorderDiagnosticsEnvironmentVariable), "1", StringComparison.Ordinal)
+                WriteToFile = ShouldWriteRecorderDiagnosticsToFile(
+                    Environment.GetEnvironmentVariable(RecorderDiagnosticsEnvironmentVariable))
             },
             AllowNameLocators = false
         };
@@ -206,4 +207,10 @@ public partial class App : Application
         return fallbackPath;
     }
 #endif
+
+    internal static bool ShouldWriteRecorderDiagnosticsToFile(string? environmentValue)
+    {
+        return !string.Equals(environmentValue, "0", StringComparison.Ordinal)
+            && !string.Equals(environmentValue, "false", StringComparison.OrdinalIgnoreCase);
+    }
 }

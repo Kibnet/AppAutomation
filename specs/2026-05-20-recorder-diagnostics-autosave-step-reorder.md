@@ -55,11 +55,13 @@ Recorder требует ручных действий для диагности�
 - `IAppAutomationRecorderSessionDetails.cs` или новый файл рядом -> internal reorder capability (`IRecorderStepReorderSessionDetails`) без изменения public details interface.
 - `RecorderOverlay.axaml.cs` -> рендер стрелок и вызов reorder capability; disabled states при busy/границах списка.
 - `RecorderTests.cs` -> регрессионные tests для default diagnostics, autosave, reorder и overlay buttons.
+- `sample/DotnetDebug.Avalonia/App.axaml.cs` -> recorder launch env must not override the default diagnostics-on behavior unless diagnostics are explicitly disabled.
 
 ### 6.2 Детальный дизайн
 - Diagnostic default:
   - поменять default `RecorderDiagnosticLogOptions.WriteToFile` на `true`;
   - сохранить возможность явно отключить запись через `new RecorderDiagnosticLogOptions { WriteToFile = false }`;
+  - sample recorder env `APPAUTOMATION_RECORDER_DIAGNOSTICS` трактовать как explicit opt-out (`0`/`false`), а не opt-in;
   - обновить текущий toggle test, который рассчитывал на default `false`.
 - Autosave:
   - после успешного добавления, удаления, ignore/restore, retry validation и reorder шагов вызвать `RequestAutosaveIfRecording()`;
@@ -106,6 +108,7 @@ Recorder требует ручных действий для диагности�
 - Diagnostic file default:
   - default options => diagnostics file enabled;
   - explicit `WriteToFile = false` => diagnostics file disabled until user toggles it on.
+  - sample recorder launch without `APPAUTOMATION_RECORDER_DIAGNOSTICS` => diagnostics file enabled; `0`/`false` => disabled.
 - Autosave:
   - `state != Recording` => no autosave;
   - `state == Recording && !IsBusy` => start autosave;
