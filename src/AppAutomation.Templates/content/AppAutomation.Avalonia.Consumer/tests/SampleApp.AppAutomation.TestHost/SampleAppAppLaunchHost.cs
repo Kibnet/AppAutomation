@@ -20,12 +20,6 @@ public static class SampleAppAppLaunchHost
         desktopTargetFramework: "net8.0",
         executableName: "REPLACE_WITH_YOUR_DESKTOP_EXE.exe");
 
-    private static readonly DesktopWindowPlacement DefaultDesktopWindowPlacement = new()
-    {
-        Monitor = DesktopMonitorSelector.LastAvailable,
-        Anchor = DesktopWindowAnchor.Center
-    };
-
     public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
         string? buildConfiguration = null,
         DesktopWindowPlacement? windowPlacement = null)
@@ -35,7 +29,7 @@ public static class SampleAppAppLaunchHost
             new AvaloniaDesktopLaunchOptions
             {
                 BuildConfiguration = buildConfiguration ?? BuildConfigurationDefaults.ForAssembly(typeof(SampleAppAppLaunchHost).Assembly),
-                WindowPlacement = windowPlacement ?? DefaultDesktopWindowPlacement
+                WindowPlacement = windowPlacement
             });
     }
 

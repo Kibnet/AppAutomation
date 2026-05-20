@@ -18,12 +18,6 @@ public static class DotnetDebugAppLaunchHost
         desktopTargetFramework: "net10.0",
         executableName: "DotnetDebug.Avalonia.exe");
 
-    private static readonly DesktopWindowPlacement DefaultDesktopWindowPlacement = new()
-    {
-        Monitor = DesktopMonitorSelector.LastAvailable,
-        Anchor = DesktopWindowAnchor.Center
-    };
-
     public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
         string? buildConfiguration = null,
         bool buildBeforeLaunch = true,
@@ -43,7 +37,7 @@ public static class DotnetDebugAppLaunchHost
                 BuildTimeout = buildTimeout ?? TimeSpan.FromMinutes(5),
                 MainWindowTimeout = mainWindowTimeout ?? TimeSpan.FromSeconds(20),
                 PollInterval = pollInterval ?? TimeSpan.FromMilliseconds(200),
-                WindowPlacement = windowPlacement ?? DefaultDesktopWindowPlacement,
+                WindowPlacement = windowPlacement,
                 UseIsolatedBuildOutput = buildBeforeLaunch
             });
     }

@@ -217,15 +217,9 @@ dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
 dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
 
-For `FlaUI` on multi-monitor workstations, keep desktop placement in `TestHost` so every scenario uses the same window geometry:
+For `FlaUI` on multi-monitor workstations, keep desktop placement as an opt-in `TestHost` parameter. The default `CreateDesktopLaunchOptions()` path keeps the old Windows/application placement behavior, while scenarios that need deterministic geometry can pass an explicit placement:
 
 ```csharp
-private static readonly DesktopWindowPlacement DefaultDesktopWindowPlacement = new()
-{
-    Monitor = DesktopMonitorSelector.LastAvailable,
-    Anchor = DesktopWindowAnchor.Center
-};
-
 public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
     string? buildConfiguration = null,
     DesktopWindowPlacement? windowPlacement = null)
@@ -235,18 +229,18 @@ public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
         new AvaloniaDesktopLaunchOptions
         {
             BuildConfiguration = buildConfiguration ?? BuildConfigurationDefaults.ForAssembly(typeof(MyAppAppLaunchHost).Assembly),
-            WindowPlacement = windowPlacement ?? DefaultDesktopWindowPlacement
+            WindowPlacement = windowPlacement
         });
 }
 ```
 
-Then most `FlaUI` tests can use the central default:
+Most `FlaUI` tests can keep the default launch:
 
 ```csharp
 DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions());
 ```
 
-Individual tests can still override the monitor and outer size:
+Tests that need a dedicated monitor and outer size can opt in:
 
 ```csharp
 DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions(
@@ -256,7 +250,7 @@ DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions(
         height: 900)));
 ```
 
-Monitor indexes are zero-based after stable ordering: primary monitor first, then virtual desktop coordinates. `DesktopMonitorSelector.LastAvailable` selects the last monitor in that order, and resolves to the primary monitor on a single-monitor desktop. The central default deliberately omits `Size`, so it keeps the app's current outer window size unless the caller passes an explicit size. Placement uses the monitor working area by default, so taskbars and docked shell UI are avoided. `WindowPlacement = null` keeps the old launch behavior when passed directly to the lower-level launch host. `FlaUI` is still interactive desktop automation and may take focus; this option makes placement predictable and reduces interference, but does not make the run headless.
+Monitor indexes are zero-based after stable ordering: primary monitor first, then virtual desktop coordinates. `DesktopMonitorSelector.LastAvailable` selects the last monitor in that order, and resolves to the primary monitor on a single-monitor desktop. If `Size` is omitted, placement keeps the app's current outer window size. Placement uses the monitor working area by default, so taskbars and docked shell UI are avoided. `WindowPlacement = null` keeps the old launch behavior. `FlaUI` is still interactive desktop automation and may take focus; this option makes placement predictable and reduces interference, but does not make the run headless.
 
 To run the whole generated solution from the repo root:
 
@@ -539,15 +533,9 @@ dotnet test --project tests/MyApp.UiTests.Headless/MyApp.UiTests.Headless.csproj
 dotnet test --project tests/MyApp.UiTests.FlaUI/MyApp.UiTests.FlaUI.csproj -c Debug
 ```
 
-Для `FlaUI` на рабочих станциях с несколькими мониторами держите настройку положения окна в `TestHost`, чтобы все сценарии использовали одну и ту же геометрию:
+Для `FlaUI` на рабочих станциях с несколькими мониторами держите положение окна как opt-in параметр `TestHost`. Обычный путь `CreateDesktopLaunchOptions()` сохраняет прежнее поведение Windows/приложения, а сценарии с требованием к геометрии могут передать явный placement:
 
 ```csharp
-private static readonly DesktopWindowPlacement DefaultDesktopWindowPlacement = new()
-{
-    Monitor = DesktopMonitorSelector.LastAvailable,
-    Anchor = DesktopWindowAnchor.Center
-};
-
 public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
     string? buildConfiguration = null,
     DesktopWindowPlacement? windowPlacement = null)
@@ -557,18 +545,18 @@ public static DesktopAppLaunchOptions CreateDesktopLaunchOptions(
         new AvaloniaDesktopLaunchOptions
         {
             BuildConfiguration = buildConfiguration ?? BuildConfigurationDefaults.ForAssembly(typeof(MyAppAppLaunchHost).Assembly),
-            WindowPlacement = windowPlacement ?? DefaultDesktopWindowPlacement
+            WindowPlacement = windowPlacement
         });
 }
 ```
 
-После этого большинство `FlaUI`-тестов могут использовать центральный default:
+Большинство `FlaUI`-тестов могут оставаться на обычном запуске:
 
 ```csharp
 DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions());
 ```
 
-Отдельные тесты всё ещё могут переопределить монитор и внешний размер окна:
+Тесты, которым нужен отдельный монитор и внешний размер окна, включают placement явно:
 
 ```csharp
 DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions(
@@ -578,7 +566,7 @@ DesktopAppSession.Launch(MyAppAppLaunchHost.CreateDesktopLaunchOptions(
         height: 900)));
 ```
 
-Индексы мониторов начинаются с нуля после стабильной сортировки: сначала основной монитор, затем координаты виртуального рабочего стола. `DesktopMonitorSelector.LastAvailable` выбирает последний монитор в этом порядке, а на одномониторной машине резолвится в основной монитор. Центральный default намеренно не задаёт `Size`, поэтому сохраняет текущий внешний размер окна приложения, если вызывающая сторона не передала явный размер. По умолчанию используется рабочая область монитора, поэтому taskbar и docked shell UI не перекрываются. `WindowPlacement = null` сохраняет прежнее поведение при прямом вызове lower-level launch host. `FlaUI` остаётся интерактивной desktop-автоматизацией и может забирать фокус; эта настройка делает размещение предсказуемым и снижает помехи, но не превращает запуск в headless.
+Индексы мониторов начинаются с нуля после стабильной сортировки: сначала основной монитор, затем координаты виртуального рабочего стола. `DesktopMonitorSelector.LastAvailable` выбирает последний монитор в этом порядке, а на одномониторной машине резолвится в основной монитор. Если `Size` не задан, placement сохраняет текущий внешний размер окна приложения. По умолчанию используется рабочая область монитора, поэтому taskbar и docked shell UI не перекрываются. `WindowPlacement = null` сохраняет прежнее поведение запуска. `FlaUI` остаётся интерактивной desktop-автоматизацией и может забирать фокус; эта настройка делает размещение предсказуемым и снижает помехи, но не превращает запуск в headless.
 
 Чтобы запустить всё сгенерированное решение из корня репозитория:
 
