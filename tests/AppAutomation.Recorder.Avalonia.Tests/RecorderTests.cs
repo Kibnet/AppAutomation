@@ -1953,6 +1953,47 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_CapturesDetachedPopupListSelectionAsCanonicalSearchPicker()
+    {
+        var options = CreateArmCustomerSearchPickerOptions();
+        var root = new StackPanel();
+        var searchInput = new TextBox();
+        var expandButton = new Button { Content = "Open" };
+        var popupContent = new StackPanel();
+        var popupHost = new PopupContentHost { PopupContent = popupContent };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "АЭРОСКАН ООО" }
+        };
+        AutomationProperties.SetAutomationId(searchInput, "OrderCustomerSearch_Input");
+        AutomationProperties.SetAutomationId(expandButton, "OrderCustomerSearch_OpenButton");
+        AutomationProperties.SetAutomationId(results, "OrderCustomerSearch_Results");
+        root.Children.Add(searchInput);
+        root.Children.Add(expandButton);
+        root.Children.Add(popupHost);
+        popupContent.Children.Add(results);
+
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(searchInput);
+        searchInput.Text = "АЭРОСКАН ООО";
+        session.CaptureButtonClickForTesting(expandButton);
+        session.RegisterPointerInputFromSourceForTesting(results);
+        results.SelectedItem = "АЭРОСКАН ООО";
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.OrderCustomerSearch, \"АЭРОСКАН ООО\", \"АЭРОСКАН ООО\");");
+            await Assert.That(details.StepJournal[0].Preview.Contains("OrderCustomerSearch_Input", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[0].Preview.Contains("EnterText", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_SuppressesConfiguredGridSearchPickerButtons_AndCapturesGridSelectionAsComposite()
     {
         var options = CreateGridSearchPickerOptions(validateRuntimeTargets: false);
@@ -3163,6 +3204,24 @@ public sealed class RecorderTests
                 expandButtonAutomationId: "ExpandFilterButton",
                 resultsKind: SearchPickerResultsKind.ListBox)));
         return options;
+    }
+
+    private static AppAutomationRecorderOptions CreateArmCustomerSearchPickerOptions()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "OrderCustomerSearch",
+            SearchPickerParts.ByAutomationIds(
+                "OrderCustomerSearch_Input",
+                "OrderCustomerSearch_Results",
+                expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
+                resultsKind: SearchPickerResultsKind.ListBox)));
+        return options;
+    }
+
+    private sealed class PopupContentHost : Control
+    {
+        public object? PopupContent { get; init; }
     }
 
     private static AppAutomationRecorderOptions CreateCompositeRecorderOptions(bool useCustomShellCaptureHost = false)

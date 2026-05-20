@@ -595,7 +595,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(innerResolver);
 
         var searchInput = innerResolver.Resolve<ITextBoxControl>(CreateDefinition("SearchInput", UiControlType.TextBox, _parts.SearchInputLocator));
-        var results = ResolveResults(innerResolver);
+        var results = new DeferredResultsSurface(ResolveResults, innerResolver);
         var applyButton = string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator)
             ? null
             : innerResolver.Resolve<IButtonControl>(CreateDefinition("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator));
@@ -643,6 +643,8 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         private readonly ISearchPickerResultsSurface _results;
         private readonly IButtonControl? _applyButton;
         private readonly IButtonControl? _expandButton;
+        private string? _lastSelectedItemText;
+        private bool _isExpanded;
 
         public SearchPickerControl(
             string automationId,
@@ -660,17 +662,16 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string AutomationId { get; }
 
-        public string Name => _results.Name;
+        public string Name => _searchInput.Name;
 
         public bool IsEnabled =>
             _searchInput.IsEnabled
-            && _results.IsEnabled
             && (_applyButton?.IsEnabled ?? true)
             && (_expandButton?.IsEnabled ?? true);
 
         public string SearchText => _searchInput.Text;
 
-        public string? SelectedItemText => _results.SelectedItemText;
+        public string? SelectedItemText => _results.SelectedItemText ?? _lastSelectedItemText;
 
         public IReadOnlyList<string> Items => _results.Items;
 
@@ -696,17 +697,26 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         {
             _searchInput.Enter(value);
             _applyButton?.Invoke();
+            _lastSelectedItemText = null;
+            _isExpanded = false;
         }
 
         public void Expand()
         {
+            if (_isExpanded)
+            {
+                return;
+            }
+
             if (_expandButton is not null)
             {
                 _expandButton.Invoke();
+                _isExpanded = true;
                 return;
             }
 
             _results.Expand();
+            _isExpanded = true;
         }
 
         public void Select(string itemText) => SelectItem(itemText);
@@ -717,6 +727,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
             Expand();
             _results.SelectItem(itemText);
+            _lastSelectedItemText = itemText;
         }
     }
 
@@ -733,6 +744,49 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         void Expand();
 
         void SelectItem(string itemText);
+    }
+
+    private sealed class DeferredResultsSurface : ISearchPickerResultsSurface
+    {
+        private readonly Func<IUiControlResolver, ISearchPickerResultsSurface> _resolve;
+        private readonly IUiControlResolver _innerResolver;
+
+        public DeferredResultsSurface(
+            Func<IUiControlResolver, ISearchPickerResultsSurface> resolve,
+            IUiControlResolver innerResolver)
+        {
+            _resolve = resolve;
+            _innerResolver = innerResolver;
+        }
+
+        public string Name => TryResolve()?.Name ?? string.Empty;
+
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
+
+        public string? SelectedItemText => TryResolve()?.SelectedItemText;
+
+        public IReadOnlyList<string> Items => TryResolve()?.Items ?? Array.Empty<string>();
+
+        public void Expand() => Resolve().Expand();
+
+        public void SelectItem(string itemText) => Resolve().SelectItem(itemText);
+
+        private ISearchPickerResultsSurface Resolve()
+        {
+            return _resolve(_innerResolver);
+        }
+
+        private ISearchPickerResultsSurface? TryResolve()
+        {
+            try
+            {
+                return Resolve();
+            }
+            catch
+            {
+                return null;
+            }
+        }
     }
 
     private sealed class ComboBoxResultsSurface : ISearchPickerResultsSurface
@@ -1371,17 +1425,23 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new NotificationControl(definition.PropertyName, _parts, innerResolver);
+        return new NotificationControl(definition.PropertyName, definition, _parts, innerResolver);
     }
 
     private sealed class NotificationControl : INotificationControl, IReadableTextControl
     {
+        private readonly UiControlDefinition _rootDefinition;
         private readonly NotificationControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
 
-        public NotificationControl(string automationId, NotificationControlParts parts, IUiControlResolver innerResolver)
+        public NotificationControl(
+            string automationId,
+            UiControlDefinition rootDefinition,
+            NotificationControlParts parts,
+            IUiControlResolver innerResolver)
         {
             AutomationId = automationId;
+            _rootDefinition = rootDefinition;
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -1390,9 +1450,15 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
 
         public string Name => TryReadText() ?? AutomationId;
 
-        public bool IsEnabled => ResolveLabel("Text", _parts.TextLocator).IsEnabled;
+        public bool IsEnabled =>
+            TryResolveLabel("Text", _parts.TextLocator)?.IsEnabled
+            ?? TryResolveRoot()?.IsEnabled
+            ?? false;
 
-        public string Text => ResolveLabel("Text", _parts.TextLocator).Text;
+        public string Text =>
+            ReadText(TryResolveLabel("Text", _parts.TextLocator)?.Text)
+            ?? ReadText(TryResolveRoot()?.Name)
+            ?? string.Empty;
 
         public void Dismiss()
         {
@@ -1420,6 +1486,35 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         private ILabelControl ResolveLabel(string suffix, string locatorValue)
         {
             return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+        }
+
+        private ILabelControl? TryResolveLabel(string suffix, string locatorValue)
+        {
+            try
+            {
+                return ResolveLabel(suffix, locatorValue);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private IUiControl? TryResolveRoot()
+        {
+            try
+            {
+                return _innerResolver.Resolve<IUiControl>(_rootDefinition);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string? ReadText(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value;
         }
 
         private IButtonControl ResolveButton(string suffix, string locatorValue)

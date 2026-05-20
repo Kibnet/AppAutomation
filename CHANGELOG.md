@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.9] - 2026-05-20
+
+### Fixed
+
+- Record and replay detached popup search-picker selections, including Arm order customer selection.
+- Make search-picker expansion idempotent so direct `Search()` then `SelectItem()` remains safe.
+
 ## [1.5.8] - 2026-05-19
 
 ### Fixed
