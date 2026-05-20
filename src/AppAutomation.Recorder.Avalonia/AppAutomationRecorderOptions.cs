@@ -208,6 +208,8 @@ public sealed class RecorderHotkeys
 
     public string? CaptureAssertChecked { get; init; } = "Ctrl+Shift+K";
 
+    public string? CaptureAssertExists { get; init; } = "Ctrl+Shift+F";
+
     public string? ToggleOverlayMinimize { get; init; } = "Ctrl+Shift+M";
 }
 

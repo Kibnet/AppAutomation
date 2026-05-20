@@ -453,6 +453,16 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         TryRecordGridAction(source);
     }
 
+    internal void SetLastHoveredControlForTesting(Control? source)
+    {
+        _lastHoveredControl = source;
+    }
+
+    internal void HandleRecorderCommandForTesting(RecorderCommandKind command)
+    {
+        HandleRecorderCommand(command);
+    }
+
     private void ApplySaveResult(RecorderSaveResult result)
     {
         var status = !result.Success
@@ -734,6 +744,9 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
                 break;
             case RecorderCommandKind.CaptureAssertChecked:
                 CaptureAssertion(RecorderAssertionMode.Checked);
+                break;
+            case RecorderCommandKind.CaptureAssertExists:
+                CaptureAssertion(RecorderAssertionMode.Exists);
                 break;
             case RecorderCommandKind.ToggleOverlayMinimize:
                 OverlayToggleRequested?.Invoke(this, EventArgs.Empty);

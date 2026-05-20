@@ -365,6 +365,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
+            RecordedActionKind.WaitUntilExists => $"Page.WaitUntilExists(static page => page.{propertyName});",
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
             RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilProgressAtLeast => $"Page.WaitUntilProgressAtLeast(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",

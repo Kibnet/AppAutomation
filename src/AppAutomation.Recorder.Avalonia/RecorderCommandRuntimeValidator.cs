@@ -134,6 +134,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.WaitUntilIsSelected => ValidateControlType(step, target, [UiControlType.RadioButton, UiControlType.TabItem])
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsEnabled => RequireBool(step, target),
+            RecordedActionKind.WaitUntilExists => Enumerable.Empty<RecorderRuntimeValidationFinding>(),
             RecordedActionKind.WaitUntilGridRowsAtLeast => ValidateGridAction(step, target)
                 .Concat(RequireNonNegativeInt(step.IntValue, target, "grid row count")),
             RecordedActionKind.WaitUntilGridCellEquals => ValidateGridAction(step, target)

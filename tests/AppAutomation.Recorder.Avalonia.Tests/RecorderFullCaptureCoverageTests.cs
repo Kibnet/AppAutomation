@@ -316,6 +316,7 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.WaitUntilIsToggled, Descriptor("PinToggleButton", UiControlType.ToggleButton), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsSelected, Descriptor("PrimaryRadioButton", UiControlType.RadioButton), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsEnabled, Descriptor("AnyControl", UiControlType.AutomationElement), BoolValue: true),
+            new RecordedStep(RecordedActionKind.WaitUntilExists, Descriptor("LatePanel", UiControlType.AutomationElement)),
             new RecordedStep(RecordedActionKind.SelectListBoxItem, Descriptor("HistoryList", UiControlType.ListBox), StringValue: "Fibonacci"),
             new RecordedStep(RecordedActionKind.WaitUntilGridRowsAtLeast, Descriptor("OrdersGrid", UiControlType.Grid), IntValue: 3),
             new RecordedStep(RecordedActionKind.WaitUntilGridCellEquals, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "EX-13"),
