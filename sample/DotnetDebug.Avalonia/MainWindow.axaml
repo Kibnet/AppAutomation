@@ -112,11 +112,22 @@
                     </Border>
                 </Grid>
 
-                <TextBlock Grid.Row="5"
-                           x:Name="ErrorText"
-                           automation:AutomationProperties.AutomationId="ErrorText"
-                           Foreground="#C62828"
-                           FontWeight="SemiBold" />
+                <StackPanel Grid.Row="5" Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                        <Button x:Name="ShowDelayedStatusButton"
+                                automation:AutomationProperties.AutomationId="ShowDelayedStatusButton"
+                                Content="Show delayed status"
+                                Click="OnShowDelayedStatusClick" />
+                        <StackPanel x:Name="DelayedStatusHost"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="ErrorText"
+                               automation:AutomationProperties.AutomationId="ErrorText"
+                               Foreground="#C62828"
+                               FontWeight="SemiBold" />
+                </StackPanel>
             </Grid>
         </TabItem>
 

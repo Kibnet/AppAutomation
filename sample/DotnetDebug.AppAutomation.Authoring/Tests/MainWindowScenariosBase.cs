@@ -11,6 +11,9 @@ namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
     where TSession : class, IUiTestSession
 {
+    private const int DelayedStatusTimeoutMs = 3000;
+    private const string DelayedStatusReadyText = "Delayed status ready";
+
     [Test]
     [NotInParallel(DesktopUiConstraint)]
     public async Task Calculate_Gcd_WithDefaultSettings_ShowsResultStepsAndHistory()
@@ -106,6 +109,37 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
         }
 
         await Assert.That(Page.HistoryList.Items.Count).IsEqualTo(initialHistoryItems);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task WaitUntilExists_DelayedStatusAppearsBeforeTextAssertion()
+    {
+        RunDelayedStatusScenario_WithWaitUntilExists();
+
+        await UiAssert.TextEqualsAsync(() => Page.DelayedStatusLabel.Text, DelayedStatusReadyText);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task WaitUntilExists_DelayedStatusWithoutExistsWait_FailsOnTextAssertion()
+    {
+        Exception? exception = null;
+        try
+        {
+            RunDelayedStatusScenario_WithoutWaitUntilExists();
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.Message).Contains("DelayedStatusLabel");
+            await Assert.That(exception.Message).Contains("not found");
+        }
     }
 
     [Test]
@@ -483,5 +517,20 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             .WaitUntilNameEquals(p => p.HierarchyResultLabel, "No node selected");
 
         await UiAssert.TextEqualsAsync(() => Page.HierarchyResultLabel.Text, "No node selected");
+    }
+
+    private void RunDelayedStatusScenario_WithWaitUntilExists()
+    {
+        Page
+            .ClickButton(static page => page.ShowDelayedStatusButton)
+            .WaitUntilExists(static page => page.DelayedStatusLabel, DelayedStatusTimeoutMs)
+            .WaitUntilTextEquals(static page => page.DelayedStatusLabel, DelayedStatusReadyText, DelayedStatusTimeoutMs);
+    }
+
+    private void RunDelayedStatusScenario_WithoutWaitUntilExists()
+    {
+        Page
+            .ClickButton(static page => page.ShowDelayedStatusButton)
+            .WaitUntilTextEquals(static page => page.DelayedStatusLabel, DelayedStatusReadyText, DelayedStatusTimeoutMs);
     }
 }
