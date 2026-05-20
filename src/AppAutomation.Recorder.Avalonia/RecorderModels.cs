@@ -47,7 +47,8 @@ public enum RecordedActionKind
     EditGridCellText = 39,
     EditGridCellNumber = 40,
     EditGridCellDate = 41,
-    SelectGridCellComboItem = 42
+    SelectGridCellComboItem = 42,
+    WaitUntilExists = 43
 }
 
 public enum RecorderAssertionMode
@@ -55,7 +56,8 @@ public enum RecorderAssertionMode
     Auto = 0,
     Text = 1,
     Enabled = 2,
-    Checked = 3
+    Checked = 3,
+    Exists = 4
 }
 
 public enum RecorderValidationStatus

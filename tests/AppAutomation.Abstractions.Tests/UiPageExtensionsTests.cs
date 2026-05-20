@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AppAutomation.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -222,6 +223,108 @@ public sealed class UiPageExtensionsTests
         var returnedPage = page.WaitUntilTextContains(static candidate => candidate.SearchBox, "Beta");
 
         await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilExists_ReturnsPage_WhenControlAppearsAfterInitialMissing()
+    {
+        var label = new FakeLabelControl("ResultLabel", "Ready");
+        var resolver = new AppearingResolver("ResultLabel", label, failuresBeforeSuccess: 2);
+        var page = new DiagnosticsPage(resolver);
+
+        var returnedPage = page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(resolver.ResolveAttempts).IsEqualTo(3);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilExists_ReturnsPage_WhenFlaUiNotFoundExceptionAppearsThenResolves()
+    {
+        var label = new FakeLabelControl("ResultLabel", "Ready");
+        var resolver = new AppearingResolver(
+            "ResultLabel",
+            label,
+            failuresBeforeSuccess: 1,
+            propertyName => new ElementNotAvailableException($"Element with locator [AutomationId:{propertyName}] was not found."));
+        var page = new DiagnosticsPage(resolver);
+
+        var returnedPage = page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+            await Assert.That(resolver.ResolveAttempts).IsEqualTo(2);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilExists_ReturnsPage_ForGeneratedGridCellControlProperty()
+    {
+        var cell = new FakeGridCellControl("EX-R1");
+        var page = new GridCellPage(new FakeResolver(("ResultCell", cell)));
+
+        var returnedPage = page.WaitUntilExists(static candidate => candidate.ResultCell, timeoutMs: 1000);
+
+        await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task WaitUntilExists_ThrowsUiOperationException_WhenControlNeverAppears()
+    {
+        var page = new DiagnosticsPage(new FakeResolver());
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 60);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilExists");
+            await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("ResultLabel");
+            await Assert.That(exception.FailureContext.LocatorValue).IsEqualTo("ResultLabel");
+            await Assert.That(exception.FailureContext.ExpectedValue).IsEqualTo("Exists=true");
+            await Assert.That(exception.FailureContext.LastObservedValue).Contains("Unknown control 'ResultLabel'");
+            await Assert.That(exception.InnerException is TimeoutException).IsEqualTo(true);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilExists_FailsFast_WhenResolveFailureIsNotRetryable()
+    {
+        var page = new DiagnosticsPage(new FakeResolver(("ResultLabel", new object())));
+        var stopwatch = Stopwatch.StartNew();
+
+        UiOperationException? exception = null;
+        try
+        {
+            page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000);
+        }
+        catch (UiOperationException ex)
+        {
+            exception = ex;
+        }
+
+        stopwatch.Stop();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("WaitUntilExists");
+            await Assert.That(exception.InnerException is InvalidOperationException).IsEqualTo(true);
+            await Assert.That(exception.Message).Contains("not of expected type");
+            await Assert.That(stopwatch.ElapsedMilliseconds < 500).IsEqualTo(true);
+        }
     }
 
     [Test]
@@ -833,6 +936,14 @@ public sealed class UiPageExtensionsTests
             "EremexDemoDataGridAutomationBridge");
     }
 
+    public static class GridCellPageDefinitions
+    {
+        public static UiControlDefinition ResultCell { get; } = new(
+            "ResultCell",
+            UiControlType.GridCell,
+            "ResultCell");
+    }
+
     public static class FilterPageDefinitions
     {
         public static UiControlDefinition CreatedAtFilter { get; } = new(
@@ -951,6 +1062,16 @@ public sealed class UiPageExtensionsTests
         public IGridControl EremexDemoDataGridAutomationBridge => Resolve<IGridControl>(GridPageDefinitions.EremexDemoDataGridAutomationBridge);
     }
 
+    private sealed class GridCellPage : UiPage
+    {
+        public GridCellPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IGridCellControl ResultCell => Resolve<IGridCellControl>(GridCellPageDefinitions.ResultCell);
+    }
+
     private sealed class FilterPage : UiPage
     {
         public FilterPage(IUiControlResolver resolver)
@@ -1012,6 +1133,53 @@ public sealed class UiPageExtensionsTests
                 ? (control as TControl
                     ?? throw new InvalidOperationException($"Control '{definition.PropertyName}' is not of expected type."))
                 : throw new InvalidOperationException($"Unknown control '{definition.PropertyName}'.");
+        }
+    }
+
+    private sealed class AppearingResolver : IUiControlResolver
+    {
+        private readonly string _propertyName;
+        private readonly object _control;
+        private readonly int _failuresBeforeSuccess;
+        private readonly Func<string, Exception> _notFoundExceptionFactory;
+
+        public AppearingResolver(
+            string propertyName,
+            object control,
+            int failuresBeforeSuccess,
+            Func<string, Exception>? notFoundExceptionFactory = null)
+        {
+            _propertyName = propertyName;
+            _control = control;
+            _failuresBeforeSuccess = failuresBeforeSuccess;
+            _notFoundExceptionFactory = notFoundExceptionFactory
+                ?? (static propertyName => new InvalidOperationException($"Unknown control '{propertyName}'."));
+        }
+
+        public int ResolveAttempts { get; private set; }
+
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
+
+        public TControl Resolve<TControl>(UiControlDefinition definition)
+            where TControl : class
+        {
+            ResolveAttempts++;
+            if (!string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal)
+                || ResolveAttempts <= _failuresBeforeSuccess)
+            {
+                throw _notFoundExceptionFactory(definition.PropertyName);
+            }
+
+            return _control as TControl
+                ?? throw new InvalidOperationException($"Control '{definition.PropertyName}' is not of expected type.");
+        }
+    }
+
+    private sealed class ElementNotAvailableException : Exception
+    {
+        public ElementNotAvailableException(string message)
+            : base(message)
+        {
         }
     }
 

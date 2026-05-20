@@ -13,7 +13,8 @@ internal enum RecorderCommandKind
     CaptureAssertText = 5,
     CaptureAssertEnabled = 6,
     CaptureAssertChecked = 7,
-    ToggleOverlayMinimize = 8
+    CaptureAssertExists = 8,
+    ToggleOverlayMinimize = 9
 }
 
 internal sealed class RecorderHotkeyMap
@@ -64,6 +65,7 @@ internal sealed class RecorderHotkeyMap
             [RecorderCommandKind.CaptureAssertText] = hotkeys.CaptureAssertText,
             [RecorderCommandKind.CaptureAssertEnabled] = hotkeys.CaptureAssertEnabled,
             [RecorderCommandKind.CaptureAssertChecked] = hotkeys.CaptureAssertChecked,
+            [RecorderCommandKind.CaptureAssertExists] = hotkeys.CaptureAssertExists,
             [RecorderCommandKind.ToggleOverlayMinimize] = hotkeys.ToggleOverlayMinimize
         };
     }
@@ -137,6 +139,7 @@ internal sealed class RecorderHotkeyMap
             RecorderCommandKind.CaptureAssertText => "Assert Text",
             RecorderCommandKind.CaptureAssertEnabled => "Assert Enabled",
             RecorderCommandKind.CaptureAssertChecked => "Assert Checked",
+            RecorderCommandKind.CaptureAssertExists => "Assert Exists",
             RecorderCommandKind.ToggleOverlayMinimize => "Overlay",
             _ => command.ToString()
         };

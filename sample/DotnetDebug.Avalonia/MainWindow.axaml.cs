@@ -2,8 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using DotnetDebug;
 
 namespace DotnetDebug.Avalonia;
@@ -30,6 +33,7 @@ public partial class MainWindow : Window
 
     private readonly List<string> _computationHistory = [];
     private string _historyFilter = string.Empty;
+    private int _delayedStatusRequestVersion;
 
     public MainWindow()
     {
@@ -94,6 +98,39 @@ public partial class MainWindow : Window
         _historyFilter = string.Empty;
         HistoryFilterInput.Text = string.Empty;
         ApplyCurrentHistoryFilter();
+    }
+
+    private async void OnShowDelayedStatusClick(object? sender, RoutedEventArgs e)
+    {
+        var requestVersion = ++_delayedStatusRequestVersion;
+        DelayedStatusHost.Children.Clear();
+
+        await Task.Delay(1000).ConfigureAwait(false);
+        try
+        {
+            AddDelayedStatusLabel(requestVersion);
+        }
+        catch (InvalidOperationException)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => AddDelayedStatusLabel(requestVersion));
+        }
+    }
+
+    private void AddDelayedStatusLabel(int requestVersion)
+    {
+        if (requestVersion != _delayedStatusRequestVersion)
+        {
+            return;
+        }
+
+        var label = new Label
+        {
+            Name = "DelayedStatusLabel",
+            Content = "Delayed status ready"
+        };
+        AutomationProperties.SetAutomationId(label, "DelayedStatusLabel");
+        AutomationProperties.SetName(label, "Delayed status ready");
+        DelayedStatusHost.Children.Add(label);
     }
 
     private void OnBuildSeriesClick(object? sender, RoutedEventArgs e)

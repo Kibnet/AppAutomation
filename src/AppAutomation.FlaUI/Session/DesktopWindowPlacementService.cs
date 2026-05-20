@@ -13,10 +13,13 @@ internal static class DesktopWindowPlacementService
 {
     private const int MonitorInfoPrimary = 0x00000001;
     private const int ShowWindowRestore = 9;
+    private const uint SetWindowPosNoSize = 0x0001;
     private const uint SetWindowPosNoZOrder = 0x0004;
     private const uint SetWindowPosNoActivate = 0x0010;
     private const uint SetWindowPosNoOwnerZOrder = 0x0200;
-    private const int BoundsTolerance = 3;
+    private const int PositionTolerance = 3;
+    // Native desktop frameworks can normalize requested outer bounds by chrome, DPI, or min layout.
+    private const int SizeTolerance = 64;
     private const int MonitorDeviceNameLength = 32;
 
     public static void Apply(
@@ -37,12 +40,14 @@ internal static class DesktopWindowPlacementService
         {
             var monitors = EnumerateMonitors();
             var windowHandle = ResolveWindowHandle(application, mainWindow, options.WindowPlacement, monitors);
+            var resizeWindow = options.WindowPlacement.Size is not null;
+
+            RestoreWindow(mainWindow, windowHandle);
             var currentWindowBounds = GetNativeWindowRectangle(windowHandle);
             var placement = ResolvePlacement(options.WindowPlacement, currentWindowBounds, monitors);
 
-            RestoreWindow(mainWindow, windowHandle);
-            ApplyWindowRectangle(windowHandle, placement.TargetBounds, options.WindowPlacement, monitors);
-            WaitForWindowRectangle(windowHandle, placement.TargetBounds, options, monitors);
+            ApplyWindowRectangle(windowHandle, placement.TargetBounds, options.WindowPlacement, monitors, resizeWindow);
+            WaitForWindowRectangle(windowHandle, placement.TargetBounds, options, monitors, resizeWindow);
         }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or PlatformNotSupportedException)
         {
@@ -366,8 +371,15 @@ internal static class DesktopWindowPlacementService
         IntPtr windowHandle,
         Rectangle targetBounds,
         DesktopWindowPlacement placement,
-        IReadOnlyList<DesktopMonitorInfo> monitors)
+        IReadOnlyList<DesktopMonitorInfo> monitors,
+        bool resizeWindow)
     {
+        var flags = SetWindowPosNoZOrder | SetWindowPosNoOwnerZOrder | SetWindowPosNoActivate;
+        if (!resizeWindow)
+        {
+            flags |= SetWindowPosNoSize;
+        }
+
         var succeeded = SetWindowPos(
             windowHandle,
             IntPtr.Zero,
@@ -375,7 +387,7 @@ internal static class DesktopWindowPlacementService
             targetBounds.Y,
             targetBounds.Width,
             targetBounds.Height,
-            SetWindowPosNoZOrder | SetWindowPosNoOwnerZOrder | SetWindowPosNoActivate);
+            flags);
 
         if (!succeeded)
         {
@@ -390,7 +402,8 @@ internal static class DesktopWindowPlacementService
         IntPtr windowHandle,
         Rectangle targetBounds,
         DesktopAppLaunchOptions options,
-        IReadOnlyList<DesktopMonitorInfo> monitors)
+        IReadOnlyList<DesktopMonitorInfo> monitors,
+        bool requireSizeMatch)
     {
         var timeout = options.MainWindowTimeout;
         var pollInterval = options.PollInterval;
@@ -409,7 +422,7 @@ internal static class DesktopWindowPlacementService
                 continue;
             }
 
-            if (IsWithinTolerance(observedBounds, targetBounds))
+            if (IsWithinTolerance(observedBounds, targetBounds, requireSizeMatch))
             {
                 return;
             }
@@ -441,12 +454,19 @@ internal static class DesktopWindowPlacementService
             && inner.Bottom <= outer.Bottom;
     }
 
-    private static bool IsWithinTolerance(Rectangle actual, Rectangle expected)
+    private static bool IsWithinTolerance(Rectangle actual, Rectangle expected, bool requireSizeMatch)
     {
-        return Math.Abs(actual.Left - expected.Left) <= BoundsTolerance
-            && Math.Abs(actual.Top - expected.Top) <= BoundsTolerance
-            && Math.Abs(actual.Width - expected.Width) <= BoundsTolerance
-            && Math.Abs(actual.Height - expected.Height) <= BoundsTolerance;
+        var positionMatches = Math.Abs(actual.Left - expected.Left) <= PositionTolerance
+            && Math.Abs(actual.Top - expected.Top) <= PositionTolerance;
+
+        if (!requireSizeMatch)
+        {
+            return positionMatches;
+        }
+
+        return positionMatches
+            && Math.Abs(actual.Width - expected.Width) <= SizeTolerance
+            && Math.Abs(actual.Height - expected.Height) <= SizeTolerance;
     }
 
     private static InvalidOperationException CreatePlacementException(

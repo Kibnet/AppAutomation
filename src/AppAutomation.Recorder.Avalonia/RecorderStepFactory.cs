@@ -2396,6 +2396,7 @@ internal sealed class RecorderStepFactory
             new TextAssertionExtractor(),
             new CheckedAssertionExtractor(),
             new EnabledAssertionExtractor(),
+            new ExistsAssertionExtractor(),
             .. options.AssertionExtractors
         ];
     }
@@ -2550,6 +2551,23 @@ internal sealed class RecorderStepFactory
                 ClassifyControlType(control),
                 RecordedActionKind.WaitUntilIsEnabled,
                 BoolValue: control.IsEnabled);
+            return true;
+        }
+    }
+
+    private sealed class ExistsAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not RecorderAssertionMode.Exists)
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                ClassifyControlType(control),
+                RecordedActionKind.WaitUntilExists);
             return true;
         }
     }

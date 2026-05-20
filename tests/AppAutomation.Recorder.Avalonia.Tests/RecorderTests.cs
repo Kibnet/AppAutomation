@@ -745,6 +745,25 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task TryCreateAssertionStep_WithExistsMode_CapturesAnyControl()
+    {
+        var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
+        var border = new Border();
+        AutomationProperties.SetAutomationId(border, "LatePanel");
+
+        var result = factory.TryCreateAssertionStep(border, RecorderAssertionMode.Exists);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.WaitUntilExists);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.AutomationElement);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("LatePanel");
+        }
+    }
+
+    [Test]
     public async Task TryCreateAssertionStep_WithGridHintRoot_CapturesRowsAtLeast()
     {
         var options = CreateEremexGridOptions();
@@ -1229,12 +1248,14 @@ public sealed class RecorderTests
         {
             StartStop = "Alt+R",
             Export = "Ctrl+Alt+E",
+            CaptureAssertExists = "Ctrl+Alt+F",
             ToggleOverlayMinimize = "Shift+M"
         };
 
         var map = RecorderHotkeyMap.Create(hotkeys);
         var startStopResolved = map.TryGetCommand(Key.R, KeyModifiers.Alt, out var startStopCommand);
         var exportResolved = map.TryGetCommand(Key.E, KeyModifiers.Control | KeyModifiers.Alt, out var exportCommand);
+        var existsResolved = map.TryGetCommand(Key.F, KeyModifiers.Control | KeyModifiers.Alt, out var existsCommand);
         var overlayResolved = map.TryGetCommand(Key.M, KeyModifiers.Shift, out var overlayCommand);
         var legend = map.BuildLegend();
 
@@ -1244,10 +1265,13 @@ public sealed class RecorderTests
             await Assert.That(startStopCommand).IsEqualTo(RecorderCommandKind.StartStop);
             await Assert.That(exportResolved).IsEqualTo(true);
             await Assert.That(exportCommand).IsEqualTo(RecorderCommandKind.Export);
+            await Assert.That(existsResolved).IsEqualTo(true);
+            await Assert.That(existsCommand).IsEqualTo(RecorderCommandKind.CaptureAssertExists);
             await Assert.That(overlayResolved).IsEqualTo(true);
             await Assert.That(overlayCommand).IsEqualTo(RecorderCommandKind.ToggleOverlayMinimize);
             await Assert.That(legend.Contains("Alt+R: Start/Stop", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Ctrl+Alt+E: Export", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(legend.Contains("Ctrl+Alt+F: Assert Exists", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Shift+M: Overlay", StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
@@ -1593,6 +1617,29 @@ public sealed class RecorderTests
             await Assert.That(bangCommand).IsEqualTo(RecorderCommandKind.Save);
             await Assert.That(map.BuildLegend()).Contains("/: Start/Stop");
             await Assert.That(map.BuildLegend()).Contains("Shift+1: Save");
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CommandPath_CapturesExistsAssertion()
+    {
+        var root = new StackPanel();
+        var statusLabel = new TextBlock { Text = "Ready" };
+        AutomationProperties.SetAutomationId(statusLabel, "StatusLabel");
+        root.Children.Add(statusLabel);
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.SetLastHoveredControlForTesting(statusLabel);
+        session.HandleRecorderCommandForTesting(RecorderCommandKind.CaptureAssertExists);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.WaitUntilExists(static page => page.StatusLabel);");
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
         }
     }
 

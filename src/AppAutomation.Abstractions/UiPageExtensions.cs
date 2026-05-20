@@ -932,6 +932,90 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Waits until a control can be resolved.
+    /// </summary>
+    /// <typeparam name="TSelf">The page type.</typeparam>
+    /// <typeparam name="TControl">The control property type.</typeparam>
+    /// <param name="page">The page instance.</param>
+    /// <param name="selector">Expression selecting the control.</param>
+    /// <param name="timeoutMs">Maximum time in milliseconds to wait.</param>
+    /// <returns>The page instance for fluent chaining.</returns>
+    /// <exception cref="UiOperationException">Thrown when the control cannot be resolved within the timeout.</exception>
+    public static TSelf WaitUntilExists<TSelf, TControl>(
+        this TSelf page,
+        Expression<Func<TSelf, TControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+        where TControl : class
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(selector);
+
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var accessor = selector.Compile();
+        var lastObservedValue = "<not checked>";
+        var timeoutMessage = "Control did not appear.";
+        var waitOptions = new UiWaitOptions
+        {
+            Timeout = timeout,
+            PollInterval = TimeSpan.FromMilliseconds(100)
+        };
+
+        try
+        {
+            UiWait.Until(
+                () =>
+                {
+                    try
+                    {
+                        var control = accessor(page);
+                        lastObservedValue = control is null
+                            ? "<not found: selector returned null>"
+                            : DescribeResolvedControl<TControl>(control);
+                        return control is not null;
+                    }
+                    catch (Exception ex) when (IsRetryableResolveFailure(ex))
+                    {
+                        lastObservedValue = $"<not found: {ex.Message}>";
+                        return false;
+                    }
+                },
+                static value => value,
+                waitOptions,
+                timeoutMessage);
+        }
+        catch (TimeoutException ex)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                timeoutMessage,
+                expectedValue: "Exists=true",
+                lastObservedValueFactory: () => lastObservedValue,
+                nameof(WaitUntilExists),
+                ex);
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateUiOperationException(
+                page,
+                selector,
+                timeout,
+                startedAtUtc,
+                "Control existence check failed.",
+                expectedValue: "Exists=true",
+                lastObservedValueFactory: () => lastObservedValue,
+                nameof(WaitUntilExists),
+                ex);
+        }
+
+        return page;
+    }
+
+    /// <summary>
     /// Waits until a control reaches the expected enabled state.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -2367,6 +2451,38 @@ public static class UiPageExtensions
         }
 
         return $"{failureMessage} Operation failed before timeout: {exception.Message}. {detailsText}.";
+    }
+
+    private static bool IsRetryableResolveFailure(Exception exception)
+    {
+        if (!IsKnownResolveFailureException(exception) || string.IsNullOrWhiteSpace(exception.Message))
+        {
+            return false;
+        }
+
+        if (exception.Message.Contains("not of expected type", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return exception.Message.Contains("Unknown control", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("cannot be found", StringComparison.OrdinalIgnoreCase)
+            || exception.Message.Contains("was not found", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsKnownResolveFailureException(Exception exception)
+    {
+        return exception is InvalidOperationException
+            || string.Equals(exception.GetType().Name, "ElementNotAvailableException", StringComparison.Ordinal);
+    }
+
+    private static string DescribeResolvedControl<TControl>(TControl control)
+        where TControl : class
+    {
+        return control is IUiControl uiControl
+            ? $"Resolved: {uiControl.AutomationId}"
+            : $"Resolved: {typeof(TControl).Name}";
     }
 
     private static UiFailureContext AttachArtifacts(UiPage page, UiFailureContext failureContext)
