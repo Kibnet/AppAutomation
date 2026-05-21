@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -2400,6 +2401,10 @@ public sealed class RecorderTests
             await Assert.That(journalEmpty!.IsVisible).IsEqualTo(false);
             await Assert.That(journalPanel).IsNotNull();
             await Assert.That(journalPanel!.Children.Count).IsEqualTo(2);
+            await Assert.That(CollectText(journalPanel.Children[0])).Contains("#1");
+            await Assert.That(CollectText(journalPanel.Children[0])).Contains("Page.EnterText(static page => page.SearchBox, \"Alpha\");");
+            await Assert.That(CollectText(journalPanel.Children[1])).Contains("#2");
+            await Assert.That(CollectText(journalPanel.Children[1])).Contains("Page.ClickButton(static page => page.RunButton);");
         }
 
         var actionSession = new FakeRecorderSession
@@ -2438,6 +2443,163 @@ public sealed class RecorderTests
             await Assert.That(actionSession.RemovedStepIds).Contains(firstStepId);
             await Assert.That(actionSession.IgnoredStepIds).Contains(firstStepId);
             await Assert.That(actionSession.RetriedStepIds).Contains(firstStepId);
+        }
+    }
+
+    [Test]
+    public async Task Overlay_RendersStepNumbers_AndResetsAutoscrollStateAfterEmptyJournal()
+    {
+        var firstStepId = Guid.NewGuid();
+        var secondStepId = Guid.NewGuid();
+        var session = new FakeRecorderSession
+        {
+            StepCount = 1,
+            PersistableStepCount = 1,
+            LatestStatus = "Ready.",
+            LatestPreview = "Page.EnterText(static page => page.SearchBox, \"Alpha\");",
+            LatestValidationStatus = RecorderValidationStatus.Valid,
+            SessionSummary = "1 steps"
+        };
+        session.SetJournal(
+        [
+            new RecorderStepJournalEntry(
+                firstStepId,
+                "Page.EnterText(static page => page.SearchBox, \"Alpha\");",
+                "Ready to persist.",
+                RecorderValidationStatus.Valid,
+                CanPersist: true,
+                IsIgnored: false,
+                RecorderStepReviewState.Active,
+                FailureCode: null,
+                LastValidationAt: DateTimeOffset.UtcNow)
+        ]);
+
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+
+        var scrollViewer = overlay.FindControl<ScrollViewer>("StepJournalScrollViewer");
+        var journalPanel = overlay.FindControl<Panel>("StepJournalPanel");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scrollViewer).IsNotNull();
+            await Assert.That(journalPanel).IsNotNull();
+            await Assert.That(journalPanel!.Children.Count).IsEqualTo(1);
+            await Assert.That(CollectText(journalPanel.Children[0])).Contains("#1");
+        }
+
+        session.SetJournal(
+        [
+            session.StepJournal[0],
+            new RecorderStepJournalEntry(
+                secondStepId,
+                "Page.ClickButton(static page => page.RunButton);",
+                "Ready to persist.",
+                RecorderValidationStatus.Valid,
+                CanPersist: true,
+                IsIgnored: false,
+                RecorderStepReviewState.Active,
+                FailureCode: null,
+                LastValidationAt: DateTimeOffset.UtcNow)
+        ]);
+        session.RaiseChanged();
+        await DrainUiAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(journalPanel!.Children.Count).IsEqualTo(2);
+            await Assert.That(CollectText(journalPanel.Children[1])).Contains("#2");
+            await Assert.That(CollectText(journalPanel.Children[1])).Contains("Page.ClickButton(static page => page.RunButton);");
+        }
+
+        session.SetJournal([]);
+        session.RaiseChanged();
+        await DrainUiAsync();
+
+        await Assert.That(journalPanel!.Children.Count).IsEqualTo(0);
+
+        session.SetJournal(
+        [
+            new RecorderStepJournalEntry(
+                Guid.NewGuid(),
+                "Page.ClickButton(static page => page.ResetButton);",
+                "Ready to persist.",
+                RecorderValidationStatus.Valid,
+                CanPersist: true,
+                IsIgnored: false,
+                RecorderStepReviewState.Active,
+                FailureCode: null,
+                LastValidationAt: DateTimeOffset.UtcNow)
+        ]);
+        session.RaiseChanged();
+        await DrainUiAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(journalPanel.Children.Count).IsEqualTo(1);
+            await Assert.That(CollectText(journalPanel.Children[0])).Contains("#1");
+            await Assert.That(CollectText(journalPanel.Children[0])).Contains("Page.ClickButton(static page => page.ResetButton);");
+        }
+    }
+
+    [Test]
+    public async Task Overlay_AutoscrollsStepJournal_WhenEntryCountIncreases()
+    {
+        var session = new FakeRecorderSession
+        {
+            StepCount = 2,
+            PersistableStepCount = 2,
+            LatestStatus = "Ready.",
+            LatestPreview = "Page.ClickButton(static page => page.Step2Button);",
+            LatestValidationStatus = RecorderValidationStatus.Valid,
+            SessionSummary = "2 steps"
+        };
+        session.SetJournal(
+            Enumerable.Range(1, 2)
+                .Select(static index => CreateJournalEntry(
+                    Guid.NewGuid(),
+                    $"Page.ClickButton(static page => page.Step{index}Button);"))
+                .ToArray());
+
+        var overlay = new RecorderOverlay();
+        var scrolledViewers = new List<ScrollViewer>();
+        overlay.ScrollToEndForTesting = scrollViewer => scrolledViewers.Add(scrollViewer);
+
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var scrollViewer = overlay.FindControl<ScrollViewer>("StepJournalScrollViewer");
+        var journalPanel = overlay.FindControl<Panel>("StepJournalPanel");
+        await Assert.That(scrollViewer).IsNotNull();
+        await Assert.That(journalPanel).IsNotNull();
+
+        await DrainUiAsync();
+        await DrainUiAsync();
+        scrolledViewers.Clear();
+
+        session.SetJournal(
+            session.StepJournal
+                .Select(static entry => entry with { StatusMessage = "Still ready." })
+                .ToArray());
+        session.RaiseChanged();
+        await DrainUiAsync();
+        await DrainUiAsync();
+
+        await Assert.That(scrolledViewers.Count).IsEqualTo(0);
+
+        var newEntry = CreateJournalEntry(
+            Guid.NewGuid(),
+            "Page.ClickButton(static page => page.Step3Button);");
+        session.SetJournal(session.StepJournal.Concat([newEntry]).ToArray());
+        session.RaiseChanged();
+        await DrainUiAsync();
+        await DrainUiAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scrolledViewers.Count).IsEqualTo(1);
+            await Assert.That(scrolledViewers[0]).IsSameReferenceAs(scrollViewer);
+            await Assert.That(journalPanel!.Children.Count).IsEqualTo(3);
+            await Assert.That(CollectText(journalPanel.Children[^1])).Contains("#3");
+            await Assert.That(CollectText(journalPanel.Children[^1])).Contains("Page.ClickButton(static page => page.Step3Button);");
         }
     }
 
@@ -3504,6 +3666,62 @@ public sealed class RecorderTests
             }
 
             await Task.Delay(10);
+        }
+    }
+
+    private static Task DrainUiAsync()
+    {
+        Dispatcher.UIThread.RunJobs();
+        return Task.CompletedTask;
+    }
+
+    private static RecorderStepJournalEntry CreateJournalEntry(Guid stepId, string preview)
+    {
+        return new RecorderStepJournalEntry(
+            stepId,
+            preview,
+            "Ready to persist.",
+            RecorderValidationStatus.Valid,
+            CanPersist: true,
+            IsIgnored: false,
+            RecorderStepReviewState.Active,
+            FailureCode: null,
+            LastValidationAt: DateTimeOffset.UtcNow);
+    }
+
+    private static string CollectText(Control control)
+    {
+        var parts = new List<string>();
+        CollectText(control, parts);
+        return string.Join(Environment.NewLine, parts);
+    }
+
+    private static void CollectText(Control control, List<string> parts)
+    {
+        switch (control)
+        {
+            case TextBlock textBlock when !string.IsNullOrWhiteSpace(textBlock.Text):
+                parts.Add(textBlock.Text!);
+                break;
+            case Button { Content: string buttonText } when !string.IsNullOrWhiteSpace(buttonText):
+                parts.Add(buttonText);
+                break;
+            case ContentControl { Content: string contentText } when !string.IsNullOrWhiteSpace(contentText):
+                parts.Add(contentText);
+                break;
+            case ContentControl { Content: Control contentControl }:
+                CollectText(contentControl, parts);
+                break;
+            case Border { Child: Control child }:
+                CollectText(child, parts);
+                break;
+            case Panel panel:
+                foreach (var childControl in panel.Children.OfType<Control>())
+                {
+                    CollectText(childControl, parts);
+                }
+
+                break;
         }
     }
 

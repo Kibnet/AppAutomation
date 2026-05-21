@@ -31,9 +31,11 @@ internal sealed partial class RecorderOverlay : UserControl
     private TextBlock? _shortcutText;
     private TextBlock? _validationBadgeText;
     private TextBlock? _journalEmptyText;
+    private ScrollViewer? _stepJournalScrollViewer;
     private Panel? _stepJournalPanel;
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
+    private int _renderedJournalEntryCount;
 
     public RecorderOverlay()
     {
@@ -42,6 +44,8 @@ internal sealed partial class RecorderOverlay : UserControl
     }
 
     public event EventHandler? ExportRequested;
+
+    internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
 
     public void Attach(IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
     {
@@ -118,6 +122,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _shortcutText = this.FindControl<TextBlock>("ShortcutText");
         _validationBadgeText = this.FindControl<TextBlock>("ValidationBadgeText");
         _journalEmptyText = this.FindControl<TextBlock>("JournalEmptyText");
+        _stepJournalScrollViewer = this.FindControl<ScrollViewer>("StepJournalScrollViewer");
         _stepJournalPanel = this.FindControl<Panel>("StepJournalPanel");
 
         if (_recordButton is not null)
@@ -389,20 +394,28 @@ internal sealed partial class RecorderOverlay : UserControl
         var entries = _sessionDetails?.StepJournal
             ?.ToArray()
             ?? Array.Empty<RecorderStepJournalEntry>();
+        var shouldScrollToEnd = entries.Length > _renderedJournalEntryCount;
 
         _journalEmptyText.IsVisible = entries.Length == 0;
         if (entries.Length == 0)
         {
+            _renderedJournalEntryCount = 0;
             return;
         }
 
-        foreach (var entry in entries)
+        for (var index = 0; index < entries.Length; index++)
         {
-            _stepJournalPanel.Children.Add(CreateStepJournalItem(entry));
+            _stepJournalPanel.Children.Add(CreateStepJournalItem(entries[index], index + 1));
+        }
+
+        _renderedJournalEntryCount = entries.Length;
+        if (shouldScrollToEnd)
+        {
+            ScrollStepJournalToEnd();
         }
     }
 
-    private Control CreateStepJournalItem(RecorderStepJournalEntry entry)
+    private Control CreateStepJournalItem(RecorderStepJournalEntry entry, int displayNumber)
     {
         var border = new Border
         {
@@ -423,14 +436,14 @@ internal sealed partial class RecorderOverlay : UserControl
         };
         var badge = new TextBlock
         {
-            Text = entry.IsIgnored
+            Text = $"#{displayNumber} " + (entry.IsIgnored
                 ? "IGNORED"
                 : entry.ValidationStatus switch
                 {
                     RecorderValidationStatus.Warning => "WARN",
                     RecorderValidationStatus.Invalid => "INVALID",
                     _ => "VALID"
-                },
+                }),
             Foreground = entry.IsIgnored
                 ? GetBrush("RecorderMuted")
                 : entry.ValidationStatus switch
@@ -489,6 +502,32 @@ internal sealed partial class RecorderOverlay : UserControl
         container.Children.Add(actions);
         border.Child = container;
         return border;
+    }
+
+    private void ScrollStepJournalToEnd()
+    {
+        if (_stepJournalScrollViewer is null)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (_stepJournalScrollViewer is not { } scrollViewer)
+                {
+                    return;
+                }
+
+                if (ScrollToEndForTesting is { } scrollToEnd)
+                {
+                    scrollToEnd(scrollViewer);
+                    return;
+                }
+
+                scrollViewer.ScrollToEnd();
+            },
+            DispatcherPriority.Background);
     }
 
     internal static RecorderOverlayTheme ResolveOverlayTheme(RecorderOverlayTheme? requestedTheme)
