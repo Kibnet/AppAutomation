@@ -64,6 +64,26 @@ internal sealed class AuthoringProjectScanner
             methodNames);
     }
 
+    internal IReadOnlyList<ExistingControlInfo> ScanControlsFile(
+        string filePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        if (!File.Exists(filePath))
+        {
+            return Array.Empty<ExistingControlInfo>();
+        }
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filePath), cancellationToken: cancellationToken);
+        var root = syntaxTree.GetCompilationUnitRoot(cancellationToken);
+        return root
+            .DescendantNodes()
+            .OfType<ClassDeclarationSyntax>()
+            .SelectMany(ParseControls)
+            .ToArray();
+    }
+
     internal static string CreateControlKey(UiLocatorKind locatorKind, string locatorValue)
     {
         return $"{locatorKind}:{locatorValue}";
@@ -71,7 +91,9 @@ internal sealed class AuthoringProjectScanner
 
     private static bool IsIgnoredPath(string filePath)
     {
-        return filePath.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+        var fileName = Path.GetFileName(filePath);
+        return fileName.Contains(".autosave.", StringComparison.OrdinalIgnoreCase)
+            || filePath.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
             || filePath.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
     }
 

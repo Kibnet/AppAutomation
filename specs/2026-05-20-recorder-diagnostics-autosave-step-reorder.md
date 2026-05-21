@@ -66,7 +66,11 @@ Recorder требует ручных действий для диагности�
 - Autosave:
   - после успешного добавления, удаления, ignore/restore, retry validation и reorder шагов вызвать `RequestAutosaveIfRecording()`;
   - autosave запускается только при `_state == RecorderSessionState.Recording`;
-  - autosave использует обычный save pipeline с `outputDirectory: null`;
+  - autosave использует отдельный autosave pipeline с `outputDirectory: null`, чтобы не создавать обычный snapshot на каждое изменение;
+  - autosave-файл сценария стабилен в рамках одной `RecorderSession` и имеет признак `.autosave.` в имени;
+  - autosave recovery files пишутся с расширением `.g.cs.autosave`: содержимое остаётся валидным C#, но SDK-проект не подхватывает их как обычные `.cs`;
+  - autosave source содержит комментарий recovery purpose, чтобы файл было проще вручную забрать после падения приложения;
+  - обычный scanner игнорирует `.autosave.` артефакты, чтобы ручной save не зависел от recovery files;
   - если save/export/autosave уже идёт, пометить pending autosave и выполнить его после завершения активной операции, если запись всё ещё включена;
   - manual save/export не должны запускать рекурсивный бесконечный autosave; queued autosave должен сбрасываться после фактического запуска.
 - Reorder:
@@ -114,6 +118,8 @@ Recorder требует ручных действий для диагности�
   - `state == Recording && !IsBusy` => start autosave;
   - `state == Recording && IsBusy` => set pending autosave;
   - active operation completed && pending autosave && state still Recording => run one autosave.
+  - all autosaves in one recorder session overwrite the same `.g.cs.autosave` scenario file.
+  - manual save keeps producing a normal non-autosave snapshot file.
 - Reorder:
   - moving earlier from index `0` is a no-op/false;
   - moving later from last index is a no-op/false;
@@ -172,6 +178,7 @@ Recorder требует ручных действий для диагности�
 ## 12. Риски и edge cases
 - Autosave может перезаписать status сразу после step capture; это приемлемо, но tests должны проверять operation count/order, а не transient status.
 - Autosave во время export может записать default scenario path после export; pending autosave запускается только если запись всё ещё активна и был change во время busy.
+- Autosave recovery artifacts могут лежать рядом с обычными generated files; они не должны попадать в обычную компиляцию и scanner должен их игнорировать для normal save.
 - Diagnostic default может увеличить filesystem writes; явное отключение остаётся доступно.
 - Overlay order change с newest-first на execution-order может изменить привычный просмотр; это осознанно ради понятности reorder стрелок и generated scenario order.
 

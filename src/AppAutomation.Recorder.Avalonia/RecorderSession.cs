@@ -34,6 +34,7 @@ internal sealed class RecorderSession :
     private readonly RecorderCommandRuntimeValidator _runtimeValidator;
     private readonly AuthoringCodeGenerator _codeGenerator;
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _saveOperation;
+    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _autosaveOperation;
     private readonly List<RecordedStep> _steps = new();
     private readonly List<Action> _detachActions = new();
     private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
@@ -77,6 +78,7 @@ internal sealed class RecorderSession :
         Func<Control?>? validationRootProvider,
         bool attachWindowHandlers,
         Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? saveOperation = null,
+        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? autosaveOperation = null,
         RecorderHotkeySettings? initialHotkeySettings = null,
         RecorderHotkeySettingsStore? hotkeySettingsStore = null)
     {
@@ -96,6 +98,10 @@ internal sealed class RecorderSession :
         _codeGenerator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), _logger);
         _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
             _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
+        _autosaveOperation = autosaveOperation
+            ?? saveOperation
+            ?? ((steps, outputDirectory, cancellationToken) =>
+                _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
         _defaultOutputDescription = _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null);
         _diagnosticLogFilePath = ResolveDiagnosticLogFilePath(options, _defaultOutputDescription);
         _isDiagnosticLogFileEnabled = options.DiagnosticLog.WriteToFile;
@@ -1966,7 +1972,7 @@ internal sealed class RecorderSession :
             _activeOperationTask = operationCompletion.Task;
             _ = ExecuteManagedOperationAsync(
                 "Autosave",
-                operationCancellationToken => SaveCoreAsync(outputDirectory: null, operationCancellationToken),
+                operationCancellationToken => AutosaveCoreAsync(outputDirectory: null, operationCancellationToken),
                 CancellationToken.None,
                 operationCompletion);
         }
@@ -2020,6 +2026,15 @@ internal sealed class RecorderSession :
         FlushPendingState();
         var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
         var result = await _saveOperation(stepsToPersist, outputDirectory, cancellationToken);
+        ApplySaveResult(result);
+        return result;
+    }
+
+    private async Task<RecorderSaveResult> AutosaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
+    {
+        FlushPendingState();
+        var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
+        var result = await _autosaveOperation(stepsToPersist, outputDirectory, cancellationToken);
         ApplySaveResult(result);
         return result;
     }
