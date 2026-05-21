@@ -2571,17 +2571,13 @@ public sealed class RecorderTests
         await Assert.That(scrollViewer).IsNotNull();
         await Assert.That(journalPanel).IsNotNull();
 
-        await DrainUiAsync();
-        await DrainUiAsync();
         scrolledViewers.Clear();
 
         session.SetJournal(
             session.StepJournal
                 .Select(static entry => entry with { StatusMessage = "Still ready." })
                 .ToArray());
-        session.RaiseChanged();
-        await DrainUiAsync();
-        await DrainUiAsync();
+        overlay.RefreshForTesting();
 
         await Assert.That(scrolledViewers.Count).IsEqualTo(0);
 
@@ -2589,9 +2585,7 @@ public sealed class RecorderTests
             Guid.NewGuid(),
             "Page.ClickButton(static page => page.Step3Button);");
         session.SetJournal(session.StepJournal.Concat([newEntry]).ToArray());
-        session.RaiseChanged();
-        await DrainUiAsync();
-        await DrainUiAsync();
+        overlay.RefreshForTesting();
 
         using (Assert.Multiple())
         {
