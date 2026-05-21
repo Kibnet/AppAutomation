@@ -1354,7 +1354,7 @@ public sealed class RecorderTests
         var startStopResolved = map.TryGetCommand(Key.R, KeyModifiers.Alt, out var startStopCommand);
         var exportResolved = map.TryGetCommand(Key.E, KeyModifiers.Control | KeyModifiers.Alt, out var exportCommand);
         var existsResolved = map.TryGetCommand(Key.F, KeyModifiers.Control | KeyModifiers.Alt, out var existsCommand);
-        var overlayResolved = map.TryGetCommand(Key.M, KeyModifiers.Shift, out var overlayCommand);
+        var overlayResolved = map.TryGetCommand(Key.M, KeyModifiers.Shift, out _);
         var legend = map.BuildLegend();
 
         using (Assert.Multiple())
@@ -1365,12 +1365,12 @@ public sealed class RecorderTests
             await Assert.That(exportCommand).IsEqualTo(RecorderCommandKind.Export);
             await Assert.That(existsResolved).IsEqualTo(true);
             await Assert.That(existsCommand).IsEqualTo(RecorderCommandKind.CaptureAssertExists);
-            await Assert.That(overlayResolved).IsEqualTo(true);
-            await Assert.That(overlayCommand).IsEqualTo(RecorderCommandKind.ToggleOverlayMinimize);
+            await Assert.That(overlayResolved).IsEqualTo(false);
             await Assert.That(legend.Contains("Alt+R: Start/Stop", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Ctrl+Alt+E: Export", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Ctrl+Alt+F: Assert Exists", StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(legend.Contains("Shift+M: Overlay", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(legend.Contains("Shift+M", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(legend.Contains("Overlay", StringComparison.Ordinal)).IsEqualTo(false);
         }
     }
 
@@ -1434,6 +1434,39 @@ public sealed class RecorderTests
             await Assert.That(loaded).IsNotNull();
             await Assert.That(loaded!.Gestures[RecorderCommandKind.StartStop]).IsEqualTo("Alt+R");
             await Assert.That(loaded.Gestures[RecorderCommandKind.Save]).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task HotkeySettingsStore_LoadsDeprecatedOverlayMinimizeGestureButDoesNotActivateIt()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hotkeys.json");
+        File.WriteAllText(
+            path,
+            """
+            {
+              "Gestures": {
+                "StartStop": "Alt+R",
+                "ToggleOverlayMinimize": "Shift+M"
+              }
+            }
+            """);
+        var store = new RecorderHotkeySettingsStore(path);
+
+        var loaded = store.TryLoad(out var settings, out var error);
+        var effective = RecorderHotkeySettings.CreateEffective(new RecorderHotkeys(), settings);
+        var startStopResolved = effective.ToMap().TryGetCommand(Key.R, KeyModifiers.Alt, out var startStopCommand);
+        var overlayResolved = effective.ToMap().TryGetCommand(Key.M, KeyModifiers.Shift, out _);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(loaded).IsEqualTo(true);
+            await Assert.That(error).IsNull();
+            await Assert.That(settings).IsNotNull();
+            await Assert.That(startStopResolved).IsEqualTo(true);
+            await Assert.That(startStopCommand).IsEqualTo(RecorderCommandKind.StartStop);
+            await Assert.That(overlayResolved).IsEqualTo(false);
         }
     }
 
@@ -2169,7 +2202,7 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task Overlay_MinimizeRestore_UpdatesPresentationAndCounters()
+    public async Task Overlay_Attach_RemovesMinimizeSurfaceAndUpdatesPresentationAndCounters()
     {
         var session = new FakeRecorderSession
         {
@@ -2181,10 +2214,6 @@ public sealed class RecorderTests
             CurrentScenarioFilePath = @"C:\Recorder\Recorded\MainWindowScenariosBase.RecordedSmoke.<timestamp>.g.cs"
         };
         var overlay = new RecorderOverlay();
-        var minimizedRaised = 0;
-        var restoredRaised = 0;
-        overlay.MinimizeRequested += (_, _) => minimizedRaised++;
-        overlay.RestoreRequested += (_, _) => restoredRaised++;
 
         overlay.Attach(
             session,
@@ -2193,7 +2222,8 @@ public sealed class RecorderTests
                 Overlay = new RecorderOverlayOptions
                 {
                     EnableExportButton = true,
-                    ShowShortcutLegend = true
+                    ShowShortcutLegend = true,
+                    StartMinimized = true
                 }
             });
 
@@ -2201,11 +2231,10 @@ public sealed class RecorderTests
         var validationBadge = overlay.FindControl<TextBlock>("ValidationBadgeText");
         var exportButton = overlay.FindControl<Button>("ExportButton");
         var expandedPanel = overlay.FindControl<Control>("ExpandedPanel");
+        var minimizeButton = overlay.FindControl<Button>("MinimizeButton");
+        var restoreButton = overlay.FindControl<Button>("RestoreButton");
         var minimizedPanel = overlay.FindControl<Control>("MinimizedPanel");
         var scenarioPathText = overlay.FindControl<TextBlock>("ScenarioPathText");
-
-        overlay.Minimize();
-        overlay.Restore();
 
         using (Assert.Multiple())
         {
@@ -2219,11 +2248,9 @@ public sealed class RecorderTests
             await Assert.That(scenarioPathText!.Text).IsEqualTo(@"C:\Recorder\Recorded\MainWindowScenariosBase.RecordedSmoke.<timestamp>.g.cs");
             await Assert.That(expandedPanel).IsNotNull();
             await Assert.That(expandedPanel!.IsVisible).IsEqualTo(true);
-            await Assert.That(minimizedPanel).IsNotNull();
-            await Assert.That(minimizedPanel!.IsVisible).IsEqualTo(false);
-            await Assert.That(minimizedRaised).IsEqualTo(1);
-            await Assert.That(restoredRaised).IsEqualTo(1);
-            await Assert.That(overlay.IsMinimized).IsEqualTo(false);
+            await Assert.That(minimizeButton).IsNull();
+            await Assert.That(restoreButton).IsNull();
+            await Assert.That(minimizedPanel).IsNull();
         }
     }
 

@@ -20,8 +20,6 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _saveButton;
     private Button? _exportButton;
     private Button? _settingsButton;
-    private Button? _minimizeButton;
-    private Button? _restoreButton;
     private Button? _copyDiagnosticLogPathButton;
     private CheckBox? _diagnosticLogCheckBox;
     private TextBlock? _stepCounter;
@@ -32,10 +30,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private TextBlock? _diagnosticLogPathText;
     private TextBlock? _shortcutText;
     private TextBlock? _validationBadgeText;
-    private TextBlock? _minimizedStatusText;
     private TextBlock? _journalEmptyText;
-    private Control? _expandedPanel;
-    private Control? _minimizedPanel;
     private Panel? _stepJournalPanel;
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
@@ -47,12 +42,6 @@ internal sealed partial class RecorderOverlay : UserControl
     }
 
     public event EventHandler? ExportRequested;
-
-    public event EventHandler? MinimizeRequested;
-
-    public event EventHandler? RestoreRequested;
-
-    public bool IsMinimized { get; private set; }
 
     public void Attach(IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
     {
@@ -98,47 +87,7 @@ internal sealed partial class RecorderOverlay : UserControl
             _timer.Start();
         }
 
-        if (options.Overlay.StartMinimized)
-        {
-            Minimize();
-        }
-
         Refresh();
-    }
-
-    public void ToggleMinimized()
-    {
-        if (IsMinimized)
-        {
-            Restore();
-            return;
-        }
-
-        Minimize();
-    }
-
-    public void Minimize()
-    {
-        if (IsMinimized)
-        {
-            return;
-        }
-
-        IsMinimized = true;
-        UpdatePanelVisibility();
-        MinimizeRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    public void Restore()
-    {
-        if (!IsMinimized)
-        {
-            return;
-        }
-
-        IsMinimized = false;
-        UpdatePanelVisibility();
-        RestoreRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnSessionChanged(object? sender, EventArgs e)
@@ -158,8 +107,6 @@ internal sealed partial class RecorderOverlay : UserControl
         _saveButton = this.FindControl<Button>("SaveButton");
         _exportButton = this.FindControl<Button>("ExportButton");
         _settingsButton = this.FindControl<Button>("SettingsButton");
-        _minimizeButton = this.FindControl<Button>("MinimizeButton");
-        _restoreButton = this.FindControl<Button>("RestoreButton");
         _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
         _diagnosticLogCheckBox = this.FindControl<CheckBox>("DiagnosticLogCheckBox");
         _stepCounter = this.FindControl<TextBlock>("StepCounter");
@@ -170,10 +117,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _diagnosticLogPathText = this.FindControl<TextBlock>("DiagnosticLogPathText");
         _shortcutText = this.FindControl<TextBlock>("ShortcutText");
         _validationBadgeText = this.FindControl<TextBlock>("ValidationBadgeText");
-        _minimizedStatusText = this.FindControl<TextBlock>("MinimizedStatusText");
         _journalEmptyText = this.FindControl<TextBlock>("JournalEmptyText");
-        _expandedPanel = this.FindControl<Control>("ExpandedPanel");
-        _minimizedPanel = this.FindControl<Control>("MinimizedPanel");
         _stepJournalPanel = this.FindControl<Panel>("StepJournalPanel");
 
         if (_recordButton is not null)
@@ -201,16 +145,6 @@ internal sealed partial class RecorderOverlay : UserControl
             _settingsButton.Click += OnSettingsClick;
         }
 
-        if (_minimizeButton is not null)
-        {
-            _minimizeButton.Click += (_, _) => Minimize();
-        }
-
-        if (_restoreButton is not null)
-        {
-            _restoreButton.Click += (_, _) => Restore();
-        }
-
         if (_diagnosticLogCheckBox is not null)
         {
             _diagnosticLogCheckBox.Click += OnDiagnosticLogToggleClick;
@@ -221,7 +155,6 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.Click += OnCopyDiagnosticLogPathClick;
         }
 
-        UpdatePanelVisibility();
     }
 
     private void OnRecordClick(object? sender, RoutedEventArgs e)
@@ -374,11 +307,6 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             _statusText.Text = _session.LatestStatus;
             _statusText.Foreground = GetBrush("RecorderMuted");
-        }
-
-        if (_minimizedStatusText is not null)
-        {
-            _minimizedStatusText.Text = _sessionDetails?.SessionSummary ?? _session.LatestStatus;
         }
 
         if (_previewText is not null)
@@ -735,19 +663,6 @@ internal sealed partial class RecorderOverlay : UserControl
         return this.TryFindResource(key, out var value) && value is IBrush brush
             ? brush
             : Brushes.Gray;
-    }
-
-    private void UpdatePanelVisibility()
-    {
-        if (_expandedPanel is not null)
-        {
-            _expandedPanel.IsVisible = !IsMinimized;
-        }
-
-        if (_minimizedPanel is not null)
-        {
-            _minimizedPanel.IsVisible = IsMinimized;
-        }
     }
 
     internal readonly record struct RecorderOverlayPalette(

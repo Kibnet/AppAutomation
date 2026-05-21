@@ -14,6 +14,7 @@ internal enum RecorderCommandKind
     CaptureAssertEnabled = 6,
     CaptureAssertChecked = 7,
     CaptureAssertExists = 8,
+    // Kept so existing hotkey settings files with this key still deserialize.
     ToggleOverlayMinimize = 9
 }
 
@@ -65,13 +66,13 @@ internal sealed class RecorderHotkeyMap
             [RecorderCommandKind.CaptureAssertText] = hotkeys.CaptureAssertText,
             [RecorderCommandKind.CaptureAssertEnabled] = hotkeys.CaptureAssertEnabled,
             [RecorderCommandKind.CaptureAssertChecked] = hotkeys.CaptureAssertChecked,
-            [RecorderCommandKind.CaptureAssertExists] = hotkeys.CaptureAssertExists,
-            [RecorderCommandKind.ToggleOverlayMinimize] = hotkeys.ToggleOverlayMinimize
+            [RecorderCommandKind.CaptureAssertExists] = hotkeys.CaptureAssertExists
         };
     }
 
     public static IReadOnlyList<RecorderCommandKind> EnumerateCommands() =>
         Enum.GetValues<RecorderCommandKind>()
+            .Where(static command => command != RecorderCommandKind.ToggleOverlayMinimize)
             .OrderBy(static command => command)
             .ToArray();
 

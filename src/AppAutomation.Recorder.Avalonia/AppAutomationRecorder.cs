@@ -92,7 +92,6 @@ public static class AppAutomationRecorder
         if (session is RecorderSession recorderSession)
         {
             recorderSession.ExportRequested += async (_, _) => await ExportAsync();
-            recorderSession.OverlayToggleRequested += (_, _) => overlay.ToggleMinimized();
         }
 
         overlayWindow.Closed += (_, _) =>
