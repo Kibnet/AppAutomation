@@ -120,7 +120,8 @@
                                    Grid.Row="1"
                                    Foreground="{DynamicResource RecorderMuted}"
                                    Text="No recorded steps yet." />
-                        <ScrollViewer Grid.Row="2"
+                        <ScrollViewer x:Name="StepJournalScrollViewer"
+                                      Grid.Row="2"
                                       HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="StepJournalPanel"
