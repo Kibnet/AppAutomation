@@ -21,15 +21,17 @@ public sealed class ReleaseWorkflowTests
     }
 
     [Test]
-    public async Task PublishPackagesWorkflow_ManualRecovery_RequiresExistingRelease()
+    public async Task PublishPackagesWorkflow_ManualRecovery_CreatesMissingRelease()
     {
         var workflow = ReadPublishPackagesWorkflow();
 
         using (Assert.Multiple())
         {
-            await Assert.That(workflow).Contains("Resolve existing GitHub release target");
+            await Assert.That(workflow).Contains("Resolve GitHub release target");
             await Assert.That(workflow).Contains("/releases/tags/");
-            await Assert.That(workflow).Contains("No existing GitHub release was found for version");
+            await Assert.That(workflow).Contains("Invoke-WebRequest -Method Post");
+            await Assert.That(workflow).Contains("generate_release_notes = $true");
+            await Assert.That(workflow).Contains("Failed to create GitHub release for tag");
         }
     }
 
@@ -41,7 +43,7 @@ public sealed class ReleaseWorkflowTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(workflow).Contains("Attach NuGet packages to existing GitHub release");
+            await Assert.That(workflow).Contains("Attach NuGet packages to GitHub release");
             await Assert.That(workflow).Contains(publishCondition);
             await Assert.That(workflow).Contains("gh release upload");
             await Assert.That(workflow).Contains("--clobber");
