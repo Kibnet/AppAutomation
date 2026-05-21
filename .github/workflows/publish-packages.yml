@@ -91,13 +91,14 @@ jobs:
           path: ${{ steps.version.outputs.packages_path }}
           if-no-files-found: error
 
-      - name: Resolve existing GitHub release target
+      - name: Resolve GitHub release target
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         id: release
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
           RESOLVED_VERSION: ${{ steps.version.outputs.full }}
@@ -134,7 +135,33 @@ jobs:
             }
           }
 
-          throw "No existing GitHub release was found for version '$($env:RESOLVED_VERSION)'. Create and publish the canonical release first, then rerun workflow_dispatch with publish=true."
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+            throw "No existing GitHub release was found for version '$($env:RESOLVED_VERSION)'."
+          }
+
+          $releaseTag = $env:RESOLVED_VERSION.Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            throw "Resolved version is empty; cannot create a GitHub release."
+          }
+
+          $payload = @{
+            tag_name = $releaseTag
+            target_commitish = $env:GITHUB_SHA
+            name = $releaseTag
+            draft = $false
+            prerelease = $false
+            generate_release_notes = $true
+            make_latest = "true"
+          } | ConvertTo-Json
+
+          $createUri = "$($env:GITHUB_API_URL)/repos/$($env:GITHUB_REPOSITORY)/releases"
+          $response = Invoke-WebRequest -Method Post -Uri $createUri -Headers $headers -ContentType "application/json" -Body $payload -SkipHttpErrorCheck
+          if ($response.StatusCode -ne 201) {
+            throw "Failed to create GitHub release for tag '$releaseTag'. Status code: $($response.StatusCode). Body: $($response.Content)"
+          }
+
+          $release = $response.Content | ConvertFrom-Json
+          "tag=$($release.tag_name)" >> $env:GITHUB_OUTPUT
 
       - name: Publish packages
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
@@ -155,7 +182,7 @@ jobs:
           NUGET_SYMBOL_SOURCE: ''
         run: pwsh -File eng/publish-nuget.ps1 -Version '${{ steps.version.outputs.full }}'
 
-      - name: Attach NuGet packages to existing GitHub release
+      - name: Attach NuGet packages to GitHub release
         if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
         shell: pwsh
         env:
