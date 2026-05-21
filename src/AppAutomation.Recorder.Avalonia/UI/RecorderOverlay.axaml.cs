@@ -47,6 +47,11 @@ internal sealed partial class RecorderOverlay : UserControl
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
 
+    internal void RefreshForTesting()
+    {
+        Refresh();
+    }
+
     public void Attach(IAppAutomationRecorderSession session, AppAutomationRecorderOptions options)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -511,21 +516,16 @@ internal sealed partial class RecorderOverlay : UserControl
             return;
         }
 
+        if (ScrollToEndForTesting is { } scrollToEnd)
+        {
+            scrollToEnd(_stepJournalScrollViewer);
+            return;
+        }
+
         Dispatcher.UIThread.Post(
             () =>
             {
-                if (_stepJournalScrollViewer is not { } scrollViewer)
-                {
-                    return;
-                }
-
-                if (ScrollToEndForTesting is { } scrollToEnd)
-                {
-                    scrollToEnd(scrollViewer);
-                    return;
-                }
-
-                scrollViewer.ScrollToEnd();
+                _stepJournalScrollViewer?.ScrollToEnd();
             },
             DispatcherPriority.Background);
     }
