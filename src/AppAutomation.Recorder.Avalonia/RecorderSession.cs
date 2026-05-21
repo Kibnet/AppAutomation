@@ -161,8 +161,6 @@ internal sealed class RecorderSession :
 
     public event EventHandler? SessionChanged;
 
-    internal event EventHandler? OverlayToggleRequested;
-
     internal event EventHandler? ExportRequested;
 
     internal event EventHandler? HotkeysChanged;
@@ -839,9 +837,6 @@ internal sealed class RecorderSession :
                 break;
             case RecorderCommandKind.CaptureAssertExists:
                 CaptureAssertion(RecorderAssertionMode.Exists);
-                break;
-            case RecorderCommandKind.ToggleOverlayMinimize:
-                OverlayToggleRequested?.Invoke(this, EventArgs.Empty);
                 break;
         }
     }

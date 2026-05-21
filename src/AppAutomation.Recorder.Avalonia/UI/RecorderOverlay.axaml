@@ -21,7 +21,7 @@
                   RowDefinitions="Auto,Auto,Auto,*,Auto"
                   RowSpacing="8">
                 <Grid Grid.Row="0"
-                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
+                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
                       ColumnSpacing="8">
                     <Button x:Name="RecordButton"
                             Grid.Column="0"
@@ -44,25 +44,21 @@
                             Grid.Column="4"
                             Padding="10,4"
                             Content="Settings" />
-                    <Button x:Name="MinimizeButton"
-                               Grid.Column="5"
-                               Padding="10,4"
-                               Content="Minimize" />
                     <TextBlock x:Name="StepCounter"
-                               Grid.Column="6"
+                               Grid.Column="5"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderAccent}"
                                FontWeight="SemiBold"
                                Text="0 steps" />
                     <TextBlock x:Name="ValidationBadgeText"
-                               Grid.Column="7"
+                               Grid.Column="6"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Text="VALID" />
                     <TextBlock x:Name="StatusText"
-                               Grid.Column="8"
+                               Grid.Column="7"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderMuted}"
@@ -139,20 +135,6 @@
                            TextWrapping="Wrap" />
             </Grid>
 
-            <Grid x:Name="MinimizedPanel"
-                  IsVisible="False"
-                  ColumnDefinitions="Auto,*"
-                  ColumnSpacing="12">
-                <Button x:Name="RestoreButton"
-                        Grid.Column="0"
-                        Padding="10,4"
-                        Content="Restore" />
-                <TextBlock x:Name="MinimizedStatusText"
-                           Grid.Column="1"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource RecorderMuted}"
-                           TextWrapping="Wrap" />
-            </Grid>
         </Grid>
     </Border>
 </UserControl>

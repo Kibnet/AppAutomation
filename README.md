@@ -198,7 +198,7 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, minimize or restore itself, save canonical partials, export the same output to another folder, keep a review-first step journal, and show either the latest AppAutomation DSL statement or the diagnostics that explain why a step is warning-only or invalid.
+The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, save canonical partials, export the same output to another folder, keep a review-first step journal, and show either the latest AppAutomation DSL statement or the diagnostics that explain why a step is warning-only or invalid.
 
 Custom assertion capture can be extended without forking the recorder:
 
@@ -514,7 +514,7 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, сворачиваться и восстанавливаться, сохранять канонические partials, экспортировать тот же output в другую директорию, просматривать и править session-level step journal и сразу видеть либо последний AppAutomation DSL-вызов, либо диагностику, почему конкретный шаг остался warning-only или invalid.
+Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, сохранять канонические partials, экспортировать тот же output в другую директорию, просматривать и править session-level step journal и сразу видеть либо последний AppAutomation DSL-вызов, либо диагностику, почему конкретный шаг остался warning-only или invalid.
 
 Кастомный assertion capture можно подключить без форка recorder-а:
 
