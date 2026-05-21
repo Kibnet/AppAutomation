@@ -33,6 +33,19 @@ public interface IAppAutomationRecorderSessionDetails
     void SetDiagnosticLogFileEnabled(bool isEnabled);
 }
 
+internal interface IRecorderStepReorderSessionDetails
+{
+    bool CanMoveStep(Guid stepId, RecorderStepMoveDirection direction);
+
+    bool MoveStep(Guid stepId, RecorderStepMoveDirection direction);
+}
+
+internal enum RecorderStepMoveDirection
+{
+    Earlier = 0,
+    Later = 1
+}
+
 public enum RecorderStepReviewState
 {
     Active = 0,

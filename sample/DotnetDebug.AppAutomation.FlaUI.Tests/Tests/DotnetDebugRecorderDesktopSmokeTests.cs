@@ -319,10 +319,12 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         string outputDirectory,
         string scenarioName)
     {
+        var previousScenarioWriteTime = GetLatestScenarioWriteTimeUtc(outputDirectory, scenarioName);
+
         session.MainWindow.Focus();
         Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_S);
 
-        var scenarioPath = await WaitForScenarioFileAsync(outputDirectory, scenarioName);
+        var scenarioPath = await WaitForScenarioFileAsync(outputDirectory, scenarioName, previousScenarioWriteTime);
         return await File.ReadAllTextAsync(scenarioPath);
     }
 
@@ -351,7 +353,10 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             $"Element '{automationId}' was not found.")!;
     }
 
-    private static async Task<string> WaitForScenarioFileAsync(string outputDirectory, string scenarioName)
+    private static async Task<string> WaitForScenarioFileAsync(
+        string outputDirectory,
+        string scenarioName,
+        DateTime? newerThanUtc = null)
     {
         var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -361,6 +366,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         {
             var candidate = Directory.Exists(outputDirectory)
                 ? Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
+                    .Where(path => newerThanUtc is null || File.GetLastWriteTimeUtc(path) > newerThanUtc.Value)
                     .OrderByDescending(File.GetLastWriteTimeUtc)
                     .FirstOrDefault()
                 : null;
@@ -391,6 +397,21 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var diagnostics = ReadRecorderDiagnostics(outputDirectory);
         var message = $"Recorder scenario file '{pattern}' was not created in '{outputDirectory}'. Existing files: {existingFiles}. {diagnostics}";
         throw lastReadError is null ? new TimeoutException(message) : new TimeoutException(message, lastReadError);
+    }
+
+    private static DateTime? GetLatestScenarioWriteTimeUtc(string outputDirectory, string scenarioName)
+    {
+        if (!Directory.Exists(outputDirectory))
+        {
+            return null;
+        }
+
+        var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+        return Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
+            .Select(File.GetLastWriteTimeUtc)
+            .OrderByDescending(static timestamp => timestamp)
+            .Cast<DateTime?>()
+            .FirstOrDefault();
     }
 
     private static string ReadRecorderDiagnostics(string outputDirectory)

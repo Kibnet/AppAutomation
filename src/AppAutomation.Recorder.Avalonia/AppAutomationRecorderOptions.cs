@@ -235,7 +235,7 @@ public sealed class RecorderValidationOptions
 
 public sealed class RecorderDiagnosticLogOptions
 {
-    public bool WriteToFile { get; init; }
+    public bool WriteToFile { get; init; } = true;
 
     public string? FilePath { get; init; }
 }

@@ -16,7 +16,11 @@ using System.Reflection;
 
 namespace AppAutomation.Recorder.Avalonia;
 
-internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutomationRecorderSessionDetails, IRecorderScenarioPathDetails
+internal sealed class RecorderSession :
+    IAppAutomationRecorderSession,
+    IAppAutomationRecorderSessionDetails,
+    IRecorderStepReorderSessionDetails,
+    IRecorderScenarioPathDetails
 {
     private static readonly TimeSpan RecentInputWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ObservationRefreshInterval = TimeSpan.FromMilliseconds(200);
@@ -30,6 +34,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private readonly RecorderCommandRuntimeValidator _runtimeValidator;
     private readonly AuthoringCodeGenerator _codeGenerator;
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _saveOperation;
+    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _autosaveOperation;
     private readonly List<RecordedStep> _steps = new();
     private readonly List<Action> _detachActions = new();
     private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
@@ -58,6 +63,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
     private readonly bool _hasConfiguredLogger;
     private readonly string _diagnosticLogFilePath;
     private bool _isDiagnosticLogFileEnabled;
+    private bool _pendingAutosave;
     private int _diagnosticLogEntryCount;
     private string? _lastScenarioFilePath;
 
@@ -72,6 +78,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         Func<Control?>? validationRootProvider,
         bool attachWindowHandlers,
         Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? saveOperation = null,
+        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? autosaveOperation = null,
         RecorderHotkeySettings? initialHotkeySettings = null,
         RecorderHotkeySettingsStore? hotkeySettingsStore = null)
     {
@@ -91,6 +98,10 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _codeGenerator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), _logger);
         _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
             _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
+        _autosaveOperation = autosaveOperation
+            ?? saveOperation
+            ?? ((steps, outputDirectory, cancellationToken) =>
+                _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
         _defaultOutputDescription = _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null);
         _diagnosticLogFilePath = ResolveDiagnosticLogFilePath(options, _defaultOutputDescription);
         _isDiagnosticLogFileEnabled = options.DiagnosticLog.WriteToFile;
@@ -306,6 +317,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _steps.RemoveAt(index);
         UpdateLatestPreviewFromSteps();
         SetStatus("Recorded step removed.", RecorderValidationStatus.Valid);
+        RequestAutosaveIfRecording();
     }
 
     public void SetStepIgnored(Guid stepId, bool isIgnored)
@@ -328,6 +340,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         SetStatus(
             isIgnored ? "Recorded step ignored." : "Recorded step restored.",
             isIgnored ? RecorderValidationStatus.Warning : updatedStep.ValidationStatus);
+        RequestAutosaveIfRecording();
     }
 
     public bool RetryStepValidation(Guid stepId)
@@ -343,6 +356,45 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _steps[index] = revalidatedStep;
         LatestPreview = _codeGenerator.GeneratePreview(revalidatedStep);
         SetStatus(ResolveJournalStatusMessage(revalidatedStep), revalidatedStep.ValidationStatus);
+        RequestAutosaveIfRecording();
+        return true;
+    }
+
+    public bool CanMoveStep(Guid stepId, RecorderStepMoveDirection direction)
+    {
+        var index = _steps.FindIndex(step => step.StepId == stepId);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        return direction switch
+        {
+            RecorderStepMoveDirection.Earlier => index > 0,
+            RecorderStepMoveDirection.Later => index < _steps.Count - 1,
+            _ => false
+        };
+    }
+
+    public bool MoveStep(Guid stepId, RecorderStepMoveDirection direction)
+    {
+        if (!CanMoveStep(stepId, direction))
+        {
+            return false;
+        }
+
+        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var targetIndex = direction == RecorderStepMoveDirection.Earlier
+            ? index - 1
+            : index + 1;
+        (_steps[index], _steps[targetIndex]) = (_steps[targetIndex], _steps[index]);
+        UpdateLatestPreviewFromSteps();
+        SetStatus(
+            direction == RecorderStepMoveDirection.Earlier
+                ? "Recorded step moved earlier."
+                : "Recorded step moved later.",
+            RecorderValidationStatus.Valid);
+        RequestAutosaveIfRecording();
         return true;
     }
 
@@ -1354,6 +1406,7 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         _lastRecordedAt = now;
         LatestPreview = preview;
         SetStatus(ResolveStepStatusMessage(recordedStep, result.Message), recordedStep.ValidationStatus);
+        RequestAutosaveIfRecording();
     }
 
     private bool TryRecordGridAction(Control? source)
@@ -1885,30 +1938,67 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
 
             _busyDescription = $"{operationName}...";
             SetStatus($"{operationName} in progress...", LatestValidationStatus);
-            _activeOperationTask = ExecuteManagedOperationAsync(operationName, operation, cancellationToken);
-            return _activeOperationTask;
+            var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _activeOperationTask = operationCompletion.Task;
+            _ = ExecuteManagedOperationAsync(operationName, operation, cancellationToken, operationCompletion);
+            return operationCompletion.Task;
         }
     }
 
-    private async Task<RecorderSaveResult> ExecuteManagedOperationAsync(
+    private void RequestAutosaveIfRecording()
+    {
+        if (_state != RecorderSessionState.Recording)
+        {
+            return;
+        }
+
+        StartAutosaveOrQueue();
+    }
+
+    private void StartAutosaveOrQueue()
+    {
+        lock (_operationSync)
+        {
+            if (_activeOperationTask is not null)
+            {
+                _pendingAutosave = true;
+                return;
+            }
+
+            _pendingAutosave = false;
+            _busyDescription = "Autosave...";
+            SetStatus("Autosave in progress...", LatestValidationStatus);
+            var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _activeOperationTask = operationCompletion.Task;
+            _ = ExecuteManagedOperationAsync(
+                "Autosave",
+                operationCancellationToken => AutosaveCoreAsync(outputDirectory: null, operationCancellationToken),
+                CancellationToken.None,
+                operationCompletion);
+        }
+    }
+
+    private async Task ExecuteManagedOperationAsync(
         string operationName,
         Func<CancellationToken, Task<RecorderSaveResult>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TaskCompletionSource<RecorderSaveResult> completion)
     {
+        var startPendingAutosave = false;
         try
         {
-            return await operation(cancellationToken);
+            completion.TrySetResult(await operation(cancellationToken));
         }
         catch (OperationCanceledException)
         {
             SetStatus($"{operationName} cancelled.", LatestValidationStatus);
-            return RecorderSaveResult.Failed($"{operationName} cancelled.");
+            completion.TrySetResult(RecorderSaveResult.Failed($"{operationName} cancelled."));
         }
         catch (Exception ex)
         {
             var message = $"{operationName} failed: {ex.Message}";
             SetStatus(message, RecorderValidationStatus.Invalid);
-            return RecorderSaveResult.Failed(message, ex.ToString());
+            completion.TrySetResult(RecorderSaveResult.Failed(message, ex.ToString()));
         }
         finally
         {
@@ -1916,9 +2006,18 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
             {
                 _activeOperationTask = null;
                 _busyDescription = string.Empty;
+                if (_pendingAutosave)
+                {
+                    _pendingAutosave = false;
+                    startPendingAutosave = _state == RecorderSessionState.Recording;
+                }
             }
 
             NotifySessionChanged();
+            if (startPendingAutosave)
+            {
+                StartAutosaveOrQueue();
+            }
         }
     }
 
@@ -1927,6 +2026,15 @@ internal sealed class RecorderSession : IAppAutomationRecorderSession, IAppAutom
         FlushPendingState();
         var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
         var result = await _saveOperation(stepsToPersist, outputDirectory, cancellationToken);
+        ApplySaveResult(result);
+        return result;
+    }
+
+    private async Task<RecorderSaveResult> AutosaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
+    {
+        FlushPendingState();
+        var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
+        var result = await _autosaveOperation(stepsToPersist, outputDirectory, cancellationToken);
         ApplySaveResult(result);
         return result;
     }

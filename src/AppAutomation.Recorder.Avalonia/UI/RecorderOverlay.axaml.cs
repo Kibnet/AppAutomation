@@ -38,6 +38,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private Control? _minimizedPanel;
     private Panel? _stepJournalPanel;
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
+    private IRecorderStepReorderSessionDetails? _stepReorderDetails;
 
     public RecorderOverlay()
     {
@@ -58,6 +59,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _sessionDetails = session as IAppAutomationRecorderSessionDetails;
         _scenarioPathDetails = session as IRecorderScenarioPathDetails;
+        _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -457,9 +459,7 @@ internal sealed partial class RecorderOverlay : UserControl
 
         _stepJournalPanel.Children.Clear();
         var entries = _sessionDetails?.StepJournal
-            ?.Reverse()
-            .Take(12)
-            .ToArray()
+            ?.ToArray()
             ?? Array.Empty<RecorderStepJournalEntry>();
 
         _journalEmptyText.IsVisible = entries.Length == 0;
@@ -538,6 +538,19 @@ internal sealed partial class RecorderOverlay : UserControl
             Spacing = 6
         };
 
+        var canReorder = _stepReorderDetails is not null && !(_sessionDetails?.IsBusy ?? false);
+        actions.Children.Add(CreateActionButton(
+            "↑",
+            entry.StepId,
+            OnMoveStepEarlierClick,
+            isEnabled: canReorder && _stepReorderDetails!.CanMoveStep(entry.StepId, RecorderStepMoveDirection.Earlier),
+            toolTip: "Move earlier"));
+        actions.Children.Add(CreateActionButton(
+            "↓",
+            entry.StepId,
+            OnMoveStepLaterClick,
+            isEnabled: canReorder && _stepReorderDetails!.CanMoveStep(entry.StepId, RecorderStepMoveDirection.Later),
+            toolTip: "Move later"));
         actions.Children.Add(CreateActionButton("Remove", entry.StepId, OnRemoveStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
         actions.Children.Add(CreateActionButton(entry.IsIgnored ? "Restore" : "Ignore", entry.StepId, OnIgnoreStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
         actions.Children.Add(CreateActionButton("Retry", entry.StepId, OnRetryStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
@@ -600,7 +613,8 @@ internal sealed partial class RecorderOverlay : UserControl
         string content,
         Guid stepId,
         EventHandler<RoutedEventArgs> handler,
-        bool isEnabled = true)
+        bool isEnabled = true,
+        string? toolTip = null)
     {
         var button = new Button
         {
@@ -609,8 +623,36 @@ internal sealed partial class RecorderOverlay : UserControl
             Padding = new Thickness(8, 3),
             IsEnabled = isEnabled
         };
+        if (!string.IsNullOrWhiteSpace(toolTip))
+        {
+            ToolTip.SetTip(button, toolTip);
+        }
+
         button.Click += handler;
         return button;
+    }
+
+    private void OnMoveStepEarlierClick(object? sender, RoutedEventArgs e)
+    {
+        MoveStep(sender, RecorderStepMoveDirection.Earlier);
+    }
+
+    private void OnMoveStepLaterClick(object? sender, RoutedEventArgs e)
+    {
+        MoveStep(sender, RecorderStepMoveDirection.Later);
+    }
+
+    private void MoveStep(object? sender, RecorderStepMoveDirection direction)
+    {
+        if (sender is not Button { Tag: Guid stepId } || _stepReorderDetails is null)
+        {
+            return;
+        }
+
+        if (_stepReorderDetails.MoveStep(stepId, direction))
+        {
+            Refresh();
+        }
     }
 
     private void OnRemoveStepClick(object? sender, RoutedEventArgs e)

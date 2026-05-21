@@ -18,6 +18,11 @@ internal static class RecorderNaming
         return $"Recorded_{SanitizeIdentifier(scenarioName, "Scenario")}_{now:yyyyMMdd_HHmmss}";
     }
 
+    public static string CreateAutosaveMethodBaseName(string scenarioName, DateTimeOffset now)
+    {
+        return $"Autosave_{SanitizeIdentifier(scenarioName, "Scenario")}_{now:yyyyMMdd_HHmmss_fff}";
+    }
+
     public static string CreateFileSafeName(string value, string fallback)
     {
         var candidate = InvalidIdentifierChars.Replace(value ?? string.Empty, "-").Trim('-');
