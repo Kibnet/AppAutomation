@@ -55,6 +55,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             UiControlType.Grid => ResolveGrid(definition),
             UiControlType.DataGridViewRow or UiControlType.GridRow => new HeadlessGridRowControl(FindGridRow(definition)),
             UiControlType.DataGridViewCell or UiControlType.GridCell => new HeadlessGridCellControl(FindGridCell(definition)),
+            UiControlType.ShellNavigation => new HeadlessShellNavigationControl(FindElement(definition)),
             _ => new HeadlessUiControl(FindElement(definition))
         };
 
@@ -415,6 +416,265 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
 
         public string Text => ReadControlVisibleText(Inner.Control) ?? string.Empty;
+    }
+
+    private sealed class HeadlessShellNavigationControl : HeadlessControlBase<AutomationElement>, IShellNavigationControl, IReadableTextControl
+    {
+        public HeadlessShellNavigationControl(AutomationElement inner) : base(inner)
+        {
+        }
+
+        public string? ActivePaneName => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            ReadPaneCandidates()
+                .FirstOrDefault(static candidate => candidate.IsActive)
+                ?.PrimaryName);
+
+        public IReadOnlyList<string> OpenPaneNames => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            ReadPaneCandidates()
+                .SelectMany(static candidate => candidate.Names)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+
+        public string Text => ActivePaneName ?? string.Join(" ", OpenPaneNames);
+
+        public void OpenOrActivate(ShellPaneNavigationRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentException.ThrowIfNullOrWhiteSpace(request.PaneName);
+
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                var candidates = ReadPaneCandidates();
+                var target = candidates.FirstOrDefault(candidate => PaneNameMatches(candidate, request.PaneName))
+                    ?? throw new InvalidOperationException(
+                        $"Shell pane '{request.PaneName}' was not found under shell '{AutomationId}'.");
+
+                SetActive(target.Target, true);
+                foreach (var candidate in candidates.Where(candidate =>
+                             !ReferenceEquals(candidate.Target, target.Target)
+                             && candidate.Target is not global::Avalonia.Controls.Control))
+                {
+                    SetActive(candidate.Target, false);
+                }
+
+                return true;
+            });
+        }
+
+        private IReadOnlyList<ShellPaneCandidate> ReadPaneCandidates()
+        {
+            var dataContextCandidates = ReadDataContextPaneCandidates();
+            return dataContextCandidates.Count > 0
+                ? dataContextCandidates
+                : ReadControlPaneCandidates();
+        }
+
+        private IReadOnlyList<ShellPaneCandidate> ReadDataContextPaneCandidates()
+        {
+            return EnumeratePaneItems(Inner.Control)
+                .Concat(EnumeratePaneItems(Inner.Control.DataContext))
+                .Select(static item => CreateDataContextPaneCandidate(item))
+                .Where(static candidate => candidate is not null)
+                .Select(static candidate => candidate!)
+                .DistinctBy(static candidate => candidate.Target)
+                .Where(static candidate => candidate.Names.Count > 0)
+                .ToArray();
+        }
+
+        private IReadOnlyList<ShellPaneCandidate> ReadControlPaneCandidates()
+        {
+            return ControlTree.EnumerateDescendants(Inner.Control)
+                .Select(static control => new ShellPaneCandidate(control, ReadPaneNames(control), IsActive(control)))
+                .Where(static candidate => candidate.Names.Count > 0)
+                .ToArray();
+        }
+
+        private static IEnumerable<object> EnumeratePaneItems(object? source)
+        {
+            if (source is null)
+            {
+                yield break;
+            }
+
+            foreach (var item in EnumerateEnumerable(source))
+            {
+                yield return item;
+            }
+
+            foreach (var item in EnumerateEnumerable(ReadPropertyValue(source, "ItemsSource")))
+            {
+                yield return item;
+            }
+
+            foreach (var item in EnumerateEnumerable(ReadPropertyValue(source, "ViewModelsCollection")))
+            {
+                yield return item;
+            }
+
+            var layout = ReadPropertyValue(source, "Layout");
+            foreach (var item in EnumerateEnumerable(ReadPropertyValue(layout, "ViewModelsCollection")))
+            {
+                yield return item;
+            }
+        }
+
+        private static IEnumerable<object> EnumerateEnumerable(object? source)
+        {
+            if (source is not IEnumerable enumerable || source is string)
+            {
+                yield break;
+            }
+
+            foreach (var item in enumerable)
+            {
+                if (item is not null)
+                {
+                    yield return item;
+                }
+            }
+        }
+
+        private static ShellPaneCandidate CreateDataContextPaneCandidate(object item)
+        {
+            if (item is global::Avalonia.Controls.Control control)
+            {
+                var target = control.DataContext ?? control;
+                var names = NormalizePaneNames(ReadPaneNames(control).Concat(ReadPaneNames(target)));
+                return new ShellPaneCandidate(target, names, IsActive(control) || IsActive(target));
+            }
+
+            return new ShellPaneCandidate(item, ReadPaneNames(item), IsActive(item));
+        }
+
+        private static IReadOnlyList<string> ReadPaneNames(global::Avalonia.Controls.Control control)
+        {
+            var values = new[]
+            {
+                AutomationProperties.GetAutomationId(control),
+                control.Name,
+                ReadStringProperty(control, "Header"),
+                ReadStringProperty(control, "Title"),
+                ReadStringProperty(control.DataContext, "ViewModelId"),
+                ReadStringProperty(control.DataContext, "Header"),
+                ReadStringProperty(control.DataContext, "Title")
+            };
+
+            return NormalizePaneNames(values);
+        }
+
+        private static IReadOnlyList<string> ReadPaneNames(object item)
+        {
+            var values = new[]
+            {
+                ReadStringProperty(item, "ViewModelId"),
+                ReadStringProperty(item, "AutomationId"),
+                ReadStringProperty(item, "Name"),
+                ReadStringProperty(item, "Header"),
+                ReadStringProperty(item, "Title")
+            };
+
+            return NormalizePaneNames(values);
+        }
+
+        private static IReadOnlyList<string> NormalizePaneNames(IEnumerable<string?> values)
+        {
+            return values
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        private static bool IsActive(global::Avalonia.Controls.Control control)
+        {
+            return ReadBooleanProperty(control, "IsActive")
+                   || ReadBooleanProperty(control.DataContext, "IsActive");
+        }
+
+        private static bool IsActive(object item)
+        {
+            return item is global::Avalonia.Controls.Control control
+                ? IsActive(control)
+                : ReadBooleanProperty(item, "IsActive");
+        }
+
+        private static bool PaneNameMatches(ShellPaneCandidate candidate, string paneName)
+        {
+            var normalizedPaneName = NormalizeLookupText(paneName);
+            return candidate.Names.Any(name =>
+                string.Equals(NormalizeLookupText(name), normalizedPaneName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static void SetActive(object? target, bool isActive)
+        {
+            var property = target?.GetType().GetProperty(
+                "IsActive",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+            if (property?.CanWrite == true && property.PropertyType == typeof(bool))
+            {
+                property.SetValue(target, isActive);
+                return;
+            }
+
+            if (target is global::Avalonia.Controls.Control { DataContext: { } dataContext }
+                && !ReferenceEquals(dataContext, target))
+            {
+                SetActive(dataContext, isActive);
+            }
+        }
+
+        private static bool ReadBooleanProperty(object? target, string propertyName)
+        {
+            var property = target?.GetType().GetProperty(
+                propertyName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+            return property?.CanRead == true
+                   && property.PropertyType == typeof(bool)
+                   && property.GetValue(target) is true;
+        }
+
+        private static object? ReadPropertyValue(object? target, string propertyName)
+        {
+            var property = target?.GetType().GetProperty(
+                propertyName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+            return property?.CanRead == true
+                ? property.GetValue(target)
+                : null;
+        }
+
+        private static string? ReadStringProperty(object? target, string propertyName)
+        {
+            var property = target?.GetType().GetProperty(
+                propertyName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+            return property?.CanRead == true
+                ? property.GetValue(target)?.ToString()
+                : null;
+        }
+
+        private static string NormalizeLookupText(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        }
+
+        private sealed record ShellPaneCandidate(
+            object Target,
+            IReadOnlyList<string> Names,
+            bool IsActive)
+        {
+            public string? PrimaryName => Names.FirstOrDefault();
+        }
     }
 
     private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, ITextBoxControl

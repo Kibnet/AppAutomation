@@ -365,6 +365,25 @@ public sealed class LaunchContractTests
     }
 
     [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessShellNavigation_ActivatesExistingPaneByAutomationId()
+    {
+        using var headless = StartHeadlessRuntime();
+        var shell = HeadlessRuntime.Dispatch(CreateShellWindow);
+        var page = new ShellPage(new HeadlessControlResolver(shell.Window));
+
+        page.ActivateShellPane(static candidate => candidate.MainShell, "newOrder");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(shell.Orders.IsActive).IsEqualTo(false);
+            await Assert.That(shell.NewOrder.IsActive).IsEqualTo(true);
+            await Assert.That(page.MainShell.ActivePaneName).IsEqualTo("newOrder");
+            await Assert.That(page.MainShell.OpenPaneNames).Contains("newOrder");
+        }
+    }
+
+    [Test]
     public async Task AvaloniaDesktopLaunchHost_CreateLaunchOptions_WithScenario_AddsEnvironmentVariables_AndCleansUp()
     {
         using var workspace = TemporaryWorkspace.Create();
@@ -737,6 +756,24 @@ Console.WriteLine("Fake desktop");
         return new Window { Content = root };
     }
 
+    private static ShellWindowContext CreateShellWindow()
+    {
+        var orders = new ShellPaneModel("ordersViewModel", "Заказы") { IsActive = true };
+        var newOrder = new ShellPaneModel("newOrder", "Заказ");
+
+        var ordersPane = new ContentControl { Name = orders.ViewModelId, DataContext = orders };
+        var newOrderPane = new ContentControl { Name = newOrder.ViewModelId, DataContext = newOrder };
+        AutomationProperties.SetAutomationId(ordersPane, orders.ViewModelId);
+        AutomationProperties.SetAutomationId(newOrderPane, newOrder.ViewModelId);
+
+        var shell = new ShellHost { ItemsSource = new[] { orders, newOrder } };
+        AutomationProperties.SetAutomationId(shell, "MainShell");
+        shell.Children.Add(ordersPane);
+        shell.Children.Add(newOrderPane);
+
+        return new ShellWindowContext(new Window { Content = shell }, orders, newOrder);
+    }
+
     private sealed record LaunchPayload(string UserName);
 
     private sealed class VisualGridPage : UiPage
@@ -794,6 +831,37 @@ Console.WriteLine("Fake desktop");
             "OrderCustomerSearch",
             UiControlType.SearchPicker,
             "OrderCustomerSearch");
+    }
+
+    private sealed class ShellPage : UiPage
+    {
+        public ShellPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IShellNavigationControl MainShell =>
+            Resolve<IShellNavigationControl>(ShellPageDefinitions.MainShell);
+    }
+
+    public static class ShellPageDefinitions
+    {
+        public static UiControlDefinition MainShell { get; } = new(
+            "MainShell",
+            UiControlType.ShellNavigation,
+            "MainShell");
+    }
+
+    private sealed record ShellWindowContext(Window Window, ShellPaneModel Orders, ShellPaneModel NewOrder);
+
+    private sealed record ShellPaneModel(string ViewModelId, string Title)
+    {
+        public bool IsActive { get; set; }
+    }
+
+    private sealed class ShellHost : StackPanel
+    {
+        public IEnumerable<ShellPaneModel> ItemsSource { get; init; } = Array.Empty<ShellPaneModel>();
     }
 
     private sealed class PopupContentHost : Control
