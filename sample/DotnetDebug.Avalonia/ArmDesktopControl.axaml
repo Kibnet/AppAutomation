@@ -135,6 +135,7 @@
                   <DataTemplate>
                     <Grid ColumnDefinitions="120,160,120"
                           Margin="0,1"
+                          DoubleTapped="OnArmGridRowDoubleTapped"
                           automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
                       <TextBlock Grid.Column="0"
                                  Text="{Binding Key}"

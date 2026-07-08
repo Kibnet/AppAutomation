@@ -5,6 +5,7 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 
 namespace DotnetDebug.Avalonia;
@@ -140,6 +141,15 @@ public partial class ArmDesktopControl : UserControl
         ArmGridStatusLabel.Content = ArmGridRows.Count == 0
             ? "Grid open: no rows"
             : $"Grid opened: {ArmGridRows[0].Key}";
+    }
+
+    private void OnArmGridRowDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is Control { DataContext: ArmDesktopGridRowViewModel row })
+        {
+            ArmGridStatusLabel.Content = $"Grid opened: {row.Key}";
+            e.Handled = true;
+        }
     }
 
     private void OnArmGridSortClick(object? sender, RoutedEventArgs e)
