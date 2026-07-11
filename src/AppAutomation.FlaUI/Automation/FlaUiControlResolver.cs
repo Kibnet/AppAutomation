@@ -5,6 +5,7 @@ using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
+using FlaUI.Core.Input;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
 using System.Text;
@@ -1411,7 +1412,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiGridControl : FlaUiControlBase<Grid>, IGridControl
+    private sealed class FlaUiGridControl : FlaUiControlBase<Grid>, IGridUserActionControl
     {
         public FlaUiGridControl(Grid inner) : base(inner)
         {
@@ -1435,9 +1436,66 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                     : null;
             }
         }
+
+        public void OpenRow(int rowIndex)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+
+            Exception? rowException = null;
+            var row = TryRead(() => Inner.GetRowByIndex(rowIndex));
+            if (row is not null && TryDoubleClick(row, out rowException))
+            {
+                return;
+            }
+
+            var rows = TryRead(() => Inner.Rows) ?? Array.Empty<GridRow>();
+            if (rowIndex >= rows.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found in grid '{AutomationId}'.");
+            }
+
+            if (TryDoubleClick(rows[rowIndex], out var indexedRowException))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Grid row {rowIndex} in grid '{AutomationId}' could not be opened by double-click.",
+                indexedRowException ?? rowException);
+        }
+
+        public void SortByColumn(string columnName)
+        {
+            ThrowUnsupportedUserAction(nameof(SortByColumn));
+        }
+
+        public void ScrollToEnd()
+        {
+            ThrowUnsupportedUserAction(nameof(ScrollToEnd));
+        }
+
+        public string CopyCell(int rowIndex, int columnIndex)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+            ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+
+            return GetRowByIndex(rowIndex)?.Cells.ElementAtOrDefault(columnIndex)?.Value
+                   ?? string.Empty;
+        }
+
+        public void Export()
+        {
+            ThrowUnsupportedUserAction(nameof(Export));
+        }
+
+        private void ThrowUnsupportedUserAction(string actionName)
+        {
+            throw new System.NotSupportedException(
+                $"Grid '{AutomationId}' does not support user action '{actionName}' in the FlaUI adapter.");
+        }
     }
 
-    private sealed class FlaUiVisualGridControl : IGridControl
+    private sealed class FlaUiVisualGridControl : IGridUserActionControl
     {
         private readonly AutomationElement _searchRoot;
         private readonly IGridControl? _fallback;
@@ -1481,6 +1539,108 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
 
             return _fallback?.GetRowByIndex(index);
+        }
+
+        public void OpenRow(int rowIndex)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+
+            var candidates = FindOpenRowTargets(rowIndex);
+            Exception? lastException = null;
+            foreach (var candidate in candidates)
+            {
+                if (TryDoubleClick(candidate, out lastException))
+                {
+                    return;
+                }
+            }
+
+            if (_fallback is IGridUserActionControl actionFallback)
+            {
+                actionFallback.OpenRow(rowIndex);
+                return;
+            }
+
+            var detail = lastException is null
+                ? $"Visual grid row {rowIndex} was not found in grid '{AutomationId}'."
+                : $"Visual grid row {rowIndex} in grid '{AutomationId}' could not be opened by double-click.";
+            throw new InvalidOperationException(detail, lastException);
+        }
+
+        public void SortByColumn(string columnName)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
+
+            if (_fallback is IGridUserActionControl actionFallback)
+            {
+                actionFallback.SortByColumn(columnName);
+                return;
+            }
+
+            ThrowUnsupportedUserAction(nameof(SortByColumn));
+        }
+
+        public void ScrollToEnd()
+        {
+            if (_fallback is IGridUserActionControl actionFallback)
+            {
+                actionFallback.ScrollToEnd();
+                return;
+            }
+
+            ThrowUnsupportedUserAction(nameof(ScrollToEnd));
+        }
+
+        public string CopyCell(int rowIndex, int columnIndex)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
+            ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
+
+            if (_fallback is IGridUserActionControl actionFallback)
+            {
+                return actionFallback.CopyCell(rowIndex, columnIndex);
+            }
+
+            ThrowUnsupportedUserAction(nameof(CopyCell));
+            return string.Empty;
+        }
+
+        public void Export()
+        {
+            if (_fallback is IGridUserActionControl actionFallback)
+            {
+                actionFallback.Export();
+                return;
+            }
+
+            ThrowUnsupportedUserAction(nameof(Export));
+        }
+
+        private AutomationElement[] FindOpenRowTargets(int rowIndex)
+        {
+            var targets = new List<AutomationElement>();
+            var row = ReadRows()
+                .FirstOrDefault(candidate =>
+                    ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == rowIndex);
+            if (row is not null)
+            {
+                targets.Add(row);
+            }
+
+            var cellRow = ReadCellRows()
+                .FirstOrDefault(candidate => candidate.RowIndex == rowIndex);
+            if (cellRow is not null)
+            {
+                targets.AddRange(cellRow.Cells);
+            }
+
+            return targets.ToArray();
+        }
+
+        private void ThrowUnsupportedUserAction(string actionName)
+        {
+            throw new System.NotSupportedException(
+                $"Visual grid '{AutomationId}' does not support user action '{actionName}' in the FlaUI adapter.");
         }
 
         private IReadOnlyList<IGridRowControl> ReadVisualRows()
@@ -1547,6 +1707,65 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     private sealed record VisualGridCellRow(
         int RowIndex,
         IReadOnlyList<AutomationElement> Cells);
+
+    private static bool TryDoubleClick(AutomationElement element, out Exception? exception)
+    {
+        try
+        {
+            TryScrollIntoView(element);
+            TryFocus(element);
+            MoveMouseImmediatelyTo(element);
+            Mouse.LeftDoubleClick();
+            exception = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+            return false;
+        }
+    }
+
+    private static void MoveMouseImmediatelyTo(AutomationElement element)
+    {
+        if (element.TryGetClickablePoint(out var point))
+        {
+            Mouse.Position = point;
+            return;
+        }
+
+        var bounds = element.BoundingRectangle;
+        Mouse.Position = new System.Drawing.Point(
+            bounds.Left + bounds.Width / 2,
+            bounds.Top + bounds.Height / 2);
+    }
+
+    private static void TryScrollIntoView(AutomationElement element)
+    {
+        try
+        {
+            if (element.Patterns.ScrollItem.IsSupported)
+            {
+                element.Patterns.ScrollItem.Pattern.ScrollIntoView();
+            }
+        }
+        catch
+        {
+            // Some visual bridge elements expose no scroll pattern; double-click can still work.
+        }
+    }
+
+    private static void TryFocus(AutomationElement element)
+    {
+        try
+        {
+            element.Focus();
+        }
+        catch
+        {
+            // Focus is best-effort before the mouse gesture.
+        }
+    }
 
     private sealed class FlaUiVisualGridRowControl : IGridRowControl
     {

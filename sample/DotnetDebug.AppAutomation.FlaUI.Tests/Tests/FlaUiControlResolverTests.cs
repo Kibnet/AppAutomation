@@ -88,6 +88,25 @@ public sealed class FlaUiControlResolverTests
         }
     }
 
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task VisualGridOpenRow_DoubleClicksDesktopBridgeRow()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
+
+        page
+            .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
+            .ClickButton(static candidate => candidate.ArmGridBuildButton)
+            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid rows: 3")
+            .OpenGridRow(static candidate => candidate.ArmGridAutomationBridge, 0)
+            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01");
+
+        await Assert.That(page.ArmGridStatusLabel.Text).IsEqualTo("Grid opened: ARM-01");
+    }
+
     private static string[] ReadElementNames(AutomationElement root)
     {
         return root.FindAllDescendants()
