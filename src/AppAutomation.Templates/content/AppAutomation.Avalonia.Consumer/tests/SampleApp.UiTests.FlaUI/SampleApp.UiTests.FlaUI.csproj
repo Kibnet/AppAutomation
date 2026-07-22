@@ -11,7 +11,7 @@
     <PackageReference Include="AppAutomation.Abstractions" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="AppAutomation.FlaUI" Version="__APPAUTOMATION_VERSION__" />
     <PackageReference Include="AppAutomation.TUnit" Version="__APPAUTOMATION_VERSION__" />
-    <PackageReference Include="TUnit" Version="1.12.111" />
+    <PackageReference Include="TUnit" Version="1.61.29" />
   </ItemGroup>
 
   <ItemGroup>

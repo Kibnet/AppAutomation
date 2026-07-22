@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
@@ -101,12 +102,23 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private void OnSessionChanged(object? sender, EventArgs e)
     {
-        Dispatcher.UIThread.Post(Refresh);
+        RunOnUiThread(Refresh);
     }
 
     private void OnHotkeysChanged(object? sender, EventArgs e)
     {
-        Dispatcher.UIThread.Post(RefreshShortcutLegend);
+        RunOnUiThread(RefreshShortcutLegend);
+    }
+
+    private void RunOnUiThread(Action action)
+    {
+        if (Dispatcher.CheckAccess() || TopLevel.GetTopLevel(this) is null)
+        {
+            action();
+            return;
+        }
+
+        Dispatcher.Post(action);
     }
 
     private void InitializeControls()
@@ -522,7 +534,7 @@ internal sealed partial class RecorderOverlay : UserControl
             return;
         }
 
-        Dispatcher.UIThread.Post(
+        Dispatcher.Post(
             () =>
             {
                 _stepJournalScrollViewer?.ScrollToEnd();

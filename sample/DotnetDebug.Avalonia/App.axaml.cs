@@ -16,6 +16,7 @@ public partial class App : Application
     private const string RecorderAuthoringProjectEnvironmentVariable = "APPAUTOMATION_RECORDER_AUTHORING_PROJECT";
     private const string RecorderOverlayEnvironmentVariable = "APPAUTOMATION_RECORDER_OVERLAY";
     private const string RecorderDiagnosticsEnvironmentVariable = "APPAUTOMATION_RECORDER_DIAGNOSTICS";
+    private const string RecorderSaveHotkeyEnvironmentVariable = "APPAUTOMATION_RECORDER_SAVE_HOTKEY";
 
     public override void Initialize()
     {
@@ -48,6 +49,7 @@ public partial class App : Application
         var scenarioName = Environment.GetEnvironmentVariable(RecorderScenarioEnvironmentVariable);
         var outputDirectory = Environment.GetEnvironmentVariable(RecorderOutputDirectoryEnvironmentVariable);
         var authoringProjectDirectory = Environment.GetEnvironmentVariable(RecorderAuthoringProjectEnvironmentVariable);
+        var saveHotkey = Environment.GetEnvironmentVariable(RecorderSaveHotkeyEnvironmentVariable);
         var options = new AppAutomationRecorderOptions
         {
             ScenarioName = string.IsNullOrWhiteSpace(scenarioName) ? "RecordedSmoke" : scenarioName,
@@ -66,6 +68,9 @@ public partial class App : Application
                 WriteToFile = ShouldWriteRecorderDiagnosticsToFile(
                     Environment.GetEnvironmentVariable(RecorderDiagnosticsEnvironmentVariable))
             },
+            Hotkeys = string.IsNullOrWhiteSpace(saveHotkey)
+                ? RecorderHotkeys.Default
+                : new RecorderHotkeys { Save = saveHotkey },
             AllowNameLocators = false
         };
         options.ControlHints.Add(new RecorderControlHint("MixCountSpinner", RecorderActionHint.SpinnerTextBox));

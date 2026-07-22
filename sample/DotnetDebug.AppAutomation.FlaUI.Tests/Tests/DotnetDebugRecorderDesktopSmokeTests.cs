@@ -7,6 +7,7 @@ using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
+using System.Runtime.InteropServices;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -21,6 +22,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     private const string RecorderAuthoringProjectEnvironmentVariable = "APPAUTOMATION_RECORDER_AUTHORING_PROJECT";
     private const string RecorderOverlayEnvironmentVariable = "APPAUTOMATION_RECORDER_OVERLAY";
     private const string RecorderDiagnosticsEnvironmentVariable = "APPAUTOMATION_RECORDER_DIAGNOSTICS";
+    private const string RecorderSaveHotkeyEnvironmentVariable = "APPAUTOMATION_RECORDER_SAVE_HOTKEY";
     private static readonly TimeSpan SaveTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
@@ -66,6 +68,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 ResolveAuthoringProjectDirectory());
             await Assert.That(options.EnvironmentVariables[RecorderOverlayEnvironmentVariable]).IsEqualTo("0");
             await Assert.That(options.EnvironmentVariables[RecorderDiagnosticsEnvironmentVariable]).IsEqualTo("1");
+            await Assert.That(options.EnvironmentVariables[RecorderSaveHotkeyEnvironmentVariable]).IsEqualTo("1");
             await Assert.That(disposeCalled).IsEqualTo(true);
         }
     }
@@ -79,7 +82,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var scenarioName = CreateScenarioName("Spinner");
         using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
         using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
-        ClickElement(session, "ControlMixTabItem");
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
         ReplaceText(session, "MixCountSpinner", "7");
 
         var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
@@ -298,7 +302,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             [RecorderOutputDirectoryEnvironmentVariable] = Path.GetFullPath(outputDirectory),
             [RecorderAuthoringProjectEnvironmentVariable] = ResolveAuthoringProjectDirectory(),
             [RecorderOverlayEnvironmentVariable] = "0",
-            [RecorderDiagnosticsEnvironmentVariable] = "1"
+            [RecorderDiagnosticsEnvironmentVariable] = "1",
+            [RecorderSaveHotkeyEnvironmentVariable] = "1"
         };
 
         return new DesktopAppLaunchOptions
@@ -321,10 +326,15 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     {
         var previousScenarioWriteTime = GetLatestScenarioWriteTimeUtc(outputDirectory, scenarioName);
 
-        session.MainWindow.Focus();
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_S);
-
-        var scenarioPath = await WaitForScenarioFileAsync(outputDirectory, scenarioName, previousScenarioWriteTime);
+        var scenarioPath = await WaitForScenarioFileAsync(
+            outputDirectory,
+            scenarioName,
+            previousScenarioWriteTime,
+            () =>
+            {
+                session.MainWindow.SetForeground();
+                SendSaveHotkey(session.MainWindow);
+            });
         return await File.ReadAllTextAsync(scenarioPath);
     }
 
@@ -339,9 +349,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     {
         var element = FindElement(session, automationId);
         element.Focus();
-        element.Click();
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-        Keyboard.Type(value);
+        element.AsTextBox().Text = value;
     }
 
     private static AutomationElement FindElement(DesktopAppSession session, string automationId)
@@ -353,17 +361,39 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             $"Element '{automationId}' was not found.")!;
     }
 
+    private static void SendSaveHotkey(Window window)
+    {
+        var windowHandle = new IntPtr(window.Properties.NativeWindowHandle.Value);
+        SendMessage(windowHandle, 0x0100u, new IntPtr((int)VirtualKeyShort.KEY_1), new IntPtr(0x00020001));
+        SendMessage(windowHandle, 0x0101u, new IntPtr((int)VirtualKeyShort.KEY_1), new IntPtr(unchecked((int)0xC0020001)));
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(
+        IntPtr windowHandle,
+        uint message,
+        IntPtr wordParameter,
+        IntPtr longParameter);
+
     private static async Task<string> WaitForScenarioFileAsync(
         string outputDirectory,
         string scenarioName,
-        DateTime? newerThanUtc = null)
+        DateTime? newerThanUtc = null,
+        Action? retryAction = null)
     {
         var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Exception? lastReadError = null;
+        var nextRetryAt = TimeSpan.Zero;
 
         while (stopwatch.Elapsed < SaveTimeout)
         {
+            if (retryAction is not null && stopwatch.Elapsed >= nextRetryAt)
+            {
+                retryAction();
+                nextRetryAt = stopwatch.Elapsed.Add(TimeSpan.FromSeconds(1));
+            }
+
             var candidate = Directory.Exists(outputDirectory)
                 ? Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
                     .Where(path => newerThanUtc is null || File.GetLastWriteTimeUtc(path) > newerThanUtc.Value)

@@ -98,4 +98,30 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
         }
     }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ResolveAvaloniaDataGrid_ByAutomationId_ReadsBoundRowsAndCells()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "5")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
+            .WaitUntilGridRowsAtLeast(static candidate => candidate.DemoDataGrid, 5)
+            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 0, "R3")
+            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 1, "13")
+            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 2, "Odd");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.DemoDataGrid.Rows.Count).IsGreaterThanOrEqualTo(5);
+            await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("R3");
+            await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("13");
+            await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("Odd");
+        }
+    }
 }

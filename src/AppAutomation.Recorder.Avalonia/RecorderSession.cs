@@ -46,6 +46,7 @@ internal sealed class RecorderSession :
     private RecorderHotkeySettings _hotkeySettings;
     private readonly Func<Control?> _validationRootProvider;
     private readonly object _operationSync = new();
+    private Control? _inputRoot;
 
     private RecorderSessionState _state;
     private TextBox? _pendingTextBox;
@@ -549,25 +550,54 @@ internal sealed class RecorderSession :
 
     private void AttachHandlers()
     {
-        _window.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
-        _window.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
-        _window.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
-        _window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel);
-        _window.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
+        RebindInputHandlers();
         _window.PropertyChanged += OnWindowPropertyChanged;
 
-        _detachActions.Add(() => _window.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed));
-        _detachActions.Add(() => _window.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved));
-        _detachActions.Add(() => _window.RemoveHandler(InputElement.TextInputEvent, OnTextInput));
-        _detachActions.Add(() => _window.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown));
-        _detachActions.Add(() => _window.RemoveHandler(Button.ClickEvent, OnButtonClick));
+        _detachActions.Add(DetachInputHandlers);
         _detachActions.Add(() => _window.PropertyChanged -= OnWindowPropertyChanged);
+    }
+
+    private void RebindInputHandlers()
+    {
+        var inputRoot = _validationRootProvider() ?? _window;
+        if (ReferenceEquals(inputRoot, _inputRoot))
+        {
+            return;
+        }
+
+        DetachInputHandlers();
+        _inputRoot = inputRoot;
+        _inputRoot.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
+        _inputRoot.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
+        _inputRoot.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
+        _inputRoot.AddHandler(
+            InputElement.KeyDownEvent,
+            OnKeyDown,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        _inputRoot.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
+    }
+
+    private void DetachInputHandlers()
+    {
+        if (_inputRoot is null)
+        {
+            return;
+        }
+
+        _inputRoot.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+        _inputRoot.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
+        _inputRoot.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
+        _inputRoot.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+        _inputRoot.RemoveHandler(Button.ClickEvent, OnButtonClick);
+        _inputRoot = null;
     }
 
     private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (string.Equals(e.Property.Name, "Content", StringComparison.Ordinal))
         {
+            RebindInputHandlers();
             RefreshObservedControls();
         }
     }
@@ -776,7 +806,7 @@ internal sealed class RecorderSession :
             return;
         }
 
-        var focused = TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
+        var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
             RegisterKeyboardInput(ResolveInteractionOwner(focused) ?? focused);
@@ -793,7 +823,7 @@ internal sealed class RecorderSession :
 
     private void HandleRecorderCommand(RecorderCommandKind command)
     {
-        var focused = TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
+        var focused = GetFocusedWindowControl();
         LogRecorderDiagnostic(
             RecorderDiagnosticsEventIds.CommandHandled,
             $"Command:{command}",
@@ -1353,9 +1383,19 @@ internal sealed class RecorderSession :
         _pendingTextBox = null;
     }
 
+    private Control? GetFocusedWindowControl()
+    {
+        if (!_window.IsInitialized)
+        {
+            return null;
+        }
+
+        return TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
+    }
+
     private void CaptureAssertion(RecorderAssertionMode mode)
     {
-        var control = _lastHoveredControl ?? TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
+        var control = _lastHoveredControl ?? GetFocusedWindowControl();
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
@@ -2209,4 +2249,5 @@ internal sealed class RecorderSession :
     {
         SessionChanged?.Invoke(this, EventArgs.Empty);
     }
+
 }

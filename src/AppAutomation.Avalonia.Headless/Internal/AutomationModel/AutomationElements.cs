@@ -273,7 +273,7 @@ internal class AutomationElement
         }
 
         button.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
-        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        button.Dispatcher.RunJobs();
     }
 }
 
@@ -300,7 +300,7 @@ internal class TextBox : AutomationElement
         set => Ui(() =>
         {
             Native.Text = value;
-            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Control.Dispatcher.RunJobs();
             return true;
         });
     }
@@ -372,14 +372,14 @@ internal class ListBox : AutomationElement
 
     public ListBoxItem[] Items => Ui(() =>
     {
-        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Control.Dispatcher.RunJobs();
         var values = ReadItems(Native.Items);
         return values.Select(item => new ListBoxItem(item)).ToArray();
     });
 
     public string? SelectedItemText => Ui(() =>
     {
-        global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Control.Dispatcher.RunJobs();
         return Native.SelectedItem?.ToString();
     });
 
@@ -389,7 +389,7 @@ internal class ListBox : AutomationElement
 
         Ui(() =>
         {
-            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Control.Dispatcher.RunJobs();
             var normalizedTarget = NormalizeLookupText(itemText);
             var values = ReadItems(Native.Items);
             var match = values.FirstOrDefault(candidate =>
@@ -403,7 +403,7 @@ internal class ListBox : AutomationElement
             }
 
             Native.SelectedItem = match;
-            global::Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Control.Dispatcher.RunJobs();
             return true;
         });
     }
@@ -865,7 +865,7 @@ internal class DataGridView : Grid
 
 internal class GridRow
 {
-    internal GridRow(object? item, IReadOnlyList<IBinding?> columnBindings)
+    internal GridRow(object? item, IReadOnlyList<BindingBase?> columnBindings)
     {
         Item = item;
         ColumnBindings = columnBindings;
@@ -873,7 +873,7 @@ internal class GridRow
 
     private object? Item { get; }
 
-    private IReadOnlyList<IBinding?> ColumnBindings { get; }
+    private IReadOnlyList<BindingBase?> ColumnBindings { get; }
 
     public GridCell[] Cells
     {
@@ -918,9 +918,16 @@ internal class GridRow
         }
     }
 
-    private static string ReadBoundValue(object item, IBinding? binding)
+    private static string ReadBoundValue(object item, BindingBase? binding)
     {
-        if (binding is Binding { Path: { } path } && !string.IsNullOrWhiteSpace(path))
+        var path = binding switch
+        {
+            ReflectionBinding { Path: { } reflectionPath } => reflectionPath,
+            CompiledBinding { Path: { } compiledPath } => compiledPath.ToString(),
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(path))
         {
             return ReadPropertyPath(item, path);
         }

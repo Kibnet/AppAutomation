@@ -106,14 +106,7 @@ public partial class MainWindow : Window
         DelayedStatusHost.Children.Clear();
 
         await Task.Delay(1000).ConfigureAwait(false);
-        try
-        {
-            AddDelayedStatusLabel(requestVersion);
-        }
-        catch (InvalidOperationException)
-        {
-            await Dispatcher.UIThread.InvokeAsync(() => AddDelayedStatusLabel(requestVersion));
-        }
+        await Dispatcher.InvokeAsync(() => AddDelayedStatusLabel(requestVersion));
     }
 
     private void AddDelayedStatusLabel(int requestVersion)
