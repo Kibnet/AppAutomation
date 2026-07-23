@@ -92,7 +92,8 @@ function Remove-DirectoryWithRetry {
             }
         }
         catch {
-            cmd /c "rd /s /q `"$Path`"" 2>$null | Out-Null
+            # A build process can briefly retain a handle after build-server shutdown.
+            # Keep retrying with the same validated literal path.
         }
 
         $removed = -not (Test-Path -LiteralPath $Path)
@@ -244,8 +245,8 @@ Write-WorkspaceGlobalJson -Path $globalJsonPath
     <PackageReference Include="AppAutomation.Abstractions" Version="$resolvedVersion" />
     <PackageReference Include="AppAutomation.Authoring" Version="$resolvedVersion" />
     <PackageReference Include="AppAutomation.TUnit" Version="$resolvedVersion" />
-    <PackageReference Include="TUnit.Assertions" Version="1.12.111" />
-    <PackageReference Include="TUnit.Core" Version="1.12.111" />
+    <PackageReference Include="TUnit.Assertions" Version="1.61.29" />
+    <PackageReference Include="TUnit.Core" Version="1.61.29" />
   </ItemGroup>
 </Project>
 "@ | Set-Content -Path $authoringProjectPath -Encoding UTF8
@@ -265,7 +266,7 @@ Write-WorkspaceGlobalJson -Path $globalJsonPath
     <PackageReference Include="AppAutomation.Abstractions" Version="$resolvedVersion" />
     <PackageReference Include="AppAutomation.Avalonia.Headless" Version="$resolvedVersion" />
     <PackageReference Include="AppAutomation.TUnit" Version="$resolvedVersion" />
-    <PackageReference Include="TUnit" Version="1.12.111" />
+    <PackageReference Include="TUnit" Version="1.61.29" />
   </ItemGroup>
 
   <ItemGroup>

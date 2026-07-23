@@ -6,6 +6,7 @@ using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
 using FlaUI.Core.Input;
+using System.Runtime.InteropServices;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
 using System.Text;
@@ -14,6 +15,15 @@ namespace AppAutomation.FlaUI.Automation;
 
 public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector
 {
+    private const uint WindowMessageKeyDown = 0x0100;
+    private const uint WindowMessageKeyUp = 0x0101;
+    private const uint WindowMessageLeftButtonDown = 0x0201;
+    private const uint WindowMessageLeftButtonUp = 0x0202;
+    private const int MouseKeyLeftButton = 0x0001;
+    private const int VirtualKeySpace = 0x20;
+    private const int SpaceKeyDownData = 0x00390001;
+    private const int SpaceKeyUpData = unchecked((int)0xC0390001);
+
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
 
@@ -638,6 +648,25 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
 
         private List<AutomationElement> GetSelectableItems()
+        {
+            var timeout = Stopwatch.StartNew();
+            List<AutomationElement> items;
+            do
+            {
+                items = ReadSelectableItems();
+                if (items.Count > 0)
+                {
+                    return items;
+                }
+
+                Thread.Sleep(50);
+            }
+            while (timeout.Elapsed < TimeSpan.FromSeconds(1));
+
+            return items;
+        }
+
+        private List<AutomationElement> ReadSelectableItems()
         {
             var items = new List<AutomationElement>();
 
@@ -1292,7 +1321,19 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void SelectTab()
         {
-            Inner.Select();
+            try
+            {
+                Inner.Click();
+            }
+            catch
+            {
+                Inner.Select();
+            }
+
+            if (TryRead(() => Inner.IsSelected) != true)
+            {
+                Inner.Select();
+            }
         }
     }
 
@@ -1719,9 +1760,26 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             exception = null;
             return true;
         }
-        catch (Exception ex)
+        catch (Exception mouseException)
         {
-            exception = ex;
+            try
+            {
+                if (TrySendDoubleClickToContainingWindow(element))
+                {
+                    exception = null;
+                    return true;
+                }
+            }
+            catch (Exception nativeException)
+            {
+                exception = new AggregateException(
+                    "The standard and native double-click paths both failed.",
+                    mouseException,
+                    nativeException);
+                return false;
+            }
+
+            exception = mouseException;
             return false;
         }
     }
@@ -2119,24 +2177,6 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     {
         try
         {
-            treeItem.Select();
-            return true;
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            treeItem.Click();
-            return true;
-        }
-        catch
-        {
-        }
-
-        try
-        {
             if (treeItem.Patterns.SelectionItem.IsSupported)
             {
                 treeItem.Patterns.SelectionItem.Pattern.Select();
@@ -2147,7 +2187,119 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
         }
 
+        if (TrySendSpaceToFocusedTreeItem(treeItem))
+        {
+            return true;
+        }
+
+        try
+        {
+            treeItem.Select();
+            return true;
+        }
+        catch
+        {
+        }
+
         return false;
+    }
+
+    private static bool TrySendSpaceToFocusedTreeItem(TreeItem treeItem)
+    {
+        try
+        {
+            treeItem.Focus();
+            if (TryRead(() => treeItem.Properties.HasKeyboardFocus.Value) != true)
+            {
+                return false;
+            }
+
+            var windowHandle = FindNativeWindowHandle(treeItem);
+            if (windowHandle == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            SendMessage(
+                windowHandle,
+                WindowMessageKeyDown,
+                new IntPtr(VirtualKeySpace),
+                new IntPtr(SpaceKeyDownData));
+            SendMessage(
+                windowHandle,
+                WindowMessageKeyUp,
+                new IntPtr(VirtualKeySpace),
+                new IntPtr(SpaceKeyUpData));
+            return true;
+        }
+        catch
+        {
+        }
+
+        return false;
+    }
+
+    private static bool TrySendDoubleClickToContainingWindow(AutomationElement element)
+    {
+        if (!element.TryGetClickablePoint(out var screenPoint))
+        {
+            var bounds = element.BoundingRectangle;
+            if (bounds.Width <= 0 || bounds.Height <= 0)
+            {
+                return false;
+            }
+
+            screenPoint = new System.Drawing.Point(
+                bounds.Left + bounds.Width / 2,
+                bounds.Top + bounds.Height / 2);
+        }
+
+        var windowHandle = FindNativeWindowHandle(element);
+        if (windowHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var clientPoint = new NativePoint(screenPoint.X, screenPoint.Y);
+        if (!ScreenToClient(windowHandle, ref clientPoint))
+        {
+            return false;
+        }
+
+        var packedPoint = new IntPtr(
+            (clientPoint.X & 0xFFFF) | ((clientPoint.Y & 0xFFFF) << 16));
+        SendMessage(
+            windowHandle,
+            WindowMessageLeftButtonDown,
+            new IntPtr(MouseKeyLeftButton),
+            packedPoint);
+        SendMessage(windowHandle, WindowMessageLeftButtonUp, IntPtr.Zero, packedPoint);
+        Thread.Sleep(50);
+        SendMessage(
+            windowHandle,
+            WindowMessageLeftButtonDown,
+            new IntPtr(MouseKeyLeftButton),
+            packedPoint);
+        SendMessage(windowHandle, WindowMessageLeftButtonUp, IntPtr.Zero, packedPoint);
+        return true;
+    }
+
+    private static IntPtr FindNativeWindowHandle(AutomationElement element)
+    {
+        AutomationElement? current = element;
+        while (current is not null)
+        {
+            var windowHandle = TryRead(
+                () => current.FrameworkAutomationElement.NativeWindowHandle.ValueOrDefault);
+            if (windowHandle != IntPtr.Zero)
+            {
+                return windowHandle;
+            }
+
+            current = TryRead(() => current.Parent);
+        }
+
+        return IntPtr.Zero;
     }
 
     private static bool TryActivateTreeSelectionCandidate(AutomationElement candidate)
@@ -2241,5 +2393,23 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     private static string NormalizeLookupText(string? value)
     {
         return value?.Trim() ?? string.Empty;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(
+        IntPtr windowHandle,
+        uint message,
+        IntPtr wordParameter,
+        IntPtr longParameter);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(IntPtr windowHandle, ref NativePoint point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint(int x, int y)
+    {
+        public int X = x;
+        public int Y = y;
     }
 }

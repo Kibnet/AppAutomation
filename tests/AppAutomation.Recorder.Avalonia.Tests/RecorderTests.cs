@@ -22,6 +22,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
+[NotInParallel]
 public sealed class RecorderTests
 {
     [Test]
@@ -2146,11 +2147,12 @@ public sealed class RecorderTests
         {
             ItemsSource = new[] { "Customers", "Orders" }
         };
-        var paneTabs = new TabControl();
         var customersTab = new TabItem { Header = "Customers" };
         var ordersTab = new TabItem { Header = "Orders" };
-        paneTabs.Items.Add(customersTab);
-        paneTabs.Items.Add(ordersTab);
+        var paneTabs = new TabControl
+        {
+            ItemsSource = new[] { customersTab, ordersTab }
+        };
         AutomationProperties.SetAutomationId(navigationList, "ShellNavigationList");
         AutomationProperties.SetAutomationId(paneTabs, "ShellPaneTabs");
         root.Children.Add(navigationList);
@@ -2297,7 +2299,7 @@ public sealed class RecorderTests
         {
             await Assert.That(configuration.ShowInTaskbar).IsEqualTo(true);
             await Assert.That(configuration.Topmost).IsEqualTo(false);
-            await Assert.That(configuration.SystemDecorations).IsEqualTo(SystemDecorations.Full);
+            await Assert.That(configuration.WindowDecorations).IsEqualTo(WindowDecorations.Full);
             await Assert.That(configuration.WindowStartupLocation).IsEqualTo(WindowStartupLocation.CenterScreen);
             await Assert.That(configuration.SizeToContent).IsEqualTo(SizeToContent.Manual);
             await Assert.That(configuration.CanResize).IsEqualTo(true);
@@ -3665,7 +3667,11 @@ public sealed class RecorderTests
 
     private static Task DrainUiAsync()
     {
-        Dispatcher.UIThread.RunJobs();
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.RunJobs();
+        }
+
         return Task.CompletedTask;
     }
 

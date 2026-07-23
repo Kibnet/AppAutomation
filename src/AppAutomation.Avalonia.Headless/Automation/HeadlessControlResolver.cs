@@ -301,20 +301,25 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     private static string? ReadVisualGridCellText(AutomationElement element)
     {
-        var directValue = TryRead(() => ReadControlVisibleText(element.Control));
-        if (!string.IsNullOrWhiteSpace(directValue))
+        return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
         {
-            return directValue;
-        }
+            var directValue = ReadControlVisibleText(element.Control);
+            if (!string.IsNullOrWhiteSpace(directValue))
+            {
+                return directValue;
+            }
 
-        if (!string.IsNullOrWhiteSpace(element.Name))
-        {
-            return element.Name;
-        }
+            var directName = AutomationElement.ReadControlName(element.Control);
+            if (!string.IsNullOrWhiteSpace(directName))
+            {
+                return directName;
+            }
 
-        return element.FindAllDescendants()
-            .Select(static candidate => TryRead(() => ReadControlVisibleText(candidate.Control)) ?? candidate.Name)
-            .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name));
+            return ControlTree.EnumerateDescendants(element.Control)
+                .Select(static candidate =>
+                    ReadControlVisibleText(candidate) ?? AutomationElement.ReadControlName(candidate))
+                .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name));
+        });
     }
 
     private static string? ReadControlVisibleText(global::Avalonia.Controls.Control control)

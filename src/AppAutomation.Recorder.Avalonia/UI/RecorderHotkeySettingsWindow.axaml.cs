@@ -96,7 +96,7 @@ internal sealed partial class RecorderHotkeySettingsWindow : Window
             var editor = new TextBox
             {
                 Text = gesture ?? string.Empty,
-                Watermark = "Press shortcut",
+                PlaceholderText = "Press shortcut",
                 Tag = command
             };
             editor.AddHandler(
