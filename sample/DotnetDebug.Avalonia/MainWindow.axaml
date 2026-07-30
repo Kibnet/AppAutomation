@@ -388,7 +388,7 @@
                     </Grid>
                 </StackPanel>
 
-                <Grid Grid.Row="2" RowDefinitions="Auto,120,2*" RowSpacing="6">
+                <Grid Grid.Row="2" RowDefinitions="Auto,120,Auto,2*" RowSpacing="6">
                     <TextBlock Grid.Row="0" FontSize="14" FontWeight="SemiBold" Text="Avalonia DataGrid" />
                     <DataGrid x:Name="DemoDataGrid"
                               Grid.Row="1"
@@ -415,6 +415,45 @@
                     </DataGrid>
 
                     <Border Grid.Row="2"
+                            BorderBrush="#666666"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="8">
+                        <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
+                            <TextBlock Grid.Row="0"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Text="Search-picker grid editor" />
+                            <local:SearchPickerGridHost x:Name="SearchPickerGridAutomationBridge"
+                                                        Grid.Row="1"
+                                                        automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge"
+                                                        ItemsSource="{Binding SearchPickerGridRows}">
+                                <Grid ColumnDefinitions="100,*"
+                                      MinHeight="40"
+                                      automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0">
+                                    <TextBlock Grid.Column="0"
+                                               Padding="6,8"
+                                               Text="{Binding Key}"
+                                               automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0_Cell0"
+                                               automation:AutomationProperties.Name="{Binding Key}" />
+                                    <Border Grid.Column="1"
+                                            automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0_Cell1"
+                                            automation:AutomationProperties.IsControlElementOverride="True"
+                                            automation:AutomationProperties.Name="{Binding SelectedValue}">
+                                        <local:ServerSearchComboBox Width="280"
+                                                                    automation:AutomationProperties.AutomationId="SearchPickerGridEditor"
+                                                                    CurrentSelected="{Binding SelectedValue, Mode=TwoWay}"
+                                                                    DataGridControlMode="True"
+                                                                    ItemList="{Binding AvailableValues}"
+                                                                    SearchText="{Binding SearchText, Mode=TwoWay}"
+                                                                    Watermark="Search value" />
+                                    </Border>
+                                </Grid>
+                            </local:SearchPickerGridHost>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="3"
                             BorderBrush="#444444"
                             BorderThickness="1"
                             CornerRadius="6"

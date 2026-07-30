@@ -78,23 +78,19 @@ public partial class ArmDesktopControl : UserControl
         }
     }
 
-    private void OnArmServerPickerOpenClick(object? sender, RoutedEventArgs e)
-    {
-        ArmServerPickerStatusLabel.Content = "Server picker opened";
-    }
-
     private void OnArmServerPickerClearClick(object? sender, RoutedEventArgs e)
     {
-        ArmServerPickerInput.Text = string.Empty;
-        ArmServerPickerResults.SelectedIndex = -1;
+        ArmServerSearchPicker.SearchText = string.Empty;
+        ArmServerSearchPicker.CurrentSelected = null;
+        ArmServerSearchPicker.IsPopupOpen = false;
         ArmServerPickerStatusLabel.Content = "Server picker cleared";
     }
 
-    private void OnArmServerPickerResultsChanged(object? sender, SelectionChangedEventArgs e)
+    private void OnArmServerPickerSelected(object? sender, object? selected)
     {
-        if (ArmServerPickerResults.SelectedItem is not null)
+        if (selected is not null)
         {
-            ArmServerPickerStatusLabel.Content = $"Server selected: {ArmServerPickerResults.SelectedItem}";
+            ArmServerPickerStatusLabel.Content = $"Server selected: {selected}";
         }
     }
 

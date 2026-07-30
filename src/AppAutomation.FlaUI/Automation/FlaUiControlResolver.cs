@@ -1,15 +1,15 @@
-using AppAutomation.Abstractions;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Extensions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
 using FlaUI.Core.Input;
-using System.Runtime.InteropServices;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
-using System.Text;
 
 namespace AppAutomation.FlaUI.Automation;
 
@@ -1536,7 +1536,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiVisualGridControl : IGridUserActionControl
+    private sealed class FlaUiVisualGridControl : IGridUserActionControl, IEditableGridControl
     {
         private readonly AutomationElement _searchRoot;
         private readonly IGridControl? _fallback;
@@ -1582,6 +1582,38 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return _fallback?.GetRowByIndex(index);
         }
 
+        public void EditCell(GridCellEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentOutOfRangeException.ThrowIfNegative(request.RowIndex);
+            ArgumentOutOfRangeException.ThrowIfNegative(request.ColumnIndex);
+            ArgumentNullException.ThrowIfNull(request.Value);
+
+            var cell = FindVisualCell(request.RowIndex, request.ColumnIndex)
+                ?? throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] was not found in grid '{AutomationId}'.");
+
+            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+            {
+                return;
+            }
+
+            if (request.EditorKind == GridCellEditorKind.SearchPicker)
+            {
+                EditSearchPickerCell(cell, request);
+                return;
+            }
+
+            if (_fallback is IEditableGridControl editableFallback)
+            {
+                editableFallback.EditCell(request);
+                return;
+            }
+
+            throw new System.NotSupportedException(
+                $"Visual grid '{AutomationId}' does not support '{request.EditorKind}' cell editing in the FlaUI adapter.");
+        }
+
         public void OpenRow(int rowIndex)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
@@ -1606,6 +1638,126 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 ? $"Visual grid row {rowIndex} was not found in grid '{AutomationId}'."
                 : $"Visual grid row {rowIndex} in grid '{AutomationId}' could not be opened by double-click.";
             throw new InvalidOperationException(detail, lastException);
+        }
+
+        private AutomationElement? FindVisualCell(int rowIndex, int columnIndex)
+        {
+            var expectedAutomationId = $"{AutomationId}_Row{rowIndex}_Cell{columnIndex}";
+            return FindAutomationDescendants(_searchRoot)
+                .FirstOrDefault(candidate =>
+                    string.Equals(
+                        TryRead(() => candidate.AutomationId),
+                        expectedAutomationId,
+                        StringComparison.Ordinal));
+        }
+
+        private void EditSearchPickerCell(AutomationElement cell, GridCellEditRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.SearchText))
+            {
+                throw new ArgumentException(
+                    "Search text cannot be empty for a search-picker grid edit.",
+                    nameof(request));
+            }
+
+            var editorElements = new[] { cell }
+                .Concat(FindAutomationDescendants(cell))
+                .ToArray();
+            var searchInput = editorElements
+                .FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Edit);
+            if (searchInput is null)
+            {
+                throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a ServerSearchComboBox input.");
+            }
+
+            new FlaUiTextBoxControl(searchInput.AsTextBox()).Enter(request.SearchText);
+
+            var inputAutomationId = TryRead(() => searchInput.AutomationId);
+            var editorAutomationId = TryGetEditorAutomationId(inputAutomationId)
+                ?? throw new InvalidOperationException(
+                    $"ServerSearchComboBox input '{inputAutomationId}' does not use the expected '<Root>_Input' automation contract.");
+            var resultsAutomationId = $"{editorAutomationId}_Results";
+            var results = WaitForProcessElementByAutomationId(resultsAutomationId, TimeSpan.FromMilliseconds(500));
+            if (results is null)
+            {
+                var openButton = FindProcessElementByAutomationId($"{editorAutomationId}_OpenButton");
+                if (openButton is not null)
+                {
+                    openButton.Click();
+                    results = WaitForProcessElementByAutomationId(resultsAutomationId, TimeSpan.FromSeconds(5));
+                }
+            }
+
+            if (results is null || TryRead(() => results.ControlType) != ControlType.List)
+            {
+                throw new InvalidOperationException(
+                    $"ServerSearchComboBox results '{resultsAutomationId}' were not exposed as a ListBox for visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}'.");
+            }
+
+            new FlaUiListBoxControl(results.AsListBox()).SelectItem(request.Value);
+        }
+
+        private AutomationElement? WaitForProcessElementByAutomationId(string automationId, TimeSpan timeout)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            do
+            {
+                var element = FindProcessElementByAutomationId(automationId);
+                if (element is not null && TryRead(() => element.IsAvailable))
+                {
+                    return element;
+                }
+
+                Thread.Sleep(50);
+            }
+            while (stopwatch.Elapsed < timeout);
+
+            return null;
+        }
+
+        private AutomationElement? FindProcessElementByAutomationId(string automationId)
+        {
+            var condition = _searchRoot.Automation.ConditionFactory.ByAutomationId(automationId);
+            var local = TryRead(() => _searchRoot.FindFirstDescendant(condition));
+            if (local is not null && TryRead(() => local.IsAvailable))
+            {
+                return local;
+            }
+
+            var processId = TryRead(() => _searchRoot.FrameworkAutomationElement.ProcessId.ValueOrDefault);
+            var desktop = TryRead(() => _searchRoot.Automation.GetDesktop());
+            if (processId <= 0 || desktop is null)
+            {
+                return null;
+            }
+
+            var processRoots = TryRead(() => desktop.FindAllChildren(factory => factory.ByProcessId(processId)))
+                ?? Array.Empty<AutomationElement>();
+            foreach (var root in processRoots)
+            {
+                if (root is null || !TryRead(() => root.IsAvailable))
+                {
+                    continue;
+                }
+
+                var match = TryRead(() => root.FindFirstDescendant(condition));
+                if (match is not null && TryRead(() => match.IsAvailable))
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? TryGetEditorAutomationId(string? inputAutomationId)
+        {
+            const string inputSuffix = "_Input";
+            return !string.IsNullOrWhiteSpace(inputAutomationId)
+                   && inputAutomationId.EndsWith(inputSuffix, StringComparison.Ordinal)
+                ? inputAutomationId[..^inputSuffix.Length]
+                : null;
         }
 
         public void SortByColumn(string columnName)
@@ -1726,7 +1878,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 .Where(candidate =>
                     candidate.AutomationId?.StartsWith(cellPrefix, StringComparison.Ordinal) == true
                     && candidate.RowIndex != int.MaxValue
-                    && candidate.ColumnIndex != int.MaxValue)
+                    && candidate.ColumnIndex != int.MaxValue
+                    && HasExactVisualGridIndexSuffix(candidate.AutomationId, "_Cell"))
                 .GroupBy(static candidate => candidate.RowIndex)
                 .OrderBy(static group => group.Key)
                 .Select(static group => new VisualGridCellRow(
@@ -2021,7 +2174,30 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     {
         var automationId = TryRead(() => candidate.AutomationId);
         return automationId?.StartsWith(cellPrefix, StringComparison.Ordinal) == true
-            && ParseVisualGridIndex(automationId, "_Cell") != int.MaxValue;
+            && HasExactVisualGridIndexSuffix(automationId, "_Cell");
+    }
+
+    private static bool HasExactVisualGridIndexSuffix(string? automationId, string marker)
+    {
+        if (string.IsNullOrWhiteSpace(automationId))
+        {
+            return false;
+        }
+
+        var markerIndex = automationId.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var digitStart = markerIndex + marker.Length;
+        var digitEnd = digitStart;
+        while (digitEnd < automationId.Length && char.IsDigit(automationId[digitEnd]))
+        {
+            digitEnd++;
+        }
+
+        return digitEnd > digitStart && digitEnd == automationId.Length;
     }
 
     private static int ParseVisualGridIndex(string? automationId, string marker)

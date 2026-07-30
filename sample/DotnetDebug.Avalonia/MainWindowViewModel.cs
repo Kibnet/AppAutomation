@@ -14,6 +14,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public ObservableCollection<DataGridRowViewModel> DataGridRows { get; } = [];
 
+    public MainWindowViewModel()
+    {
+        SearchPickerGridRows = [SearchPickerGridRow];
+    }
+
+    public SearchPickerGridRowViewModel SearchPickerGridRow { get; } = new();
+
+    public IReadOnlyList<SearchPickerGridRowViewModel> SearchPickerGridRows { get; }
+
     public string GridResultLabel
     {
         get => _gridResultLabel;

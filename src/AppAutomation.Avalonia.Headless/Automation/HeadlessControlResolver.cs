@@ -1,10 +1,12 @@
-using AppAutomation.Abstractions;
-using AvaloniaWindow = Avalonia.Controls.Window;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using System.Collections;
 using System.Text;
+using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using Avalonia.Automation;
+using AvaloniaControl = Avalonia.Controls.Control;
+using AvaloniaTemplatedControl = Avalonia.Controls.Primitives.TemplatedControl;
+using AvaloniaWindow = Avalonia.Controls.Window;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
 
@@ -168,11 +170,56 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         var normalized = locatorValue.Trim();
         return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
         {
-            var match = ControlTree.EnumerateDescendants(_window.Native)
-                .FirstOrDefault(candidate =>
-                    string.Equals(AutomationProperties.GetAutomationId(candidate) ?? string.Empty, normalized, StringComparison.Ordinal));
+            var match = FindByAutomationId(normalized);
+            if (match is null && TryGetDerivedEditorRootAutomationId(normalized, out var rootAutomationId))
+            {
+                var editorRoot = FindByAutomationId(rootAutomationId);
+                if (editorRoot is AvaloniaTemplatedControl templatedEditor)
+                {
+                    templatedEditor.ApplyTemplate();
+                    match = FindByAutomationId(normalized);
+                }
+            }
+
             return match is null ? null : AutomationElement.WrapControl(match);
         });
+    }
+
+    private AvaloniaControl? FindByAutomationId(string automationId)
+    {
+        return ControlTree.EnumerateDescendants(_window.Native)
+            .FirstOrDefault(candidate =>
+                string.Equals(
+                    AutomationProperties.GetAutomationId(candidate) ?? string.Empty,
+                    automationId,
+                    StringComparison.Ordinal));
+    }
+
+    private static bool TryGetDerivedEditorRootAutomationId(
+        string automationId,
+        out string rootAutomationId)
+    {
+        string[] supportedSuffixes =
+        [
+            "_Input",
+            "_OpenButton",
+            "_Results",
+            "_ClearButton",
+            "_ApplyButton"
+        ];
+
+        foreach (var suffix in supportedSuffixes)
+        {
+            if (automationId.EndsWith(suffix, StringComparison.Ordinal)
+                && automationId.Length > suffix.Length)
+            {
+                rootAutomationId = automationId[..^suffix.Length];
+                return true;
+            }
+        }
+
+        rootAutomationId = string.Empty;
+        return false;
     }
 
     private AutomationElement? SearchByName(string locatorValue)
@@ -266,7 +313,30 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
     {
         var automationId = candidate.AutomationId;
         return automationId.StartsWith(cellPrefix, StringComparison.Ordinal)
-            && ParseVisualGridIndex(automationId, "_Cell") != int.MaxValue;
+            && HasExactVisualGridIndexSuffix(automationId, "_Cell");
+    }
+
+    private static bool HasExactVisualGridIndexSuffix(string? automationId, string marker)
+    {
+        if (string.IsNullOrWhiteSpace(automationId))
+        {
+            return false;
+        }
+
+        var markerIndex = automationId.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var digitStart = markerIndex + marker.Length;
+        var digitEnd = digitStart;
+        while (digitEnd < automationId.Length && char.IsDigit(automationId[digitEnd]))
+        {
+            digitEnd++;
+        }
+
+        return digitEnd > digitStart && digitEnd == automationId.Length;
     }
 
     private static int ParseVisualGridIndex(string? automationId, string marker)
@@ -1043,21 +1113,26 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 return null;
             }
 
-            var rowPrefix = $"{AutomationId}_Row{rowIndex}";
+            var expectedAutomationId = $"{AutomationId}_Row{rowIndex}_Cell{columnIndex}";
             return Inner.FindAllDescendants()
                 .FirstOrDefault(candidate =>
-                    candidate.AutomationId.StartsWith(rowPrefix, StringComparison.Ordinal)
-                    && ParseVisualGridIndex(candidate.AutomationId, "_Row") == rowIndex
-                    && ParseVisualGridIndex(candidate.AutomationId, "_Cell") == columnIndex);
+                    string.Equals(
+                        candidate.AutomationId,
+                        expectedAutomationId,
+                        StringComparison.Ordinal));
         }
 
-        private static bool TryWriteCellValue(AutomationElement cell, GridCellEditRequest request)
+        private bool TryWriteCellValue(AutomationElement cell, GridCellEditRequest request)
         {
             return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
-                var controls = new[] { cell.Control }
-                    .Concat(ControlTree.EnumerateDescendants(cell.Control))
-                    .ToArray();
+                var controls = ReadCellControls(cell.Control);
+
+                if (request.EditorKind == GridCellEditorKind.SearchPicker)
+                {
+                    controls = MaterializeSearchPickerControls(cell.Control, controls);
+                    return TryWriteSearchPicker(controls, request);
+                }
 
                 foreach (var candidate in controls)
                 {
@@ -1079,6 +1154,60 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             });
         }
 
+        private static List<global::Avalonia.Controls.Control> ReadCellControls(
+            global::Avalonia.Controls.Control cell)
+        {
+            return new[] { cell }
+                .Concat(ControlTree.EnumerateDescendants(cell))
+                .ToList();
+        }
+
+        private static List<global::Avalonia.Controls.Control> MaterializeSearchPickerControls(
+            global::Avalonia.Controls.Control cell,
+            List<global::Avalonia.Controls.Control> controls)
+        {
+            if (controls.OfType<global::Avalonia.Controls.TextBox>().Any()
+                && controls.OfType<global::Avalonia.Controls.ListBox>().Any())
+            {
+                return controls;
+            }
+
+            foreach (var editor in controls
+                         .OfType<global::Avalonia.Controls.Primitives.TemplatedControl>()
+                         .ToArray())
+            {
+                editor.ApplyTemplate();
+                controls = ReadCellControls(cell);
+                if (controls.OfType<global::Avalonia.Controls.TextBox>().Any()
+                    && controls.OfType<global::Avalonia.Controls.ListBox>().Any())
+                {
+                    break;
+                }
+            }
+
+            return controls;
+        }
+
+        private static bool TryWriteSearchPicker(
+            IReadOnlyList<global::Avalonia.Controls.Control> controls,
+            GridCellEditRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.SearchText))
+            {
+                return false;
+            }
+
+            var searchInput = controls.OfType<global::Avalonia.Controls.TextBox>().FirstOrDefault();
+            var results = controls.OfType<global::Avalonia.Controls.ListBox>().FirstOrDefault();
+            if (searchInput is null || results is null)
+            {
+                return false;
+            }
+
+            searchInput.Text = request.SearchText;
+            return TrySelectListBoxItem(results, request.Value);
+        }
+
         private static bool TryWriteTypedEditor(global::Avalonia.Controls.Control control, GridCellEditRequest request)
         {
             switch (control)
@@ -1088,14 +1217,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                     datePicker.SelectedDate = ParseDate(request.Value);
                     return true;
                 case global::Avalonia.Controls.ComboBox comboBox
-                    when request.EditorKind is GridCellEditorKind.ComboBox or GridCellEditorKind.SearchPicker:
+                    when request.EditorKind == GridCellEditorKind.ComboBox:
                     return TrySelectComboBoxItem(comboBox, request.Value);
                 case global::Avalonia.Controls.TextBox textBox
                     when request.EditorKind is GridCellEditorKind.Text
                         or GridCellEditorKind.Number
                         or GridCellEditorKind.Date
-                        or GridCellEditorKind.ComboBox
-                        or GridCellEditorKind.SearchPicker:
+                        or GridCellEditorKind.ComboBox:
                     textBox.Text = request.Value;
                     return true;
                 default:
@@ -1132,6 +1260,26 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
                 comboBox.SelectedIndex = index;
                 comboBox.SelectedItem = item;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TrySelectListBoxItem(global::Avalonia.Controls.ListBox listBox, string itemText)
+        {
+            var items = listBox.Items?.Cast<object?>().ToArray() ?? Array.Empty<object?>();
+            var normalizedTarget = NormalizeLookupText(itemText);
+            for (var index = 0; index < items.Length; index++)
+            {
+                var item = items[index];
+                if (!string.Equals(NormalizeLookupText(ReadComboBoxItemText(item)), normalizedTarget, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                listBox.SelectedIndex = index;
+                listBox.SelectedItem = item;
                 return true;
             }
 

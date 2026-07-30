@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             xmlns:local="clr-namespace:DotnetDebug.Avalonia"
              xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
              x:Class="DotnetDebug.Avalonia.ArmDesktopControl"
              x:CompileBindings="False">
@@ -68,27 +69,18 @@
             </StackPanel>
 
             <StackPanel Margin="8,0,0,0"
-                        Spacing="6"
-                        automation:AutomationProperties.AutomationId="ArmServerSearchPicker">
+                        Spacing="6">
               <TextBlock Text="Server picker" />
-              <TextBox x:Name="ArmServerPickerInput"
-                       Watermark="Lookup"
-                       automation:AutomationProperties.AutomationId="ArmServerPickerInput" />
-              <ComboBox x:Name="ArmServerPickerResults"
-                        ItemsSource="{Binding ArmServerItems}"
-                        SelectionChanged="OnArmServerPickerResultsChanged"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerResults" />
-              <StackPanel Orientation="Horizontal"
-                          Spacing="6">
-                <Button x:Name="ArmServerPickerOpenButton"
-                        Content="Open"
-                        Click="OnArmServerPickerOpenClick"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerOpenButton" />
-                <Button x:Name="ArmServerPickerClearButton"
-                        Content="Clear"
-                        Click="OnArmServerPickerClearClick"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerClearButton" />
-              </StackPanel>
+              <local:ServerSearchComboBox x:Name="ArmServerSearchPicker"
+                                          Width="220"
+                                          automation:AutomationProperties.AutomationId="ArmServerSearchPicker"
+                                          CurrentSelectedChanged="OnArmServerPickerSelected"
+                                          ItemList="{Binding ArmServerItems}"
+                                          Watermark="Lookup" />
+              <Button x:Name="ArmServerPickerClearButton"
+                      Content="Clear"
+                      Click="OnArmServerPickerClearClick"
+                      automation:AutomationProperties.AutomationId="ArmServerPickerClearButton" />
               <Label x:Name="ArmServerPickerStatusLabel"
                      Content="Server picker idle"
                      automation:AutomationProperties.AutomationId="ArmServerPickerStatusLabel" />

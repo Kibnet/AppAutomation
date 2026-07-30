@@ -90,6 +90,10 @@ public partial class App : Application
             "ArmEremexDataGridControl",
             "ArmGridAutomationBridge",
             ["Key", "Value", "State"]));
+        options.GridHints.Add(new RecorderGridHint(
+            "SearchPickerGridAutomationBridge",
+            "SearchPickerGridAutomationBridge",
+            ["Key", "SelectedValue"]));
         options.GridActionHints.Add(new RecorderGridActionHint(
             "ArmGridOpenButton",
             "ArmGridAutomationBridge",
@@ -136,9 +140,21 @@ public partial class App : Application
         options.SearchPickerHints.Add(new RecorderSearchPickerHint(
             "ArmServerSearchPicker",
             SearchPickerParts.ByAutomationIds(
-                "ArmServerPickerInput",
-                "ArmServerPickerResults",
-                expandButtonAutomationId: "ArmServerPickerOpenButton")));
+                "ArmServerSearchPicker_Input",
+                "ArmServerSearchPicker_Results",
+                expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
+                resultsKind: SearchPickerResultsKind.ListBox,
+                opensOnSearch: true)));
+        options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
+            "SearchPickerGridEditor",
+            "SearchPickerGridAutomationBridge",
+            SearchPickerParts.ByAutomationIds(
+                "SearchPickerGridEditor_Input",
+                "SearchPickerGridEditor_Results",
+                expandButtonAutomationId: "SearchPickerGridEditor_OpenButton",
+                resultsKind: SearchPickerResultsKind.ListBox,
+                opensOnSearch: true),
+            ColumnName: "SelectedValue"));
         options.DateRangeFilterHints.Add(new RecorderDateRangeFilterHint(
             "ArmDateRangeFilter",
             DateRangeFilterParts.ByAutomationIds(

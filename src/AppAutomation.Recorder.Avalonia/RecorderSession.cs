@@ -50,6 +50,7 @@ internal sealed class RecorderSession :
 
     private RecorderSessionState _state;
     private TextBox? _pendingTextBox;
+    private string? _pendingTextValue;
     private Slider? _pendingSlider;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
@@ -788,6 +789,7 @@ internal sealed class RecorderSession :
         }
 
         _pendingTextBox = textBox;
+        _pendingTextValue = textBox.Text;
         RegisterKeyboardInput(textBox);
         RestartTextDebounceUnlessCompositeSelection(textBox);
     }
@@ -920,7 +922,8 @@ internal sealed class RecorderSession :
 
     private void RecordComboBoxSelection(ComboBox comboBox)
     {
-        if (_state != RecorderSessionState.Recording || !WasRecentlyTriggeredByUser(comboBox))
+        if (_state != RecorderSessionState.Recording
+            || (!WasRecentlyTriggeredByUser(comboBox) && !HasPendingCompositeSelection(comboBox)))
         {
             return;
         }
@@ -947,7 +950,7 @@ internal sealed class RecorderSession :
             return false;
         }
 
-        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, comboBox);
+        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, comboBox, _pendingTextValue);
         if (!result.Success)
         {
             return false;
@@ -955,6 +958,7 @@ internal sealed class RecorderSession :
 
         _textDebounceTimer.Stop();
         _pendingTextBox = null;
+        _pendingTextValue = null;
         FlushPendingSliderIfSwitchingTo(comboBox);
         AddStep(result, comboBox, "SearchPickerSelection");
         return true;
@@ -967,7 +971,7 @@ internal sealed class RecorderSession :
             return false;
         }
 
-        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, listBox);
+        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, listBox, _pendingTextValue);
         if (!result.Success)
         {
             return false;
@@ -975,6 +979,7 @@ internal sealed class RecorderSession :
 
         _textDebounceTimer.Stop();
         _pendingTextBox = null;
+        _pendingTextValue = null;
         FlushPendingSliderIfSwitchingTo(listBox);
         AddStep(result, listBox, "SearchPickerSelection");
         return true;
@@ -990,7 +995,8 @@ internal sealed class RecorderSession :
 
     private void RecordListBoxSelection(ListBox listBox)
     {
-        if (_state != RecorderSessionState.Recording || !WasRecentlyTriggeredByUser(listBox))
+        if (_state != RecorderSessionState.Recording
+            || (!WasRecentlyTriggeredByUser(listBox) && !HasPendingCompositeSelection(listBox)))
         {
             return;
         }
@@ -1208,7 +1214,19 @@ internal sealed class RecorderSession :
             return;
         }
 
+        var currentText = textBox.Text ?? string.Empty;
+        var preserveCapturedSearchText =
+            ReferenceEquals(_pendingTextBox, textBox)
+            && !string.IsNullOrWhiteSpace(_pendingTextValue)
+            && !string.Equals(_pendingTextValue, currentText, StringComparison.Ordinal)
+            && IsCompositeSelectedValue(textBox, currentText);
+
         _pendingTextBox = textBox;
+        if (!preserveCapturedSearchText)
+        {
+            _pendingTextValue = currentText;
+        }
+
         RestartTextDebounceUnlessCompositeSelection(textBox);
     }
 
@@ -1381,6 +1399,7 @@ internal sealed class RecorderSession :
     {
         _textDebounceTimer.Stop();
         _pendingTextBox = null;
+        _pendingTextValue = null;
     }
 
     private Control? GetFocusedWindowControl()
@@ -1720,6 +1739,7 @@ internal sealed class RecorderSession :
 
         var textBox = _pendingTextBox;
         _pendingTextBox = null;
+        _pendingTextValue = null;
         if (ShouldSuppressTemplateTextEntry(textBox))
         {
             return;
@@ -1774,6 +1794,19 @@ internal sealed class RecorderSession :
         }
 
         FlushPendingSlider();
+    }
+
+    private bool HasPendingCompositeSelection(Control results)
+    {
+        return _pendingTextBox is not null
+            && _stepFactory.IsCompositeSelectionPair(_pendingTextBox, results);
+    }
+
+    private bool IsCompositeSelectedValue(TextBox searchInput, string text)
+    {
+        return _observedControlDetachers.Keys.Any(results =>
+            (results is ComboBox or ListBox)
+            && _stepFactory.IsCompositeSelectedValue(searchInput, results, text));
     }
 
     private void RegisterPointerInput(Control? control)

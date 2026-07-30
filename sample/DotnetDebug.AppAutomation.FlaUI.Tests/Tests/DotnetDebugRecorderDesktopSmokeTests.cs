@@ -114,7 +114,14 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
             .SetChecked(static candidate => candidate.ArmSearchFuzzyToggle, true)
             .SearchAndSelect(static candidate => candidate.ArmSearchPicker, "customer", "Customer Alpha")
-            .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42");
+            .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42")
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .SearchAndSelectGridCell(
+                static candidate => candidate.SearchPickerGridAutomationBridge,
+                0,
+                1,
+                "ga",
+                "Gamma");
 
         var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
 
@@ -126,9 +133,12 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             await Assert.That(scenarioSource.Contains(
                 "Page.SearchAndSelect(static page => page.ArmServerSearchPicker, \"product\", \"Product 42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains(
+                "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, 0, 1, \"ga\", \"Gamma\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("ArmSearchInput", StringComparison.Ordinal)).IsEqualTo(false);
             await Assert.That(scenarioSource.Contains("ArmSearchApplyButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmServerPickerOpenButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(scenarioSource.Contains("ArmServerSearchPicker_OpenButton", StringComparison.Ordinal)).IsEqualTo(false);
         }
     }
 

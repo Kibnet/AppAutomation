@@ -92,6 +92,43 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task SearchPickerAdapter_SearchOpenedList_DoesNotTogglePopupClosed()
+    {
+        var searchInput = new FakeTextBoxControl("ServerSearchComboBox_Input");
+        var expandButton = new FakeButtonControl("ServerSearchComboBox_OpenButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "ServerSearchComboBox_Results",
+            [
+                new FakeListBoxItem("Product 42", "Product 42")
+            ]);
+
+        var resolver = new FakeResolver(
+            ("ServerSearchComboBox_Input", searchInput),
+            ("ServerSearchComboBox_OpenButton", expandButton),
+            ("ServerSearchComboBox_Results", listBox))
+            .WithSearchPicker(
+                "ServerSearchComboBox",
+                SearchPickerParts.ByAutomationIds(
+                    "ServerSearchComboBox_Input",
+                    "ServerSearchComboBox_Results",
+                    expandButtonAutomationId: "ServerSearchComboBox_OpenButton",
+                    resultsKind: SearchPickerResultsKind.ListBox,
+                    opensOnSearch: true));
+        var page = new ServerSearchComboBoxPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.ServerSearchComboBox,
+            "product",
+            "Product 42");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Product 42");
+        }
+    }
+
+    [Test]
     public async Task SearchPickerAdapter_SelectedItemText_DoesNotFallbackToSearchInputBeforeSelection()
     {
         var searchInput = new FakeTextBoxControl("HistoryFilterInput");
@@ -841,6 +878,16 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class ServerSearchComboBoxPageDefinitions
+    {
+        public static UiControlDefinition ServerSearchComboBox { get; } = new(
+            "ServerSearchComboBox",
+            UiControlType.SearchPicker,
+            "ServerSearchComboBox",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class SearchPickerPage : UiPage
     {
         public SearchPickerPage(IUiControlResolver resolver)
@@ -860,6 +907,17 @@ public sealed class UiControlAdapterTests
 
         public ISearchPickerControl OrderCustomerSearch =>
             Resolve<ISearchPickerControl>(OrderCustomerSearchPageDefinitions.OrderCustomerSearch);
+    }
+
+    private sealed class ServerSearchComboBoxPage : UiPage
+    {
+        public ServerSearchComboBoxPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl ServerSearchComboBox =>
+            Resolve<ISearchPickerControl>(ServerSearchComboBoxPageDefinitions.ServerSearchComboBox);
     }
 
     private sealed class SearchPickerInputPartPage : UiPage

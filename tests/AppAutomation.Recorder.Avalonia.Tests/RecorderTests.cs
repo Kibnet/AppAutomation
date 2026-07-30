@@ -2028,8 +2028,10 @@ public sealed class RecorderTests
         var popupHost = new PopupContentHost { PopupContent = popupContent };
         var results = new ListBox
         {
-            ItemsSource = new[] { "АЭРОСКАН ООО" }
+            ItemsSource = new[] { "Product 42" }
         };
+        results.SelectionChanged += (_, _) =>
+            searchInput.Text = results.SelectedItem?.ToString() ?? string.Empty;
         AutomationProperties.SetAutomationId(searchInput, "OrderCustomerSearch_Input");
         AutomationProperties.SetAutomationId(expandButton, "OrderCustomerSearch_OpenButton");
         AutomationProperties.SetAutomationId(results, "OrderCustomerSearch_Results");
@@ -2044,15 +2046,14 @@ public sealed class RecorderTests
         session.Start();
         session.RefreshObservedControlsForTesting();
         session.RegisterKeyboardInputForTesting(searchInput);
-        searchInput.Text = "АЭРОСКАН ООО";
+        searchInput.Text = "product";
         session.CaptureButtonClickForTesting(expandButton);
-        session.RegisterPointerInputFromSourceForTesting(results);
-        results.SelectedItem = "АЭРОСКАН ООО";
+        results.SelectedItem = "Product 42";
 
         using (Assert.Multiple())
         {
             await Assert.That(details.StepJournal.Count).IsEqualTo(1);
-            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.OrderCustomerSearch, \"АЭРОСКАН ООО\", \"АЭРОСКАН ООО\");");
+            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.OrderCustomerSearch, \"product\", \"Product 42\");");
             await Assert.That(details.StepJournal[0].Preview.Contains("OrderCustomerSearch_Input", StringComparison.Ordinal)).IsEqualTo(false);
             await Assert.That(details.StepJournal[0].Preview.Contains("EnterText", StringComparison.Ordinal)).IsEqualTo(false);
         }

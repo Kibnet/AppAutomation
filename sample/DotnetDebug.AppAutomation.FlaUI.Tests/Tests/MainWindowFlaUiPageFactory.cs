@@ -28,9 +28,11 @@ internal static class MainWindowFlaUiPageFactory
                 .WithSearchPicker(
                     "ArmServerSearchPicker",
                     SearchPickerParts.ByAutomationIds(
-                        "ArmServerPickerInput",
-                        "ArmServerPickerResults",
-                        expandButtonAutomationId: "ArmServerPickerOpenButton"))
+                        "ArmServerSearchPicker_Input",
+                        "ArmServerSearchPicker_Results",
+                        expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
+                        resultsKind: SearchPickerResultsKind.ListBox,
+                        opensOnSearch: true))
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

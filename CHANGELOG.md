@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Record and replay the ARM-style `ServerSearchComboBox` contract in cards and grid cells through its real `PopupEditor` input and popup `ListBox`.
+- Preserve the typed search query when `ServerSearchComboBox` replaces the editor text with the selected value before Recorder receives the selection event.
+
 ### Removed
 
 - Remove recorder overlay minimize/restore controls and hotkey handling.

@@ -167,7 +167,10 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
-    public StepCreationResult TryCreateSearchPickerStep(TextBox searchInput, ComboBox results)
+    public StepCreationResult TryCreateSearchPickerStep(
+        TextBox searchInput,
+        ComboBox results,
+        string? capturedSearchText = null)
     {
         ArgumentNullException.ThrowIfNull(searchInput);
         ArgumentNullException.ThrowIfNull(results);
@@ -176,10 +179,14 @@ internal sealed class RecorderStepFactory
             searchInput,
             results,
             SearchPickerResultsKind.ComboBox,
-            ExtractSelectionText(results.SelectedItem));
+            ExtractSelectionText(results.SelectedItem),
+            capturedSearchText);
     }
 
-    public StepCreationResult TryCreateSearchPickerStep(TextBox searchInput, ListBox results)
+    public StepCreationResult TryCreateSearchPickerStep(
+        TextBox searchInput,
+        ListBox results,
+        string? capturedSearchText = null)
     {
         ArgumentNullException.ThrowIfNull(searchInput);
         ArgumentNullException.ThrowIfNull(results);
@@ -188,7 +195,8 @@ internal sealed class RecorderStepFactory
             searchInput,
             results,
             SearchPickerResultsKind.ListBox,
-            ExtractSelectionText(results.SelectedItem));
+            ExtractSelectionText(results.SelectedItem),
+            capturedSearchText);
     }
 
     public bool ShouldSuppressSearchPickerButton(Control? source)
@@ -459,6 +467,26 @@ internal sealed class RecorderStepFactory
                 || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _),
             _ => false
         };
+    }
+
+    public bool IsCompositeSelectedValue(TextBox searchInput, Control results, string? text)
+    {
+        ArgumentNullException.ThrowIfNull(searchInput);
+        ArgumentNullException.ThrowIfNull(results);
+
+        if (string.IsNullOrWhiteSpace(text) || !IsCompositeSelectionPair(searchInput, results))
+        {
+            return false;
+        }
+
+        var selectedText = results switch
+        {
+            ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
+            ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
+            _ => null
+        };
+
+        return string.Equals(selectedText?.Trim(), text.Trim(), StringComparison.Ordinal);
     }
 
     public bool ShouldSuppressCompositeDateSelection(DatePicker datePicker)
@@ -1089,11 +1117,17 @@ internal sealed class RecorderStepFactory
         TextBox searchInput,
         Control results,
         SearchPickerResultsKind resultsKind,
-        string? selectedText)
+        string? selectedText,
+        string? capturedSearchText)
     {
         if (TryResolveGridSearchPickerHint(searchInput, results, resultsKind, out var gridHint))
         {
-            return TryCreateGridSearchPickerStep(searchInput, results, selectedText, gridHint);
+            return TryCreateGridSearchPickerStep(
+                searchInput,
+                results,
+                selectedText,
+                capturedSearchText,
+                gridHint);
         }
 
         if (TryResolveGridHint(searchInput, out _, out _))
@@ -1106,7 +1140,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
         }
 
-        var searchText = searchInput.Text?.Trim();
+        var searchText = (capturedSearchText ?? searchInput.Text)?.Trim();
         if (string.IsNullOrWhiteSpace(searchText))
         {
             return StepCreationResult.Unsupported("Search picker search text is empty.");
@@ -1141,9 +1175,10 @@ internal sealed class RecorderStepFactory
         TextBox searchInput,
         Control results,
         string? selectedText,
+        string? capturedSearchText,
         RecorderGridSearchPickerHint hint)
     {
-        var searchText = searchInput.Text?.Trim();
+        var searchText = (capturedSearchText ?? searchInput.Text)?.Trim();
         if (string.IsNullOrWhiteSpace(searchText))
         {
             return StepCreationResult.Unsupported("Grid search picker search text is empty.");

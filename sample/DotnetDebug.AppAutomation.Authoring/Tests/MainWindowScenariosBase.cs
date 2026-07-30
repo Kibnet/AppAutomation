@@ -1,8 +1,8 @@
 using System;
 using System.Linq;
-using DotnetDebug.AppAutomation.Authoring.Pages;
 using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
+using DotnetDebug.AppAutomation.Authoring.Pages;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -293,6 +293,30 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
             await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("EX-13");
             await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("EX-Odd");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task SearchPicker_CardAndGrid_RuntimeParity_Works()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
+            .WaitUntilTextEquals(p => p.ArmServerSearchPicker, "Product 42");
+
+        await Assert.That(Page.ArmServerSearchPicker.SelectedItemText).IsEqualTo("Product 42");
+
+        Page
+            .SelectTabItem(p => p.DataGridTabItem)
+            .SearchAndSelectGridCell(p => p.SearchPickerGridAutomationBridge, 0, 1, "ga", "Gamma")
+            .WaitUntilTextEquals(p => p.SearchPickerGridSearchInput, "Gamma")
+            .WaitUntilGridCellEquals(p => p.SearchPickerGridAutomationBridge, 0, 1, "Gamma");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.SearchPickerGridSearchInput.Text).IsEqualTo("Gamma");
+            await Assert.That(Page.SearchPickerGridAutomationBridge.GetRowByIndex(0)!.Cells[1].Value).IsEqualTo("Gamma");
         }
     }
 

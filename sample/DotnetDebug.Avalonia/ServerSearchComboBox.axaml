@@ -1,0 +1,62 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:common="https://schemas.eremexcontrols.net/avalonia"
+                    xmlns:editors="https://schemas.eremexcontrols.net/avalonia/editors"
+                    xmlns:local="using:DotnetDebug.Avalonia"
+                    xmlns:visuals="clr-namespace:Eremex.AvaloniaUI.Controls.Editors.Visuals;assembly=Eremex.Avalonia.Controls">
+    <!--
+      Provider-specific fixture copied from the structural contract of ARM's
+      ServerSearchComboBox theme: an Avalonia TextBox and popup ListBox hosted
+      by an Eremex PopupEditor. Business templates and server loading are omitted.
+    -->
+    <ControlTheme x:Key="{x:Type local:ServerSearchComboBox}"
+                  TargetType="local:ServerSearchComboBox"
+                  BasedOn="{StaticResource {x:Type editors:PopupEditor}}">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <DockPanel>
+                    <Panel x:Name="PART_RealEditorPanel">
+                        <TextBox x:Name="PART_RealEditor"
+                                 Background="{TemplateBinding Background}"
+                                 Foreground="{TemplateBinding Foreground}"
+                                 BorderThickness="0"
+                                 Focusable="{TemplateBinding Focusable}"
+                                 Padding="{TemplateBinding Padding}"
+                                 CornerRadius="{TemplateBinding CornerRadius}"
+                                 HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                 HorizontalAlignment="Stretch"
+                                 MinHeight="0"
+                                 Text="{Binding $parent[local:ServerSearchComboBox].SearchText, Mode=TwoWay}"
+                                 Watermark="{TemplateBinding Watermark}">
+                            <TextBox.InnerRightContent>
+                                <ToggleButton x:Name="PART_PopupOpenButton"
+                                              Padding="6,0"
+                                              Content="▼" />
+                            </TextBox.InnerRightContent>
+                        </TextBox>
+                        <Grid x:Name="PART_ButtonsContainer" />
+                        <Border x:Name="PART_RootBorder"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Background="{x:Null}"
+                                MinHeight="0" />
+                        <common:ResizeablePopup x:Name="PART_EditorPopup"
+                                               IsOpen="{TemplateBinding IsPopupOpen, Mode=TwoWay}"
+                                               PlacementTarget="PART_RootBorder"
+                                               Placement="BottomEdgeAlignedLeft"
+                                               IsLightDismissEnabled="True">
+                            <Border BorderThickness="1"
+                                    BorderBrush="{DynamicResource ThemeBorderLowBrush}"
+                                    Background="{DynamicResource ThemeBackgroundBrush}"
+                                    HorizontalAlignment="Stretch">
+                                <visuals:PopupContentContainer x:Name="PART_PopupContentContainer" />
+                            </Border>
+                        </common:ResizeablePopup>
+                    </Panel>
+                </DockPanel>
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+</ResourceDictionary>
