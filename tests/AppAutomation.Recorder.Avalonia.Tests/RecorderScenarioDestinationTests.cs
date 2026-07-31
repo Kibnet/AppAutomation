@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -10,6 +11,18 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 [NotInParallel]
 public sealed class RecorderScenarioDestinationTests
 {
+    [Test]
+    public async Task FileReservation_RethrowsNonCollisionIoFailure()
+    {
+        var missingParent = Path.Combine(
+            Path.GetTempPath(),
+            $"appautomation-missing-{Guid.NewGuid():N}",
+            "scenario.g.cs");
+
+        await Assert.That(() => AuthoringCodeGenerator.TryReserveFile(missingParent))
+            .Throws<DirectoryNotFoundException>();
+    }
+
     [Test]
     public async Task DiscoverScenarioDestinations_MapsSourcePartialClasses()
     {

@@ -62,6 +62,52 @@ public sealed record SearchPickerParts(
     bool OpensOnSearch = false)
 {
     /// <summary>
+    /// Initializes a configuration using the constructor signature published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public SearchPickerParts(
+        string searchInputLocator,
+        string resultsLocator,
+        string? applyButtonLocator,
+        string? expandButtonLocator,
+        UiLocatorKind locatorKind,
+        bool fallbackToName,
+        SearchPickerResultsKind resultsKind)
+        : this(
+            searchInputLocator,
+            resultsLocator,
+            applyButtonLocator,
+            expandButtonLocator,
+            locatorKind,
+            fallbackToName,
+            resultsKind,
+            OpensOnSearch: false)
+    {
+    }
+
+    /// <summary>
+    /// Deconstructs the configuration using the shape published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public void Deconstruct(
+        out string searchInputLocator,
+        out string resultsLocator,
+        out string? applyButtonLocator,
+        out string? expandButtonLocator,
+        out UiLocatorKind locatorKind,
+        out bool fallbackToName,
+        out SearchPickerResultsKind resultsKind)
+    {
+        searchInputLocator = SearchInputLocator;
+        resultsLocator = ResultsLocator;
+        applyButtonLocator = ApplyButtonLocator;
+        expandButtonLocator = ExpandButtonLocator;
+        locatorKind = LocatorKind;
+        fallbackToName = FallbackToName;
+        resultsKind = ResultsKind;
+    }
+
+    /// <summary>
     /// Creates a <see cref="SearchPickerParts"/> configuration using automation IDs.
     /// </summary>
     /// <param name="searchInputAutomationId">The automation ID of the search input.</param>
@@ -86,6 +132,26 @@ public sealed record SearchPickerParts(
             expandButtonAutomationId,
             ResultsKind: resultsKind,
             OpensOnSearch: opensOnSearch);
+    }
+
+    /// <summary>
+    /// Creates a configuration using the factory signature published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public static SearchPickerParts ByAutomationIds(
+        string searchInputAutomationId,
+        string resultsAutomationId,
+        string? applyButtonAutomationId,
+        string? expandButtonAutomationId,
+        SearchPickerResultsKind resultsKind)
+    {
+        return ByAutomationIds(
+            searchInputAutomationId,
+            resultsAutomationId,
+            applyButtonAutomationId,
+            expandButtonAutomationId,
+            resultsKind,
+            opensOnSearch: false);
     }
 }
 
@@ -562,6 +628,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 {
     private readonly string _propertyName;
     private readonly SearchPickerParts _parts;
+    private readonly SearchPickerSelectionState _selectionState = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SearchPickerControlAdapter"/> class.
@@ -620,7 +687,8 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             results,
             applyButton,
             expandButton,
-            _parts.OpensOnSearch);
+            _parts.OpensOnSearch,
+            _selectionState);
     }
 
     private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver)
@@ -661,7 +729,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         private readonly IButtonControl? _applyButton;
         private readonly IButtonControl? _expandButton;
         private readonly bool _opensOnSearch;
-        private string? _lastSelectedItemText;
+        private readonly SearchPickerSelectionState _selectionState;
         private bool _isExpanded;
 
         public SearchPickerControl(
@@ -670,7 +738,8 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             ISearchPickerResultsSurface results,
             IButtonControl? applyButton,
             IButtonControl? expandButton,
-            bool opensOnSearch)
+            bool opensOnSearch,
+            SearchPickerSelectionState selectionState)
         {
             AutomationId = automationId;
             _searchInput = searchInput;
@@ -678,6 +747,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             _applyButton = applyButton;
             _expandButton = expandButton;
             _opensOnSearch = opensOnSearch;
+            _selectionState = selectionState;
         }
 
         public string AutomationId { get; }
@@ -685,11 +755,25 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         public string Name => _searchInput.Name;
 
         public bool IsEnabled =>
-            _searchInput.IsEnabled;
+            _searchInput.IsEnabled
+            && (_applyButton?.IsEnabled ?? true)
+            && (_expandButton?.IsEnabled ?? true);
 
         public string SearchText => _searchInput.Text;
 
-        public string? SelectedItemText => _results.SelectedItemText ?? _lastSelectedItemText;
+        public string? SelectedItemText
+        {
+            get
+            {
+                if (_results.SelectedItemText is { } selectedItemText)
+                {
+                    _selectionState.Record(selectedItemText, SearchText);
+                    return selectedItemText;
+                }
+
+                return _selectionState.Read(SearchText);
+            }
+        }
 
         public IReadOnlyList<string> Items => _results.Items;
 
@@ -713,9 +797,9 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Search(string value)
         {
+            _selectionState.Clear();
             _searchInput.Enter(value);
             _applyButton?.Invoke();
-            _lastSelectedItemText = null;
             _isExpanded = _opensOnSearch;
         }
 
@@ -745,7 +829,48 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
             Expand();
             _results.SelectItem(itemText);
-            _lastSelectedItemText = itemText;
+            _selectionState.Record(itemText, SearchText);
+        }
+    }
+
+    private sealed class SearchPickerSelectionState
+    {
+        private readonly object _sync = new();
+        private string? _selectedItemText;
+        private string? _searchTextAtSelection;
+
+        public void Clear()
+        {
+            lock (_sync)
+            {
+                _selectedItemText = null;
+                _searchTextAtSelection = null;
+            }
+        }
+
+        public void Record(string selectedItemText, string searchText)
+        {
+            lock (_sync)
+            {
+                _selectedItemText = selectedItemText;
+                _searchTextAtSelection = searchText;
+            }
+        }
+
+        public string? Read(string currentSearchText)
+        {
+            lock (_sync)
+            {
+                if (string.Equals(currentSearchText, _searchTextAtSelection, StringComparison.Ordinal)
+                    || string.Equals(currentSearchText, _selectedItemText, StringComparison.OrdinalIgnoreCase))
+                {
+                    return _selectedItemText;
+                }
+
+                _selectedItemText = null;
+                _searchTextAtSelection = null;
+                return null;
+            }
         }
     }
 
@@ -820,11 +945,23 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string AutomationId => _locator;
 
-        public string Name => string.Empty;
+        public string Name => TryResolve()?.Name ?? string.Empty;
 
-        public bool IsEnabled => true;
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
 
         public void Invoke() => _resolve().Invoke();
+
+        private IButtonControl? TryResolve()
+        {
+            try
+            {
+                return _resolve();
+            }
+            catch
+            {
+                return null;
+            }
+        }
     }
 
     private sealed class ComboBoxResultsSurface : ISearchPickerResultsSurface

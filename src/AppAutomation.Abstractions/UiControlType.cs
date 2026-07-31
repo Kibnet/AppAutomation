@@ -167,5 +167,10 @@ public enum UiControlType
     /// <summary>
     /// A composite multi-select popup. Maps to <see cref="IMultiSelectControl"/>.
     /// </summary>
-    MultiSelect = 31
+    MultiSelect = 31,
+
+    /// <summary>
+    /// A logical ComboBoxEditor-style filter with an exact selected item set. Maps to <see cref="IComboBoxFilterControl"/>.
+    /// </summary>
+    ComboBoxFilter = 32
 }

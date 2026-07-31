@@ -59,6 +59,7 @@ internal sealed class RecorderSession :
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
+    private ComboBoxFilterClickSnapshot? _comboBoxFilterClickSnapshot;
     private string _lastFingerprint = string.Empty;
     private DateTimeOffset _lastRecordedAt;
     private Task<RecorderSaveResult>? _activeOperationTask;
@@ -634,6 +635,17 @@ internal sealed class RecorderSession :
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
     }
 
+    internal void AttachInputHandlersForTesting()
+    {
+        RebindInputHandlers();
+        RefreshObservedControls();
+    }
+
+    internal void CaptureButtonPressForTesting(Control? source)
+    {
+        CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(source));
+    }
+
     internal void CaptureComboBoxSelectionForTesting(ComboBox comboBox)
     {
         RecordComboBoxSelection(comboBox);
@@ -896,6 +908,7 @@ internal sealed class RecorderSession :
             return;
         }
 
+        CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(e.Source as Control));
         var control = ResolveInteractionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
@@ -953,6 +966,11 @@ internal sealed class RecorderSession :
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
+            if (e.Key is Key.Enter or Key.Space)
+            {
+                CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(focused));
+            }
+
             RegisterKeyboardInput(ResolveInteractionOwner(focused) ?? focused);
             if (focused is TextBox && e.Key is Key.Enter or Key.Tab)
             {
@@ -1015,8 +1033,24 @@ internal sealed class RecorderSession :
         }
     }
 
+    private void CaptureComboBoxFilterClickSnapshot(Control? actionSource)
+    {
+        _comboBoxFilterClickSnapshot = null;
+        if (_state == RecorderSessionState.Recording
+            && actionSource is not null
+            && _stepFactory.TryCaptureComboBoxFilterSelection(actionSource, out var selectedValues))
+        {
+            _comboBoxFilterClickSnapshot = new ComboBoxFilterClickSnapshot(
+                actionSource,
+                selectedValues,
+                DateTimeOffset.UtcNow);
+        }
+    }
+
     private void OnButtonClick(object? sender, RoutedEventArgs e)
     {
+        var clickSnapshot = _comboBoxFilterClickSnapshot;
+        _comboBoxFilterClickSnapshot = null;
         if (_state != RecorderSessionState.Recording)
         {
             return;
@@ -1044,7 +1078,7 @@ internal sealed class RecorderSession :
             return;
         }
 
-        if (TryRecordCompositeButtonAction(control ?? eventSource))
+        if (TryRecordCompositeButtonAction(control ?? eventSource, clickSnapshot))
         {
             return;
         }
@@ -1071,6 +1105,11 @@ internal sealed class RecorderSession :
         }
 
         if (_stepFactory.ShouldSuppressCompositeSelection(comboBox))
+        {
+            return;
+        }
+
+        if (TryRecordComboBoxFilterSelection(comboBox))
         {
             return;
         }
@@ -1143,6 +1182,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryRecordComboBoxFilterSelection(listBox))
+        {
+            return;
+        }
+
         if (_stepFactory.ShouldSuppressCompositeSelection(listBox))
         {
             return;
@@ -1207,11 +1251,33 @@ internal sealed class RecorderSession :
         return source is not null && _stepFactory.ShouldSuppressCompositeWorkflowButton(source);
     }
 
-    private bool TryRecordCompositeButtonAction(Control? source)
+    private bool TryRecordCompositeButtonAction(
+        Control? source,
+        ComboBoxFilterClickSnapshot? clickSnapshot = null)
     {
         if (source is null)
         {
             return false;
+        }
+
+        var isComboBoxFilterAction = _stepFactory.IsComboBoxFilterAction(source);
+        var capturedFilterValues = ReferenceEquals(clickSnapshot?.ActionSource, source)
+            && DateTimeOffset.UtcNow - clickSnapshot.CapturedAt <= RecentInputWindow
+            ? clickSnapshot.SelectedValues
+            : null;
+        var comboBoxFilterResult = _stepFactory.TryCreateComboBoxFilterStep(source, capturedFilterValues);
+        if (comboBoxFilterResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(comboBoxFilterResult, source, "ComboBoxFilter");
+            return true;
+        }
+
+        if (isComboBoxFilterAction)
+        {
+            AddStep(comboBoxFilterResult, source, "ComboBoxFilter");
+            return true;
         }
 
         var isMultiSelectCommit = _stepFactory.IsMultiSelectCommit(source);
@@ -1281,6 +1347,20 @@ internal sealed class RecorderSession :
         }
 
         return false;
+    }
+
+    private bool TryRecordComboBoxFilterSelection(Control source)
+    {
+        if (!_stepFactory.IsComboBoxFilterAction(source))
+        {
+            return false;
+        }
+
+        var result = _stepFactory.TryCreateComboBoxFilterStep(source);
+        DiscardPendingText();
+        FlushPendingSliderIfSwitchingTo(source);
+        AddStep(result, source, "ComboBoxFilter");
+        return true;
     }
 
     private bool TryRecordShellNavigation(Control source)
@@ -2054,6 +2134,11 @@ internal sealed class RecorderSession :
 
         return null;
     }
+
+    private sealed record ComboBoxFilterClickSnapshot(
+        Control ActionSource,
+        IReadOnlyList<string> SelectedValues,
+        DateTimeOffset CapturedAt);
 
     private static bool IsDatePickerTemplateButton(Control? control)
     {

@@ -849,15 +849,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
 
         public IReadOnlyList<string> Items => ReadItems()
-            .Select(static item => item.Text)
             .ToArray();
 
         public IReadOnlyList<string> SelectedItems =>
             AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                ReadItemsCore()
-                    .Where(static item => item.Control.IsChecked == true)
-                    .Select(static item => item.Text)
-                    .ToArray());
+                ReadSelectedItemsCore());
 
         public void SetSelectedItems(IReadOnlyCollection<string> values)
         {
@@ -866,11 +862,27 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
             AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
-                var items = ReadItemsCore();
-                ValidateAvailableItems(items.Select(static item => item.Text), normalizedValues);
-                foreach (var item in items)
+                var checkBoxes = ReadCheckBoxesCore();
+                if (checkBoxes.Length > 0)
                 {
-                    item.Control.IsChecked = normalizedValues.Contains(item.Text);
+                    ValidateAvailableItems(checkBoxes.Select(static item => item.Text), normalizedValues);
+                    foreach (var item in checkBoxes)
+                    {
+                        item.Control.IsChecked = normalizedValues.Contains(item.Text);
+                    }
+                }
+                else if (FindListBoxCore() is { } listBox)
+                {
+                    SetListBoxSelectedItems(listBox, normalizedValues);
+                }
+                else if (FindComboBoxCore() is { } comboBox)
+                {
+                    SetComboBoxSelectedItem(comboBox, normalizedValues);
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        "Multi-select items container does not expose checkbox, ListBox, or ComboBox items.");
                 }
 
                 Inner.Control.Dispatcher.RunJobs();
@@ -878,18 +890,135 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             });
         }
 
-        private MultiSelectCheckBox[] ReadItems()
+        private string[] ReadItems()
         {
             return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(ReadItemsCore);
         }
 
-        private MultiSelectCheckBox[] ReadItemsCore()
+        private string[] ReadItemsCore()
+        {
+            var checkBoxes = ReadCheckBoxesCore();
+            if (checkBoxes.Length > 0)
+            {
+                return checkBoxes.Select(static item => item.Text).ToArray();
+            }
+
+            if (FindListBoxCore() is { } listBox)
+            {
+                return listBox.Items.Cast<object?>().Select(ReadItemText).ToArray();
+            }
+
+            if (FindComboBoxCore() is { } comboBox)
+            {
+                return comboBox.Items.Cast<object?>().Select(ReadItemText).ToArray();
+            }
+
+            return [];
+        }
+
+        private string[] ReadSelectedItemsCore()
+        {
+            var checkBoxes = ReadCheckBoxesCore();
+            if (checkBoxes.Length > 0)
+            {
+                return checkBoxes
+                    .Where(static item => item.Control.IsChecked == true)
+                    .Select(static item => item.Text)
+                    .ToArray();
+            }
+
+            if (FindListBoxCore() is { } listBox)
+            {
+                if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
+                {
+                    return listBox.SelectedItem is null ? [] : [ReadItemText(listBox.SelectedItem)];
+                }
+
+                return listBox.SelectedItems?.Cast<object?>().Select(ReadItemText).ToArray() ?? [];
+            }
+
+            if (FindComboBoxCore() is { } comboBox)
+            {
+                return comboBox.SelectedItem is null ? [] : [ReadItemText(comboBox.SelectedItem)];
+            }
+
+            return [];
+        }
+
+        private MultiSelectCheckBox[] ReadCheckBoxesCore()
         {
             return ControlTree.EnumerateDescendants(Inner.Control)
                 .OfType<global::Avalonia.Controls.CheckBox>()
                 .Select(static checkBox => new MultiSelectCheckBox(ReadItemText(checkBox), checkBox))
                 .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
                 .ToArray();
+        }
+
+        private global::Avalonia.Controls.ListBox? FindListBoxCore()
+        {
+            return Inner.Control as global::Avalonia.Controls.ListBox
+                ?? ControlTree.EnumerateDescendants(Inner.Control)
+                    .OfType<global::Avalonia.Controls.ListBox>()
+                    .FirstOrDefault();
+        }
+
+        private global::Avalonia.Controls.ComboBox? FindComboBoxCore()
+        {
+            return Inner.Control as global::Avalonia.Controls.ComboBox
+                ?? ControlTree.EnumerateDescendants(Inner.Control)
+                    .OfType<global::Avalonia.Controls.ComboBox>()
+                    .FirstOrDefault();
+        }
+
+        private static void SetListBoxSelectedItems(
+            global::Avalonia.Controls.ListBox listBox,
+            HashSet<string> requestedValues)
+        {
+            var items = listBox.Items.Cast<object?>().ToArray();
+            var available = items.Select(ReadItemText).ToArray();
+            ValidateAvailableItems(available, requestedValues);
+
+            if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
+            {
+                if (requestedValues.Count > 1)
+                {
+                    throw new InvalidOperationException("The physical ListBox allows at most one selected item.");
+                }
+
+                listBox.SelectedItem = requestedValues.Count == 0
+                    ? null
+                    : items.Single(item => requestedValues.Contains(ReadItemText(item)));
+                return;
+            }
+
+            var selectedItems = listBox.SelectedItems
+                ?? throw new InvalidOperationException("The physical ListBox does not expose a selected-items collection.");
+            selectedItems.Clear();
+            foreach (var item in items.Where(item => requestedValues.Contains(ReadItemText(item))))
+            {
+                selectedItems.Add(item);
+            }
+        }
+
+        private static void SetComboBoxSelectedItem(
+            global::Avalonia.Controls.ComboBox comboBox,
+            HashSet<string> requestedValues)
+        {
+            if (requestedValues.Count > 1)
+            {
+                throw new InvalidOperationException("The physical ComboBox allows at most one selected item.");
+            }
+
+            var items = comboBox.Items.Cast<object?>().ToArray();
+            ValidateAvailableItems(items.Select(ReadItemText), requestedValues);
+            comboBox.SelectedItem = requestedValues.Count == 0
+                ? null
+                : items.Single(item => requestedValues.Contains(ReadItemText(item)));
+        }
+
+        private static string ReadItemText(object? item)
+        {
+            return item?.ToString()?.Trim() ?? string.Empty;
         }
 
         private static string ReadItemText(global::Avalonia.Controls.CheckBox checkBox)

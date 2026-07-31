@@ -35,6 +35,14 @@ internal static class MainWindowFlaUiPageFactory
                         expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                         resultsKind: SearchPickerResultsKind.ListBox,
                         opensOnSearch: true))
+                .WithComboBoxFilter(
+                    "ArmStatusFilter",
+                    ComboBoxFilterParts.ByAutomationIds(
+                        "ArmStatusFilter",
+                        "ArmStatusFilter_OpenButton",
+                        "ArmStatusFilter_Results",
+                        "ArmStatusFilter_ApplyButton",
+                        "ArmStatusFilter_CancelButton"))
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

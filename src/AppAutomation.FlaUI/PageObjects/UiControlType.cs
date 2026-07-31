@@ -33,5 +33,6 @@ public enum UiControlType
     Notification = 28,
     FolderExport = 29,
     ShellNavigation = 30,
-    MultiSelect = 31
+    MultiSelect = 31,
+    ComboBoxFilter = 32
 }

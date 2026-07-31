@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Eremex.AvaloniaUI.Controls.Editors;
 
 namespace DotnetDebug.Avalonia;
 
@@ -24,9 +25,22 @@ public partial class ArmDesktopControl : UserControl
         ArmDateRangeTo.SelectedDate = new DateTimeOffset(new DateTime(2026, 4, 30));
         ArmShellNavigationList.SelectedIndex = 0;
         ArmShellPaneTabs.SelectedIndex = 0;
+        SelectedArmStatusFilterItems.Add(ArmStatusFilterItems[0]);
+        SelectedArmStatusFilterItems.CollectionChanged += (_, _) => UpdateArmStatusFilterLabel();
+        UpdateArmStatusFilterLabel();
     }
 
     public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = new();
+
+    public ObservableCollection<MultiSelectItemViewModel> ArmStatusFilterItems { get; } =
+    [
+        new("Open"),
+        new("Pending"),
+        new("Closed"),
+        new("Archived")
+    ];
+
+    public ObservableCollection<MultiSelectItemViewModel> SelectedArmStatusFilterItems { get; } = [];
 
     public string[] ArmServerItems { get; } =
     [
@@ -62,6 +76,25 @@ public partial class ArmDesktopControl : UserControl
         {
             ArmServerPickerStatusLabel.Content = $"Server selected: {selected}";
         }
+    }
+
+    private void OnArmStatusFilterLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is PopupEditor popupEditor)
+        {
+            MultiSelectEditorAutomation.Apply(popupEditor, "ArmStatusFilter");
+        }
+    }
+
+    private void UpdateArmStatusFilterLabel()
+    {
+        var selected = SelectedArmStatusFilterItems
+            .Select(static item => item.Name)
+            .OrderBy(static item => item, StringComparer.Ordinal)
+            .ToArray();
+        ArmStatusFilterStatusLabel.Content = selected.Length == 0
+            ? "Filter: none"
+            : $"Filter: {string.Join(", ", selected)}";
     }
 
     private void OnArmDateRangeOpenClick(object? sender, RoutedEventArgs e)

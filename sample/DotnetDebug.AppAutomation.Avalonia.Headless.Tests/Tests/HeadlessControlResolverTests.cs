@@ -1,6 +1,6 @@
+using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
-using AppAutomation.Abstractions;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
 using TUnit.Assertions;
@@ -69,6 +69,28 @@ public sealed class HeadlessControlResolverTests
         {
             await Assert.That(selectableList).IsNotNull();
             await Assert.That(selectableList!.SelectedItemText).IsEqualTo("Fibonacci");
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task MultiSelectItemsSurface_UsesComboBoxAsZeroOrOneValueSet()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var items = resolver.Resolve<IMultiSelectItemsControl>(new UiControlDefinition(
+            "OperationFilterItems",
+            UiControlType.ComboBox,
+            "OperationCombo"));
+
+        items.SetSelectedItems(["LCM"]);
+        var selected = items.SelectedItems;
+        items.SetSelectedItems([]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected).IsEquivalentTo(["LCM"]);
+            await Assert.That(items.SelectedItems).IsEmpty();
         }
     }
 

@@ -50,7 +50,9 @@ public enum RecordedActionKind
     SelectGridCellComboItem = 42,
     WaitUntilExists = 43,
     SelectMultiItems = 44,
-    CancelMultiSelection = 45
+    CancelMultiSelection = 45,
+    ApplyFilterSelection = 46,
+    CancelFilterSelection = 47
 }
 
 public enum RecorderAssertionMode

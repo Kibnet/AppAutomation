@@ -59,10 +59,10 @@ internal static class MultiSelectEditorAutomation
         }
 
         ApplyTemplatesRecursively(popupRoot);
-        var results = EnumerateControls(popupRoot)
-            .OfType<ListBox>()
-            .FirstOrDefault(static listBox =>
-                EnumerateControls(listBox).OfType<CheckBox>().Any())
+        var listBoxes = EnumerateControls(popupRoot).OfType<ListBox>().ToArray();
+        var results = listBoxes
+            .FirstOrDefault(static listBox => EnumerateControls(listBox).OfType<CheckBox>().Any())
+            ?? listBoxes.FirstOrDefault()
             ?? popupContent;
         AutomationProperties.SetAutomationId(results, $"{automationId}_Results");
 

@@ -5,8 +5,8 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
-using Eremex.AvaloniaUI.Controls.Common;
 using Eremex.AvaloniaUI.Controls.Editors;
 
 namespace DotnetDebug.Avalonia;
@@ -33,8 +33,8 @@ public sealed class ServerSearchComboBox : PopupEditor
     private readonly ListBox _results;
     private TextBox? _input;
     private ToggleButton? _openButton;
-    private ResizeablePopup? _editorPopup;
-    private PixelPoint? _lastInputScreenPosition;
+    private ScrollViewer? _ancestorScrollViewer;
+    private bool _canOpenFromTextChanges;
     private bool _synchronizing;
 
     public ServerSearchComboBox()
@@ -46,7 +46,6 @@ public sealed class ServerSearchComboBox : PopupEditor
         _results.SelectionChanged += OnResultsSelectionChanged;
         PopupContent = _results;
         Loaded += OnLoaded;
-        PopupOpening += OnPopupOpening;
         PopupOpened += OnPopupOpened;
     }
 
@@ -78,10 +77,11 @@ public sealed class ServerSearchComboBox : PopupEditor
 
     protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
     {
+        _canOpenFromTextChanges = false;
         if (_input is not null)
         {
             _input.TextChanged -= OnInputTextChanged;
-            _input.LayoutUpdated -= OnInputLayoutUpdated;
+            _input.LostFocus -= OnInputLostFocus;
         }
 
         base.OnApplyTemplate(e);
@@ -98,18 +98,48 @@ public sealed class ServerSearchComboBox : PopupEditor
             ?? this.GetLogicalDescendants()
                 .OfType<ToggleButton>()
                 .FirstOrDefault(static candidate => candidate.Name == "PART_PopupOpenButton");
-        _editorPopup = e.NameScope.Find<ResizeablePopup>("PART_EditorPopup");
-        UpdatePopupPlacement();
 
         if (_input is not null)
         {
             _input.Text = SearchText ?? CurrentSelected?.ToString() ?? string.Empty;
             _input.TextChanged += OnInputTextChanged;
-            _input.LayoutUpdated += OnInputLayoutUpdated;
+            _input.LostFocus += OnInputLostFocus;
+        }
+
+        if (_input?.IsFocused != true)
+        {
+            IsPopupOpen = false;
         }
 
         ApplyAutomationPartIds();
         RefreshResults();
+
+        var appliedInput = _input;
+        Dispatcher.UIThread.Post(
+            () => _canOpenFromTextChanges = ReferenceEquals(_input, appliedInput),
+            DispatcherPriority.Background);
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _ancestorScrollViewer = this.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
+        if (_ancestorScrollViewer is not null)
+        {
+            _ancestorScrollViewer.ScrollChanged += OnAncestorScrollChanged;
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        _canOpenFromTextChanges = false;
+        if (_ancestorScrollViewer is not null)
+        {
+            _ancestorScrollViewer.ScrollChanged -= OnAncestorScrollChanged;
+            _ancestorScrollViewer = null;
+        }
+
+        base.OnDetachedFromVisualTree(e);
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -146,11 +176,10 @@ public sealed class ServerSearchComboBox : PopupEditor
     {
         ApplyTemplate();
         ApplyAutomationPartIds();
-    }
-
-    private void OnPopupOpening(object? sender, OpeningPopupEventArgs e)
-    {
-        UpdatePopupPlacement();
+        if (_input?.IsFocused != true)
+        {
+            IsPopupOpen = false;
+        }
     }
 
     private void OnPopupOpened(object? sender, EventArgs e)
@@ -158,39 +187,41 @@ public sealed class ServerSearchComboBox : PopupEditor
         ApplyAutomationPartIds();
     }
 
-    private void UpdatePopupPlacement()
+    private void OnInputLostFocus(object? sender, RoutedEventArgs e)
     {
-        if (_editorPopup is null || _input is null)
-        {
-            return;
-        }
-
-        _editorPopup.PlacementTarget = _input;
-        _editorPopup.VerticalOffset = 0;
-        _lastInputScreenPosition = _input.IsAttachedToVisualTree()
-            ? _input.PointToScreen(default)
-            : null;
+        Dispatcher.UIThread.Post(ClosePopupWhenFocusLeavesEditor, DispatcherPriority.Input);
     }
 
-    private void OnInputLayoutUpdated(object? sender, EventArgs e)
+    private void ClosePopupWhenFocusLeavesEditor()
     {
-        if (!IsPopupOpen
-            || _editorPopup is null
-            || _input is null
-            || !_input.IsAttachedToVisualTree())
+        if (!IsPopupOpen)
         {
             return;
         }
 
-        var currentPosition = _input.PointToScreen(default);
-        if (_lastInputScreenPosition == currentPosition)
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() as Control;
+        if (focused is null || IsEditorOrPopupElement(focused))
         {
             return;
         }
 
-        _lastInputScreenPosition = currentPosition;
-        _editorPopup.PlacementTarget = null;
-        _editorPopup.PlacementTarget = _input;
+        IsPopupOpen = false;
+    }
+
+    private bool IsEditorOrPopupElement(Control control)
+    {
+        return ReferenceEquals(control, this)
+            || ReferenceEquals(control, _results)
+            || control.GetVisualAncestors().Contains(this)
+            || control.GetVisualAncestors().Contains(_results);
+    }
+
+    private void OnAncestorScrollChanged(object? sender, ScrollChangedEventArgs e)
+    {
+        if (e.OffsetDelta != default)
+        {
+            IsPopupOpen = false;
+        }
     }
 
     private void OnInputTextChanged(object? sender, TextChangedEventArgs e)
@@ -212,7 +243,7 @@ public sealed class ServerSearchComboBox : PopupEditor
         }
 
         RefreshResults();
-        if (this.IsAttachedToVisualTree())
+        if (this.IsAttachedToVisualTree() && _canOpenFromTextChanges)
         {
             IsPopupOpen = true;
         }

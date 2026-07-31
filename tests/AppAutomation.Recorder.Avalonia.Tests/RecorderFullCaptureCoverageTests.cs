@@ -96,7 +96,15 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(
                 RecordedActionKind.CancelMultiSelection,
                 Descriptor("Categories", UiControlType.MultiSelect),
-                StringValues: ["Gamma", "Alpha"])
+                StringValues: ["Gamma", "Alpha"]),
+            new RecordedStep(
+                RecordedActionKind.ApplyFilterSelection,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                StringValues: ["Closed", "Open"]),
+            new RecordedStep(
+                RecordedActionKind.CancelFilterSelection,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                StringValues: [])
         ]);
 
         using (Assert.Multiple())
@@ -127,6 +135,12 @@ public sealed class RecorderFullCaptureCoverageTests
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
                 "Page.CancelMultiSelection(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"Closed\", \"Open\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.CancelFilterSelection(static page => page.StatusFilter, global::System.Array.Empty<string>());",
                 StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
@@ -358,7 +372,9 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.EditGridCellDate, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 3, DateValue: date),
             new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "Approved"),
             new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
-            new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"])
+            new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"]),
+            new RecordedStep(RecordedActionKind.ApplyFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: ["Open"]),
+            new RecordedStep(RecordedActionKind.CancelFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: [])
         ];
     }
 

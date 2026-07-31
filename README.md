@@ -297,6 +297,7 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - adapter registration API via `WithAdapters(...)`;
 - built-in composite abstraction `ISearchPickerControl` and `WithSearchPicker(...)`;
 - provider-neutral multi-select popup abstraction `IMultiSelectControl` with `WithMultiSelect(...)`;
+- cardinality-neutral combo-box filter abstraction `IComboBoxFilterControl` with `WithComboBoxFilter(...)`;
 - package-based smoke path via `eng/smoke-consumer.ps1`.
 
 Register a multi-select popup from stable primitive parts, then use one authoring command in both runtimes:
@@ -315,7 +316,27 @@ Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
 Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
 ```
 
-Registration is opt-in. `RootLocator` identifies the real multi-select editor (for example, an Eremex `ComboBoxEditor` with `SelectionMode="Multiple"`); popup state is observed through the real checkbox-items container. Open/results/Apply IDs can be assigned by consumer-side template instrumentation. The cancel locator is optional when the control exposes confirmation only. Recorder persists Apply as `SelectMultiItems` and Cancel as `CancelMultiSelection`, including pending items outside the current viewport: Avalonia containers are realized by index from the nearest current edge during capture, while FlaUI replay uses bounded, position-aware passes through standard UIA Scroll/RangeValue patterns. Provider-neutral projects do not require Eremex template-part names. Existing search-picker and index-based grid APIs keep their current behavior.
+Registration is opt-in. `RootLocator` identifies the real multi-select editor (for example, an Eremex `ComboBoxEditor` with `SelectionMode="Multiple"`); popup state is observed through the real selectable-items container. Open/results/Apply IDs can be assigned by consumer-side template instrumentation. The cancel locator is optional when the control exposes confirmation only. Recorder persists Apply as `SelectMultiItems` and Cancel as `CancelMultiSelection`, including pending items outside the current viewport: Avalonia containers are realized by index from the nearest current edge during capture, while FlaUI replay uses bounded, position-aware passes through standard UIA Scroll/RangeValue patterns. Provider-neutral projects do not require Eremex template-part names. Existing search-picker and index-based grid APIs keep their current behavior.
+
+Register a logical combo-box filter with the same stable popup parts. The values are always one set (`0..N`), regardless of the physical editor's selection mode:
+
+```csharp
+var resolver = innerResolver.WithComboBoxFilter(
+    "StatusFilter",
+    ComboBoxFilterParts.ByAutomationIds(
+        "StatusFilter",
+        "StatusFilter_OpenButton",
+        "StatusFilter_Results",
+        "StatusFilter_ApplyButton",
+        "StatusFilter_CancelButton"));
+
+Page.ApplyFilterSelection(static page => page.StatusFilter, ["Open", "Pending"]);
+Page.CancelFilterSelection(static page => page.StatusFilter, []);
+```
+
+`Classes="filterComboBox"` may remain a visual style marker, but it is not a locator. Recorder recognition is opt-in through `RecorderComboBoxFilterHint`, and generated code always targets the logical filter property. Apply/OK and Cancel are preserved; internal popup controls do not leak into the scenario.
+
+If the selectable-items surface is a single-selection `ComboBox`, pass `itemsKind: MultiSelectItemsKind.ComboBox`; the same filter contract then carries a set of `0..1` values.
 
 ## What remains consumer responsibility
 
@@ -652,6 +673,7 @@ dotnet test --solution MyApp.sln -c Debug
 - API регистрации адаптеров через `WithAdapters(...)`;
 - встроенная составная абстракция `ISearchPickerControl` и `WithSearchPicker(...)`;
 - provider-neutral абстракция popup-мультиселектора `IMultiSelectControl` с `WithMultiSelect(...)`;
+- cardinality-neutral абстракция combo-box фильтра `IComboBoxFilterControl` с `WithComboBoxFilter(...)`;
 - готовый сценарий быстрой проверки через `eng/smoke-consumer.ps1`.
 
 Мультиселектор регистрируется по стабильным primitive parts, после чего в обоих runtime используется одна authoring-команда:
@@ -670,7 +692,27 @@ Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
 Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
 ```
 
-Регистрация выполняется явно. `RootLocator` указывает на настоящий редактор-мультиселектор (например, Eremex `ComboBoxEditor` с `SelectionMode="Multiple"`), а состояние popup определяется по настоящему контейнеру элементов с checkbox. ID для open/results/Apply могут назначаться consumer-side инструментированием шаблона. Cancel locator необязателен для контрола только с подтверждением. Recorder сохраняет Apply как `SelectMultiItems`, а Cancel как `CancelMultiSelection`, включая отмеченные пункты вне текущей видимой области: при записи Avalonia-контейнеры последовательно реализуются по индексам от ближайшего края текущей позиции, а FlaUI-replay выполняет ограниченные позиционные проходы через стандартные UIA Scroll/RangeValue patterns. Provider-neutral проекты не зависят от имён template parts Eremex. Поведение существующих SearchPicker API и index-based grid API не меняется.
+Регистрация выполняется явно. `RootLocator` указывает на настоящий редактор-мультиселектор (например, Eremex `ComboBoxEditor` с `SelectionMode="Multiple"`), а состояние popup определяется по настоящему контейнеру выбираемых элементов. ID для open/results/Apply могут назначаться consumer-side инструментированием шаблона. Cancel locator необязателен для контрола только с подтверждением. Recorder сохраняет Apply как `SelectMultiItems`, а Cancel как `CancelMultiSelection`, включая отмеченные пункты вне текущей видимой области: при записи Avalonia-контейнеры последовательно реализуются по индексам от ближайшего края текущей позиции, а FlaUI-replay выполняет ограниченные позиционные проходы через стандартные UIA Scroll/RangeValue patterns. Provider-neutral проекты не зависят от имён template parts Eremex. Поведение существующих SearchPicker API и index-based grid API не меняется.
+
+Логический combo-box фильтр регистрируется по тем же стабильным popup parts. Значения всегда представляют один набор `0..N`, независимо от физического режима editor:
+
+```csharp
+var resolver = innerResolver.WithComboBoxFilter(
+    "StatusFilter",
+    ComboBoxFilterParts.ByAutomationIds(
+        "StatusFilter",
+        "StatusFilter_OpenButton",
+        "StatusFilter_Results",
+        "StatusFilter_ApplyButton",
+        "StatusFilter_CancelButton"));
+
+Page.ApplyFilterSelection(static page => page.StatusFilter, ["Open", "Pending"]);
+Page.CancelFilterSelection(static page => page.StatusFilter, []);
+```
+
+`Classes="filterComboBox"` может оставаться визуальным маркером стиля, но не является locator. Recorder распознаёт фильтр через явный `RecorderComboBoxFilterHint`, а generated code всегда указывает на логическое свойство фильтра. Apply/OK и Cancel сохраняются, внутренние popup controls в сценарий не попадают.
+
+Если элементы представлены одиночным `ComboBox`, передайте `itemsKind: MultiSelectItemsKind.ComboBox`; тот же контракт фильтра будет работать с набором `0..1` значений.
 
 ## Что остаётся на стороне потребителя
 

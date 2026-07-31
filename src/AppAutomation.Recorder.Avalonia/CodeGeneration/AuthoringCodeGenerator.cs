@@ -1,10 +1,10 @@
+using System.Globalization;
+using System.Reflection;
+using System.Text;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using Avalonia.Controls;
 using Microsoft.Extensions.Logging;
-using System.Globalization;
-using System.Reflection;
-using System.Text;
 
 namespace AppAutomation.Recorder.Avalonia.CodeGeneration;
 
@@ -442,14 +442,14 @@ internal sealed class AuthoringCodeGenerator
         return controlsByKey.Values.ToArray();
     }
 
-    private static bool TryReserveFile(string filePath)
+    internal static bool TryReserveFile(string filePath)
     {
         try
         {
             using var stream = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             return true;
         }
-        catch (IOException)
+        catch (IOException) when (File.Exists(filePath))
         {
             return false;
         }
@@ -669,6 +669,8 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.ActivateShellPane => $"Page.ActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SelectMultiItems => $"Page.SelectMultiItems(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
             RecordedActionKind.CancelMultiSelection => $"Page.CancelMultiSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
+            RecordedActionKind.ApplyFilterSelection => $"Page.ApplyFilterSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
+            RecordedActionKind.CancelFilterSelection => $"Page.CancelFilterSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 

@@ -12,55 +12,67 @@
     <ControlTheme x:Key="{x:Type local:ServerSearchComboBox}"
                   TargetType="local:ServerSearchComboBox"
                   BasedOn="{StaticResource {x:Type editors:PopupEditor}}">
-        <Setter Property="PopupFooterTemplate" Value="{x:Null}" />
         <Setter Property="Template">
             <ControlTemplate>
-                <DockPanel>
-                    <Panel x:Name="PART_RealEditorPanel">
-                        <TextBox x:Name="PART_RealEditor"
-                                 Background="{TemplateBinding Background}"
-                                 Foreground="{TemplateBinding Foreground}"
-                                 BorderThickness="0"
-                                 Focusable="{TemplateBinding Focusable}"
-                                 Padding="{TemplateBinding Padding}"
-                                 CornerRadius="{TemplateBinding CornerRadius}"
-                                 HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                 VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                 HorizontalAlignment="Stretch"
-                                 MinHeight="0"
-                                 Text="{Binding $parent[local:ServerSearchComboBox].SearchText, Mode=TwoWay}"
-                                 Watermark="{TemplateBinding Watermark}">
-                            <TextBox.InnerRightContent>
-                                <ToggleButton x:Name="PART_PopupOpenButton"
-                                              Padding="6,0"
-                                              Content="▼" />
-                            </TextBox.InnerRightContent>
-                        </TextBox>
-                        <Grid x:Name="PART_ButtonsContainer" />
-                        <Border x:Name="PART_RootBorder"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="{TemplateBinding CornerRadius}"
-                                Background="{x:Null}"
-                                MinHeight="0" />
-                        <common:ResizeablePopup x:Name="PART_EditorPopup"
-                                               WindowManagerAddShadowHint="False"
-                                               IsOpen="{TemplateBinding IsPopupOpen, Mode=TwoWay}"
-                                               MinHeight="{TemplateBinding PopupMinHeight}"
-                                               MaxHeight="{TemplateBinding PopupMaxHeight}"
-                                               PlacementTarget="PART_RootBorder"
-                                               Placement="BottomEdgeAlignedLeft"
-                                               IsLightDismissEnabled="{Binding !StaysPopupOpen, RelativeSource={RelativeSource TemplatedParent}}">
-                            <Border BorderThickness="1"
-                                    BorderBrush="{DynamicResource ThemeBorderLowBrush}"
-                                    Background="{DynamicResource ThemeBackgroundBrush}"
-                                    HorizontalAlignment="Stretch">
-                                <visuals:PopupContentContainer x:Name="PART_PopupContentContainer" />
-                            </Border>
-                        </common:ResizeablePopup>
-                    </Panel>
+                <DockPanel x:Name="PART_InactiveContentContainer">
+                    <visuals:MxTextBlock x:Name="PART_RealEditorPresenter"
+                                         TextBlock.TextTrimming="CharacterEllipsis"
+                                         Text="{Binding $parent[local:ServerSearchComboBox].SearchText}" />
                 </DockPanel>
             </ControlTemplate>
         </Setter>
+
+        <Style Selector="^:activeMode">
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <DockPanel>
+                        <Panel x:Name="PART_RealEditorPanel">
+                            <TextBox x:Name="PART_RealEditor"
+                                     Background="{TemplateBinding Background}"
+                                     Foreground="{TemplateBinding Foreground}"
+                                     BorderThickness="0"
+                                     Focusable="{TemplateBinding Focusable}"
+                                     Padding="{TemplateBinding Padding}"
+                                     CornerRadius="{TemplateBinding CornerRadius}"
+                                     HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                     HorizontalAlignment="Stretch"
+                                     MinHeight="0"
+                                     Text="{Binding $parent[local:ServerSearchComboBox].SearchText, Mode=TwoWay}"
+                                     Watermark="{TemplateBinding Watermark}">
+                                <TextBox.InnerRightContent>
+                                    <ToggleButton x:Name="PART_PopupOpenButton"
+                                                  Padding="6,0"
+                                                  Content="▼" />
+                                </TextBox.InnerRightContent>
+                            </TextBox>
+                            <Grid x:Name="PART_ButtonsContainer" />
+                            <Border x:Name="PART_RootBorder"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}"
+                                    Background="{x:Null}"
+                                    MinHeight="0" />
+                            <common:ResizeablePopup x:Name="PART_EditorPopup"
+                                                   WindowManagerAddShadowHint="False"
+                                                   IsOpen="{TemplateBinding IsPopupOpen, Mode=TwoWay}"
+                                                   MinHeight="{TemplateBinding PopupMinHeight}"
+                                                   MaxHeight="{TemplateBinding PopupMaxHeight}"
+                                                   PlacementTarget="PART_RootBorder"
+                                                   Placement="BottomEdgeAlignedLeft"
+                                                   IsLightDismissEnabled="{Binding !StaysPopupOpen, RelativeSource={RelativeSource TemplatedParent}}">
+                                <Border BorderThickness="1"
+                                        BorderBrush="{DynamicResource ThemeBorderLowBrush}"
+                                        Background="{DynamicResource ThemeBackgroundBrush}"
+                                        HorizontalAlignment="Stretch">
+                                    <visuals:PopupContentContainer x:Name="PART_PopupContentContainer" />
+                                </Border>
+                            </common:ResizeablePopup>
+                        </Panel>
+                    </DockPanel>
+                </ControlTemplate>
+            </Setter>
+            <Setter Property="PopupFooterTemplate" Value="{x:Null}" />
+        </Style>
     </ControlTheme>
 </ResourceDictionary>

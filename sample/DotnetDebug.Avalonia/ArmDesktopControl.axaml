@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             xmlns:editors="clr-namespace:Eremex.AvaloniaUI.Controls.Editors;assembly=Eremex.Avalonia.Controls"
              xmlns:local="clr-namespace:DotnetDebug.Avalonia"
              xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
              x:Class="DotnetDebug.Avalonia.ArmDesktopControl"
@@ -172,9 +173,27 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Filters, dialogs, notifications and export"
                      FontWeight="SemiBold" />
-          <UniformGrid Columns="4"
-                       Rows="1">
-            <StackPanel Margin="0,0,8,0"
+          <WrapPanel Orientation="Horizontal"
+                     ItemWidth="320">
+            <StackPanel Margin="0,0,16,16"
+                        Spacing="6">
+              <TextBlock Text="Combo-box filter" />
+              <editors:ComboBoxEditor x:Name="ArmStatusFilterEditor"
+                                      Width="220"
+                                      Classes="filterComboBox"
+                                      automation:AutomationProperties.AutomationId="ArmStatusFilter"
+                                      Loaded="OnArmStatusFilterLoaded"
+                                      SelectionMode="Multiple"
+                                      ItemsSource="{Binding ArmStatusFilterItems}"
+                                      SelectedItems="{Binding SelectedArmStatusFilterItems, Mode=TwoWay}"
+                                      DisplayMember="Name"
+                                      Watermark="Statuses" />
+              <Label x:Name="ArmStatusFilterStatusLabel"
+                     Content="Filter: Open"
+                     automation:AutomationProperties.AutomationId="ArmStatusFilterStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmDateRangeFilter">
               <TextBlock Text="Date range" />
@@ -202,7 +221,7 @@
                      automation:AutomationProperties.AutomationId="ArmDateRangeStatusLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmNumericRangeFilter">
               <TextBlock Text="Numeric range" />
@@ -232,7 +251,7 @@
                      automation:AutomationProperties.AutomationId="ArmNumericRangeStatusLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6">
               <TextBlock Text="Dialog and notification" />
               <StackPanel Spacing="6"
@@ -274,7 +293,7 @@
               </StackPanel>
             </StackPanel>
 
-            <StackPanel Margin="8,0,0,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmFolderExport">
               <TextBlock Text="Folder export" />
@@ -300,7 +319,7 @@
                      Content="Export idle"
                      automation:AutomationProperties.AutomationId="ArmFolderExportStatusLabel" />
             </StackPanel>
-          </UniformGrid>
+          </WrapPanel>
         </StackPanel>
       </Border>
 

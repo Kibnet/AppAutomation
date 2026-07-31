@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
@@ -10,7 +11,6 @@ using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
-using System.Runtime.InteropServices;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -306,6 +306,48 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeComboBoxFilterCapturesValuesAndCommitOutcome()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("ComboBoxFilter");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var armScrollViewer = FindElement(session, "ArmDesktopScrollViewer");
+        var initialScrollPosition = ReadVerticalScrollPercent(armScrollViewer);
+
+        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending"]);
+        TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-one-value.png");
+
+        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending", "Closed"]);
+        TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-several-values.png");
+
+        page.CancelFilterSelection(static candidate => candidate.ArmStatusFilter, []);
+
+        var scenarioSource = await WaitForAutosaveScenarioSourceAsync(
+            outputDirectory.FullPath,
+            scenarioName);
+        var finalScrollPosition = ReadVerticalScrollPercent(armScrollViewer);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(finalScrollPosition).IsEqualTo(initialScrollPosition);
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplyFilterSelection(static page => page.ArmStatusFilter, new[] { \"Pending\" });");
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplyFilterSelection(static page => page.ArmStatusFilter, new[] { \"Closed\", \"Pending\" });");
+            await Assert.That(scenarioSource).Contains(
+                "Page.CancelFilterSelection(static page => page.ArmStatusFilter, global::System.Array.Empty<string>());");
+            await Assert.That(scenarioSource).DoesNotContain("Page.SetChecked");
+            await Assert.That(scenarioSource).DoesNotContain("ArmStatusFilter_ApplyButton");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeRangeAndFolderSaveCompositeSteps()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -581,6 +623,13 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             $"Element '{automationId}' was not found in the selected window.")!;
+    }
+
+    private static double ReadVerticalScrollPercent(AutomationElement element)
+    {
+        return element.Patterns.Scroll.PatternOrDefault?.VerticalScrollPercent.ValueOrDefault
+            ?? throw new InvalidOperationException(
+                $"Element '{element.AutomationId}' does not expose a Scroll pattern.");
     }
 
     private static void SendSaveHotkey(Window window)

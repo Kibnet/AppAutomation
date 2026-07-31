@@ -10,14 +10,16 @@ namespace AppAutomation.Abstractions;
 /// <param name="CancelButtonLocator">The optional locator for the cancel button.</param>
 /// <param name="LocatorKind">The locator strategy used by all parts.</param>
 /// <param name="FallbackToName">Whether part resolution may fall back to name.</param>
+/// <param name="ItemsKind">The primitive control kind used by the selectable-items surface.</param>
 public sealed record MultiSelectParts(
     string RootLocator,
     string OpenButtonLocator,
     string ItemsContainerLocator,
-    string ApplyButtonLocator,
+    string? ApplyButtonLocator,
     string? CancelButtonLocator = null,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = true)
+    bool FallbackToName = true,
+    MultiSelectItemsKind ItemsKind = MultiSelectItemsKind.ListBox)
 {
     /// <summary>
     /// Creates a multi-select parts configuration that uses automation IDs.
@@ -27,15 +29,33 @@ public sealed record MultiSelectParts(
         string openButtonAutomationId,
         string itemsContainerAutomationId,
         string applyButtonAutomationId,
-        string? cancelButtonAutomationId = null)
+        string? cancelButtonAutomationId = null,
+        MultiSelectItemsKind itemsKind = MultiSelectItemsKind.ListBox)
     {
         return new MultiSelectParts(
             rootAutomationId,
             openButtonAutomationId,
             itemsContainerAutomationId,
             applyButtonAutomationId,
-            cancelButtonAutomationId);
+            cancelButtonAutomationId,
+            ItemsKind: itemsKind);
     }
+}
+
+/// <summary>
+/// Specifies the primitive control kind used by a composed multi-select items surface.
+/// </summary>
+public enum MultiSelectItemsKind
+{
+    /// <summary>
+    /// Items are exposed through a list-box-like surface.
+    /// </summary>
+    ListBox = 0,
+
+    /// <summary>
+    /// Items are exposed through a combo-box-like surface that supports zero or one selected value.
+    /// </summary>
+    ComboBox = 1
 }
 
 public static partial class UiControlResolverExtensions
@@ -69,11 +89,19 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
     /// Initializes a new multi-select composite adapter.
     /// </summary>
     public MultiSelectControlAdapter(string propertyName, MultiSelectParts parts)
+        : this(propertyName, parts, allowMissingApplyButton: false)
+    {
+    }
+
+    internal MultiSelectControlAdapter(
+        string propertyName,
+        MultiSelectParts parts,
+        bool allowMissingApplyButton)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
         _propertyName = propertyName.Trim();
         _parts = parts ?? throw new ArgumentNullException(nameof(parts));
-        ValidateParts(parts);
+        ValidateParts(parts, allowMissingApplyButton);
     }
 
     /// <inheritdoc />
@@ -96,12 +124,20 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         return new MultiSelectControl(definition.PropertyName, _parts, innerResolver, _state);
     }
 
-    private static void ValidateParts(MultiSelectParts parts)
+    private static void ValidateParts(MultiSelectParts parts, bool allowMissingApplyButton)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.RootLocator);
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.OpenButtonLocator);
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.ItemsContainerLocator);
-        ArgumentException.ThrowIfNullOrWhiteSpace(parts.ApplyButtonLocator);
+        if (!allowMissingApplyButton)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(parts.ApplyButtonLocator);
+        }
+        else if (parts.ApplyButtonLocator is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(parts.ApplyButtonLocator);
+        }
+
         if (parts.CancelButtonLocator is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(parts.CancelButtonLocator);
@@ -195,11 +231,12 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
 
         public void Open()
         {
-            if (!IsOpen)
+            if (IsOpen)
             {
-                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+                return;
             }
 
+            ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
             _state.BeginOpen();
         }
 
@@ -208,15 +245,23 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             ArgumentNullException.ThrowIfNull(values);
 
             var items = ResolveItems();
-            items.SetSelectedItems(values);
             var availableItems = items.Items;
             ValidateAvailableItems(availableItems, values);
+            items.SetSelectedItems(values);
             _state.SetPending(availableItems, values);
+            if (string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
+            {
+                _state.CommitPending();
+            }
         }
 
         public void Apply()
         {
-            ResolveButton("ApplyButton", _parts.ApplyButtonLocator).Invoke();
+            if (!string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
+            {
+                ResolveButton("ApplyButton", _parts.ApplyButtonLocator).Invoke();
+            }
+
             _state.CommitPending();
         }
 
@@ -241,7 +286,12 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         private IMultiSelectItemsControl ResolveItems()
         {
             return _innerResolver.Resolve<IMultiSelectItemsControl>(
-                CreateDefinition("Items", UiControlType.AutomationElement, _parts.ItemsContainerLocator));
+                CreateDefinition(
+                    "Items",
+                    _parts.ItemsKind == MultiSelectItemsKind.ComboBox
+                        ? UiControlType.ComboBox
+                        : UiControlType.ListBox,
+                    _parts.ItemsContainerLocator));
         }
 
         private bool TryResolveItems(out IMultiSelectItemsControl items)
@@ -303,6 +353,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         private bool _hasAvailableItems;
         private bool _hasCommittedItems;
         private bool _hasPendingItems;
+        private bool _refreshCommittedOnNextObservation;
 
         public IReadOnlyList<string> AvailableItems
         {
@@ -349,10 +400,9 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             lock (_sync)
             {
                 _hasAvailableItems = false;
-                _hasPendingItems = _hasCommittedItems;
-                _pendingItems = _hasCommittedItems
-                    ? _committedItems.ToArray()
-                    : [];
+                _hasPendingItems = false;
+                _pendingItems = [];
+                _refreshCommittedOnNextObservation = true;
             }
         }
 
@@ -363,7 +413,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _availableItems = availableItems.ToArray();
                 _hasAvailableItems = true;
                 var observedSelection = selectedItems.ToArray();
-                if (!_hasCommittedItems)
+                if (!_hasCommittedItems || _refreshCommittedOnNextObservation)
                 {
                     _committedItems = observedSelection;
                     _hasCommittedItems = true;
@@ -371,6 +421,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
 
                 _pendingItems = observedSelection;
                 _hasPendingItems = true;
+                _refreshCommittedOnNextObservation = false;
             }
         }
 
@@ -382,6 +433,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _hasAvailableItems = true;
                 _pendingItems = selectedItems.ToArray();
                 _hasPendingItems = true;
+                _refreshCommittedOnNextObservation = false;
             }
         }
 
@@ -392,6 +444,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _committedItems = _pendingItems.ToArray();
                 _hasCommittedItems = true;
                 _hasPendingItems = false;
+                _refreshCommittedOnNextObservation = false;
             }
         }
 
@@ -401,6 +454,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             {
                 _pendingItems = _committedItems.ToArray();
                 _hasPendingItems = false;
+                _refreshCommittedOnNextObservation = false;
             }
         }
     }

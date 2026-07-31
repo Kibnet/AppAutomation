@@ -22,6 +22,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
         return new MainWindowPage(
             new HeadlessControlResolver(session.Inner.MainWindow)
                 .WithAdapters(new HeadlessMultiSelectControlAdapter(session.Inner.MainWindow))
+                .WithAdapters(new HeadlessComboBoxFilterControlAdapter(session.Inner.MainWindow))
                 .WithSearchPicker(
                     "HistoryOperationPicker",
                     SearchPickerParts.ByAutomationIds(

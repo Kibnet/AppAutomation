@@ -228,7 +228,110 @@ internal sealed class RecorderStepFactory
                     source,
                     hint.Parts.LocatorKind,
                     hint.Parts.OpenButtonLocator,
-                    hint.Parts.ItemsContainerLocator));
+                    hint.Parts.ItemsContainerLocator))
+            || _options.ComboBoxFilterHints.Any(hint =>
+                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)
+                || (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)));
+    }
+
+    public StepCreationResult TryCreateComboBoxFilterStep(
+        Control? source,
+        IReadOnlyList<string>? capturedValues = null)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a ComboBox filter hint for this interaction.");
+        }
+
+        var matchingActions = FindComboBoxFilterActions(source).ToArray();
+
+        if (matchingActions.Length == 0)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a ComboBox filter hint for this interaction.");
+        }
+
+        if (matchingActions.Length > 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Recorder ComboBox filter configuration is ambiguous for this interaction ({matchingActions.Length} actions matched).");
+        }
+
+        var (hint, actionKind) = matchingActions[0];
+        IReadOnlyList<string> selectedValues;
+        if (capturedValues is not null)
+        {
+            selectedValues = capturedValues.ToArray();
+        }
+        else if (!TryReadSelectionValues(
+                     source,
+                     ToMultiSelectParts(hint.Parts),
+                     "combo-box filter",
+                     out selectedValues,
+                     out var message))
+        {
+            return StepCreationResult.Unsupported(message);
+        }
+
+        selectedValues = selectedValues.OrderBy(static value => value, StringComparer.Ordinal).ToArray();
+
+        var warning = actionKind == RecordedActionKind.ApplyFilterSelection
+            ? "Recorded ComboBox filter Apply action from configured parts."
+            : "Recorded ComboBox filter Cancel action from configured parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.ComboBoxFilter,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                actionKind,
+                descriptor,
+                Warning: warning,
+                StringValues: selectedValues),
+            warning);
+    }
+
+    public bool IsComboBoxFilterAction(Control? source)
+    {
+        return source is not null
+            && FindComboBoxFilterActions(source).Any();
+    }
+
+    public bool TryCaptureComboBoxFilterSelection(
+        Control? source,
+        out IReadOnlyList<string> selectedValues)
+    {
+        selectedValues = [];
+        if (source is null)
+        {
+            return false;
+        }
+
+        var matchingActions = FindComboBoxFilterActions(source).ToArray();
+        if (matchingActions.Length != 1)
+        {
+            return false;
+        }
+
+        if (!TryReadSelectionValues(
+                source,
+                ToMultiSelectParts(matchingActions[0].Hint.Parts),
+                "combo-box filter",
+                out var currentValues,
+                out _))
+        {
+            return false;
+        }
+
+        selectedValues = currentValues
+            .OrderBy(static value => value, StringComparer.Ordinal)
+            .ToArray();
+        return true;
     }
 
     public StepCreationResult TryCreateMultiSelectStep(Control? source)
@@ -238,34 +341,26 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Recorder does not have a multi-select hint for this button.");
         }
 
-        var matchingActions = new List<(RecorderMultiSelectHint Hint, RecordedActionKind ActionKind)>();
-        foreach (var candidate in _options.MultiSelectHints)
-        {
-            if (MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.ApplyButtonLocator))
-            {
-                matchingActions.Add((candidate, RecordedActionKind.SelectMultiItems));
-            }
+        var matchingActions = FindMultiSelectActions(source).ToArray();
 
-            if (!string.IsNullOrWhiteSpace(candidate.Parts.CancelButtonLocator)
-                && MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.CancelButtonLocator))
-            {
-                matchingActions.Add((candidate, RecordedActionKind.CancelMultiSelection));
-            }
-        }
-
-        if (matchingActions.Count == 0)
+        if (matchingActions.Length == 0)
         {
             return StepCreationResult.Unsupported("Recorder does not have a multi-select hint for this commit button.");
         }
 
-        if (matchingActions.Count > 1)
+        if (matchingActions.Length > 1)
         {
             return StepCreationResult.Unsupported(
-                $"Recorder multi-select configuration is ambiguous for this commit button ({matchingActions.Count} actions matched).");
+                $"Recorder multi-select configuration is ambiguous for this commit button ({matchingActions.Length} actions matched).");
         }
 
         var (hint, actionKind) = matchingActions[0];
-        if (!TryReadMultiSelectValues(source, hint.Parts, out var selectedValues, out var message))
+        if (!TryReadSelectionValues(
+                source,
+                hint.Parts,
+                "multi-select",
+                out var selectedValues,
+                out var message))
         {
             return StepCreationResult.Unsupported(message);
         }
@@ -294,10 +389,7 @@ internal sealed class RecorderStepFactory
     public bool IsMultiSelectCommit(Control? source)
     {
         return source is not null
-            && _options.MultiSelectHints.Any(hint =>
-                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator)
-                || (!string.IsNullOrWhiteSpace(hint.Parts.CancelButtonLocator)
-                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator)));
+            && FindMultiSelectActions(source).Any();
     }
 
     public StepCreationResult TryCreateDialogActionStep(Control? source)
@@ -581,6 +673,12 @@ internal sealed class RecorderStepFactory
         return MatchesGridEditValuePart(control)
             || _options.MultiSelectHints.Any(hint =>
                 MatchesLocator(
+                    control,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.ItemsContainerLocator))
+            || _options.ComboBoxFilterHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                && MatchesLocator(
                     control,
                     hint.Parts.LocatorKind,
                     hint.Parts.ItemsContainerLocator));
@@ -2279,9 +2377,10 @@ internal sealed class RecorderStepFactory
             MatchesLocator(control, hint.ValueLocatorKind, hint.ValueLocatorValue));
     }
 
-    private bool TryReadMultiSelectValues(
+    private bool TryReadSelectionValues(
         Control source,
         MultiSelectParts parts,
+        string controlDescription,
         out IReadOnlyList<string> selectedValues,
         out string message)
     {
@@ -2291,7 +2390,7 @@ internal sealed class RecorderStepFactory
         if (editorRoot is null)
         {
             selectedValues = [];
-            message = $"Recorder could not resolve multi-select editor root '{parts.RootLocator}'.";
+            message = $"Recorder could not resolve {controlDescription} editor root '{parts.RootLocator}'.";
             return false;
         }
 
@@ -2303,24 +2402,24 @@ internal sealed class RecorderStepFactory
         if (itemsContainer is null)
         {
             selectedValues = [];
-            message = $"Recorder could not resolve multi-select items container '{parts.ItemsContainerLocator}'.";
+            message = $"Recorder could not resolve {controlDescription} items container '{parts.ItemsContainerLocator}'.";
             return false;
         }
 
-        if (!TryReadMultiSelectItemSnapshots(itemsContainer, out var items, out message))
+        if (!TryReadSelectionItemSnapshots(itemsContainer, controlDescription, out var items, out message))
         {
             selectedValues = [];
             return false;
         }
 
         var selected = items
-            .Where(static item => item.IsChecked)
+            .Where(static item => item.IsSelected)
             .Select(static item => item.Text)
             .ToArray();
         if (selected.Distinct(StringComparer.OrdinalIgnoreCase).Count() != selected.Length)
         {
             selectedValues = [];
-            message = "Recorder multi-select Apply action contains duplicate selected item text.";
+            message = $"Recorder {controlDescription} action contains duplicate selected item text.";
             return false;
         }
 
@@ -2329,12 +2428,13 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
-    private static bool TryReadMultiSelectItemSnapshots(
+    private static bool TryReadSelectionItemSnapshots(
         Control itemsContainer,
-        out IReadOnlyList<MultiSelectItemSnapshot> items,
+        string controlDescription,
+        out IReadOnlyList<SelectionItemSnapshot> items,
         out string message)
     {
-        var visibleItems = ReadMultiSelectItemSnapshots(itemsContainer);
+        var visibleItems = ReadSelectionItemSnapshots(itemsContainer);
         if (itemsContainer is not ItemsControl itemsControl
             || itemsControl.ItemCount <= visibleItems.Count)
         {
@@ -2343,8 +2443,8 @@ internal sealed class RecorderStepFactory
             return true;
         }
 
-        var allItems = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
-        foreach (var index in GetMultiSelectTraversalIndexes(itemsControl))
+        var allItems = new Dictionary<string, SelectionItemSnapshot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var index in GetSelectionTraversalIndexes(itemsControl))
         {
             try
             {
@@ -2355,7 +2455,7 @@ internal sealed class RecorderStepFactory
             {
                 items = [];
                 message =
-                    $"Recorder could not scroll multi-select item at index {index}: {exception.Message}";
+                    $"Recorder could not scroll {controlDescription} item at index {index}: {exception.Message}";
                 return false;
             }
 
@@ -2364,16 +2464,16 @@ internal sealed class RecorderStepFactory
             {
                 items = [];
                 message =
-                    $"Recorder could not realize multi-select item at index {index} while traversing the scrollable list.";
+                    $"Recorder could not realize {controlDescription} item at index {index} while traversing the scrollable list.";
                 return false;
             }
 
-            var itemSnapshots = ReadMultiSelectItemSnapshots(itemContainer);
+            var itemSnapshots = ReadSelectionItemSnapshots(itemContainer);
             if (itemSnapshots.Count == 0)
             {
                 items = [];
                 message =
-                    $"Recorder could not resolve a checkbox for multi-select item at index {index}.";
+                    $"Recorder could not resolve a selectable {controlDescription} item at index {index}.";
                 return false;
             }
 
@@ -2382,7 +2482,7 @@ internal sealed class RecorderStepFactory
                 if (!allItems.TryAdd(item.Text, item))
                 {
                     items = [];
-                    message = "Recorder multi-select action contains duplicate item text.";
+                    message = $"Recorder {controlDescription} action contains duplicate item text.";
                     return false;
                 }
             }
@@ -2393,7 +2493,7 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
-    private static IEnumerable<int> GetMultiSelectTraversalIndexes(ItemsControl itemsControl)
+    private static IEnumerable<int> GetSelectionTraversalIndexes(ItemsControl itemsControl)
     {
         var realizedIndexes = Enumerable
             .Range(0, itemsControl.ItemCount)
@@ -2412,14 +2512,48 @@ internal sealed class RecorderStepFactory
                 .Select(index => itemsControl.ItemCount - 1 - index);
     }
 
-    private static IReadOnlyList<MultiSelectItemSnapshot> ReadMultiSelectItemSnapshots(Control root)
+    private static IReadOnlyList<SelectionItemSnapshot> ReadSelectionItemSnapshots(Control root)
     {
-        return EnumerateDescendantControls(root)
+        var checkBoxItems = EnumerateDescendantControls(root)
             .OfType<CheckBox>()
-            .Select(checkBox => new MultiSelectItemSnapshot(
-                ReadMultiSelectItemText(checkBox),
+            .Select(checkBox => new SelectionItemSnapshot(
+                ReadSelectionItemText(checkBox),
                 checkBox.IsChecked == true))
             .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
+            .ToArray();
+        if (checkBoxItems.Length > 0)
+        {
+            return checkBoxItems;
+        }
+
+        var listBox = EnumerateDescendantControls(root).OfType<ListBox>().FirstOrDefault();
+        if (listBox is not null)
+        {
+            var selectedTexts = (listBox.SelectedItems?.Cast<object?>()
+                    ?? (listBox.SelectedItem is null ? [] : [listBox.SelectedItem]))
+                .Select(ExtractSelectionText)
+                .Where(static text => !string.IsNullOrWhiteSpace(text))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return listBox.Items
+                .Select(ExtractSelectionText)
+                .Where(static text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => new SelectionItemSnapshot(text!, selectedTexts.Contains(text!)))
+                .ToArray();
+        }
+
+        var comboBox = EnumerateDescendantControls(root).OfType<ComboBox>().FirstOrDefault();
+        if (comboBox is null)
+        {
+            return [];
+        }
+
+        var selectedText = ExtractSelectionText(comboBox.SelectedItem);
+        return comboBox.Items
+            .Select(ExtractSelectionText)
+            .Where(static text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => new SelectionItemSnapshot(
+                text!,
+                string.Equals(text, selectedText, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
     }
 
@@ -2459,7 +2593,7 @@ internal sealed class RecorderStepFactory
             .Distinct<Control>(ReferenceEqualityComparer.Instance);
     }
 
-    private static string ReadMultiSelectItemText(CheckBox checkBox)
+    private static string ReadSelectionItemText(CheckBox checkBox)
     {
         return (AutomationProperties.GetName(checkBox)
                 ?? checkBox.Content?.ToString()
@@ -2469,7 +2603,64 @@ internal sealed class RecorderStepFactory
             .Trim();
     }
 
-    private sealed record MultiSelectItemSnapshot(string Text, bool IsChecked);
+    private sealed record SelectionItemSnapshot(string Text, bool IsSelected);
+
+    private IEnumerable<(RecorderComboBoxFilterHint Hint, RecordedActionKind ActionKind)> FindComboBoxFilterActions(
+        Control source)
+    {
+        foreach (var hint in _options.ComboBoxFilterHints)
+        {
+            if (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator))
+            {
+                yield return (hint, RecordedActionKind.ApplyFilterSelection);
+            }
+
+            if (!string.IsNullOrWhiteSpace(hint.Parts.CancelButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator))
+            {
+                yield return (hint, RecordedActionKind.CancelFilterSelection);
+            }
+
+            if (string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator))
+            {
+                yield return (hint, RecordedActionKind.ApplyFilterSelection);
+            }
+        }
+    }
+
+    private IEnumerable<(RecorderMultiSelectHint Hint, RecordedActionKind ActionKind)> FindMultiSelectActions(
+        Control source)
+    {
+        foreach (var hint in _options.MultiSelectHints)
+        {
+            if (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator))
+            {
+                yield return (hint, RecordedActionKind.SelectMultiItems);
+            }
+
+            if (!string.IsNullOrWhiteSpace(hint.Parts.CancelButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator))
+            {
+                yield return (hint, RecordedActionKind.CancelMultiSelection);
+            }
+        }
+    }
+
+    private static MultiSelectParts ToMultiSelectParts(ComboBoxFilterParts parts)
+    {
+        return new MultiSelectParts(
+            parts.RootLocator,
+            parts.OpenButtonLocator,
+            parts.ItemsContainerLocator,
+            parts.ApplyButtonLocator,
+            parts.CancelButtonLocator,
+            parts.LocatorKind,
+            parts.FallbackToName,
+            parts.ItemsKind);
+    }
 
     private RecordedControlDescriptor CreateCompositeDescriptor(
         string locatorValue,

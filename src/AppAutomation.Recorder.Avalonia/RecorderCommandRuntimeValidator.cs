@@ -186,6 +186,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
             RecordedActionKind.SelectMultiItems
                 or RecordedActionKind.CancelMultiSelection => ValidateMultiSelectAction(step, target),
+            RecordedActionKind.ApplyFilterSelection
+                or RecordedActionKind.CancelFilterSelection => ValidateComboBoxFilterAction(step, target),
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
@@ -282,7 +284,40 @@ internal sealed class RecorderCommandRuntimeValidator
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        foreach (var finding in ValidateControlType(step, target, UiControlType.MultiSelect))
+        return ValidateSelectionSetAction(
+            step,
+            target,
+            UiControlType.MultiSelect,
+            "payload-invalid-multi-select-values",
+            "Multi-select action requires distinct non-empty item texts.",
+            "multi-select-adapter-required",
+            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.");
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateComboBoxFilterAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return ValidateSelectionSetAction(
+            step,
+            target,
+            UiControlType.ComboBoxFilter,
+            "payload-invalid-combo-box-filter-values",
+            "Combo-box filter action requires distinct non-empty item texts.",
+            "combo-box-filter-adapter-required",
+            "Combo-box filter action requires registered composite parts or a consumer IComboBoxFilterControl adapter.");
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSelectionSetAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target,
+        UiControlType controlType,
+        string invalidPayloadCode,
+        string invalidPayloadMessage,
+        string adapterWarningCode,
+        string adapterWarningMessage)
+    {
+        foreach (var finding in ValidateControlType(step, target, controlType))
         {
             yield return finding;
         }
@@ -291,16 +326,10 @@ internal sealed class RecorderCommandRuntimeValidator
         if (values.Any(string.IsNullOrWhiteSpace)
             || values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != values.Length)
         {
-            yield return Invalid(
-                target,
-                "payload-invalid-multi-select-values",
-                "Multi-select action requires distinct non-empty item texts.");
+            yield return Invalid(target, invalidPayloadCode, invalidPayloadMessage);
         }
 
-        yield return Warning(
-            target,
-            "multi-select-adapter-required",
-            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.");
+        yield return Warning(target, adapterWarningCode, adapterWarningMessage);
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(

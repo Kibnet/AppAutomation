@@ -50,7 +50,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public SearchPickerGridRowViewModel SearchPickerGridRow { get; } = new();
 
     public IReadOnlyList<SearchPickerGridRowViewModel> SearchPickerGridRows { get; }
-    
+
     public ObservableCollection<MultiSelectItemViewModel> MultiSelectItems { get; }
 
     public ObservableCollection<MultiSelectItemViewModel> SelectedMultiSelectItems { get; } = [];

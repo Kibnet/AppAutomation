@@ -158,6 +158,14 @@ public partial class App : Application
                 expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                 resultsKind: SearchPickerResultsKind.ListBox,
                 opensOnSearch: true)));
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "ArmStatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "ArmStatusFilter",
+                "ArmStatusFilter_OpenButton",
+                "ArmStatusFilter_Results",
+                "ArmStatusFilter_ApplyButton",
+                "ArmStatusFilter_CancelButton")));
         options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
             "SearchPickerGridEditor",
             "SearchPickerGridAutomationBridge",

@@ -318,6 +318,16 @@ public interface IMultiSelectControl : IUiControl
 }
 
 /// <summary>
+/// Represents a logical ComboBoxEditor-style filter whose selected value set may contain zero, one, or many items.
+/// </summary>
+/// <remarks>
+/// The selected item count is action data. It does not select a different control contract or execution path.
+/// </remarks>
+public interface IComboBoxFilterControl : IMultiSelectControl
+{
+}
+
+/// <summary>
 /// Represents a radio button control within a mutually exclusive group.
 /// </summary>
 public interface IRadioButtonControl : IUiControl

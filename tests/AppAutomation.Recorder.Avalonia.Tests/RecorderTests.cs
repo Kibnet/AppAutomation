@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
+using AppAutomation.Abstractions;
+using AppAutomation.Recorder.Avalonia.CodeGeneration;
+using AppAutomation.Recorder.Avalonia.SourceScanning;
+using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -12,10 +16,6 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
-using AppAutomation.Abstractions;
-using AppAutomation.Recorder.Avalonia.CodeGeneration;
-using AppAutomation.Recorder.Avalonia.SourceScanning;
-using AppAutomation.Recorder.Avalonia.UI;
 using Microsoft.Extensions.Logging;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -1100,6 +1100,41 @@ public sealed class RecorderTests
             await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
             await Assert.That(result.RuntimeValidationFindings!.Any(
                 static finding => finding.Code.Contains("payload-invalid-multi-select-values", StringComparison.Ordinal))).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task RuntimeValidator_ComboBoxFilter_AllowsEmptySetAndRejectsDuplicates()
+    {
+        static RecordedStep CreateFilterStep(IReadOnlyList<string> values)
+        {
+            return new RecordedStep(
+                RecordedActionKind.ApplyFilterSelection,
+                new RecordedControlDescriptor(
+                    "StatusFilter",
+                    UiControlType.ComboBoxFilter,
+                    "StatusFilter",
+                    UiLocatorKind.AutomationId,
+                    FallbackToName: false,
+                    AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
+                    Warning: null),
+                StringValues: values);
+        }
+
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var emptySet = CreateFilterStep([]);
+        var duplicateSet = CreateFilterStep(["Closed", "closed"]);
+
+        var emptyResult = validator.Validate(emptySet);
+        var duplicateResult = validator.Validate(duplicateSet);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(emptyResult.CanPersist).IsTrue();
+            await Assert.That(emptyResult.ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
+            await Assert.That(duplicateResult.CanPersist).IsFalse();
+            await Assert.That(duplicateResult.RuntimeValidationFindings!.Any(
+                static finding => finding.Code.Contains("payload-invalid-combo-box-filter-values", StringComparison.Ordinal))).IsTrue();
         }
     }
 

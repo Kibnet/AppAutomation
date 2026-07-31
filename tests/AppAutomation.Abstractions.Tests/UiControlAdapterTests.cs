@@ -8,6 +8,43 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    public async Task ComboBoxFilterAdapter_AppliesOneOrManyValuesAndReplaysCancel()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        context.Page
+            .ApplyFilterSelection(static page => page.StatusFilter, [])
+            .ApplyFilterSelection(static page => page.StatusFilter, ["Pending"])
+            .ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"])
+            .CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
+            await Assert.That(context.Items.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(4);
+            await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(3);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task ComboBoxFilterAdapter_AppliesImmediateSelectionWithoutApplyButton()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: false);
+        context.Items.OnSetSelectedItems = _ => context.Items.IsAvailable = false;
+
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
     public async Task MultiSelectAdapter_AppliesExactSelectionAndCancelRestoresCommittedItems()
     {
         var editorRoot = new FakeControl("CategoriesEditor");
@@ -74,6 +111,19 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task MultiSelectAdapter_ReReadsSelectionAfterPopupReopens()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending"]);
+        context.Items.SetSelectedItems(["Closed"]);
+
+        context.Page.StatusFilter.Open();
+
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
+        context.Items.IsAvailable = false;
+    }
+
+    [Test]
     public async Task SearchPickerAdapter_SupportsSharedPageFlow()
     {
         var searchInput = new FakeTextBoxControl("HistoryFilterInput");
@@ -110,6 +160,88 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(comboBox.SelectedIndex).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_ReflectsConfiguredActionButtonAvailability()
+    {
+        var searchInput = new FakeTextBoxControl("HistoryFilterInput");
+        var applyButton = new FakeButtonControl("ApplyFilterButton");
+        var expandButton = new FakeButtonControl("ExpandFilterButton");
+        var comboBox = new FakeComboBoxControl(
+            "OperationCombo",
+            [new FakeComboBoxItem("Least Common Multiple", "Least Common Multiple")]);
+        var resolver = new FakeResolver(
+                ("HistoryFilterInput", searchInput),
+                ("ApplyFilterButton", applyButton),
+                ("ExpandFilterButton", expandButton),
+                ("OperationCombo", comboBox))
+            .WithSearchPicker(
+                "HistoryOperationPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "HistoryFilterInput",
+                    "OperationCombo",
+                    "ApplyFilterButton",
+                    "ExpandFilterButton",
+                    SearchPickerResultsKind.ComboBox));
+        var picker = new SearchPickerPage(resolver).HistoryOperationPicker;
+
+        applyButton.IsEnabled = false;
+        await Assert.That(picker.IsEnabled).IsFalse();
+
+        applyButton.IsEnabled = true;
+        expandButton.IsEnabled = false;
+        await Assert.That(picker.IsEnabled).IsFalse();
+
+        expandButton.IsEnabled = true;
+        await Assert.That(picker.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchPickerParts_PreservesPublishedSevenValueApiShape()
+    {
+        var constructorParameterTypes = new[]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(UiLocatorKind),
+            typeof(bool),
+            typeof(SearchPickerResultsKind)
+        };
+        var factoryParameterTypes = new[]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(SearchPickerResultsKind)
+        };
+        var deconstructParameterTypes = constructorParameterTypes
+            .Select(static type => type.MakeByRefType())
+            .ToArray();
+
+        var constructor = typeof(SearchPickerParts).GetConstructor(constructorParameterTypes);
+        var factory = typeof(SearchPickerParts).GetMethod(
+            nameof(SearchPickerParts.ByAutomationIds),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            factoryParameterTypes,
+            modifiers: null);
+        var deconstruct = typeof(SearchPickerParts).GetMethod(
+            "Deconstruct",
+            BindingFlags.Public | BindingFlags.Instance,
+            binder: null,
+            deconstructParameterTypes,
+            modifiers: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(constructor).IsNotNull();
+            await Assert.That(factory).IsNotNull();
+            await Assert.That(deconstruct).IsNotNull();
         }
     }
 
@@ -266,7 +398,7 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task SearchPickerAdapter_DefersDetachedListBackedResultsUntilExpand()
+    public async Task SearchPickerAdapter_DefersDetachedResultsAndRetainsSelectionAfterClose()
     {
         var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
         var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
@@ -296,13 +428,17 @@ public sealed class UiControlAdapterTests
             "АЭРОСКАН ООО",
             "АЭРОСКАН ООО",
             timeoutMs: 1000);
+        innerResolver.ResultsAvailable = false;
 
         using (Assert.Multiple())
         {
             await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
             await Assert.That(innerResolver.ResultsResolveAttemptsBeforeExpand).IsEqualTo(0);
-            await Assert.That(listBox.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+            await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
         }
+
+        searchInput.Text = "Другой клиент";
+        await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsNull();
     }
 
     [Test]
@@ -914,6 +1050,63 @@ public sealed class UiControlAdapterTests
             .Throws<ArgumentNullException>();
     }
 
+    private static ComboBoxFilterTestContext CreateComboBoxFilterContext(bool hasApplyButton)
+    {
+        var items = new FakeMultiSelectItemsControl(
+            "StatusFilterItems",
+            ["Open", "Pending", "Closed"],
+            ["Open"]);
+        var committedItems = new[] { "Open" };
+        var openButton = new FakeButtonControl("StatusFilterOpenButton")
+        {
+            OnInvoke = () => items.IsAvailable = true
+        };
+        var applyButton = new FakeButtonControl("StatusFilterApplyButton")
+        {
+            OnInvoke = () =>
+            {
+                committedItems = items.SelectedItems.ToArray();
+                items.IsAvailable = false;
+            }
+        };
+        var cancelButton = new FakeButtonControl("StatusFilterCancelButton")
+        {
+            OnInvoke = () =>
+            {
+                items.SetSelectedItems(committedItems);
+                items.IsAvailable = false;
+            }
+        };
+        var resolver = new FakeResolver(
+                ("StatusFilterRoot", new FakeControl("StatusFilterRoot")),
+                ("StatusFilterOpenButton", openButton),
+                ("StatusFilterItems", items),
+                ("StatusFilterApplyButton", applyButton),
+                ("StatusFilterCancelButton", cancelButton))
+            .WithComboBoxFilter(
+                "StatusFilter",
+                ComboBoxFilterParts.ByAutomationIds(
+                    "StatusFilterRoot",
+                    "StatusFilterOpenButton",
+                    "StatusFilterItems",
+                    applyButtonAutomationId: hasApplyButton ? "StatusFilterApplyButton" : null,
+                    cancelButtonAutomationId: hasApplyButton ? "StatusFilterCancelButton" : null));
+
+        return new ComboBoxFilterTestContext(
+            new ComboBoxFilterPage(resolver),
+            items,
+            openButton,
+            applyButton,
+            cancelButton);
+    }
+
+    private sealed record ComboBoxFilterTestContext(
+        ComboBoxFilterPage Page,
+        FakeMultiSelectItemsControl Items,
+        FakeButtonControl OpenButton,
+        FakeButtonControl ApplyButton,
+        FakeButtonControl CancelButton);
+
     public static class SearchPickerPageDefinitions
     {
         public static UiControlDefinition HistoryOperationPicker { get; } = new(
@@ -930,6 +1123,16 @@ public sealed class UiControlAdapterTests
             "Categories",
             UiControlType.MultiSelect,
             "Categories",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    public static class ComboBoxFilterPageDefinitions
+    {
+        public static UiControlDefinition StatusFilter { get; } = new(
+            "StatusFilter",
+            UiControlType.ComboBoxFilter,
+            "StatusFilter",
             UiLocatorKind.AutomationId,
             FallbackToName: false);
     }
@@ -982,6 +1185,17 @@ public sealed class UiControlAdapterTests
         }
 
         public IMultiSelectControl Categories => Resolve<IMultiSelectControl>(MultiSelectPageDefinitions.Categories);
+    }
+
+    private sealed class ComboBoxFilterPage : UiPage
+    {
+        public ComboBoxFilterPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IComboBoxFilterControl StatusFilter =>
+            Resolve<IComboBoxFilterControl>(ComboBoxFilterPageDefinitions.StatusFilter);
     }
 
     private sealed class OrderCustomerSearchPage : UiPage
@@ -1165,13 +1379,15 @@ public sealed class UiControlAdapterTests
 
         public int ResultsResolveAttemptsBeforeExpand { get; private set; }
 
+        public bool ResultsAvailable { get; set; } = true;
+
         public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
             if (string.Equals(definition.LocatorValue, "OrderCustomerSearch_Results", StringComparison.Ordinal)
-                && _expandButton.InvokeCount == 0)
+                && (_expandButton.InvokeCount == 0 || !ResultsAvailable))
             {
                 ResultsResolveAttemptsBeforeExpand++;
                 throw new InvalidOperationException("Popup results are not attached before expand.");
@@ -1196,7 +1412,7 @@ public sealed class UiControlAdapterTests
 
         public string Name { get; protected set; }
 
-        public bool IsEnabled { get; init; } = true;
+        public bool IsEnabled { get; set; } = true;
     }
 
     private sealed class FakeTextBoxControl : FakeControlBase, ITextBoxControl
@@ -1278,9 +1494,12 @@ public sealed class UiControlAdapterTests
 
         public bool IsAvailable { get; set; }
 
+        public Action<IReadOnlyCollection<string>>? OnSetSelectedItems { get; set; }
+
         public void SetSelectedItems(IReadOnlyCollection<string> values)
         {
             _selectedItems = values.ToArray();
+            OnSetSelectedItems?.Invoke(values);
         }
     }
 

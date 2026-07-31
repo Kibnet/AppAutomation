@@ -1,9 +1,9 @@
 using AppAutomation.Abstractions;
+using AppAutomation.FlaUI.Automation;
+using AppAutomation.FlaUI.Session;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
-using AppAutomation.FlaUI.Automation;
-using AppAutomation.FlaUI.Session;
 using FlaUI.Core.AutomationElements;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -12,7 +12,7 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
-    private static readonly UiWaitOptions EremexGridWaitOptions = new()
+    private static readonly UiWaitOptions DesktopControlWaitOptions = new()
     {
         Timeout = TimeSpan.FromSeconds(10),
         PollInterval = TimeSpan.FromMilliseconds(200)
@@ -52,6 +52,41 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task MultiSelectMissingItem_DoesNotPartiallyChangeDesktopSelection()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
+        page.MultiSelection.Open();
+
+        try
+        {
+            var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory);
+            var items = resolver.Resolve<IMultiSelectItemsControl>(new UiControlDefinition(
+                "MultiSelectionItems",
+                UiControlType.ListBox,
+                "MultiSelection_Results",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false));
+            items.SetSelectedItems(["Alpha"]);
+
+            await Assert.That(() => items.SetSelectedItems(["Beta", "Missing"]))
+                .Throws<InvalidOperationException>();
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Alpha"]);
+        }
+        finally
+        {
+            if (page.MultiSelection.IsOpen)
+            {
+                page.MultiSelection.Cancel();
+            }
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task SelectListBoxItem_ByCapability_SelectsDesktopItem()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -76,6 +111,34 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task ServerSearchComboBox_GridPopupStaysClosedUntilEditorIsUsed()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var desktop = session.MainWindow.Automation.GetDesktop();
+        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
+
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var input = WaitForDesktopElement(session, desktop, "SearchPickerGridEditor_Input", "search input");
+        var isPopupVisible = IsVisible(desktop.FindFirstDescendant(
+            session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")));
+
+        await Assert.That(isPopupVisible).IsFalse();
+
+        input.AsTextBox().Text = "a";
+        var results = UiWait.Until(
+            () => desktop.FindFirstDescendant(
+                session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")),
+            IsVisible,
+            DesktopControlWaitOptions,
+            "ServerSearchComboBox results did not become visible after text input.");
+
+        await Assert.That(results).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -96,13 +159,13 @@ public sealed class FlaUiControlResolverTests
         var eremexAnchor = UiWait.Until(
             () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGrid")),
             static element => element is not null && TryRead(() => element.IsAvailable),
-            EremexGridWaitOptions,
+            DesktopControlWaitOptions,
             "Eremex DataGrid automation anchor was not found by AutomationId.")
             ?? throw new InvalidOperationException("Eremex DataGrid automation anchor was not found by AutomationId.");
         var bridgeElement = UiWait.Until(
             () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGridAutomationBridge")),
             static element => element is not null && TryRead(() => element.IsAvailable),
-            EremexGridWaitOptions,
+            DesktopControlWaitOptions,
             "Eremex DataGrid automation bridge was not found by AutomationId.")
             ?? throw new InvalidOperationException("Eremex DataGrid automation bridge was not found by AutomationId.");
 
@@ -169,7 +232,7 @@ public sealed class FlaUiControlResolverTests
         return UiWait.Until(
                 () => desktop.FindFirstDescendant(session.ConditionFactory.ByAutomationId(automationId)),
                 static element => element is not null && TryRead(() => element.IsAvailable),
-                EremexGridWaitOptions,
+                DesktopControlWaitOptions,
                 failureMessage)
             ?? throw new InvalidOperationException(failureMessage);
     }
@@ -177,6 +240,12 @@ public sealed class FlaUiControlResolverTests
     private static bool ContainsText(IEnumerable<string> texts, string expected)
     {
         return texts.Any(text => text.Contains(expected, StringComparison.Ordinal));
+    }
+
+    private static bool IsVisible(AutomationElement? element)
+    {
+        return element is not null
+            && TryRead(() => element.IsAvailable && !element.IsOffscreen);
     }
 
     private static T? TryRead<T>(Func<T> accessor)

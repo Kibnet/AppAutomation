@@ -344,6 +344,30 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_ComboBoxFilter_UsesOneContractForOneAndSeveralValues()
+    {
+        string[] severalValues = ["Pending", "Closed"];
+
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .ApplyFilterSelection(p => p.ArmStatusFilter, ["Pending"])
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, ["Pending"])
+            .ApplyFilterSelection(p => p.ArmStatusFilter, severalValues)
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
+            .CancelFilterSelection(p => p.ArmStatusFilter, [])
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
+            .WaitUntilTextEquals(p => p.ArmStatusFilterStatusLabel, "Filter: Closed, Pending");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.ArmStatusFilter.IsOpen).IsFalse();
+            await Assert.That(Page.ArmStatusFilter.SelectedItems).IsEquivalentTo(severalValues);
+            await Assert.That(Page.ArmStatusFilterStatusLabel.Text).IsEqualTo("Filter: Closed, Pending");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_PrimitivesWrappersAndSearch_Work()
     {
         Page
