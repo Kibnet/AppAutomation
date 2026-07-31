@@ -190,6 +190,26 @@ If you want to reduce the first manual authoring pass, attach `AppAutomation.Rec
 - The recorder UI is hosted in a separate opaque window, so it no longer follows or overlays the AUT window.
 - Hotkeys, overlay behavior, selector validation, and custom assertion capture are configurable through `AppAutomationRecorderOptions`.
 
+To choose an existing scenario class at runtime, opt in to project discovery:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions
+{
+    AuthoringProjectDirectory = authoringProjectDirectory,
+    PageNamespace = "MyApp.UiTests.Authoring.Pages",
+    PageClassName = "MainWindowPage",
+    ScenarioName = "RecordedSmoke",
+    ScenarioSelection = new RecorderScenarioSelectionOptions
+    {
+        IsEnabled = true,
+        ScenarioNamespaceRoot = "MyApp.UiTests.Authoring.Tests",
+        OutputSubdirectoryRoot = "Recorded"
+    }
+};
+```
+
+The overlay scans source `partial` classes under the namespace root, including generic classes, and keeps `Record` disabled until a destination and valid scenario name are selected. It never silently falls back to another class: save/autosave revalidate the selected source class and write each completed scenario into its own collision-safe partial `.g.cs` file. A relative output root is resolved below the authoring project; an absolute root remains absolute. `Export...` still writes directly to the explicitly chosen folder. Existing preset `ScenarioNamespace`, `ScenarioClassName`, `ScenarioName`, and `OutputSubdirectory` configuration remains supported when interactive selection is disabled.
+
 Reference smoke path in this repository:
 
 ```powershell
@@ -524,6 +544,26 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - `Save` и `Export...` теперь single-flight: пока идёт запись файлов, overlay показывает busy summary и не даёт запустить второй save/export поверх первого.
 - Recorder UI теперь живёт в отдельном непрозрачном окне и больше не привязан к позиции или состоянию окна AUT.
 - Hotkeys, поведение overlay, selector validation и кастомный assertion capture настраиваются через `AppAutomationRecorderOptions`.
+
+Чтобы выбирать существующий класс сценариев при запуске, включите сканирование authoring-проекта:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions
+{
+    AuthoringProjectDirectory = authoringProjectDirectory,
+    PageNamespace = "MyApp.UiTests.Authoring.Pages",
+    PageClassName = "MainWindowPage",
+    ScenarioName = "RecordedSmoke",
+    ScenarioSelection = new RecorderScenarioSelectionOptions
+    {
+        IsEnabled = true,
+        ScenarioNamespaceRoot = "MyApp.UiTests.Authoring.Tests",
+        OutputSubdirectoryRoot = "Recorded"
+    }
+};
+```
+
+Overlay асинхронно находит исходные `partial`-классы внутри корневого namespace, включая generic-классы, и не активирует `Record`, пока назначение и корректное имя сценария не выбраны. Silent fallback на другой класс отсутствует: перед save/autosave выбранный исходный класс проверяется повторно, а каждый завершённый сценарий получает отдельный collision-safe partial `.g.cs`-файл. Относительный output root считается от authoring-проекта, абсолютный остаётся абсолютным; `Export...` по-прежнему пишет прямо в явно выбранную папку. Старый режим с заранее заданными `ScenarioNamespace`, `ScenarioClassName`, `ScenarioName` и `OutputSubdirectory` сохраняется, если интерактивный выбор выключен.
 
 Референсный smoke path в этом репозитории:
 

@@ -72,12 +72,6 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmCopyTextBox", UiControlType.TextBox, "ArmCopyTextBox")]
 [UiControl("ArmCopyButton", UiControlType.Button, "ArmCopyButton")]
 [UiControl("ArmCopyResultLabel", UiControlType.Label, "ArmCopyResultLabel")]
-[UiControl("ArmSearchInput", UiControlType.TextBox, "ArmSearchInput")]
-[UiControl("ArmSearchResults", UiControlType.ComboBox, "ArmSearchResults")]
-[UiControl("ArmSearchFuzzyToggle", UiControlType.CheckBox, "ArmSearchFuzzyToggle")]
-[UiControl("ArmSearchApplyButton", UiControlType.Button, "ArmSearchApplyButton")]
-[UiControl("ArmSearchClearButton", UiControlType.Button, "ArmSearchClearButton")]
-[UiControl("ArmSearchStatusLabel", UiControlType.Label, "ArmSearchStatusLabel")]
 [UiControl("ArmServerPickerInput", UiControlType.TextBox, "ArmServerSearchPicker_Input")]
 [UiControl("ArmServerPickerResults", UiControlType.ListBox, "ArmServerSearchPicker_Results")]
 [UiControl("ArmServerPickerOpenButton", UiControlType.Button, "ArmServerSearchPicker_OpenButton")]
@@ -146,9 +140,6 @@ public sealed partial class MainWindowPage : UiPage
     private static UiControlDefinition HistoryOperationPickerDefinition { get; } =
         new("HistoryOperationPicker", UiControlType.AutomationElement, "HistoryOperationPicker", UiLocatorKind.AutomationId, FallbackToName: false);
 
-    private static UiControlDefinition ArmSearchPickerDefinition { get; } =
-        new("ArmSearchPicker", UiControlType.AutomationElement, "ArmSearchPicker", UiLocatorKind.AutomationId, FallbackToName: false);
-
     private static UiControlDefinition ArmServerSearchPickerDefinition { get; } =
         new("ArmServerSearchPicker", UiControlType.AutomationElement, "ArmServerSearchPicker", UiLocatorKind.AutomationId, FallbackToName: false);
 
@@ -175,8 +166,6 @@ public sealed partial class MainWindowPage : UiPage
     }
 
     public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(HistoryOperationPickerDefinition);
-
-    public ISearchPickerControl ArmSearchPicker => Resolve<ISearchPickerControl>(ArmSearchPickerDefinition);
 
     public ISearchPickerControl ArmServerSearchPicker => Resolve<ISearchPickerControl>(ArmServerSearchPickerDefinition);
 

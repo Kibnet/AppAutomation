@@ -50,6 +50,7 @@ public partial class App : Application
         var outputDirectory = Environment.GetEnvironmentVariable(RecorderOutputDirectoryEnvironmentVariable);
         var authoringProjectDirectory = Environment.GetEnvironmentVariable(RecorderAuthoringProjectEnvironmentVariable);
         var saveHotkey = Environment.GetEnvironmentVariable(RecorderSaveHotkeyEnvironmentVariable);
+        var useInteractiveScenarioSelection = string.IsNullOrWhiteSpace(scenarioName);
         var options = new AppAutomationRecorderOptions
         {
             ScenarioName = string.IsNullOrWhiteSpace(scenarioName) ? "RecordedSmoke" : scenarioName,
@@ -59,8 +60,18 @@ public partial class App : Application
             OutputSubdirectory = string.IsNullOrWhiteSpace(outputDirectory) ? "Recorded" : Path.GetFullPath(outputDirectory),
             PageNamespace = "DotnetDebug.AppAutomation.Authoring.Pages",
             PageClassName = "MainWindowPage",
-            ScenarioNamespace = "DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests",
-            ScenarioClassName = "MainWindowScenariosBase",
+            ScenarioNamespace = useInteractiveScenarioSelection
+                ? null
+                : "DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests",
+            ScenarioClassName = useInteractiveScenarioSelection ? null : "MainWindowScenariosBase",
+            ScenarioSelection = new RecorderScenarioSelectionOptions
+            {
+                IsEnabled = useInteractiveScenarioSelection,
+                ScenarioNamespaceRoot = "DotnetDebug.AppAutomation.Authoring.Tests",
+                OutputSubdirectoryRoot = string.IsNullOrWhiteSpace(outputDirectory)
+                    ? "Recorded"
+                    : Path.GetFullPath(outputDirectory)
+            },
             OverlayTheme = RecorderOverlayTheme.Dark,
             ShowOverlay = !string.Equals(Environment.GetEnvironmentVariable(RecorderOverlayEnvironmentVariable), "0", StringComparison.Ordinal),
             DiagnosticLog = new RecorderDiagnosticLogOptions
@@ -140,12 +151,6 @@ public partial class App : Application
             1,
             CommitMode: GridCellEditCommitMode.Cancel));
         options.SearchPickerHints.Add(new RecorderSearchPickerHint(
-            "ArmSearchPicker",
-            SearchPickerParts.ByAutomationIds(
-                "ArmSearchInput",
-                "ArmSearchResults",
-                applyButtonAutomationId: "ArmSearchApplyButton")));
-        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
             "ArmServerSearchPicker",
             SearchPickerParts.ByAutomationIds(
                 "ArmServerSearchPicker_Input",
@@ -209,7 +214,10 @@ public partial class App : Application
                 navigationKind: ShellNavigationSourceKind.ListBox)));
 
         var session = AppAutomationRecorder.Attach(mainWindow, options);
-        session.Start();
+        if (!useInteractiveScenarioSelection)
+        {
+            session.Start();
+        }
     }
 
     private static string ResolveAuthoringProjectDirectory()

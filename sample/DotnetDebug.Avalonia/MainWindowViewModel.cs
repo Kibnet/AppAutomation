@@ -42,14 +42,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             new MultiSelectItemViewModel("Omega")
         ];
         SelectedMultiSelectItems.Add(MultiSelectItems[0]);
+        SearchPickerGridRows = [SearchPickerGridRow];
     }
 
     public ObservableCollection<DataGridRowViewModel> DataGridRows { get; } = [];
-
-    public MainWindowViewModel()
-    {
-        SearchPickerGridRows = [SearchPickerGridRow];
-    }
 
     public SearchPickerGridRowViewModel SearchPickerGridRow { get; } = new();
 

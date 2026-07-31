@@ -28,14 +28,6 @@ public partial class ArmDesktopControl : UserControl
 
     public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = new();
 
-    public string[] ArmSearchItems { get; } =
-    [
-        "Customer Alpha",
-        "Customer Beta",
-        "Order 1001",
-        "Invoice 2026"
-    ];
-
     public string[] ArmServerItems { get; } =
     [
         "Product 42",
@@ -54,28 +46,6 @@ public partial class ArmDesktopControl : UserControl
     private void OnArmCopyClick(object? sender, RoutedEventArgs e)
     {
         ArmCopyResultLabel.Content = $"Copied: {ArmCopyTextBox.Text ?? string.Empty}";
-    }
-
-    private void OnArmSearchApplyClick(object? sender, RoutedEventArgs e)
-    {
-        var query = ArmSearchInput.Text ?? string.Empty;
-        var selected = ArmSearchResults.SelectedItem?.ToString() ?? "<none>";
-        ArmSearchStatusLabel.Content = $"Search applied: {query}; selected={selected}";
-    }
-
-    private void OnArmSearchClearClick(object? sender, RoutedEventArgs e)
-    {
-        ArmSearchInput.Text = string.Empty;
-        ArmSearchResults.SelectedIndex = -1;
-        ArmSearchStatusLabel.Content = "Search cleared";
-    }
-
-    private void OnArmSearchResultsChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (ArmSearchResults.SelectedItem is not null)
-        {
-            ArmSearchStatusLabel.Content = $"Search selected: {ArmSearchResults.SelectedItem}";
-        }
     }
 
     private void OnArmServerPickerClearClick(object? sender, RoutedEventArgs e)

@@ -6,6 +6,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
+using Eremex.AvaloniaUI.Controls.Common;
 using Eremex.AvaloniaUI.Controls.Editors;
 
 namespace DotnetDebug.Avalonia;
@@ -32,6 +33,8 @@ public sealed class ServerSearchComboBox : PopupEditor
     private readonly ListBox _results;
     private TextBox? _input;
     private ToggleButton? _openButton;
+    private ResizeablePopup? _editorPopup;
+    private PixelPoint? _lastInputScreenPosition;
     private bool _synchronizing;
 
     public ServerSearchComboBox()
@@ -43,6 +46,7 @@ public sealed class ServerSearchComboBox : PopupEditor
         _results.SelectionChanged += OnResultsSelectionChanged;
         PopupContent = _results;
         Loaded += OnLoaded;
+        PopupOpening += OnPopupOpening;
         PopupOpened += OnPopupOpened;
     }
 
@@ -77,6 +81,7 @@ public sealed class ServerSearchComboBox : PopupEditor
         if (_input is not null)
         {
             _input.TextChanged -= OnInputTextChanged;
+            _input.LayoutUpdated -= OnInputLayoutUpdated;
         }
 
         base.OnApplyTemplate(e);
@@ -93,11 +98,14 @@ public sealed class ServerSearchComboBox : PopupEditor
             ?? this.GetLogicalDescendants()
                 .OfType<ToggleButton>()
                 .FirstOrDefault(static candidate => candidate.Name == "PART_PopupOpenButton");
+        _editorPopup = e.NameScope.Find<ResizeablePopup>("PART_EditorPopup");
+        UpdatePopupPlacement();
 
         if (_input is not null)
         {
             _input.Text = SearchText ?? CurrentSelected?.ToString() ?? string.Empty;
             _input.TextChanged += OnInputTextChanged;
+            _input.LayoutUpdated += OnInputLayoutUpdated;
         }
 
         ApplyAutomationPartIds();
@@ -140,9 +148,49 @@ public sealed class ServerSearchComboBox : PopupEditor
         ApplyAutomationPartIds();
     }
 
+    private void OnPopupOpening(object? sender, OpeningPopupEventArgs e)
+    {
+        UpdatePopupPlacement();
+    }
+
     private void OnPopupOpened(object? sender, EventArgs e)
     {
         ApplyAutomationPartIds();
+    }
+
+    private void UpdatePopupPlacement()
+    {
+        if (_editorPopup is null || _input is null)
+        {
+            return;
+        }
+
+        _editorPopup.PlacementTarget = _input;
+        _editorPopup.VerticalOffset = 0;
+        _lastInputScreenPosition = _input.IsAttachedToVisualTree()
+            ? _input.PointToScreen(default)
+            : null;
+    }
+
+    private void OnInputLayoutUpdated(object? sender, EventArgs e)
+    {
+        if (!IsPopupOpen
+            || _editorPopup is null
+            || _input is null
+            || !_input.IsAttachedToVisualTree())
+        {
+            return;
+        }
+
+        var currentPosition = _input.PointToScreen(default);
+        if (_lastInputScreenPosition == currentPosition)
+        {
+            return;
+        }
+
+        _lastInputScreenPosition = currentPosition;
+        _editorPopup.PlacementTarget = null;
+        _editorPopup.PlacementTarget = _input;
     }
 
     private void OnInputTextChanged(object? sender, TextChangedEventArgs e)

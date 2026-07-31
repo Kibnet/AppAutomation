@@ -27,7 +27,19 @@ internal sealed class AuthoringCodeGenerator
         string? outputDirectoryOverride,
         CancellationToken cancellationToken = default)
     {
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, cancellationToken);
+        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext: null, cancellationToken);
+    }
+
+    internal Task<RecorderSaveResult> SaveAsync(
+        Window window,
+        AppAutomationRecorderOptions options,
+        IReadOnlyList<RecordedStep> steps,
+        string? outputDirectoryOverride,
+        RecorderScenarioSaveContext saveContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(saveContext);
+        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext, cancellationToken);
     }
 
     public Task<RecorderSaveResult> AutosaveAsync(
@@ -37,7 +49,19 @@ internal sealed class AuthoringCodeGenerator
         string? outputDirectoryOverride,
         CancellationToken cancellationToken = default)
     {
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, cancellationToken);
+        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext: null, cancellationToken);
+    }
+
+    internal Task<RecorderSaveResult> AutosaveAsync(
+        Window window,
+        AppAutomationRecorderOptions options,
+        IReadOnlyList<RecordedStep> steps,
+        string? outputDirectoryOverride,
+        RecorderScenarioSaveContext saveContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(saveContext);
+        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext, cancellationToken);
     }
 
     private async Task<RecorderSaveResult> SaveCoreAsync(
@@ -46,6 +70,7 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyList<RecordedStep> steps,
         string? outputDirectoryOverride,
         AuthoringSaveKind saveKind,
+        RecorderScenarioSaveContext? saveContext,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(window);
@@ -68,7 +93,7 @@ internal sealed class AuthoringCodeGenerator
             return RecorderSaveResult.Failed($"Authoring project directory '{projectDirectory}' does not exist.");
         }
 
-        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride);
+        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride, saveContext);
         var snapshot = _scanner.Scan(target, cancellationToken);
         var validationError = ValidateSnapshot(target, snapshot);
         if (validationError is not null)
@@ -144,10 +169,21 @@ internal sealed class AuthoringCodeGenerator
             renderedStatements.Add(GenerateStepStatement(step, controlInfo.PropertyName));
         }
 
+        Directory.CreateDirectory(target.OutputDirectory);
         var fileSafeScenarioName = RecorderNaming.CreateFileSafeName(target.ScenarioName, "scenario");
         var saveTarget = saveKind == AuthoringSaveKind.Autosave
-            ? GetOrCreateAutosaveTarget(target, snapshot, fileSafeScenarioName)
-            : CreateSnapshotTarget(target, snapshot, fileSafeScenarioName);
+            ? GetOrCreateAutosaveTarget(
+                target,
+                snapshot,
+                fileSafeScenarioName,
+                saveContext?.DraftIdentity,
+                reservePageFile: saveContext is not null && generatedControls.Count > 0)
+            : CreateSnapshotTarget(
+                target,
+                snapshot,
+                fileSafeScenarioName,
+                useTimestampedPageFile: saveContext is not null,
+                reservePageFile: saveContext is not null && generatedControls.Count > 0);
         var controlsToWrite = saveKind == AuthoringSaveKind.Autosave
             ? MergeAutosaveControls(saveTarget.PageFilePath, generatedControls, cancellationToken)
             : generatedControls;
@@ -155,8 +191,6 @@ internal sealed class AuthoringCodeGenerator
             ? null
             : saveTarget.PageFilePath;
         var scenarioFilePath = saveTarget.ScenarioFilePath;
-
-        Directory.CreateDirectory(target.OutputDirectory);
 
         if (pageFilePath is not null)
         {
@@ -195,7 +229,8 @@ internal sealed class AuthoringCodeGenerator
     internal RecorderOutputDescription DescribeOutput(
         Window window,
         AppAutomationRecorderOptions options,
-        string? outputDirectoryOverride)
+        string? outputDirectoryOverride,
+        RecorderScenarioSaveContext? saveContext = null)
     {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(options);
@@ -210,14 +245,16 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var projectDirectory = Path.GetFullPath(options.AuthoringProjectDirectory);
-        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride);
+        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride, saveContext);
         var fileSafeScenarioName = RecorderNaming.CreateFileSafeName(target.ScenarioName, "scenario");
         var scenarioFilePathDisplay = Path.Combine(
             target.OutputDirectory,
             $"{target.ScenarioClassName}.{fileSafeScenarioName}.<timestamp>.g.cs");
         var pageFilePathDisplay = Path.Combine(
             target.OutputDirectory,
-            $"{target.PageClassName}.{fileSafeScenarioName}.controls.g.cs");
+            saveContext is null
+                ? $"{target.PageClassName}.{fileSafeScenarioName}.controls.g.cs"
+                : $"{target.PageClassName}.{fileSafeScenarioName}.<timestamp>.controls.g.cs");
 
         return new RecorderOutputDescription(
             IsConfigured: true,
@@ -270,33 +307,75 @@ internal sealed class AuthoringCodeGenerator
             return $"Scenario class '{target.ScenarioNamespace}.{target.ScenarioClassName}' must be partial for recorder-generated methods.";
         }
 
+        if (target.ScenarioGenericArity is not null
+            && (snapshot.ScenarioClass.GenericArity != target.ScenarioGenericArity
+                || !string.Equals(
+                    snapshot.ScenarioClass.TypeParameterSignature,
+                    target.ScenarioTypeParameterSignature,
+                    StringComparison.Ordinal)))
+        {
+            return $"Scenario class '{target.ScenarioNamespace}.{target.ScenarioClassName}' no longer matches the selected generic declaration.";
+        }
+
         return null;
     }
 
     private static AuthoringSaveTarget CreateSnapshotTarget(
         AuthoringTargetConfiguration target,
         AuthoringProjectSnapshot snapshot,
-        string fileSafeScenarioName)
+        string fileSafeScenarioName,
+        bool useTimestampedPageFile,
+        bool reservePageFile)
     {
         var reservedMethodNames = new HashSet<string>(snapshot.ExistingScenarioMethodNames, StringComparer.Ordinal);
         var timestamp = DateTimeOffset.Now;
         var methodName = RecorderNaming.EnsureUniqueName(
             RecorderNaming.CreateRecordedMethodBaseName(target.ScenarioName, timestamp),
             reservedMethodNames);
-        var pageFilePath = Path.Combine(target.OutputDirectory, $"{target.PageClassName}.{fileSafeScenarioName}.controls.g.cs");
-        var scenarioFilePath = Path.Combine(
-            target.OutputDirectory,
-            $"{target.ScenarioClassName}.{fileSafeScenarioName}.{timestamp:yyyyMMdd_HHmmss}.g.cs");
+        var timestampText = timestamp.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+        for (var suffix = 1; ; suffix++)
+        {
+            var collisionSuffix = suffix == 1 ? string.Empty : $"_{suffix}";
+            var scenarioCandidate = Path.Combine(
+                target.OutputDirectory,
+                $"{target.ScenarioClassName}.{fileSafeScenarioName}.{timestampText}{collisionSuffix}.g.cs");
+            var pageCandidate = Path.Combine(
+                target.OutputDirectory,
+                useTimestampedPageFile
+                    ? $"{target.PageClassName}.{fileSafeScenarioName}.{timestampText}{collisionSuffix}.controls.g.cs"
+                    : $"{target.PageClassName}.{fileSafeScenarioName}.controls.g.cs");
+            if (File.Exists(scenarioCandidate)
+                || (useTimestampedPageFile && File.Exists(pageCandidate)))
+            {
+                continue;
+            }
 
-        return new AuthoringSaveTarget(pageFilePath, scenarioFilePath, methodName);
+            if (!TryReserveFile(scenarioCandidate))
+            {
+                continue;
+            }
+
+            if (reservePageFile && !TryReserveFile(pageCandidate))
+            {
+                TryDeleteReservedFile(scenarioCandidate);
+                continue;
+            }
+
+            var collisionSafeMethodName = suffix == 1
+                ? methodName
+                : RecorderNaming.EnsureUniqueName($"{methodName}_{suffix}", reservedMethodNames);
+            return new AuthoringSaveTarget(pageCandidate, scenarioCandidate, collisionSafeMethodName);
+        }
     }
 
     private AuthoringSaveTarget GetOrCreateAutosaveTarget(
         AuthoringTargetConfiguration target,
         AuthoringProjectSnapshot snapshot,
-        string fileSafeScenarioName)
+        string fileSafeScenarioName,
+        string? draftIdentity,
+        bool reservePageFile)
     {
-        var key = CreateAutosaveTargetKey(target);
+        var key = CreateAutosaveTargetKey(target, draftIdentity);
         if (_autosaveTargets.TryGetValue(key, out var existingTarget))
         {
             return existingTarget;
@@ -308,15 +387,38 @@ internal sealed class AuthoringCodeGenerator
         var methodName = RecorderNaming.EnsureUniqueName(
             RecorderNaming.CreateAutosaveMethodBaseName(target.ScenarioName, timestamp),
             reservedMethodNames);
-        var pageFilePath = Path.Combine(
-            target.OutputDirectory,
-            $"{target.PageClassName}.{fileSafeScenarioName}.autosave.{timestampText}.controls.g.cs.autosave");
-        var scenarioFilePath = Path.Combine(
-            target.OutputDirectory,
-            $"{target.ScenarioClassName}.{fileSafeScenarioName}.autosave.{timestampText}.g.cs.autosave");
-        var autosaveTarget = new AuthoringSaveTarget(pageFilePath, scenarioFilePath, methodName);
-        _autosaveTargets.Add(key, autosaveTarget);
-        return autosaveTarget;
+        for (var suffix = 1; ; suffix++)
+        {
+            var collisionSuffix = suffix == 1 ? string.Empty : $"_{suffix}";
+            var pageFilePath = Path.Combine(
+                target.OutputDirectory,
+                $"{target.PageClassName}.{fileSafeScenarioName}.autosave.{timestampText}{collisionSuffix}.controls.g.cs.autosave");
+            var scenarioFilePath = Path.Combine(
+                target.OutputDirectory,
+                $"{target.ScenarioClassName}.{fileSafeScenarioName}.autosave.{timestampText}{collisionSuffix}.g.cs.autosave");
+            if (File.Exists(pageFilePath) || File.Exists(scenarioFilePath))
+            {
+                continue;
+            }
+
+            if (!TryReserveFile(scenarioFilePath))
+            {
+                continue;
+            }
+
+            if (reservePageFile && !TryReserveFile(pageFilePath))
+            {
+                TryDeleteReservedFile(scenarioFilePath);
+                continue;
+            }
+
+            var collisionSafeMethodName = suffix == 1
+                ? methodName
+                : RecorderNaming.EnsureUniqueName($"{methodName}_{suffix}", reservedMethodNames);
+            var autosaveTarget = new AuthoringSaveTarget(pageFilePath, scenarioFilePath, collisionSafeMethodName);
+            _autosaveTargets.Add(key, autosaveTarget);
+            return autosaveTarget;
+        }
     }
 
     private IReadOnlyList<ExistingControlInfo> MergeAutosaveControls(
@@ -340,7 +442,36 @@ internal sealed class AuthoringCodeGenerator
         return controlsByKey.Values.ToArray();
     }
 
-    private static string CreateAutosaveTargetKey(AuthoringTargetConfiguration target)
+    private static bool TryReserveFile(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteReservedFile(string filePath)
+    {
+        try
+        {
+            File.Delete(filePath);
+        }
+        catch (IOException)
+        {
+            // Best effort cleanup of a zero-length reservation created by this save attempt.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best effort cleanup of a zero-length reservation created by this save attempt.
+        }
+    }
+
+    private static string CreateAutosaveTargetKey(AuthoringTargetConfiguration target, string? draftIdentity)
     {
         return string.Join(
             "\n",
@@ -350,7 +481,8 @@ internal sealed class AuthoringCodeGenerator
             target.PageClassName,
             target.ScenarioNamespace,
             target.ScenarioClassName,
-            target.ScenarioName);
+            target.ScenarioName,
+            draftIdentity ?? string.Empty);
     }
 
     private static string CreateGeneratedControlKey(UiLocatorKind locatorKind, string locatorValue, UiControlType controlType)
@@ -362,7 +494,8 @@ internal sealed class AuthoringCodeGenerator
         Window window,
         AppAutomationRecorderOptions options,
         string projectDirectory,
-        string? outputDirectoryOverride)
+        string? outputDirectoryOverride,
+        RecorderScenarioSaveContext? saveContext)
     {
         var entryAssembly = Assembly.GetEntryAssembly();
         var appName = entryAssembly?.GetName().Name
@@ -370,11 +503,19 @@ internal sealed class AuthoringCodeGenerator
             ?? "App";
 
         var pageClassName = options.PageClassName ?? $"{window.GetType().Name}Page";
-        var scenarioClassName = options.ScenarioClassName ?? $"{window.GetType().Name}ScenariosBase";
+        var destination = saveContext?.Destination;
+        var scenarioClassName = destination?.ScenarioClassName
+            ?? options.ScenarioClassName
+            ?? $"{window.GetType().Name}ScenariosBase";
         var pageNamespace = options.PageNamespace ?? $"{appName}.UiTests.Authoring.Pages";
-        var scenarioNamespace = options.ScenarioNamespace ?? $"{appName}.UiTests.Authoring.Tests";
+        var scenarioNamespace = destination?.ScenarioNamespace
+            ?? options.ScenarioNamespace
+            ?? $"{appName}.UiTests.Authoring.Tests";
+        var outputSubdirectory = destination?.OutputSubdirectory ?? options.OutputSubdirectory;
         var outputDirectory = string.IsNullOrWhiteSpace(outputDirectoryOverride)
-            ? Path.Combine(projectDirectory, options.OutputSubdirectory)
+            ? Path.IsPathRooted(outputSubdirectory)
+                ? Path.GetFullPath(outputSubdirectory)
+                : Path.Combine(projectDirectory, outputSubdirectory)
             : Path.GetFullPath(outputDirectoryOverride);
 
         return new AuthoringTargetConfiguration(
@@ -384,7 +525,9 @@ internal sealed class AuthoringCodeGenerator
             pageClassName,
             scenarioNamespace,
             scenarioClassName,
-            options.ScenarioName,
+            destination?.GenericArity,
+            destination?.TypeParameterSignature,
+            saveContext?.ScenarioName ?? options.ScenarioName,
             appName);
     }
 

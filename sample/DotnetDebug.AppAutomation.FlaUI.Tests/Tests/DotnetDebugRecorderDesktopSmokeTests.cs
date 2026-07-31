@@ -5,8 +5,11 @@ using AppAutomation.TestHost.Avalonia;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
+using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
+using FlaUI.UIA3;
 using System.Runtime.InteropServices;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -101,6 +104,105 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderInteractiveDestinationSelectsRecordsAndSaves()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("Interactive");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderInteractive");
+        using var session = DesktopAppSession.Launch(CreateInteractiveRecorderLaunchOptions(outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
+        var overlayWindow = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllChildren(session.ConditionFactory.ByControlType(ControlType.Window))
+                .Select(static element => element.AsWindow())
+                .FirstOrDefault(window =>
+                    string.Equals(window.Name, "AppAutomation Recorder", StringComparison.Ordinal)
+                    && window.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "Recorder overlay window was not found.")!;
+        var appWindow = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllChildren(session.ConditionFactory.ByControlType(ControlType.Window))
+                .Select(static element => element.AsWindow())
+                .FirstOrDefault(window =>
+                    string.Equals(window.Name, "DotnetDebug - Math Operations Showcase", StringComparison.Ordinal)
+                    && window.Properties.ProcessId.Value == overlayWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "DotnetDebug application window was not found.")!;
+        var destinationCombo = FindElement(overlayWindow, session, "RecorderScenarioDestination").AsComboBox();
+        var nameTextBox = FindElement(overlayWindow, session, "RecorderScenarioName").AsTextBox();
+        var recordButton = FindElement(overlayWindow, session, "RecordButton").AsButton();
+        var saveButton = FindElement(overlayWindow, session, "SaveButton").AsButton();
+
+        UiWait.Until(
+            () => destinationCombo.Items,
+            static items => items.Any(item => string.Equals(
+                item.Text,
+                "UIAutomationTests.MainWindowScenariosBase",
+                StringComparison.Ordinal)),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "Recorder scenario destinations were not loaded.");
+        destinationCombo.Select("UIAutomationTests.MainWindowScenariosBase");
+        destinationCombo.Collapse();
+        nameTextBox.Focus();
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+        Keyboard.Type(scenarioName);
+        UiWait.Until(
+            () => nameTextBox.Text,
+            text => string.Equals(text, scenarioName, StringComparison.Ordinal),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Recorder scenario name was not updated.");
+        UiWait.Until(
+            () => recordButton.IsEnabled,
+            static enabled => enabled,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Recorder Record button did not become enabled.");
+
+        TryCaptureDesktopElement(overlayWindow, "recorder-destination-selection.png");
+        recordButton.Invoke();
+        var numbersInput = FindElement(appWindow, session, "NumbersInput");
+        numbersInput.Focus();
+        numbersInput.AsTextBox().Text = "4 2";
+        recordButton.Invoke();
+        saveButton.Invoke();
+
+        var selectedOutputDirectory = Path.Combine(outputDirectory.FullPath, "UIAutomationTests");
+        var scenarioPath = await WaitForScenarioFileAsync(
+            selectedOutputDirectory,
+            scenarioName,
+            patternOverride: $"MainWindowScenariosBase.{scenarioName}.*.g.cs");
+        var scenarioSource = await File.ReadAllTextAsync(scenarioPath);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource).Contains(
+                "namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;");
+            await Assert.That(scenarioSource).Contains(
+                "partial class MainWindowScenariosBase<TSession>");
+            await Assert.That(scenarioSource).Contains(
+                "Page.EnterText(static page => page.NumbersInput, \"4 2\");");
+        }
+    }
+
+    private static void TryCaptureDesktopElement(AutomationElement element, string fileName)
+    {
+        try
+        {
+            var screenshotDirectory = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+            var screenshotPath = Path.Combine(screenshotDirectory.FullName, fileName);
+            Capture.Element(element).ToFile(screenshotPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ExternalException)
+        {
+            Console.WriteLine($"Recorder overlay screenshot is unavailable: {exception.Message}");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeSearchPickersSaveCompositeSearchSteps()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -108,12 +210,38 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var scenarioName = CreateScenarioName("SearchPickers");
         using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
         using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
         var page = MainWindowFlaUiPageFactory.Create(session);
 
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var serverInput = FindElement(session, "ArmServerSearchPicker_Input");
+        if (serverInput.Patterns.ScrollItem.IsSupported)
+        {
+            serverInput.Patterns.ScrollItem.Pattern.ScrollIntoView();
+        }
+
+        UiWait.Until(
+            () => serverInput.BoundingRectangle,
+            static bounds => bounds.Top >= 0,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker input did not scroll into view.");
+        page.ArmServerSearchPicker.Expand();
+        var serverResults = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmServerSearchPicker_Results"))
+                .FirstOrDefault(element =>
+                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker popup results were not found.")!;
+        var popupVerticalGap = UiWait.Until(
+            () => serverResults.BoundingRectangle.Top - serverInput.BoundingRectangle.Bottom,
+            static gap => gap >= -1 && gap <= 8,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker popup did not stay adjacent to its editor.");
+        TryCaptureDesktopElement(session.MainWindow, "server-search-picker-popup.png");
+
         page
-            .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
-            .SetChecked(static candidate => candidate.ArmSearchFuzzyToggle, true)
-            .SearchAndSelect(static candidate => candidate.ArmSearchPicker, "customer", "Customer Alpha")
             .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42")
             .SelectTabItem(static candidate => candidate.DataGridTabItem)
             .SearchAndSelectGridCell(
@@ -127,17 +255,13 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(scenarioSource.Contains(
-                "Page.SearchAndSelect(static page => page.ArmSearchPicker, \"customer\", \"Customer Alpha\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(popupVerticalGap >= -1 && popupVerticalGap <= 8).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.SearchAndSelect(static page => page.ArmServerSearchPicker, \"product\", \"Product 42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, 0, 1, \"ga\", \"Gamma\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("ArmSearchInput", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmSearchApplyButton", StringComparison.Ordinal)).IsEqualTo(false);
             await Assert.That(scenarioSource.Contains("ArmServerSearchPicker_OpenButton", StringComparison.Ordinal)).IsEqualTo(false);
         }
     }
@@ -334,6 +458,32 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         return CreateRecorderLaunchOptions(baseOptions, scenarioName, outputDirectory);
     }
 
+    private static DesktopAppLaunchOptions CreateInteractiveRecorderLaunchOptions(string outputDirectory)
+    {
+        var baseOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildConfiguration: "Debug");
+        var environmentVariables = new Dictionary<string, string?>(baseOptions.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            [RecorderEnabledEnvironmentVariable] = "1",
+            [RecorderScenarioEnvironmentVariable] = null,
+            [RecorderOutputDirectoryEnvironmentVariable] = Path.GetFullPath(outputDirectory),
+            [RecorderAuthoringProjectEnvironmentVariable] = ResolveAuthoringProjectDirectory(),
+            [RecorderOverlayEnvironmentVariable] = "1",
+            [RecorderDiagnosticsEnvironmentVariable] = "0"
+        };
+
+        return new DesktopAppLaunchOptions
+        {
+            ExecutablePath = baseOptions.ExecutablePath,
+            WorkingDirectory = baseOptions.WorkingDirectory,
+            Arguments = baseOptions.Arguments,
+            EnvironmentVariables = environmentVariables,
+            DisposeCallback = baseOptions.DisposeCallback,
+            MainWindowTimeout = baseOptions.MainWindowTimeout,
+            PollInterval = baseOptions.PollInterval,
+            WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
     private static DesktopAppLaunchOptions CreateRecorderLaunchOptions(
         DesktopAppLaunchOptions baseOptions,
         string scenarioName,
@@ -419,6 +569,18 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             $"Element '{automationId}' was not found.")!;
+    }
+
+    private static AutomationElement FindElement(
+        AutomationElement root,
+        DesktopAppSession session,
+        string automationId)
+    {
+        return UiWait.Until(
+            () => root.FindFirstDescendant(session.ConditionFactory.ByAutomationId(automationId)),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            $"Element '{automationId}' was not found in the selected window.")!;
     }
 
     private static void SendSaveHotkey(Window window)

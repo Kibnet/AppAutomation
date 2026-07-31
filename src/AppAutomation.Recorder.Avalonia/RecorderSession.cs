@@ -20,7 +20,8 @@ internal sealed class RecorderSession :
     IAppAutomationRecorderSession,
     IAppAutomationRecorderSessionDetails,
     IRecorderStepReorderSessionDetails,
-    IRecorderScenarioPathDetails
+    IRecorderScenarioPathDetails,
+    IRecorderScenarioSelectionDetails
 {
     private static readonly TimeSpan RecentInputWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ObservationRefreshInterval = TimeSpan.FromMilliseconds(200);
@@ -33,6 +34,7 @@ internal sealed class RecorderSession :
     private readonly RecorderStepValidator _stepValidator;
     private readonly RecorderCommandRuntimeValidator _runtimeValidator;
     private readonly AuthoringCodeGenerator _codeGenerator;
+    private readonly AuthoringProjectScanner _authoringProjectScanner;
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _saveOperation;
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _autosaveOperation;
     private readonly List<RecordedStep> _steps = new();
@@ -68,6 +70,13 @@ internal sealed class RecorderSession :
     private bool _pendingAutosave;
     private int _diagnosticLogEntryCount;
     private string? _lastScenarioFilePath;
+    private IReadOnlyList<RecordedScenarioDestination> _scenarioDestinations = Array.Empty<RecordedScenarioDestination>();
+    private RecordedScenarioDestination? _selectedScenarioDestination;
+    private string _scenarioName;
+    private string? _scenarioDiscoveryError;
+    private bool _isScanning;
+    private string _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+    private Task _scenarioDiscoveryTask = Task.CompletedTask;
 
     public RecorderSession(Window window, AppAutomationRecorderOptions options)
         : this(window, options, validationRootProvider: () => window.Content as Control, attachWindowHandlers: true)
@@ -97,13 +106,29 @@ internal sealed class RecorderSession :
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
         _stepValidator = new RecorderStepValidator();
         _runtimeValidator = new RecorderCommandRuntimeValidator(options);
-        _codeGenerator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), _logger);
+        _authoringProjectScanner = new AuthoringProjectScanner();
+        _codeGenerator = new AuthoringCodeGenerator(_authoringProjectScanner, _logger);
+        _scenarioName = options.ScenarioName?.Trim() ?? string.Empty;
         _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
-            _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
+        {
+            var saveContext = CreateScenarioSaveContext();
+            return IsScenarioSelectionEnabled && saveContext is null
+                ? Task.FromResult(RecorderSaveResult.Failed(ScenarioSelectionError ?? "Scenario destination is not ready."))
+                : saveContext is null
+                    ? _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken)
+                    : _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, saveContext, cancellationToken);
+        });
         _autosaveOperation = autosaveOperation
             ?? saveOperation
             ?? ((steps, outputDirectory, cancellationToken) =>
-                _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, cancellationToken));
+            {
+                var saveContext = CreateScenarioSaveContext();
+                return IsScenarioSelectionEnabled && saveContext is null
+                    ? Task.FromResult(RecorderSaveResult.Failed(ScenarioSelectionError ?? "Scenario destination is not ready."))
+                    : saveContext is null
+                        ? _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, cancellationToken)
+                        : _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, saveContext, cancellationToken);
+            });
         _defaultOutputDescription = _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null);
         _diagnosticLogFilePath = ResolveDiagnosticLogFilePath(options, _defaultOutputDescription);
         _isDiagnosticLogFileEnabled = options.DiagnosticLog.WriteToFile;
@@ -137,6 +162,12 @@ internal sealed class RecorderSession :
             _observationTimer.Tick += (_, _) => RefreshObservedControls();
             _observationTimer.Start();
             RefreshObservedControls();
+        }
+
+        if (IsScenarioSelectionEnabled)
+        {
+            _isScanning = true;
+            _scenarioDiscoveryTask = DiscoverScenarioDestinationsAsync();
         }
     }
 
@@ -199,7 +230,53 @@ internal sealed class RecorderSession :
 
     public IReadOnlyList<RecorderStepJournalEntry> StepJournal => _steps.Select(CreateJournalEntry).ToArray();
 
-    public string CurrentScenarioFilePath => _lastScenarioFilePath ?? _defaultOutputDescription.ScenarioFilePathDisplay;
+    public string CurrentScenarioFilePath
+    {
+        get
+        {
+            if (_lastScenarioFilePath is not null)
+            {
+                return _lastScenarioFilePath;
+            }
+
+            if (!IsScenarioSelectionEnabled)
+            {
+                return _defaultOutputDescription.ScenarioFilePathDisplay;
+            }
+
+            var saveContext = CreateScenarioSaveContext();
+            return saveContext is null
+                ? "Select a scenario destination and enter a scenario name."
+                : _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null, saveContext).ScenarioFilePathDisplay;
+        }
+    }
+
+    public bool IsScenarioSelectionEnabled => _options.ScenarioSelection.IsEnabled;
+
+    public bool IsScanning => _isScanning;
+
+    public string? ScenarioSelectionError => _scenarioDiscoveryError ?? ValidateScenarioName(_scenarioName);
+
+    public IReadOnlyList<RecordedScenarioDestination> ScenarioDestinations => _scenarioDestinations;
+
+    public RecordedScenarioDestination? SelectedScenarioDestination => _selectedScenarioDestination;
+
+    public string ScenarioName => _scenarioName;
+
+    public bool CanStartRecording => !IsScenarioSelectionEnabled
+        || (_state == RecorderSessionState.Off
+            && !IsBusy
+            && !_isScanning
+            && ScenarioSelectionError is null
+            && _selectedScenarioDestination is not null);
+
+    public bool CanChangeScenarioTarget => IsScenarioSelectionEnabled
+        && _state == RecorderSessionState.Off
+        && _steps.Count == 0
+        && !IsBusy
+        && !_isScanning;
+
+    internal Task ScenarioDiscoveryTaskForTesting => _scenarioDiscoveryTask;
 
     internal RecorderHotkeySettings HotkeySettings => _hotkeySettings;
 
@@ -207,6 +284,20 @@ internal sealed class RecorderSession :
 
     public void Start()
     {
+        if (!CanStartRecording)
+        {
+            SetStatus(
+                ScenarioSelectionError
+                    ?? (_isScanning ? "Scenario destinations are still being scanned." : "Select a scenario destination."),
+                RecorderValidationStatus.Warning);
+            return;
+        }
+
+        if (IsScenarioSelectionEnabled)
+        {
+            _scenarioName = _scenarioName.Trim();
+        }
+
         _state = RecorderSessionState.Recording;
         SetStatus("Recording.", RecorderValidationStatus.Valid);
     }
@@ -220,10 +311,61 @@ internal sealed class RecorderSession :
 
     public void Clear()
     {
+        if (IsScenarioSelectionEnabled && (_state != RecorderSessionState.Off || IsBusy))
+        {
+            SetStatus(
+                "Clear is available only while recording is stopped and no save operation is running.",
+                RecorderValidationStatus.Warning);
+            return;
+        }
+
         FlushPendingState();
         _steps.Clear();
         LatestPreview = string.Empty;
+        _lastScenarioFilePath = null;
+        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
         SetStatus("Recorded steps cleared.", RecorderValidationStatus.Valid);
+    }
+
+    public bool TrySelectScenarioDestination(RecordedScenarioDestination? destination)
+    {
+        if (!CanChangeScenarioTarget)
+        {
+            SetStatus("Stop recording and clear recorded steps before changing the scenario destination.", RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        if (destination is not null && !_scenarioDestinations.Contains(destination))
+        {
+            SetStatus("The selected scenario destination is not available.", RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        _selectedScenarioDestination = destination;
+        _lastScenarioFilePath = null;
+        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+        SetStatus(
+            destination is null ? "Scenario destination cleared." : $"Scenario destination: {destination.DisplayName}",
+            RecorderValidationStatus.Valid);
+        return true;
+    }
+
+    public bool TrySetScenarioName(string? scenarioName)
+    {
+        if (!CanChangeScenarioTarget)
+        {
+            SetStatus("Stop recording and clear recorded steps before changing the scenario name.", RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        _scenarioName = scenarioName ?? string.Empty;
+        _lastScenarioFilePath = null;
+        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+        var validationError = ValidateScenarioName(_scenarioName);
+        SetStatus(
+            validationError ?? "Scenario name updated.",
+            validationError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Warning);
+        return true;
     }
 
     public void SetDiagnosticLogFileEnabled(bool isEnabled)
@@ -2223,6 +2365,89 @@ internal sealed class RecorderSession :
             RecorderValidationStatus.Invalid => "Recorded for review only.",
             _ => "Ready to persist."
         };
+    }
+
+    private async Task DiscoverScenarioDestinationsAsync()
+    {
+        ScenarioDestinationDiscoveryResult result;
+        try
+        {
+            result = await Task.Run(
+                () => _authoringProjectScanner.DiscoverScenarioDestinations(
+                    _options.AuthoringProjectDirectory,
+                    _options.ScenarioSelection.ScenarioNamespaceRoot,
+                    _options.ScenarioSelection.OutputSubdirectoryRoot));
+        }
+        catch (Exception ex)
+        {
+            result = ScenarioDestinationDiscoveryResult.Failed($"Scenario destination scan failed: {ex.Message}");
+        }
+
+        _scenarioDestinations = result.Destinations;
+        _scenarioDiscoveryError = result.Error;
+
+        if (result.Success
+            && !string.IsNullOrWhiteSpace(_options.ScenarioNamespace)
+            && !string.IsNullOrWhiteSpace(_options.ScenarioClassName))
+        {
+            _selectedScenarioDestination = result.Destinations.SingleOrDefault(destination =>
+                string.Equals(destination.ScenarioNamespace, _options.ScenarioNamespace, StringComparison.Ordinal)
+                && string.Equals(destination.ScenarioClassName, _options.ScenarioClassName, StringComparison.Ordinal));
+            if (_selectedScenarioDestination is null)
+            {
+                _scenarioDiscoveryError =
+                    $"Configured scenario destination '{_options.ScenarioNamespace}.{_options.ScenarioClassName}' was not found.";
+            }
+        }
+
+        _isScanning = false;
+        SetStatus(
+            _scenarioDiscoveryError
+                ?? $"Found {_scenarioDestinations.Count} scenario destination(s).",
+            _scenarioDiscoveryError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Invalid);
+    }
+
+    private RecorderScenarioSaveContext? CreateScenarioSaveContext()
+    {
+        if (!IsScenarioSelectionEnabled
+            || _selectedScenarioDestination is null
+            || _isScanning
+            || _scenarioDiscoveryError is not null
+            || ValidateScenarioName(_scenarioName) is not null)
+        {
+            return null;
+        }
+
+        return new RecorderScenarioSaveContext(
+            _selectedScenarioDestination,
+            _scenarioName.Trim(),
+            _autosaveDraftIdentity);
+    }
+
+    private static string? ValidateScenarioName(string? scenarioName)
+    {
+        var value = scenarioName?.Trim() ?? string.Empty;
+        if (value.Length == 0)
+        {
+            return "Scenario name is required.";
+        }
+
+        if (value.Any(static character => char.IsControl(character))
+            || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || value.Contains(Path.DirectorySeparatorChar)
+            || value.Contains(Path.AltDirectorySeparatorChar)
+            || value.Contains("..", StringComparison.Ordinal))
+        {
+            return "Scenario name contains characters that cannot be used safely in a generated file.";
+        }
+
+        if (string.Equals(RecorderNaming.CreateFileSafeName(value, "scenario"), "scenario", StringComparison.Ordinal)
+            && !string.Equals(value, "scenario", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Scenario name cannot be converted to a generated method and file name.";
+        }
+
+        return null;
     }
 
     private string BuildSessionSummary()

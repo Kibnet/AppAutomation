@@ -32,11 +32,19 @@ internal sealed partial class RecorderOverlay : UserControl
     private TextBlock? _shortcutText;
     private TextBlock? _validationBadgeText;
     private TextBlock? _journalEmptyText;
+    private Control? _scenarioSelectionPanel;
+    private ProgressBar? _scenarioScanProgress;
+    private TextBlock? _scenarioScanStatus;
+    private ComboBox? _scenarioDestinationComboBox;
+    private TextBox? _scenarioNameTextBox;
+    private TextBlock? _scenarioSelectionErrorText;
     private ScrollViewer? _stepJournalScrollViewer;
     private Panel? _stepJournalPanel;
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
+    private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
     private int _renderedJournalEntryCount;
+    private bool _isRefreshingScenarioSelection;
 
     public RecorderOverlay()
     {
@@ -59,6 +67,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _sessionDetails = session as IAppAutomationRecorderSessionDetails;
         _scenarioPathDetails = session as IRecorderScenarioPathDetails;
         _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
+        _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -139,6 +148,12 @@ internal sealed partial class RecorderOverlay : UserControl
         _shortcutText = this.FindControl<TextBlock>("ShortcutText");
         _validationBadgeText = this.FindControl<TextBlock>("ValidationBadgeText");
         _journalEmptyText = this.FindControl<TextBlock>("JournalEmptyText");
+        _scenarioSelectionPanel = this.FindControl<Control>("ScenarioSelectionPanel");
+        _scenarioScanProgress = this.FindControl<ProgressBar>("ScenarioScanProgress");
+        _scenarioScanStatus = this.FindControl<TextBlock>("ScenarioScanStatus");
+        _scenarioDestinationComboBox = this.FindControl<ComboBox>("ScenarioDestinationComboBox");
+        _scenarioNameTextBox = this.FindControl<TextBox>("ScenarioNameTextBox");
+        _scenarioSelectionErrorText = this.FindControl<TextBlock>("ScenarioSelectionErrorText");
         _stepJournalScrollViewer = this.FindControl<ScrollViewer>("StepJournalScrollViewer");
         _stepJournalPanel = this.FindControl<Panel>("StepJournalPanel");
 
@@ -177,6 +192,39 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.Click += OnCopyDiagnosticLogPathClick;
         }
 
+        if (_scenarioDestinationComboBox is not null)
+        {
+            _scenarioDestinationComboBox.SelectionChanged += OnScenarioDestinationSelectionChanged;
+        }
+
+        if (_scenarioNameTextBox is not null)
+        {
+            _scenarioNameTextBox.TextChanged += OnScenarioNameTextChanged;
+        }
+
+    }
+
+    private void OnScenarioDestinationSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        _scenarioSelectionDetails.TrySelectScenarioDestination(
+            _scenarioDestinationComboBox?.SelectedItem as RecordedScenarioDestination);
+        Refresh();
+    }
+
+    private void OnScenarioNameTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        _scenarioSelectionDetails.TrySetScenarioName(_scenarioNameTextBox?.Text);
+        Refresh();
     }
 
     private void OnRecordClick(object? sender, RoutedEventArgs e)
@@ -301,20 +349,28 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         var isBusy = _sessionDetails?.IsBusy == true;
+        if (_recordButton is not null)
+        {
+            _recordButton.IsEnabled = !isBusy
+                && (_session.State == RecorderSessionState.Recording
+                    || _scenarioSelectionDetails?.CanStartRecording != false);
+        }
         if (_clearButton is not null)
         {
-            _clearButton.IsEnabled = !isBusy;
+            _clearButton.IsEnabled = !isBusy
+                && (_scenarioSelectionDetails?.IsScenarioSelectionEnabled != true
+                    || _session.State == RecorderSessionState.Off);
         }
 
         if (_saveButton is not null)
         {
-            _saveButton.IsEnabled = !isBusy;
+            _saveButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
             _saveButton.Content = isBusy ? "Saving..." : "Save";
         }
 
         if (_exportButton is not null)
         {
-            _exportButton.IsEnabled = !isBusy;
+            _exportButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
             _exportButton.Content = isBusy ? "Busy..." : "Export...";
         }
 
@@ -366,8 +422,76 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.IsEnabled = _sessionDetails is not null;
         }
 
+        RefreshScenarioSelection();
+
         RenderStepJournal();
         UpdateValidationBadge(_session.LatestValidationStatus);
+    }
+
+    private bool CanPersistSelectedScenario()
+    {
+        return _scenarioSelectionDetails is not { IsScenarioSelectionEnabled: true } selection
+            || (!selection.IsScanning
+                && selection.SelectedScenarioDestination is not null
+                && selection.ScenarioSelectionError is null);
+    }
+
+    private void RefreshScenarioSelection()
+    {
+        if (_scenarioSelectionPanel is null)
+        {
+            return;
+        }
+
+        var selection = _scenarioSelectionDetails;
+        var isVisible = selection?.IsScenarioSelectionEnabled == true;
+        _scenarioSelectionPanel.IsVisible = isVisible;
+        if (!isVisible || selection is null)
+        {
+            return;
+        }
+
+        _isRefreshingScenarioSelection = true;
+        try
+        {
+            if (_scenarioScanProgress is not null)
+            {
+                _scenarioScanProgress.IsVisible = selection.IsScanning;
+            }
+
+            if (_scenarioScanStatus is not null)
+            {
+                _scenarioScanStatus.IsVisible = selection.IsScanning;
+            }
+
+            if (_scenarioDestinationComboBox is not null)
+            {
+                _scenarioDestinationComboBox.ItemsSource = selection.ScenarioDestinations;
+                _scenarioDestinationComboBox.SelectedItem = selection.SelectedScenarioDestination;
+                _scenarioDestinationComboBox.IsEnabled = selection.CanChangeScenarioTarget;
+            }
+
+            if (_scenarioNameTextBox is not null)
+            {
+                if (!string.Equals(_scenarioNameTextBox.Text, selection.ScenarioName, StringComparison.Ordinal))
+                {
+                    _scenarioNameTextBox.Text = selection.ScenarioName;
+                }
+
+                _scenarioNameTextBox.IsEnabled = selection.CanChangeScenarioTarget;
+            }
+
+            if (_scenarioSelectionErrorText is not null)
+            {
+                var error = selection.IsScanning ? null : selection.ScenarioSelectionError;
+                _scenarioSelectionErrorText.Text = error ?? string.Empty;
+                _scenarioSelectionErrorText.IsVisible = !string.IsNullOrWhiteSpace(error);
+            }
+        }
+        finally
+        {
+            _isRefreshingScenarioSelection = false;
+        }
     }
 
     private void RefreshShortcutLegend()

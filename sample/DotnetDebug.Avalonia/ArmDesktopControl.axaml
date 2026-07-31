@@ -20,7 +20,7 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Primitives, wrappers and search"
                      FontWeight="SemiBold" />
-          <UniformGrid Columns="3"
+          <UniformGrid Columns="2"
                        Rows="1">
             <StackPanel Margin="0,0,8,0"
                         Spacing="6">
@@ -36,36 +36,6 @@
               <Label x:Name="ArmCopyResultLabel"
                      Content="Copy idle"
                      automation:AutomationProperties.AutomationId="ArmCopyResultLabel" />
-            </StackPanel>
-
-            <StackPanel Margin="8,0"
-                        Spacing="6"
-                        automation:AutomationProperties.AutomationId="ArmSearchPicker">
-              <TextBlock Text="Search picker" />
-              <TextBox x:Name="ArmSearchInput"
-                       Watermark="Search"
-                       automation:AutomationProperties.AutomationId="ArmSearchInput" />
-              <ComboBox x:Name="ArmSearchResults"
-                        ItemsSource="{Binding ArmSearchItems}"
-                        SelectionChanged="OnArmSearchResultsChanged"
-                        automation:AutomationProperties.AutomationId="ArmSearchResults" />
-              <StackPanel Orientation="Horizontal"
-                          Spacing="6">
-                <CheckBox x:Name="ArmSearchFuzzyToggle"
-                          Content="Fuzzy"
-                          automation:AutomationProperties.AutomationId="ArmSearchFuzzyToggle" />
-                <Button x:Name="ArmSearchApplyButton"
-                        Content="Apply"
-                        Click="OnArmSearchApplyClick"
-                        automation:AutomationProperties.AutomationId="ArmSearchApplyButton" />
-                <Button x:Name="ArmSearchClearButton"
-                        Content="Clear"
-                        Click="OnArmSearchClearClick"
-                        automation:AutomationProperties.AutomationId="ArmSearchClearButton" />
-              </StackPanel>
-              <Label x:Name="ArmSearchStatusLabel"
-                     Content="Search idle"
-                     automation:AutomationProperties.AutomationId="ArmSearchStatusLabel" />
             </StackPanel>
 
             <StackPanel Margin="8,0,0,0"

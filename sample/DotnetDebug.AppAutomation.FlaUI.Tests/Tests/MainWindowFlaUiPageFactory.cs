@@ -28,12 +28,6 @@ internal static class MainWindowFlaUiPageFactory
                         "OperationCombo",
                         applyButtonAutomationId: "ApplyFilterButton"))
                 .WithSearchPicker(
-                    "ArmSearchPicker",
-                    SearchPickerParts.ByAutomationIds(
-                        "ArmSearchInput",
-                        "ArmSearchResults",
-                        applyButtonAutomationId: "ArmSearchApplyButton"))
-                .WithSearchPicker(
                     "ArmServerSearchPicker",
                     SearchPickerParts.ByAutomationIds(
                         "ArmServerSearchPicker_Input",

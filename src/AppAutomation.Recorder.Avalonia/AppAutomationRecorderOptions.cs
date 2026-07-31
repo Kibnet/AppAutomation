@@ -19,6 +19,8 @@ public sealed class AppAutomationRecorderOptions
 
     public string? ScenarioClassName { get; init; }
 
+    public RecorderScenarioSelectionOptions ScenarioSelection { get; init; } = new();
+
     public bool AllowNameLocators { get; init; }
 
     public bool ShowOverlay { get; init; } = true;
@@ -64,6 +66,28 @@ public sealed class AppAutomationRecorderOptions
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
 
     public IList<IRecorderAssertionExtractor> AssertionExtractors { get; } = new List<IRecorderAssertionExtractor>();
+}
+
+public sealed record RecordedScenarioDestination(
+    string DisplayName,
+    string ScenarioNamespace,
+    string ScenarioClassName,
+    string OutputSubdirectory)
+{
+    internal int GenericArity { get; init; }
+
+    internal string TypeParameterListText { get; init; } = string.Empty;
+
+    internal string TypeParameterSignature { get; init; } = string.Empty;
+}
+
+public sealed class RecorderScenarioSelectionOptions
+{
+    public bool IsEnabled { get; init; }
+
+    public string? ScenarioNamespaceRoot { get; init; }
+
+    public string OutputSubdirectoryRoot { get; init; } = "Recorded";
 }
 
 public enum RecorderOverlayTheme

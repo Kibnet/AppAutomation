@@ -351,10 +351,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             .EnterText(p => p.ArmCopyTextBox, "ARM-COPY-42")
             .ClickButton(p => p.ArmCopyButton)
             .WaitUntilNameEquals(p => p.ArmCopyResultLabel, "Copied: ARM-COPY-42")
-            .SetChecked(p => p.ArmSearchFuzzyToggle, true)
-            .WaitUntilIsChecked(p => p.ArmSearchFuzzyToggle, true)
-            .SearchAndSelect(p => p.ArmSearchPicker, "customer", "Customer Alpha")
-            .WaitUntilNameContains(p => p.ArmSearchStatusLabel, "Customer Alpha")
             .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
             .WaitUntilNameContains(p => p.ArmServerPickerStatusLabel, "Product 42")
             .ClickButton(p => p.ArmServerPickerClearButton)
@@ -363,7 +359,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
         using (Assert.Multiple())
         {
             await UiAssert.TextEqualsAsync(() => Page.ArmCopyResultLabel.Text, "Copied: ARM-COPY-42");
-            await UiAssert.TextContainsAsync(() => Page.ArmSearchStatusLabel.Text, "Customer Alpha");
             await UiAssert.TextContainsAsync(() => Page.ArmServerPickerStatusLabel.Text, "cleared");
         }
     }

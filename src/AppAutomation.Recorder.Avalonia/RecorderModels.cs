@@ -182,8 +182,15 @@ internal sealed record AuthoringTargetConfiguration(
     string PageClassName,
     string ScenarioNamespace,
     string ScenarioClassName,
+    int? ScenarioGenericArity,
+    string? ScenarioTypeParameterSignature,
     string ScenarioName,
     string AppName);
+
+internal sealed record RecorderScenarioSaveContext(
+    RecordedScenarioDestination Destination,
+    string ScenarioName,
+    string DraftIdentity);
 
 internal sealed record RecorderOutputDescription(
     bool IsConfigured,
@@ -196,7 +203,21 @@ internal sealed record ScannedClassInfo(
     string Name,
     string ModifiersText,
     string TypeParameterListText,
+    string TypeParameterSignature,
+    int GenericArity,
     bool IsPartial);
+
+internal sealed record ScenarioDestinationDiscoveryResult(
+    IReadOnlyList<RecordedScenarioDestination> Destinations,
+    string? Error)
+{
+    public bool Success => Error is null;
+
+    public static ScenarioDestinationDiscoveryResult Failed(string error)
+    {
+        return new ScenarioDestinationDiscoveryResult(Array.Empty<RecordedScenarioDestination>(), error);
+    }
+}
 
 internal sealed record ExistingControlInfo(
     string PropertyName,

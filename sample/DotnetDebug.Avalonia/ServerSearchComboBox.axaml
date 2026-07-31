@@ -12,6 +12,7 @@
     <ControlTheme x:Key="{x:Type local:ServerSearchComboBox}"
                   TargetType="local:ServerSearchComboBox"
                   BasedOn="{StaticResource {x:Type editors:PopupEditor}}">
+        <Setter Property="PopupFooterTemplate" Value="{x:Null}" />
         <Setter Property="Template">
             <ControlTemplate>
                 <DockPanel>
@@ -43,10 +44,13 @@
                                 Background="{x:Null}"
                                 MinHeight="0" />
                         <common:ResizeablePopup x:Name="PART_EditorPopup"
+                                               WindowManagerAddShadowHint="False"
                                                IsOpen="{TemplateBinding IsPopupOpen, Mode=TwoWay}"
+                                               MinHeight="{TemplateBinding PopupMinHeight}"
+                                               MaxHeight="{TemplateBinding PopupMaxHeight}"
                                                PlacementTarget="PART_RootBorder"
                                                Placement="BottomEdgeAlignedLeft"
-                                               IsLightDismissEnabled="True">
+                                               IsLightDismissEnabled="{Binding !StaysPopupOpen, RelativeSource={RelativeSource TemplatedParent}}">
                             <Border BorderThickness="1"
                                     BorderBrush="{DynamicResource ThemeBorderLowBrush}"
                                     Background="{DynamicResource ThemeBackgroundBrush}"
