@@ -3,6 +3,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+        xmlns:editors="clr-namespace:Eremex.AvaloniaUI.Controls.Editors;assembly=Eremex.Avalonia.Controls"
         xmlns:local="clr-namespace:DotnetDebug.Avalonia"
         xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
         x:CompileBindings="False"
@@ -211,6 +212,22 @@
                                     Content="Clear"
                                     Click="OnClearSeriesClick" />
                         </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                        <editors:ComboBoxEditor x:Name="MultiSelectionEditor"
+                                                Width="260"
+                                                automation:AutomationProperties.AutomationId="MultiSelection"
+                                                Loaded="OnMultiSelectionEditorLoaded"
+                                                SelectionMode="Multiple"
+                                                ItemsSource="{Binding MultiSelectItems}"
+                                                SelectedItems="{Binding SelectedMultiSelectItems, Mode=TwoWay}"
+                                                DisplayMember="Name"
+                                                Watermark="Choose categories" />
+                        <Label x:Name="MultiSelectStatusLabel"
+                               automation:AutomationProperties.AutomationId="MultiSelectStatusLabel"
+                               VerticalContentAlignment="Center"
+                               Content="Selected: Alpha" />
                     </StackPanel>
                 </StackPanel>
 

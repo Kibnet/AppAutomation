@@ -27,7 +27,7 @@ namespace AppAutomation.Abstractions;
 ///     .WaitUntilNameContains(p => p.StatusLabel, "Welcome");
 /// </code>
 /// </example>
-public static class UiPageExtensions
+public static partial class UiPageExtensions
 {
     /// <summary>
     /// Enters text into a text box control.

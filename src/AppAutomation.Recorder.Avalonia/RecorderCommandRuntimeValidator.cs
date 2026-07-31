@@ -184,6 +184,8 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
+            RecordedActionKind.SelectMultiItems
+                or RecordedActionKind.CancelMultiSelection => ValidateMultiSelectAction(step, target),
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
@@ -274,6 +276,31 @@ internal sealed class RecorderCommandRuntimeValidator
         RecorderRuntimeValidationTarget target)
     {
         return ValidateControlType(step, target, [UiControlType.Grid, UiControlType.DataGridView]);
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiSelectAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(step, target, UiControlType.MultiSelect))
+        {
+            yield return finding;
+        }
+
+        var values = step.StringValues?.Select(static value => value?.Trim() ?? string.Empty).ToArray() ?? [];
+        if (values.Any(string.IsNullOrWhiteSpace)
+            || values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != values.Length)
+        {
+            yield return Invalid(
+                target,
+                "payload-invalid-multi-select-values",
+                "Multi-select action requires distinct non-empty item texts.");
+        }
+
+        yield return Warning(
+            target,
+            "multi-select-adapter-required",
+            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.");
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(

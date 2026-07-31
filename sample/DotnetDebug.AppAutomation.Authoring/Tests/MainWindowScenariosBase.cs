@@ -322,6 +322,28 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task MultiSelectPopup_SelectsExactItemsAndCloses()
+    {
+        string[] expectedItems = ["Alpha", "Omega"];
+
+        Page
+            .SelectTabItem(p => p.ControlMixTabItem)
+            .SelectMultiItems(p => p.MultiSelection, expectedItems)
+            .WaitUntilSelectedItemsEqual(p => p.MultiSelection, expectedItems)
+            .CancelMultiSelection(p => p.MultiSelection, ["Beta", "Psi"])
+            .WaitUntilSelectedItemsEqual(p => p.MultiSelection, expectedItems)
+            .WaitUntilTextEquals(p => p.MultiSelectStatusLabel, "Selected: Alpha, Omega");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.MultiSelection.IsOpen).IsFalse();
+            await Assert.That(Page.MultiSelection.SelectedItems).IsEquivalentTo(expectedItems);
+            await Assert.That(Page.MultiSelectStatusLabel.Text).IsEqualTo("Selected: Alpha, Omega");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_PrimitivesWrappersAndSearch_Work()
     {
         Page

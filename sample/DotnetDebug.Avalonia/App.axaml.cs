@@ -1,10 +1,10 @@
+using System;
+using System.IO;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using System;
-using System.IO;
 
 namespace DotnetDebug.Avalonia;
 
@@ -74,6 +74,14 @@ public partial class App : Application
             AllowNameLocators = false
         };
         options.ControlHints.Add(new RecorderControlHint("MixCountSpinner", RecorderActionHint.SpinnerTextBox));
+        options.MultiSelectHints.Add(new RecorderMultiSelectHint(
+            "MultiSelection",
+            MultiSelectParts.ByAutomationIds(
+                "MultiSelection",
+                "MultiSelection_OpenButton",
+                "MultiSelection_Results",
+                "MultiSelection_ApplyButton",
+                "MultiSelection_CancelButton")));
         options.LocatorAliases.Add(new RecorderLocatorAlias(
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",

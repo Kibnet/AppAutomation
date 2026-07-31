@@ -162,5 +162,10 @@ public enum UiControlType
     /// <summary>
     /// A shell/docking navigation control. Maps to <see cref="IShellNavigationControl"/>.
     /// </summary>
-    ShellNavigation = 30
+    ShellNavigation = 30,
+
+    /// <summary>
+    /// A composite multi-select popup. Maps to <see cref="IMultiSelectControl"/>.
+    /// </summary>
+    MultiSelect = 31
 }

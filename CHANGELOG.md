@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add provider-neutral multi-select popup authoring through `IMultiSelectControl`, `WithMultiSelect(...)`, `SelectMultiItems(...)`, and `CancelMultiSelection(...)`, with semantic Recorder capture for both Apply and Cancel, bounded position-aware traversal of virtualized items, and shared Headless/FlaUI replay.
+
 ### Fixed
 
 - Record and replay the ARM-style `ServerSearchComboBox` contract in cards and grid cells through its real `PopupEditor` input and popup `ListBox`.

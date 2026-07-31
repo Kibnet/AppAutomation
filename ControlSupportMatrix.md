@@ -26,6 +26,7 @@ next to cover the widest possible set of `ControlType`.
 | Label | `ResultText`, `ModeLabel`, ... | `Label` | full | Read text and `WaitUntilNameEquals` |
 | ListBox | `StepsList`, `HistoryList`, `SeriesList`, `DateDiffList`, `HierarchySelectionList` | `ListBox` | full | `WaitUntilHasItemsAtLeast`, `WaitUntilListBoxContains`, `ReadListBox` fallback |
 | CheckBox | `UseAbsoluteValuesCheck`, `ShowStepsCheck`, `MixShowDetailsCheck` | `CheckBox` | full | `SetChecked`, `IsChecked` |
+| Multi-select combo editor | Eremex `ComboBoxEditor` `MultiSelection` with `SelectionMode="Multiple"` and popup Apply/Cancel parts | `MultiSelect` | full through opt-in composite parts | `SelectMultiItems`, `CancelMultiSelection`, and `WaitUntilSelectedItemsEqual`; Recorder preserves both Apply and Cancel |
 | ComboBox | `OperationCombo`, `MixModeCombo` | `ComboBox` | full | `SelectComboItem` + fallback candidates |
 | RadioButton | `MixDirectionAscendingRadio`, `MixDirectionDescendingRadio` | `RadioButton` | full | `SetChecked`, `WaitUntilIsSelected` |
 | ToggleButton | `MixAdvancedToggle` | `ToggleButton` | full | `SetToggled`, `WaitUntilIsToggled` |
@@ -38,6 +39,12 @@ next to cover the widest possible set of `ControlType`.
 | Calendar | `DemoCalendar` | `Calendar` | full | `SetDate`/`SelectDate` and selected-date assertions through typed API |
 | Avalonia DataGrid | `DemoDataGrid` | `Grid` | full baseline | Shared UI scenario builds/selects/clears rows through typed page object |
 | Eremex DataGrid + recorder bridge | `EremexDemoDataGridControl` visual control + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | full recorder playback through bridge/provider | Native Eremex UIA remains root-only, but recorder `GridHint` maps Eremex assertions to the bridge; Headless/FlaUI providers expose bridge rows/cells as `IGridControl` |
+
+### Provider-neutral composite parity
+
+| Composite | Recorder | Headless | FlaUI | Limitation |
+|---|---|---|---|---|
+| Multi-select combo editor | Configured Eremex-style open/toggle/Apply becomes `SelectMultiItems`; open/toggle/Cancel becomes `CancelMultiSelection` with the pending values, including virtualized items outside the current viewport | Executes the same commands through a consumer/session-backed `IMultiSelectControl` adapter without a pseudo-visual control | Traverses scrollable popup items from the current position through bounded UIA Scroll/RangeValue passes, uses real UIA checkbox gestures, and invokes the real Apply or Cancel button | Opt-in `MultiSelectParts` are required for Recorder/FlaUI. The consumer assigns stable IDs to the editor, open button, popup results, and Apply button; Cancel is optional. No Eremex template-part names are required by provider-neutral projects. |
 
 ## Arm.Srv consumer audit (static XAML/code-behind scan)
 
@@ -151,6 +158,7 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 | Label | `ResultText`, `ModeLabel`, ... | `Label` | полная | Чтение текста и `WaitUntilNameEquals` |
 | ListBox | `StepsList`, `HistoryList`, `SeriesList`, `DateDiffList`, `HierarchySelectionList` | `ListBox` | полная | `WaitUntilHasItemsAtLeast`, `WaitUntilListBoxContains`, `ReadListBox` fallback |
 | CheckBox | `UseAbsoluteValuesCheck`, `ShowStepsCheck`, `MixShowDetailsCheck` | `CheckBox` | полная | `SetChecked`, `IsChecked` |
+| Комбобокс-мультиселектор | Eremex `ComboBoxEditor` `MultiSelection` с `SelectionMode="Multiple"` и popup-кнопками Apply/Cancel | `MultiSelect` | полная через opt-in composite parts | `SelectMultiItems`, `CancelMultiSelection` и `WaitUntilSelectedItemsEqual`; Recorder сохраняет и Apply, и Cancel |
 | ComboBox | `OperationCombo`, `MixModeCombo` | `ComboBox` | полная | `SelectComboItem` + fallback кандидатов |
 | RadioButton | `MixDirectionAscendingRadio`, `MixDirectionDescendingRadio` | `RadioButton` | полная | `SetChecked`, `WaitUntilIsSelected` |
 | ToggleButton | `MixAdvancedToggle` | `ToggleButton` | полная | `SetToggled`, `WaitUntilIsToggled` |
@@ -163,6 +171,12 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 | Calendar | `DemoCalendar` | `Calendar` | полная | `SetDate`/`SelectDate` и проверки выбранной даты через typed API |
 | Avalonia DataGrid | `DemoDataGrid` | `Grid` | полный baseline | Shared UI-сценарий строит/выбирает/очищает строки через typed page object |
 | Eremex DataGrid + recorder bridge | визуальный `EremexDemoDataGridControl` + `EremexDemoDataGridAutomationBridge` | `AutomationElement` + `Grid` bridge | полноценное playback-покрытие через bridge/provider | Нативный Eremex UIA остаётся root-only, но recorder `GridHint` мапит Eremex assertions на bridge; Headless/FlaUI providers отдают строки/ячейки bridge как `IGridControl` |
+
+### Provider-neutral parity составных контролов
+
+| Составной контрол | Recorder | Headless | FlaUI | Ограничение |
+|---|---|---|---|---|
+| Комбобокс-мультиселектор | Настроенный Eremex-style flow open/toggle/Apply превращается в `SelectMultiItems`, а open/toggle/Cancel — в `CancelMultiSelection` с pending-набором, включая виртуализированные пункты вне текущей видимой области | Выполняет те же команды через consumer/session-backed адаптер `IMultiSelectControl`, без псевдовизуального контрола | Обходит прокручиваемые пункты от текущей позиции ограниченными проходами через UIA Scroll/RangeValue patterns, использует настоящие UIA-жесты checkbox и нажимает реальную кнопку Apply или Cancel | Для Recorder/FlaUI требуется явная настройка `MultiSelectParts`. Consumer назначает стабильные ID редактору, open button, popup results и Apply; Cancel необязателен. Provider-neutral проекты не зависят от имён template parts Eremex. |
 
 ## Ревизия потребителя Arm.Srv (статический XAML/code-behind scan)
 

@@ -13,6 +13,14 @@ internal static class MainWindowFlaUiPageFactory
 
         return new MainWindowPage(
             new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+                .WithMultiSelect(
+                    "MultiSelection",
+                    MultiSelectParts.ByAutomationIds(
+                        "MultiSelection",
+                        "MultiSelection_OpenButton",
+                        "MultiSelection_Results",
+                        "MultiSelection_ApplyButton",
+                        "MultiSelection_CancelButton"))
                 .WithSearchPicker(
                     "HistoryOperationPicker",
                     SearchPickerParts.ByAutomationIds(

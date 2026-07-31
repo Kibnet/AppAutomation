@@ -48,7 +48,9 @@ public enum RecordedActionKind
     EditGridCellNumber = 40,
     EditGridCellDate = 41,
     SelectGridCellComboItem = 42,
-    WaitUntilExists = 43
+    WaitUntilExists = 43,
+    SelectMultiItems = 44,
+    CancelMultiSelection = 45
 }
 
 public enum RecorderAssertionMode
@@ -101,7 +103,8 @@ internal sealed record RecordedStep(
     FilterPopupCommitMode? FilterCommitMode = null,
     FolderExportCommitMode? FolderExportCommitMode = null,
     GridCellEditCommitMode? GridCellEditCommitMode = null,
-    IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null);
+    IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null,
+    IReadOnlyList<string>? StringValues = null);
 
 internal enum RecorderRuntimeValidationTarget
 {

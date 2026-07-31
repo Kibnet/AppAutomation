@@ -18,6 +18,38 @@ public sealed class FlaUiControlResolverTests
         PollInterval = TimeSpan.FromMilliseconds(200)
     };
 
+    private static readonly string[] ExpectedMultiSelectItems =
+    [
+        "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta",
+        "Eta", "Theta", "Iota", "Kappa", "Lambda", "Mu",
+        "Nu", "Xi", "Omicron", "Pi", "Rho", "Sigma",
+        "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega"
+    ];
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task EremexMultiSelectPopup_ExposesInstrumentedPartsAndReadsAllItems()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var desktop = session.MainWindow.Automation.GetDesktop();
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
+        page.MultiSelection.Open();
+        var popup = FindInstrumentedMultiSelectPopup(session, desktop);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(popup.Results.AutomationId).IsEqualTo("MultiSelection_Results");
+            await Assert.That(popup.ApplyButton.AutomationId).IsEqualTo("MultiSelection_ApplyButton");
+            await Assert.That(popup.CancelButton.AutomationId).IsEqualTo("MultiSelection_CancelButton");
+            await Assert.That(page.MultiSelection.Items).IsEquivalentTo(ExpectedMultiSelectItems);
+        }
+
+        popup.CancelButton.Click();
+    }
+
     [Test]
     [NotInParallel("DesktopUi")]
     public async Task SelectListBoxItem_ByCapability_SelectsDesktopItem()
@@ -117,6 +149,31 @@ public sealed class FlaUiControlResolverTests
             .ToArray();
     }
 
+    private static MultiSelectPopupParts FindInstrumentedMultiSelectPopup(
+        DesktopAppSession session,
+        AutomationElement desktop)
+    {
+        return new MultiSelectPopupParts(
+            WaitForDesktopElement(session, desktop, "MultiSelection_Results", "results"),
+            WaitForDesktopElement(session, desktop, "MultiSelection_ApplyButton", "Apply button"),
+            WaitForDesktopElement(session, desktop, "MultiSelection_CancelButton", "Cancel button"));
+    }
+
+    private static AutomationElement WaitForDesktopElement(
+        DesktopAppSession session,
+        AutomationElement desktop,
+        string automationId,
+        string description)
+    {
+        var failureMessage = $"The instrumented multi-select popup part '{description}' was not exposed.";
+        return UiWait.Until(
+                () => desktop.FindFirstDescendant(session.ConditionFactory.ByAutomationId(automationId)),
+                static element => element is not null && TryRead(() => element.IsAvailable),
+                EremexGridWaitOptions,
+                failureMessage)
+            ?? throw new InvalidOperationException(failureMessage);
+    }
+
     private static bool ContainsText(IEnumerable<string> texts, string expected)
     {
         return texts.Any(text => text.Contains(expected, StringComparison.Ordinal));
@@ -133,4 +190,9 @@ public sealed class FlaUiControlResolverTests
             return default;
         }
     }
+
+    private sealed record MultiSelectPopupParts(
+        AutomationElement Results,
+        AutomationElement ApplyButton,
+        AutomationElement CancelButton);
 }

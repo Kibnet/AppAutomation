@@ -47,6 +47,8 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
+    public IList<RecorderMultiSelectHint> MultiSelectHints { get; } = new List<RecorderMultiSelectHint>();
+
     public IList<RecorderDateRangeFilterHint> DateRangeFilterHints { get; } = new List<RecorderDateRangeFilterHint>();
 
     public IList<RecorderNumericRangeFilterHint> NumericRangeFilterHints { get; } = new List<RecorderNumericRangeFilterHint>();
@@ -130,6 +132,12 @@ public sealed record RecorderGridEditHint(
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderMultiSelectHint(
+    string LocatorValue,
+    MultiSelectParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 

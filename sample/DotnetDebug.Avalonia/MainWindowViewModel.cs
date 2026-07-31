@@ -12,6 +12,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _dataGridErrorText = string.Empty;
     private DataGridRowViewModel? _selectedDataGridRow;
 
+    public MainWindowViewModel()
+    {
+        MultiSelectItems =
+        [
+            new MultiSelectItemViewModel("Alpha"),
+            new MultiSelectItemViewModel("Beta"),
+            new MultiSelectItemViewModel("Gamma"),
+            new MultiSelectItemViewModel("Delta"),
+            new MultiSelectItemViewModel("Epsilon"),
+            new MultiSelectItemViewModel("Zeta"),
+            new MultiSelectItemViewModel("Eta"),
+            new MultiSelectItemViewModel("Theta"),
+            new MultiSelectItemViewModel("Iota"),
+            new MultiSelectItemViewModel("Kappa"),
+            new MultiSelectItemViewModel("Lambda"),
+            new MultiSelectItemViewModel("Mu"),
+            new MultiSelectItemViewModel("Nu"),
+            new MultiSelectItemViewModel("Xi"),
+            new MultiSelectItemViewModel("Omicron"),
+            new MultiSelectItemViewModel("Pi"),
+            new MultiSelectItemViewModel("Rho"),
+            new MultiSelectItemViewModel("Sigma"),
+            new MultiSelectItemViewModel("Tau"),
+            new MultiSelectItemViewModel("Upsilon"),
+            new MultiSelectItemViewModel("Phi"),
+            new MultiSelectItemViewModel("Chi"),
+            new MultiSelectItemViewModel("Psi"),
+            new MultiSelectItemViewModel("Omega")
+        ];
+        SelectedMultiSelectItems.Add(MultiSelectItems[0]);
+    }
+
     public ObservableCollection<DataGridRowViewModel> DataGridRows { get; } = [];
 
     public MainWindowViewModel()
@@ -22,6 +54,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public SearchPickerGridRowViewModel SearchPickerGridRow { get; } = new();
 
     public IReadOnlyList<SearchPickerGridRowViewModel> SearchPickerGridRows { get; }
+    
+    public ObservableCollection<MultiSelectItemViewModel> MultiSelectItems { get; }
+
+    public ObservableCollection<MultiSelectItemViewModel> SelectedMultiSelectItems { get; } = [];
 
     public string GridResultLabel
     {
@@ -114,4 +150,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+}
+
+public sealed class MultiSelectItemViewModel
+{
+    public MultiSelectItemViewModel(string name)
+    {
+        Name = name;
+    }
+
+    public string Name { get; }
+
+    public override string ToString() => Name;
 }

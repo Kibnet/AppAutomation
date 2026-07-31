@@ -276,7 +276,26 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - headless launch helpers on top of `BeforeLaunchAsync`, `CreateMainWindow`, `CreateMainWindowAsync`;
 - adapter registration API via `WithAdapters(...)`;
 - built-in composite abstraction `ISearchPickerControl` and `WithSearchPicker(...)`;
+- provider-neutral multi-select popup abstraction `IMultiSelectControl` with `WithMultiSelect(...)`;
 - package-based smoke path via `eng/smoke-consumer.ps1`.
+
+Register a multi-select popup from stable primitive parts, then use one authoring command in both runtimes:
+
+```csharp
+var resolver = innerResolver.WithMultiSelect(
+    "Categories",
+    MultiSelectParts.ByAutomationIds(
+        "CategoriesEditor",
+        "CategoriesEditor_OpenButton",
+        "CategoriesEditor_Results",
+        "CategoriesEditor_ApplyButton",
+        "CategoriesEditor_CancelButton"));
+
+Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
+Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
+```
+
+Registration is opt-in. `RootLocator` identifies the real multi-select editor (for example, an Eremex `ComboBoxEditor` with `SelectionMode="Multiple"`); popup state is observed through the real checkbox-items container. Open/results/Apply IDs can be assigned by consumer-side template instrumentation. The cancel locator is optional when the control exposes confirmation only. Recorder persists Apply as `SelectMultiItems` and Cancel as `CancelMultiSelection`, including pending items outside the current viewport: Avalonia containers are realized by index from the nearest current edge during capture, while FlaUI replay uses bounded, position-aware passes through standard UIA Scroll/RangeValue patterns. Provider-neutral projects do not require Eremex template-part names. Existing search-picker and index-based grid APIs keep their current behavior.
 
 ## What remains consumer responsibility
 
@@ -592,7 +611,26 @@ dotnet test --solution MyApp.sln -c Debug
 - вспомогательные средства запуска `Headless` поверх `BeforeLaunchAsync`, `CreateMainWindow`, `CreateMainWindowAsync`;
 - API регистрации адаптеров через `WithAdapters(...)`;
 - встроенная составная абстракция `ISearchPickerControl` и `WithSearchPicker(...)`;
+- provider-neutral абстракция popup-мультиселектора `IMultiSelectControl` с `WithMultiSelect(...)`;
 - готовый сценарий быстрой проверки через `eng/smoke-consumer.ps1`.
+
+Мультиселектор регистрируется по стабильным primitive parts, после чего в обоих runtime используется одна authoring-команда:
+
+```csharp
+var resolver = innerResolver.WithMultiSelect(
+    "Categories",
+    MultiSelectParts.ByAutomationIds(
+        "CategoriesEditor",
+        "CategoriesEditor_OpenButton",
+        "CategoriesEditor_Results",
+        "CategoriesEditor_ApplyButton",
+        "CategoriesEditor_CancelButton"));
+
+Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
+Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
+```
+
+Регистрация выполняется явно. `RootLocator` указывает на настоящий редактор-мультиселектор (например, Eremex `ComboBoxEditor` с `SelectionMode="Multiple"`), а состояние popup определяется по настоящему контейнеру элементов с checkbox. ID для open/results/Apply могут назначаться consumer-side инструментированием шаблона. Cancel locator необязателен для контрола только с подтверждением. Recorder сохраняет Apply как `SelectMultiItems`, а Cancel как `CancelMultiSelection`, включая отмеченные пункты вне текущей видимой области: при записи Avalonia-контейнеры последовательно реализуются по индексам от ближайшего края текущей позиции, а FlaUI-replay выполняет ограниченные позиционные проходы через стандартные UIA Scroll/RangeValue patterns. Provider-neutral проекты не зависят от имён template parts Eremex. Поведение существующих SearchPicker API и index-based grid API не меняется.
 
 ## Что остаётся на стороне потребителя
 

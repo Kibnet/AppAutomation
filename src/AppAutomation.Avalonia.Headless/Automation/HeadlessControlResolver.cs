@@ -34,6 +34,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        if (typeof(TControl) == typeof(IMultiSelectItemsControl))
+        {
+            return (TControl)(object)new HeadlessMultiSelectItemsControl(FindElement(definition));
+        }
+
         object resolved = definition.ControlType switch
         {
             UiControlType.TextBox => new HeadlessTextBoxControl(FindElement(definition).AsTextBox()),
@@ -462,7 +467,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             .ToArray();
     }
 
-    private abstract class HeadlessControlBase<TControl> : IUiControl
+    private abstract class HeadlessControlBase<TControl> : IUiControlAvailability
         where TControl : AutomationElement
     {
         protected HeadlessControlBase(TControl inner)
@@ -477,6 +482,9 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public string Name => Inner.Name ?? string.Empty;
 
         public bool IsEnabled => Inner.IsEnabled;
+
+        public bool IsAvailable => Inner.IsAvailable
+            && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => Inner.Control.IsEffectivelyVisible);
     }
 
     private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>, IReadableTextControl
@@ -832,6 +840,99 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             get => Inner.IsChecked;
             set => Inner.IsChecked = value;
         }
+    }
+
+    private sealed class HeadlessMultiSelectItemsControl : HeadlessControlBase<AutomationElement>, IMultiSelectItemsControl
+    {
+        public HeadlessMultiSelectItemsControl(AutomationElement inner) : base(inner)
+        {
+        }
+
+        public IReadOnlyList<string> Items => ReadItems()
+            .Select(static item => item.Text)
+            .ToArray();
+
+        public IReadOnlyList<string> SelectedItems =>
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                ReadItemsCore()
+                    .Where(static item => item.Control.IsChecked == true)
+                    .Select(static item => item.Text)
+                    .ToArray());
+
+        public void SetSelectedItems(IReadOnlyCollection<string> values)
+        {
+            ArgumentNullException.ThrowIfNull(values);
+            var normalizedValues = NormalizeRequestedItems(values);
+
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                var items = ReadItemsCore();
+                ValidateAvailableItems(items.Select(static item => item.Text), normalizedValues);
+                foreach (var item in items)
+                {
+                    item.Control.IsChecked = normalizedValues.Contains(item.Text);
+                }
+
+                Inner.Control.Dispatcher.RunJobs();
+                return true;
+            });
+        }
+
+        private MultiSelectCheckBox[] ReadItems()
+        {
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(ReadItemsCore);
+        }
+
+        private MultiSelectCheckBox[] ReadItemsCore()
+        {
+            return ControlTree.EnumerateDescendants(Inner.Control)
+                .OfType<global::Avalonia.Controls.CheckBox>()
+                .Select(static checkBox => new MultiSelectCheckBox(ReadItemText(checkBox), checkBox))
+                .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
+                .ToArray();
+        }
+
+        private static string ReadItemText(global::Avalonia.Controls.CheckBox checkBox)
+        {
+            return (AutomationProperties.GetName(checkBox)
+                    ?? checkBox.Content?.ToString()
+                    ?? checkBox.Name
+                    ?? AutomationProperties.GetAutomationId(checkBox)
+                    ?? string.Empty)
+                .Trim();
+        }
+
+        private static HashSet<string> NormalizeRequestedItems(IEnumerable<string> values)
+        {
+            var normalized = values.Select(static value => value?.Trim() ?? string.Empty).ToArray();
+            if (normalized.Any(string.IsNullOrWhiteSpace)
+                || normalized.Distinct(StringComparer.OrdinalIgnoreCase).Count() != normalized.Length)
+            {
+                throw new ArgumentException("Multi-select item values must be non-empty and distinct.", nameof(values));
+            }
+
+            return normalized.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static void ValidateAvailableItems(
+            IEnumerable<string> availableValues,
+            IReadOnlySet<string> requestedValues)
+        {
+            var available = availableValues.ToArray();
+            if (available.Distinct(StringComparer.OrdinalIgnoreCase).Count() != available.Length)
+            {
+                throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+            }
+
+            var missing = requestedValues.Where(value => !available.Contains(value, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (missing.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Multi-select items were not found: [{string.Join(", ", missing)}].");
+            }
+        }
+
+        private sealed record MultiSelectCheckBox(string Text, global::Avalonia.Controls.CheckBox Control);
     }
 
     private sealed class HeadlessComboBoxControl : HeadlessControlBase<ComboBox>, IComboBoxControl, IReadableTextControl

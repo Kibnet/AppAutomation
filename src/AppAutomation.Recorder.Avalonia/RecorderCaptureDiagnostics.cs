@@ -237,7 +237,8 @@ internal static class RecorderCaptureDiagnostics
                 or UiControlType.Dialog
                 or UiControlType.Notification
                 or UiControlType.FolderExport
-                or UiControlType.ShellNavigation => "composed adapter configuration",
+                or UiControlType.ShellNavigation
+                or UiControlType.MultiSelect => "composed adapter configuration",
             _ => "provider resolver or recorder action mapping"
         };
     }

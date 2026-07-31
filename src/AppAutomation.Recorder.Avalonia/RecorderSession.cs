@@ -1,3 +1,4 @@
+using System.Reflection;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -12,7 +13,6 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using System.Reflection;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -1070,6 +1070,22 @@ internal sealed class RecorderSession :
         if (source is null)
         {
             return false;
+        }
+
+        var isMultiSelectCommit = _stepFactory.IsMultiSelectCommit(source);
+        var multiSelectResult = _stepFactory.TryCreateMultiSelectStep(source);
+        if (multiSelectResult.Success)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+            AddStep(multiSelectResult, source, "MultiSelect");
+            return true;
+        }
+
+        if (isMultiSelectCommit)
+        {
+            AddStep(multiSelectResult, source, "MultiSelect");
+            return true;
         }
 
         var gridEditResult = _stepFactory.TryCreateGridEditStep(source);

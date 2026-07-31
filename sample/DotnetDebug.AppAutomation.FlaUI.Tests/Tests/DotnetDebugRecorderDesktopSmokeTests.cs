@@ -144,6 +144,44 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeMultiSelectCapturesConfirmedAndCanceledSelections()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("MultiSelect");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page
+            .SelectTabItem(static candidate => candidate.ControlMixTabItem)
+            .SelectMultiItems(
+                static candidate => candidate.MultiSelection,
+                ["Alpha", "Omega"])
+            .CancelMultiSelection(
+                static candidate => candidate.MultiSelection,
+                ["Beta", "Psi"]);
+
+        var scenarioSource = await WaitForAutosaveScenarioSourceAsync(
+            outputDirectory.FullPath,
+            scenarioName);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains(
+                "Page.SelectMultiItems(static page => page.MultiSelection, new[] { \"Alpha\", \"Omega\" });",
+                StringComparison.Ordinal)).IsTrue();
+            await Assert.That(scenarioSource.Contains(
+                "Page.CancelMultiSelection(static page => page.MultiSelection, new[] { \"Beta\", \"Psi\" });",
+                StringComparison.Ordinal)).IsTrue();
+            await Assert.That(scenarioSource.Contains("Page.SetChecked", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("MultiSelection_OpenButton", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("MultiSelection_ApplyButton", StringComparison.Ordinal)).IsFalse();
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeRangeAndFolderSaveCompositeSteps()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -348,6 +386,18 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         return await File.ReadAllTextAsync(scenarioPath);
     }
 
+    private static async Task<string> WaitForAutosaveScenarioSourceAsync(
+        string outputDirectory,
+        string scenarioName)
+    {
+        var pattern = $"MainWindowScenariosBase.{scenarioName}.autosave.*.g.cs.autosave";
+        var scenarioPath = await WaitForScenarioFileAsync(
+            outputDirectory,
+            scenarioName,
+            patternOverride: pattern);
+        return await File.ReadAllTextAsync(scenarioPath);
+    }
+
     private static void ClickElement(DesktopAppSession session, string automationId)
     {
         var element = FindElement(session, automationId);
@@ -389,9 +439,11 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         string outputDirectory,
         string scenarioName,
         DateTime? newerThanUtc = null,
-        Action? retryAction = null)
+        Action? retryAction = null,
+        string? patternOverride = null)
     {
-        var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+        var pattern = patternOverride
+            ?? $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Exception? lastReadError = null;
         var nextRetryAt = TimeSpan.Zero;

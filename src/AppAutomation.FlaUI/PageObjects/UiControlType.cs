@@ -32,5 +32,6 @@ public enum UiControlType
     Dialog = 27,
     Notification = 28,
     FolderExport = 29,
-    ShellNavigation = 30
+    ShellNavigation = 30,
+    MultiSelect = 31
 }

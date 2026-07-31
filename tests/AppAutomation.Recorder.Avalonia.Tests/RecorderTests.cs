@@ -1077,6 +1077,33 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RuntimeValidator_MultiSelectRejectsDuplicatePayload()
+    {
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var step = new RecordedStep(
+            RecordedActionKind.SelectMultiItems,
+            new RecordedControlDescriptor(
+                "Categories",
+                UiControlType.MultiSelect,
+                "Categories",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
+                Warning: null),
+            StringValues: ["Alpha", "alpha"]);
+
+        var result = validator.Validate(step);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.CanPersist).IsFalse();
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(result.RuntimeValidationFindings!.Any(
+                static finding => finding.Code.Contains("payload-invalid-multi-select-values", StringComparison.Ordinal))).IsTrue();
+        }
+    }
+
+    [Test]
     public async Task RuntimeValidator_TextAssertion_OnValueOnlyControl_IsUnsupported()
     {
         var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());

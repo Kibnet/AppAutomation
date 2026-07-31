@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using DotnetDebug;
+using Eremex.AvaloniaUI.Controls.Editors;
 
 namespace DotnetDebug.Avalonia;
 
@@ -44,6 +45,8 @@ public partial class MainWindow : Window
         StartDatePicker.SelectedDate = DateTime.Today;
         EndDatePicker.SelectedDate = DateTime.Today.AddDays(3);
         MixModeCombo.SelectedIndex = 0;
+        _viewModel.SelectedMultiSelectItems.CollectionChanged += (_, _) => UpdateMultiSelectStatus();
+        UpdateMultiSelectStatus();
     }
 
     private void OnCalculateClick(object? sender, RoutedEventArgs e)
@@ -98,6 +101,25 @@ public partial class MainWindow : Window
         _historyFilter = string.Empty;
         HistoryFilterInput.Text = string.Empty;
         ApplyCurrentHistoryFilter();
+    }
+
+    private void OnMultiSelectionEditorLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is PopupEditor popupEditor)
+        {
+            MultiSelectEditorAutomation.Apply(popupEditor, "MultiSelection");
+        }
+    }
+
+    private void UpdateMultiSelectStatus()
+    {
+        var selected = _viewModel.SelectedMultiSelectItems
+            .Select(static item => item.Name)
+            .OrderBy(static item => item, StringComparer.Ordinal)
+            .ToArray();
+        MultiSelectStatusLabel.Content = selected.Length == 0
+            ? "Selected: none"
+            : $"Selected: {string.Join(", ", selected)}";
     }
 
     private async void OnShowDelayedStatusClick(object? sender, RoutedEventArgs e)

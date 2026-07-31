@@ -15,6 +15,7 @@ internal sealed class RecorderStepFactory
     internal const string NoGridSearchPickerHintMessage = "Recorder does not have a grid search picker hint for this editor.";
 
     private readonly AppAutomationRecorderOptions _options;
+    private readonly Func<Control?>? _validationRootProvider;
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
@@ -31,6 +32,7 @@ internal sealed class RecorderStepFactory
     internal RecorderStepFactory(AppAutomationRecorderOptions options, Func<Control?>? validationRootProvider)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _validationRootProvider = validationRootProvider;
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
         _stepValidator = new RecorderStepValidator();
         _assertionExtractors = CreateAssertionExtractors(options);
@@ -220,7 +222,82 @@ internal sealed class RecorderStepFactory
                 !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
                 && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
             || _options.FolderExportHints.Any(hint =>
-                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator));
+                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
+            || _options.MultiSelectHints.Any(hint =>
+                MatchesAnyLocator(
+                    source,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.OpenButtonLocator,
+                    hint.Parts.ItemsContainerLocator));
+    }
+
+    public StepCreationResult TryCreateMultiSelectStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a multi-select hint for this button.");
+        }
+
+        var matchingActions = new List<(RecorderMultiSelectHint Hint, RecordedActionKind ActionKind)>();
+        foreach (var candidate in _options.MultiSelectHints)
+        {
+            if (MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.ApplyButtonLocator))
+            {
+                matchingActions.Add((candidate, RecordedActionKind.SelectMultiItems));
+            }
+
+            if (!string.IsNullOrWhiteSpace(candidate.Parts.CancelButtonLocator)
+                && MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.CancelButtonLocator))
+            {
+                matchingActions.Add((candidate, RecordedActionKind.CancelMultiSelection));
+            }
+        }
+
+        if (matchingActions.Count == 0)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a multi-select hint for this commit button.");
+        }
+
+        if (matchingActions.Count > 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Recorder multi-select configuration is ambiguous for this commit button ({matchingActions.Count} actions matched).");
+        }
+
+        var (hint, actionKind) = matchingActions[0];
+        if (!TryReadMultiSelectValues(source, hint.Parts, out var selectedValues, out var message))
+        {
+            return StepCreationResult.Unsupported(message);
+        }
+
+        var warning = actionKind == RecordedActionKind.SelectMultiItems
+            ? "Recorded multi-select Apply action from configured popup parts."
+            : "Recorded multi-select Cancel action from configured popup parts.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.MultiSelect,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                actionKind,
+                descriptor,
+                Warning: warning,
+                StringValues: selectedValues),
+            warning);
+    }
+
+    public bool IsMultiSelectCommit(Control? source)
+    {
+        return source is not null
+            && _options.MultiSelectHints.Any(hint =>
+                MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator)
+                || (!string.IsNullOrWhiteSpace(hint.Parts.CancelButtonLocator)
+                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator)));
     }
 
     public StepCreationResult TryCreateDialogActionStep(Control? source)
@@ -501,7 +578,12 @@ internal sealed class RecorderStepFactory
     {
         ArgumentNullException.ThrowIfNull(control);
 
-        return MatchesGridEditValuePart(control);
+        return MatchesGridEditValuePart(control)
+            || _options.MultiSelectHints.Any(hint =>
+                MatchesLocator(
+                    control,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.ItemsContainerLocator));
     }
 
     public StepCreationResult TryCreateShellNavigationStep(Control source)
@@ -2197,6 +2279,198 @@ internal sealed class RecorderStepFactory
             MatchesLocator(control, hint.ValueLocatorKind, hint.ValueLocatorValue));
     }
 
+    private bool TryReadMultiSelectValues(
+        Control source,
+        MultiSelectParts parts,
+        out IReadOnlyList<string> selectedValues,
+        out string message)
+    {
+        var editorRoot = FindFromValidationRoot(parts.RootLocator, parts.LocatorKind)
+            ?? EnumerateRelatedControls(source)
+                .FirstOrDefault(candidate => HasExactLocator(candidate, parts.LocatorKind, parts.RootLocator));
+        if (editorRoot is null)
+        {
+            selectedValues = [];
+            message = $"Recorder could not resolve multi-select editor root '{parts.RootLocator}'.";
+            return false;
+        }
+
+        var itemsContainer = FindFromRelatedControlTrees(
+                source,
+                parts.ItemsContainerLocator,
+                parts.LocatorKind)
+            ?? FindFromValidationRoot(parts.ItemsContainerLocator, parts.LocatorKind);
+        if (itemsContainer is null)
+        {
+            selectedValues = [];
+            message = $"Recorder could not resolve multi-select items container '{parts.ItemsContainerLocator}'.";
+            return false;
+        }
+
+        if (!TryReadMultiSelectItemSnapshots(itemsContainer, out var items, out message))
+        {
+            selectedValues = [];
+            return false;
+        }
+
+        var selected = items
+            .Where(static item => item.IsChecked)
+            .Select(static item => item.Text)
+            .ToArray();
+        if (selected.Distinct(StringComparer.OrdinalIgnoreCase).Count() != selected.Length)
+        {
+            selectedValues = [];
+            message = "Recorder multi-select Apply action contains duplicate selected item text.";
+            return false;
+        }
+
+        selectedValues = selected;
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadMultiSelectItemSnapshots(
+        Control itemsContainer,
+        out IReadOnlyList<MultiSelectItemSnapshot> items,
+        out string message)
+    {
+        var visibleItems = ReadMultiSelectItemSnapshots(itemsContainer);
+        if (itemsContainer is not ItemsControl itemsControl
+            || itemsControl.ItemCount <= visibleItems.Count)
+        {
+            items = visibleItems;
+            message = string.Empty;
+            return true;
+        }
+
+        var allItems = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var index in GetMultiSelectTraversalIndexes(itemsControl))
+        {
+            try
+            {
+                itemsControl.ScrollIntoView(index);
+                itemsControl.UpdateLayout();
+            }
+            catch (Exception exception)
+            {
+                items = [];
+                message =
+                    $"Recorder could not scroll multi-select item at index {index}: {exception.Message}";
+                return false;
+            }
+
+            var itemContainer = itemsControl.ContainerFromIndex(index);
+            if (itemContainer is null)
+            {
+                items = [];
+                message =
+                    $"Recorder could not realize multi-select item at index {index} while traversing the scrollable list.";
+                return false;
+            }
+
+            var itemSnapshots = ReadMultiSelectItemSnapshots(itemContainer);
+            if (itemSnapshots.Count == 0)
+            {
+                items = [];
+                message =
+                    $"Recorder could not resolve a checkbox for multi-select item at index {index}.";
+                return false;
+            }
+
+            foreach (var item in itemSnapshots)
+            {
+                if (!allItems.TryAdd(item.Text, item))
+                {
+                    items = [];
+                    message = "Recorder multi-select action contains duplicate item text.";
+                    return false;
+                }
+            }
+        }
+
+        items = allItems.Values.ToArray();
+        message = string.Empty;
+        return true;
+    }
+
+    private static IEnumerable<int> GetMultiSelectTraversalIndexes(ItemsControl itemsControl)
+    {
+        var realizedIndexes = Enumerable
+            .Range(0, itemsControl.ItemCount)
+            .Where(index => itemsControl.ContainerFromIndex(index) is not null)
+            .ToArray();
+        var distanceToStart = realizedIndexes.Length == 0
+            ? 0
+            : realizedIndexes[0];
+        var distanceToEnd = realizedIndexes.Length == 0
+            ? itemsControl.ItemCount - 1
+            : itemsControl.ItemCount - 1 - realizedIndexes[^1];
+
+        return distanceToStart <= distanceToEnd
+            ? Enumerable.Range(0, itemsControl.ItemCount)
+            : Enumerable.Range(0, itemsControl.ItemCount)
+                .Select(index => itemsControl.ItemCount - 1 - index);
+    }
+
+    private static IReadOnlyList<MultiSelectItemSnapshot> ReadMultiSelectItemSnapshots(Control root)
+    {
+        return EnumerateDescendantControls(root)
+            .OfType<CheckBox>()
+            .Select(checkBox => new MultiSelectItemSnapshot(
+                ReadMultiSelectItemText(checkBox),
+                checkBox.IsChecked == true))
+            .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
+            .ToArray();
+    }
+
+    private static Control? FindFromRelatedControlTrees(
+        Control source,
+        string locatorValue,
+        UiLocatorKind locatorKind)
+    {
+        foreach (var relatedControl in EnumerateRelatedControls(source))
+        {
+            var match = EnumerateDescendantControls(relatedControl)
+                .FirstOrDefault(candidate => HasExactLocator(candidate, locatorKind, locatorValue));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return null;
+    }
+
+    private Control? FindFromValidationRoot(string locatorValue, UiLocatorKind locatorKind)
+    {
+        return _validationRootProvider?.Invoke() is { } root
+            ? EnumerateDescendantControls(root)
+                .FirstOrDefault(candidate => HasExactLocator(candidate, locatorKind, locatorValue))
+            : null;
+    }
+
+    private static IEnumerable<Control> EnumerateDescendantControls(Control root)
+    {
+        return root
+            .GetLogicalDescendants()
+            .OfType<Control>()
+            .Concat(root.GetVisualDescendants().OfType<Control>())
+            .Prepend(root)
+            .Distinct<Control>(ReferenceEqualityComparer.Instance);
+    }
+
+    private static string ReadMultiSelectItemText(CheckBox checkBox)
+    {
+        return (AutomationProperties.GetName(checkBox)
+                ?? checkBox.Content?.ToString()
+                ?? checkBox.Name
+                ?? AutomationProperties.GetAutomationId(checkBox)
+                ?? string.Empty)
+            .Trim();
+    }
+
+    private sealed record MultiSelectItemSnapshot(string Text, bool IsChecked);
+
     private RecordedControlDescriptor CreateCompositeDescriptor(
         string locatorValue,
         UiControlType controlType,
@@ -2266,6 +2540,13 @@ internal sealed class RecorderStepFactory
         }
 
         return false;
+    }
+
+    private static bool HasExactLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
+    {
+        return !string.IsNullOrWhiteSpace(locatorValue)
+            && TryGetLocator(source, locatorKind, out var currentLocator)
+            && string.Equals(currentLocator, locatorValue.Trim(), StringComparison.Ordinal);
     }
 
     private static bool MatchesAnyLocator(Control source, UiLocatorKind locatorKind, params string?[] locatorValues)

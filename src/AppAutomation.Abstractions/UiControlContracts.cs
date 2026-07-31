@@ -30,6 +30,17 @@ public interface IUiControl
 }
 
 /// <summary>
+/// Optional capability for controls whose current availability or visibility can be observed.
+/// </summary>
+public interface IUiControlAvailability : IUiControl
+{
+    /// <summary>
+    /// Gets a value indicating whether the control is currently attached and visible to the user.
+    /// </summary>
+    bool IsAvailable { get; }
+}
+
+/// <summary>
 /// Represents a control that exposes visible read-only text.
 /// </summary>
 public interface IReadableTextControl : IUiControl
@@ -240,6 +251,70 @@ public interface ISearchPickerControl : IUiControl
     /// </summary>
     /// <param name="itemText">The text of the item to select.</param>
     void SelectItem(string itemText);
+}
+
+/// <summary>
+/// Represents the checkbox-items surface inside a multi-select popup.
+/// </summary>
+public interface IMultiSelectItemsControl : IUiControl
+{
+    /// <summary>
+    /// Gets all available item texts.
+    /// </summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>
+    /// Gets the currently selected item texts.
+    /// </summary>
+    IReadOnlyList<string> SelectedItems { get; }
+
+    /// <summary>
+    /// Sets the exact selected item set.
+    /// </summary>
+    /// <param name="values">The item texts that should remain selected.</param>
+    void SetSelectedItems(IReadOnlyCollection<string> values);
+}
+
+/// <summary>
+/// Represents a composite multi-select popup with explicit apply and cancel actions.
+/// </summary>
+public interface IMultiSelectControl : IUiControl
+{
+    /// <summary>
+    /// Gets all available item texts.
+    /// </summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>
+    /// Gets the committed or currently pending selected item texts.
+    /// </summary>
+    IReadOnlyList<string> SelectedItems { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the popup is currently open.
+    /// </summary>
+    bool IsOpen { get; }
+
+    /// <summary>
+    /// Opens the popup.
+    /// </summary>
+    void Open();
+
+    /// <summary>
+    /// Sets the exact pending selected item set.
+    /// </summary>
+    /// <param name="values">The item texts that should remain selected.</param>
+    void SetSelectedItems(IReadOnlyCollection<string> values);
+
+    /// <summary>
+    /// Applies the pending selection and closes the popup.
+    /// </summary>
+    void Apply();
+
+    /// <summary>
+    /// Cancels the pending selection and closes the popup.
+    /// </summary>
+    void Cancel();
 }
 
 /// <summary>

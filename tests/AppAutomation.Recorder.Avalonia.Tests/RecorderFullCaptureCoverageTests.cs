@@ -4,7 +4,6 @@ using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -89,7 +88,15 @@ public sealed class RecorderFullCaptureCoverageTests
                 Descriptor("EditableGrid", UiControlType.Grid),
                 StringValue: "Approved",
                 RowIndex: 0,
-                ColumnIndex: 4)
+                ColumnIndex: 4),
+            new RecordedStep(
+                RecordedActionKind.SelectMultiItems,
+                Descriptor("Categories", UiControlType.MultiSelect),
+                StringValues: ["Gamma", "Alpha"]),
+            new RecordedStep(
+                RecordedActionKind.CancelMultiSelection,
+                Descriptor("Categories", UiControlType.MultiSelect),
+                StringValues: ["Gamma", "Alpha"])
         ]);
 
         using (Assert.Multiple())
@@ -114,6 +121,12 @@ public sealed class RecorderFullCaptureCoverageTests
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
                 "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 4, \"Approved\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.SelectMultiItems(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.CancelMultiSelection(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
                 StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
@@ -343,7 +356,9 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.EditGridCellText, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "Edited"),
             new RecordedStep(RecordedActionKind.EditGridCellNumber, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 2, DoubleValue: 42.5),
             new RecordedStep(RecordedActionKind.EditGridCellDate, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 3, DateValue: date),
-            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "Approved")
+            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "Approved"),
+            new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
+            new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"])
         ];
     }
 

@@ -1,10 +1,10 @@
-using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Automation;
+using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.TUnit;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
-using AppAutomation.TUnit;
-using AppAutomation.Avalonia.Headless.Automation;
 using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTests;
@@ -21,6 +21,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
     {
         return new MainWindowPage(
             new HeadlessControlResolver(session.Inner.MainWindow)
+                .WithAdapters(new HeadlessMultiSelectControlAdapter(session.Inner.MainWindow))
                 .WithSearchPicker(
                     "HistoryOperationPicker",
                     SearchPickerParts.ByAutomationIds(

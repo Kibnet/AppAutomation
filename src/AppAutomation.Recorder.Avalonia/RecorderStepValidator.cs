@@ -50,6 +50,8 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
             RecordedActionKind.WaitUntilNotificationContains => true,
             RecordedActionKind.SearchAndSelect or RecordedActionKind.SearchAndSelectGridCell => true,
+            RecordedActionKind.SelectMultiItems
+                or RecordedActionKind.CancelMultiSelection => true,
             RecordedActionKind.OpenGridRow
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd

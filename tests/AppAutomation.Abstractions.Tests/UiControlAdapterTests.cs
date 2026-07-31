@@ -1,5 +1,5 @@
-using AppAutomation.Abstractions;
 using System.Reflection;
+using AppAutomation.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -7,6 +7,72 @@ namespace AppAutomation.Abstractions.Tests;
 
 public sealed class UiControlAdapterTests
 {
+    [Test]
+    public async Task MultiSelectAdapter_AppliesExactSelectionAndCancelRestoresCommittedItems()
+    {
+        var editorRoot = new FakeControl("CategoriesEditor");
+        var items = new FakeMultiSelectItemsControl(
+            "CategoriesItems",
+            ["Alpha", "Beta", "Gamma"],
+            ["Alpha"]);
+        var openButton = new FakeButtonControl("CategoriesOpenButton")
+        {
+            OnInvoke = () => items.IsAvailable = true
+        };
+        var applyButton = new FakeButtonControl("CategoriesApplyButton")
+        {
+            OnInvoke = () => items.IsAvailable = false
+        };
+        var cancelButton = new FakeButtonControl("CategoriesCancelButton")
+        {
+            OnInvoke = () =>
+            {
+                items.SetSelectedItems(["Alpha", "Gamma"]);
+                items.IsAvailable = false;
+            }
+        };
+        var resolver = new FakeResolver(
+                ("CategoriesEditor", editorRoot),
+                ("CategoriesOpenButton", openButton),
+                ("CategoriesItems", items),
+                ("CategoriesApplyButton", applyButton),
+                ("CategoriesCancelButton", cancelButton))
+            .WithMultiSelect(
+                "Categories",
+                MultiSelectParts.ByAutomationIds(
+                    "CategoriesEditor",
+                    "CategoriesOpenButton",
+                    "CategoriesItems",
+                    "CategoriesApplyButton",
+                    "CategoriesCancelButton"));
+        var page = new MultiSelectPage(resolver);
+
+        page
+            .SelectMultiItems(static candidate => candidate.Categories, ["Gamma", "Alpha"])
+            .CancelMultiSelection(static candidate => candidate.Categories, ["Beta"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.Categories.IsOpen).IsFalse();
+            await Assert.That(page.Categories.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(2);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+        }
+
+        await Assert.That(() => page.SelectMultiItems(
+                static candidate => candidate.Categories,
+                ["Missing"],
+                timeoutMs: 50))
+            .Throws<UiOperationException>();
+        await Assert.That(() => page.SelectMultiItems(
+                static candidate => candidate.Categories,
+                ["Alpha", "alpha"],
+                timeoutMs: 50))
+            .Throws<UiOperationException>();
+    }
+
     [Test]
     public async Task SearchPickerAdapter_SupportsSharedPageFlow()
     {
@@ -858,6 +924,16 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class MultiSelectPageDefinitions
+    {
+        public static UiControlDefinition Categories { get; } = new(
+            "Categories",
+            UiControlType.MultiSelect,
+            "Categories",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     public static class SearchPickerInputPartPageDefinitions
     {
         public static UiControlDefinition OrderCustomerSearch_Input { get; } = new(
@@ -896,6 +972,16 @@ public sealed class UiControlAdapterTests
         }
 
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
+    }
+
+    private sealed class MultiSelectPage : UiPage
+    {
+        public MultiSelectPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IMultiSelectControl Categories => Resolve<IMultiSelectControl>(MultiSelectPageDefinitions.Categories);
     }
 
     private sealed class OrderCustomerSearchPage : UiPage
@@ -1154,9 +1240,47 @@ public sealed class UiControlAdapterTests
 
         public int InvokeCount { get; private set; }
 
+        public Action? OnInvoke { get; init; }
+
         public void Invoke()
         {
             InvokeCount++;
+            OnInvoke?.Invoke();
+        }
+    }
+
+    private sealed class FakeControl : FakeControlBase
+    {
+        public FakeControl(string automationId)
+            : base(automationId)
+        {
+        }
+    }
+
+    private sealed class FakeMultiSelectItemsControl : FakeControlBase, IMultiSelectItemsControl, IUiControlAvailability
+    {
+        private readonly string[] _items;
+        private string[] _selectedItems;
+
+        public FakeMultiSelectItemsControl(
+            string automationId,
+            IReadOnlyCollection<string> items,
+            IReadOnlyCollection<string> selectedItems)
+            : base(automationId)
+        {
+            _items = items.ToArray();
+            _selectedItems = selectedItems.ToArray();
+        }
+
+        public IReadOnlyList<string> Items => _items;
+
+        public IReadOnlyList<string> SelectedItems => _selectedItems;
+
+        public bool IsAvailable { get; set; }
+
+        public void SetSelectedItems(IReadOnlyCollection<string> values)
+        {
+            _selectedItems = values.ToArray();
         }
     }
 

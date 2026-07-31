@@ -524,6 +524,8 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.DismissNotification => $"Page.DismissNotification(static page => page.{propertyName});",
             RecordedActionKind.OpenOrActivateShellPane => $"Page.OpenOrActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ActivateShellPane => $"Page.ActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.SelectMultiItems => $"Page.SelectMultiItems(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
+            RecordedActionKind.CancelMultiSelection => $"Page.CancelMultiSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
@@ -616,6 +618,21 @@ internal sealed class AuthoringCodeGenerator
             .Replace("\"", "\\\"", StringComparison.Ordinal)
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);
+    }
+
+    private static string FormatStringValues(IReadOnlyList<string>? values)
+    {
+        var renderedValues = values?
+            .Select(static value => value?.Trim() ?? string.Empty)
+            .OrderBy(static value => value, StringComparer.Ordinal)
+            .Select(static value => $"\"{EscapeString(value)}\"")
+            .ToArray() ?? [];
+        if (renderedValues.Length == 0)
+        {
+            return "global::System.Array.Empty<string>()";
+        }
+
+        return $"new[] {{ {string.Join(", ", renderedValues)} }}";
     }
 
     private static string FormatBoolean(bool? value)
