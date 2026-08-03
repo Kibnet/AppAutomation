@@ -1128,7 +1128,7 @@ internal sealed class RecorderStepFactory
 
         if (TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var columnIndex, out var cellValue))
         {
-            result = CreateStep(
+            result = CreateGridStep(
                 source,
                 new RecordedStep(
                     RecordedActionKind.WaitUntilGridCellEquals,
@@ -1140,7 +1140,35 @@ internal sealed class RecorderStepFactory
                     CanPersist: locatorResult.CanPersist,
                     RowIndex: rowIndex,
                     ColumnIndex: columnIndex),
-                locatorResult.Message);
+                locatorResult.Message,
+                hint.TargetLocatorValue,
+                hint.TargetLocatorKind,
+                rowIndex,
+                columnIndex,
+                excludeTargetColumnFromIdentity: true);
+            return true;
+        }
+
+        if (hint.RowIdentityColumnPropertyNames is { Count: > 0 }
+            && string.IsNullOrWhiteSpace(ExtractTextValue(source))
+            && TryResolveGridRow(source, gridSource, items, out rowIndex, out _))
+        {
+            result = CreateGridStep(
+                source,
+                new RecordedStep(
+                    RecordedActionKind.WaitUntilGridContainsRow,
+                    locatorResult.Control,
+                    Warning: locatorResult.Control.Warning,
+                    ValidationStatus: locatorResult.ValidationStatus,
+                    ValidationMessage: locatorResult.ValidationMessage,
+                    CanPersist: locatorResult.CanPersist,
+                    RowIndex: rowIndex),
+                locatorResult.Message,
+                hint.TargetLocatorValue,
+                hint.TargetLocatorKind,
+                rowIndex,
+                columnIndex: null,
+                excludeTargetColumnFromIdentity: false);
             return true;
         }
 
@@ -1214,14 +1242,19 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid open-row action requires a row index from the hint or grid row/cell context.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.OpenGridRow,
                 descriptor,
                 Warning: warning,
                 RowIndex: rowIndex),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            rowIndex,
+            columnIndex: null,
+            excludeTargetColumnFromIdentity: false);
     }
 
     private StepCreationResult TryCreateSortGridByColumnStep(
@@ -1261,7 +1294,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid copy-cell action requires row and column indexes from the hint or grid cell context.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.CopyGridCell,
@@ -1269,7 +1302,12 @@ internal sealed class RecorderStepFactory
                 Warning: warning,
                 RowIndex: rowIndex,
                 ColumnIndex: columnIndex),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            rowIndex,
+            columnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private RecorderActionHint TryResolveActionHint(Control control, RecordedControlDescriptor descriptor)
@@ -1503,7 +1541,7 @@ internal sealed class RecorderStepFactory
             results.GetType().FullName ?? results.GetType().Name,
             warning);
 
-        return CreateStep(
+        return CreateGridStep(
             results,
             new RecordedStep(
                 RecordedActionKind.SearchAndSelectGridCell,
@@ -1513,7 +1551,12 @@ internal sealed class RecorderStepFactory
                 RowIndex: rowIndex,
                 ColumnIndex: columnIndex,
                 ItemValue: selectedText.Trim()),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            rowIndex,
+            columnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private bool TryResolveSearchPickerHint(
@@ -2241,6 +2284,168 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
+    private StepCreationResult CreateGridStep(
+        Control source,
+        RecordedStep step,
+        string warning,
+        string targetGridLocatorValue,
+        UiLocatorKind targetGridLocatorKind,
+        int rowIndex,
+        int? columnIndex,
+        bool excludeTargetColumnFromIdentity)
+    {
+        var matchingHints = _options.GridHints
+            .Where(hint => hint.TargetLocatorKind == targetGridLocatorKind
+                && string.Equals(
+                    hint.TargetLocatorValue.Trim(),
+                    targetGridLocatorValue.Trim(),
+                    StringComparison.Ordinal))
+            .ToArray();
+        if (matchingHints.Length == 0
+            || matchingHints.All(static hint => hint.RowIdentityColumnPropertyNames is not { Count: > 0 }))
+        {
+            return CreateStep(source, step, warning);
+        }
+
+        if (matchingHints.Length != 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{targetGridLocatorValue}' has multiple RecorderGridHint registrations; named row capture requires exactly one.");
+        }
+
+        var hint = matchingHints[0];
+        if (!TryValidateGridIdentityHint(hint, out var identityColumns, out var configurationError))
+        {
+            return StepCreationResult.Unsupported(configurationError);
+        }
+
+        if (!TryFindControl(hint.SourceLocatorValue, hint.SourceLocatorKind, out var gridSource)
+            || !TryReadItemsSource(gridSource, out var items))
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{targetGridLocatorValue}' does not expose the configured ItemsSource for named row capture.");
+        }
+
+        if (rowIndex < 0 || rowIndex >= items.Count || items[rowIndex] is not { } item)
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{targetGridLocatorValue}' row index {rowIndex} is outside the current ItemsSource.");
+        }
+
+        string? targetColumnName = null;
+        if (columnIndex is { } resolvedColumnIndex)
+        {
+            if (resolvedColumnIndex < 0 || resolvedColumnIndex >= hint.ColumnPropertyNames.Count)
+            {
+                return StepCreationResult.Unsupported(
+                    $"Grid '{targetGridLocatorValue}' column index {resolvedColumnIndex} is outside ColumnPropertyNames.");
+            }
+
+            targetColumnName = hint.ColumnPropertyNames[resolvedColumnIndex].Trim();
+        }
+
+        var effectiveIdentityColumns = excludeTargetColumnFromIdentity && targetColumnName is not null
+            ? identityColumns
+                .Where(columnName => !string.Equals(columnName, targetColumnName, StringComparison.Ordinal))
+                .ToArray()
+            : identityColumns;
+        if (effectiveIdentityColumns.Count == 0)
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{targetGridLocatorValue}' row identity is empty after excluding target column '{targetColumnName}'.");
+        }
+
+        if (!TryReadGridIdentity(item, effectiveIdentityColumns, out var conditions, out var readError))
+        {
+            return StepCreationResult.Unsupported(readError);
+        }
+
+        var matchingRows = 0;
+        foreach (var candidate in items)
+        {
+            if (candidate is null
+                || !TryReadGridIdentity(candidate, effectiveIdentityColumns, out var candidateConditions, out readError))
+            {
+                return StepCreationResult.Unsupported(readError);
+            }
+
+            if (candidateConditions.SequenceEqual(conditions))
+            {
+                matchingRows++;
+            }
+        }
+
+        if (matchingRows != 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{targetGridLocatorValue}' configured row identity matches {matchingRows} rows; named row capture requires exactly one.");
+        }
+
+        var namedStep = step with
+        {
+            GridRowConditions = conditions,
+            GridTargetColumnName = targetColumnName
+        };
+        return CreateStep(source, namedStep, warning);
+    }
+
+    private static bool TryValidateGridIdentityHint(
+        RecorderGridHint hint,
+        out IReadOnlyList<string> identityColumns,
+        out string error)
+    {
+        identityColumns = Array.Empty<string>();
+        var columns = hint.ColumnPropertyNames.Select(static name => name?.Trim() ?? string.Empty).ToArray();
+        if (columns.Length == 0
+            || columns.Any(string.IsNullOrWhiteSpace)
+            || columns.Distinct(StringComparer.Ordinal).Count() != columns.Length)
+        {
+            error = $"Grid '{hint.TargetLocatorValue}' ColumnPropertyNames must be non-empty and distinct for named row capture.";
+            return false;
+        }
+
+        var identities = (hint.RowIdentityColumnPropertyNames ?? Array.Empty<string>())
+            .Select(static name => name?.Trim() ?? string.Empty)
+            .ToArray();
+        if (identities.Length == 0
+            || identities.Any(string.IsNullOrWhiteSpace)
+            || identities.Distinct(StringComparer.Ordinal).Count() != identities.Length
+            || identities.Any(identity => !columns.Contains(identity, StringComparer.Ordinal)))
+        {
+            error = $"Grid '{hint.TargetLocatorValue}' RowIdentityColumnPropertyNames must be non-empty, distinct, and contained in ColumnPropertyNames.";
+            return false;
+        }
+
+        identityColumns = identities;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadGridIdentity(
+        object item,
+        IReadOnlyList<string> identityColumns,
+        out IReadOnlyList<RecordedGridRowCondition> conditions,
+        out string error)
+    {
+        var result = new RecordedGridRowCondition[identityColumns.Count];
+        for (var index = 0; index < identityColumns.Count; index++)
+        {
+            var columnName = identityColumns[index];
+            if (!TryReadPropertyValue(item, columnName, out var value))
+            {
+                conditions = Array.Empty<RecordedGridRowCondition>();
+                error = $"Grid row type '{item.GetType().FullName}' does not expose configured identity property '{columnName}'.";
+                return false;
+            }
+
+            result[index] = new RecordedGridRowCondition(columnName, value);
+        }
+
+        conditions = result;
+        error = string.Empty;
+        return true;
+    }
+
     private StepCreationResult TryCreateGridEditTextStep(
         Control source,
         RecordedControlDescriptor descriptor,
@@ -2253,7 +2458,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid text edit hint value locator was not found or is not a TextBox.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.EditGridCellText,
@@ -2263,7 +2468,12 @@ internal sealed class RecorderStepFactory
                 RowIndex: hint.RowIndex,
                 ColumnIndex: hint.ColumnIndex,
                 GridCellEditCommitMode: hint.CommitMode),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private StepCreationResult TryCreateGridEditNumberStep(
@@ -2278,7 +2488,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid numeric edit hint value locator does not expose a numeric value.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.EditGridCellNumber,
@@ -2288,7 +2498,12 @@ internal sealed class RecorderStepFactory
                 RowIndex: hint.RowIndex,
                 ColumnIndex: hint.ColumnIndex,
                 GridCellEditCommitMode: hint.CommitMode),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private StepCreationResult TryCreateGridEditDateStep(
@@ -2303,7 +2518,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid date edit hint value locator does not expose a date value.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.EditGridCellDate,
@@ -2313,7 +2528,12 @@ internal sealed class RecorderStepFactory
                 RowIndex: hint.RowIndex,
                 ColumnIndex: hint.ColumnIndex,
                 GridCellEditCommitMode: hint.CommitMode),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private StepCreationResult TryCreateGridEditComboStep(
@@ -2338,7 +2558,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid combo edit hint value locator does not have a selected item.");
         }
 
-        return CreateStep(
+        return CreateGridStep(
             source,
             new RecordedStep(
                 RecordedActionKind.SelectGridCellComboItem,
@@ -2348,7 +2568,12 @@ internal sealed class RecorderStepFactory
                 RowIndex: hint.RowIndex,
                 ColumnIndex: hint.ColumnIndex,
                 GridCellEditCommitMode: hint.CommitMode),
-            warning);
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
     }
 
     private bool TryReadDateRangeValues(

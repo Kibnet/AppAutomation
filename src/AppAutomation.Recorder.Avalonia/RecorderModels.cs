@@ -55,7 +55,8 @@ public enum RecordedActionKind
     CancelFilterSelection = 47,
     EnterSearch = 48,
     ClearSearch = 49,
-    ApplySearchFromHistory = 50
+    ApplySearchFromHistory = 50,
+    WaitUntilGridContainsRow = 51
 }
 
 public enum RecorderAssertionMode
@@ -109,7 +110,14 @@ internal sealed record RecordedStep(
     FolderExportCommitMode? FolderExportCommitMode = null,
     GridCellEditCommitMode? GridCellEditCommitMode = null,
     IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null,
-    IReadOnlyList<string>? StringValues = null);
+    IReadOnlyList<string>? StringValues = null)
+{
+    public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
+
+    public string? GridTargetColumnName { get; init; }
+}
+
+internal sealed record RecordedGridRowCondition(string ColumnName, string Value);
 
 internal enum RecorderRuntimeValidationTarget
 {

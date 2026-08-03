@@ -346,6 +346,10 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.WaitUntilExists, Descriptor("LatePanel", UiControlType.AutomationElement)),
             new RecordedStep(RecordedActionKind.SelectListBoxItem, Descriptor("HistoryList", UiControlType.ListBox), StringValue: "Fibonacci"),
             new RecordedStep(RecordedActionKind.WaitUntilGridRowsAtLeast, Descriptor("OrdersGrid", UiControlType.Grid), IntValue: 3),
+            new RecordedStep(RecordedActionKind.WaitUntilGridContainsRow, Descriptor("OrdersGrid", UiControlType.Grid))
+            {
+                GridRowConditions = [new RecordedGridRowCondition("OrderId", "ORD-42")]
+            },
             new RecordedStep(RecordedActionKind.WaitUntilGridCellEquals, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "EX-13"),
             new RecordedStep(RecordedActionKind.SearchAndSelect, Descriptor("HistoryOperationPicker", UiControlType.SearchPicker), StringValue: "least", ItemValue: "Least Common Multiple"),
             new RecordedStep(RecordedActionKind.OpenGridRow, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0),

@@ -130,6 +130,9 @@ public static partial class UiPageExtensions
     {
         ArgumentNullException.ThrowIfNull(values);
         var control = Resolve(selector, page);
+        IReadOnlyList<string> cachedCommittedItems = [];
+        var hasCachedCommittedItems = control is IMultiSelectCommittedStateControl committedState
+            && committedState.TryGetCommittedItems(out cachedCommittedItems);
         var expectedItems = ValidateExpectedMultiSelectItems(
             page,
             selector,
@@ -175,9 +178,16 @@ public static partial class UiPageExtensions
             lastObservedValueFactory: () => DescribeMultiSelect(control),
             operationName: nameof(CancelMultiSelection));
 
-        var committedItems = control.SelectedItems
-            .Select(NormalizeMultiSelectItem)
-            .ToArray();
+        var committedItems = hasCachedCommittedItems
+            ? cachedCommittedItems.Select(NormalizeMultiSelectItem).ToArray()
+            : control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
+        EnsureMultiSelectPopupRemainsOpen(
+            page,
+            selector,
+            expectedItems,
+            control,
+            timeoutMs,
+            nameof(CancelMultiSelection));
 
         try
         {
@@ -305,6 +315,48 @@ public static partial class UiPageExtensions
                 ex,
                 operationName);
         }
+    }
+
+    private static void EnsureMultiSelectPopupRemainsOpen<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IMultiSelectControl>> selector,
+        IReadOnlyCollection<string> expectedItems,
+        IMultiSelectControl control,
+        int timeoutMs,
+        string operationName)
+        where TSelf : UiPage
+    {
+        if (control.IsOpen)
+        {
+            return;
+        }
+
+        try
+        {
+            control.Open();
+        }
+        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
+        {
+            throw CreateMultiSelectException(
+                page,
+                selector,
+                expectedItems,
+                control,
+                timeoutMs,
+                "closed while reading the committed selection and failed to reopen",
+                ex,
+                operationName);
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => control.IsOpen,
+            timeoutMs,
+            $"Multi-select popup '{control.AutomationId}' did not reopen after reading the committed selection.",
+            expectedValue: "IsOpen=true",
+            lastObservedValueFactory: () => DescribeMultiSelect(control),
+            operationName: operationName);
     }
 
     private static bool MultiSelectSetsEqual(

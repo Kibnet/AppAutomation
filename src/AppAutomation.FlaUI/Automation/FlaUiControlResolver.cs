@@ -925,6 +925,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
     private sealed class FlaUiMultiSelectItemsControl : FlaUiControlBase<AutomationElement>, IMultiSelectItemsControl
     {
+        private const int BoundaryRealizationAttempts = 4;
+        private const int BoundaryRealizationDelayMs = 50;
         private const int MaxScrollSteps = 256;
         private MultiSelectItemSnapshot[]? _lastItems;
 
@@ -956,6 +958,11 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void SetSelectedItems(IReadOnlyCollection<string> values)
         {
+            _ = SetSelectedItemsAndGetAvailableItems(values);
+        }
+
+        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+        {
             ArgumentNullException.ThrowIfNull(values);
             var normalizedValues = NormalizeRequestedItems(values);
             var items = ReadAllItems();
@@ -963,15 +970,20 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             {
                 _lastItems = items;
                 ValidateAvailableItems(items.Select(static item => item.Text), normalizedValues);
-                _lastItems = ReadAllItems(item =>
-                {
-                    var shouldBeChecked = normalizedValues.Contains(item.Text);
-                    item.Control.SetChecked(shouldBeChecked, item.Text);
-                });
-                return;
+                var changes = items
+                    .Where(item => item.IsChecked != normalizedValues.Contains(item.Text))
+                    .ToDictionary(
+                        static item => item.Text,
+                        item => normalizedValues.Contains(item.Text),
+                        StringComparer.OrdinalIgnoreCase);
+                ApplySelectionChanges(changes);
+                _lastItems = items
+                    .Select(item => item with { IsChecked = normalizedValues.Contains(item.Text) })
+                    .ToArray();
+                return items.Select(static item => item.Text).ToArray();
             }
 
-            SetSelectableItems(normalizedValues);
+            return SetSelectableItems(normalizedValues);
         }
 
         private MultiSelectItemSnapshot[] GetItems()
@@ -993,7 +1005,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 .ToArray();
         }
 
-        private void SetSelectableItems(HashSet<string> requestedValues)
+        private string[] SetSelectableItems(HashSet<string> requestedValues)
         {
             var items = ReadSelectableItems();
             ValidateAvailableItems(items.Select(static item => item.Text), requestedValues);
@@ -1007,6 +1019,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             {
                 AddToSelection(item);
             }
+
+            return items.Select(static item => item.Text).ToArray();
         }
 
         private static bool IsSelected(AutomationElement item)
@@ -1045,30 +1059,30 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             pattern.RemoveFromSelection();
         }
 
-        private MultiSelectItemSnapshot[] ReadAllItems(Action<MultiSelectCheckBox>? processItem = null)
+        private MultiSelectItemSnapshot[] ReadAllItems()
         {
             var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
             var scroll = FindVerticalScrollPattern(Inner);
             var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
-            AddCurrentItems(items, processItem);
+            AddCurrentItems(items);
 
             if (scroll is not null)
             {
                 var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-                TraverseItems(items, processItem, () => ScrollForward(scroll));
+                TraverseItems(items, () => ScrollForward(scroll));
                 if (startingPosition > 0)
                 {
-                    TraverseItems(items, processItem, () => ScrollBackward(scroll));
+                    TraverseItems(items, () => ScrollBackward(scroll));
                 }
             }
             else if (scrollBarRange is not null)
             {
                 var startingPosition = scrollBarRange.Value.ValueOrDefault;
                 var minimum = scrollBarRange.Minimum.ValueOrDefault;
-                TraverseItems(items, processItem, () => ScrollForward(scrollBarRange));
+                TraverseItems(items, () => ScrollForward(scrollBarRange));
                 if (startingPosition > minimum)
                 {
-                    TraverseItems(items, processItem, () => ScrollBackward(scrollBarRange));
+                    TraverseItems(items, () => ScrollBackward(scrollBarRange));
                 }
             }
 
@@ -1077,17 +1091,17 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         private void TraverseItems(
             IDictionary<string, MultiSelectItemSnapshot> items,
-            Action<MultiSelectCheckBox>? processItem,
             Func<bool> scroll)
         {
             for (var step = 0; step < MaxScrollSteps; step++)
             {
                 if (!scroll())
                 {
+                    WaitForBoundaryItems(items);
                     return;
                 }
 
-                AddCurrentItems(items, processItem);
+                AddCurrentItems(items);
             }
 
             throw new InvalidOperationException(
@@ -1095,8 +1109,116 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
 
         private void AddCurrentItems(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            Action<MultiSelectCheckBox>? processItem)
+            IDictionary<string, MultiSelectItemSnapshot> items)
+        {
+            foreach (var item in ReadCurrentItems())
+            {
+                if (items.ContainsKey(item.Text))
+                {
+                    continue;
+                }
+
+                items.Add(item.Text, new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true));
+            }
+        }
+
+        private void ApplySelectionChanges(Dictionary<string, bool> changes)
+        {
+            if (changes.Count == 0)
+            {
+                return;
+            }
+
+            var pendingChanges = new Dictionary<string, bool>(changes, StringComparer.OrdinalIgnoreCase);
+            ApplyCurrentSelectionChanges(pendingChanges);
+            if (pendingChanges.Count == 0)
+            {
+                return;
+            }
+
+            var scroll = FindVerticalScrollPattern(Inner);
+            var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
+            if (scroll is not null)
+            {
+                var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
+                TraverseSelectionChanges(pendingChanges, () => ScrollForward(scroll));
+                if (pendingChanges.Count > 0 && startingPosition > 0)
+                {
+                    TraverseSelectionChanges(pendingChanges, () => ScrollBackward(scroll));
+                }
+            }
+            else if (scrollBarRange is not null)
+            {
+                var startingPosition = scrollBarRange.Value.ValueOrDefault;
+                var minimum = scrollBarRange.Minimum.ValueOrDefault;
+                TraverseSelectionChanges(pendingChanges, () => ScrollForward(scrollBarRange));
+                if (pendingChanges.Count > 0 && startingPosition > minimum)
+                {
+                    TraverseSelectionChanges(pendingChanges, () => ScrollBackward(scrollBarRange));
+                }
+            }
+
+            if (pendingChanges.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Multi-select items could not be revisited after validation: [{string.Join(", ", pendingChanges.Keys)}].");
+            }
+        }
+
+        private void TraverseSelectionChanges(Dictionary<string, bool> pendingChanges, Func<bool> scroll)
+        {
+            for (var step = 0; step < MaxScrollSteps && pendingChanges.Count > 0; step++)
+            {
+                if (!scroll())
+                {
+                    WaitForBoundarySelectionChanges(pendingChanges);
+                    return;
+                }
+
+                ApplyCurrentSelectionChanges(pendingChanges);
+            }
+
+            if (pendingChanges.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Multi-select selection traversal exceeded {MaxScrollSteps} vertical scroll steps.");
+            }
+        }
+
+        private void ApplyCurrentSelectionChanges(Dictionary<string, bool> pendingChanges)
+        {
+            foreach (var item in ReadCurrentItems())
+            {
+                if (!pendingChanges.Remove(item.Text, out var shouldBeChecked))
+                {
+                    continue;
+                }
+
+                item.Control.SetChecked(shouldBeChecked, item.Text);
+            }
+        }
+
+        private void WaitForBoundaryItems(IDictionary<string, MultiSelectItemSnapshot> items)
+        {
+            for (var attempt = 0; attempt < BoundaryRealizationAttempts; attempt++)
+            {
+                Thread.Sleep(BoundaryRealizationDelayMs);
+                AddCurrentItems(items);
+            }
+        }
+
+        private void WaitForBoundarySelectionChanges(Dictionary<string, bool> pendingChanges)
+        {
+            for (var attempt = 0;
+                 attempt < BoundaryRealizationAttempts && pendingChanges.Count > 0;
+                 attempt++)
+            {
+                Thread.Sleep(BoundaryRealizationDelayMs);
+                ApplyCurrentSelectionChanges(pendingChanges);
+            }
+        }
+
+        private MultiSelectCheckBox[] ReadCurrentItems()
         {
             var currentItems = FindAutomationDescendants(Inner)
                 .Where(candidate => candidate.ControlType == ControlType.CheckBox && IsVisibleItem(candidate))
@@ -1116,16 +1238,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
             }
 
-            foreach (var item in currentItems)
-            {
-                if (items.ContainsKey(item.Text))
-                {
-                    continue;
-                }
-
-                processItem?.Invoke(item);
-                items.Add(item.Text, new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true));
-            }
+            return currentItems;
         }
 
         private bool IsVisibleItem(AutomationElement candidate)

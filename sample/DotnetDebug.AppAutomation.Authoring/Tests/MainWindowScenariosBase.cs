@@ -404,25 +404,30 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
     [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_GridActionsAndEditableCells_Work()
     {
+        var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
+        var dynamicallyAddedRow = GridRowSelector.ByCell("Key", "ARM-05");
+
         Page
             .SelectTabItem(p => p.ArmDesktopTabItem)
             .ClickButton(p => p.ArmGridBuildButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 3")
             .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 3)
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 0, "ARM-01")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Value-1")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Value-1")
             .EnterText(p => p.ArmGridEditValueInput, "Edited-42")
             .WaitUntilTextEquals(p => p.ArmGridEditValueInput, "Edited-42")
             .ClickButton(p => p.ArmGridCommitEditButton)
             .WaitUntilNameContains(p => p.ArmGridStatusLabel, "Edited-42")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Edited-42")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
             .ClickButton(p => p.ArmGridOpenButton)
             .WaitUntilNameContains(p => p.ArmGridStatusLabel, "ARM-01")
             .ClickButton(p => p.ArmGridLoadMoreButton)
             .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 5)
+            .WaitUntilGridContainsRow(p => p.ArmGridAutomationBridge, dynamicallyAddedRow)
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, dynamicallyAddedRow, "Value", "Value-5")
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 5")
             .ClickButton(p => p.ArmGridSortButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid sorted by value")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
             .ClickButton(p => p.ArmGridCopyButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid copied")
             .ClickButton(p => p.ArmGridExportButton)

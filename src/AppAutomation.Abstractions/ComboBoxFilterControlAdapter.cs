@@ -120,7 +120,7 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
         return new ComboBoxFilterControl(inner);
     }
 
-    private sealed class ComboBoxFilterControl : IComboBoxFilterControl
+    private sealed class ComboBoxFilterControl : IComboBoxFilterControl, IMultiSelectCommittedStateControl
     {
         private readonly IMultiSelectControl _inner;
 
@@ -140,6 +140,17 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
         public IReadOnlyList<string> SelectedItems => _inner.SelectedItems;
 
         public bool IsOpen => _inner.IsOpen;
+
+        public bool TryGetCommittedItems(out IReadOnlyList<string> items)
+        {
+            if (_inner is IMultiSelectCommittedStateControl committedState)
+            {
+                return committedState.TryGetCommittedItems(out items);
+            }
+
+            items = [];
+            return false;
+        }
 
         public void Open() => _inner.Open();
 

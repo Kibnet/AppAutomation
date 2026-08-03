@@ -38,6 +38,15 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                         resultsKind: SearchPickerResultsKind.ListBox,
                         opensOnSearch: true))
+                .WithGridColumns(
+                    "EremexDemoDataGridAutomationBridge",
+                    ["EremexRow", "EremexValue", "EremexParity"])
+                .WithGridColumns(
+                    "ArmGridAutomationBridge",
+                    ["Key", "Value", "State"])
+                .WithGridColumns(
+                    "SearchPickerGridAutomationBridge",
+                    ["Key", "SelectedValue"])
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

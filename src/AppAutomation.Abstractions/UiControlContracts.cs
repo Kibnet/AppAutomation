@@ -315,6 +315,36 @@ public interface IMultiSelectItemsControl : IUiControl
     /// </summary>
     /// <param name="values">The item texts that should remain selected.</param>
     void SetSelectedItems(IReadOnlyCollection<string> values);
+
+    /// <summary>
+    /// Validates and sets the exact selected item set, returning the available-item snapshot used for validation.
+    /// </summary>
+    /// <remarks>
+    /// Virtualized providers can override this operation to avoid enumerating the same popup twice.
+    /// </remarks>
+    /// <param name="values">The item texts that should remain selected.</param>
+    /// <returns>All item texts that were available when the selection was validated.</returns>
+    IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var availableItems = Items;
+        if (availableItems.Distinct(StringComparer.OrdinalIgnoreCase).Count() != availableItems.Count)
+        {
+            throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+        }
+
+        var missingItems = values
+            .Where(requested => !availableItems.Contains(requested, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missingItems.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Multi-select items were not found: [{string.Join(", ", missingItems)}].");
+        }
+
+        SetSelectedItems(values);
+        return availableItems;
+    }
 }
 
 /// <summary>

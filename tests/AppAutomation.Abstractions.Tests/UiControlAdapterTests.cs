@@ -124,6 +124,32 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task MultiSelectAdapter_UsesProviderSelectionSnapshotWithoutPreReadingItems()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Items.SelectionSnapshotCount).IsEqualTo(1);
+            await Assert.That(context.Items.ItemsReadCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task CancelMultiSelection_ReusesKnownCommittedItemsWithoutScanningPopupSelection()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
+        context.Items.ResetObservationCounts();
+
+        context.Page.CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
+
+        await Assert.That(context.Items.SelectedItemsReadCount).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task SearchPickerAdapter_SupportsSharedPageFlow()
     {
         var searchInput = new FakeTextBoxControl("HistoryFilterInput");
@@ -1488,11 +1514,31 @@ public sealed class UiControlAdapterTests
             _selectedItems = selectedItems.ToArray();
         }
 
-        public IReadOnlyList<string> Items => _items;
+        public IReadOnlyList<string> Items
+        {
+            get
+            {
+                ItemsReadCount++;
+                return _items;
+            }
+        }
 
-        public IReadOnlyList<string> SelectedItems => _selectedItems;
+        public IReadOnlyList<string> SelectedItems
+        {
+            get
+            {
+                SelectedItemsReadCount++;
+                return _selectedItems;
+            }
+        }
 
         public bool IsAvailable { get; set; }
+
+        public int ItemsReadCount { get; private set; }
+
+        public int SelectionSnapshotCount { get; private set; }
+
+        public int SelectedItemsReadCount { get; private set; }
 
         public Action<IReadOnlyCollection<string>>? OnSetSelectedItems { get; set; }
 
@@ -1500,6 +1546,29 @@ public sealed class UiControlAdapterTests
         {
             _selectedItems = values.ToArray();
             OnSetSelectedItems?.Invoke(values);
+        }
+
+        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+        {
+            SelectionSnapshotCount++;
+            var missingItems = values
+                .Where(value => !_items.Contains(value, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (missingItems.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Multi-select items were not found: [{string.Join(", ", missingItems)}].");
+            }
+
+            SetSelectedItems(values);
+            return _items;
+        }
+
+        public void ResetObservationCounts()
+        {
+            ItemsReadCount = 0;
+            SelectedItemsReadCount = 0;
+            SelectionSnapshotCount = 0;
         }
     }
 

@@ -298,6 +298,8 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - built-in composite abstraction `ISearchPickerControl` and `WithSearchPicker(...)`;
 - provider-neutral multi-select popup abstraction `IMultiSelectControl` with `WithMultiSelect(...)`;
 - cardinality-neutral combo-box filter abstraction `IComboBoxFilterControl` with `WithComboBoxFilter(...)`;
+- provider-neutral search abstraction `ISearchControl` with `WithSearchControl(...)` and optional history;
+- stable grid row selectors through `GridRowSelector` and `WithGridColumns(...)`;
 - package-based smoke path via `eng/smoke-consumer.ps1`.
 
 Register a multi-select popup from stable primitive parts, then use one authoring command in both runtimes:
@@ -337,6 +339,43 @@ Page.CancelFilterSelection(static page => page.StatusFilter, []);
 `Classes="filterComboBox"` may remain a visual style marker, but it is not a locator. Recorder recognition is opt-in through `RecorderComboBoxFilterHint`, and generated code always targets the logical filter property. Apply/OK and Cancel are preserved; internal popup controls do not leak into the scenario.
 
 If the selectable-items surface is a single-selection `ComboBox`, pass `itemsKind: MultiSelectItemsKind.ComboBox`; the same filter contract then carries a set of `0..1` values.
+
+Register a search field once, regardless of whether its history is currently empty or populated:
+
+```csharp
+var searchParts = SearchControlParts.ByAutomationIds(
+    "TableSearchInput",
+    "TableSearchHistoryItemButton",
+    historyRootAutomationId: "TableSearchHistoryRoot");
+
+var resolver = innerResolver.WithSearchControl("TableSearch", searchParts);
+var options = new AppAutomationRecorderOptions();
+options.SearchControlHints.Add(new RecorderSearchControlHint("TableSearch", searchParts));
+
+Page.EnterSearch(static page => page.TableSearch, "orders");
+Page.ClearSearch(static page => page.TableSearch);
+Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
+```
+
+`EnterSearch`, `ClearSearch`, and `ApplySearchFromHistory` cover input, clearing, and history selection. History remains optional state of the same control; use `SearchHistoryResultsKind.ListBox` only when its results are a `ListBox`. `ISearchPickerControl` remains the separate abstraction for relation pickers such as `ServerSearchComboBox`.
+
+Register each grid's own ordered column names, then identify rows by the business columns that are stable for that grid:
+
+```csharp
+var resolver = innerResolver.WithGridColumns(
+    "OrdersGrid",
+    ["OrderId", "Customer", "Status", "Total"]);
+
+var order = GridRowSelector
+    .ByCell("OrderId", "ORD-42")
+    .AndCell("Customer", "North");
+
+Page.WaitUntilGridContainsRow(static page => page.OrdersGrid, order);
+Page.WaitUntilGridCellEquals(static page => page.OrdersGrid, order, "Status", "Ready");
+Page.OpenGridRow(static page => page.OrdersGrid, order);
+```
+
+Rows are resolved on every poll, so insertion and sorting do not invalidate the selector; operations require one unique match. Configure Recorder keys through `RecorderGridHint.RowIdentityColumnPropertyNames`; without them it keeps legacy row/column indexes. Existing index overloads are unchanged.
 
 ## What remains consumer responsibility
 
@@ -674,6 +713,8 @@ dotnet test --solution MyApp.sln -c Debug
 - встроенная составная абстракция `ISearchPickerControl` и `WithSearchPicker(...)`;
 - provider-neutral абстракция popup-мультиселектора `IMultiSelectControl` с `WithMultiSelect(...)`;
 - cardinality-neutral абстракция combo-box фильтра `IComboBoxFilterControl` с `WithComboBoxFilter(...)`;
+- provider-neutral абстракция поиска `ISearchControl` с `WithSearchControl(...)` и необязательной историей;
+- стабильные селекторы строк таблиц через `GridRowSelector` и `WithGridColumns(...)`;
 - готовый сценарий быстрой проверки через `eng/smoke-consumer.ps1`.
 
 Мультиселектор регистрируется по стабильным primitive parts, после чего в обоих runtime используется одна authoring-команда:
@@ -713,6 +754,43 @@ Page.CancelFilterSelection(static page => page.StatusFilter, []);
 `Classes="filterComboBox"` может оставаться визуальным маркером стиля, но не является locator. Recorder распознаёт фильтр через явный `RecorderComboBoxFilterHint`, а generated code всегда указывает на логическое свойство фильтра. Apply/OK и Cancel сохраняются, внутренние popup controls в сценарий не попадают.
 
 Если элементы представлены одиночным `ComboBox`, передайте `itemsKind: MultiSelectItemsKind.ComboBox`; тот же контракт фильтра будет работать с набором `0..1` значений.
+
+Поле поиска регистрируется один раз независимо от того, пуста ли его история сейчас:
+
+```csharp
+var searchParts = SearchControlParts.ByAutomationIds(
+    "TableSearchInput",
+    "TableSearchHistoryItemButton",
+    historyRootAutomationId: "TableSearchHistoryRoot");
+
+var resolver = innerResolver.WithSearchControl("TableSearch", searchParts);
+var options = new AppAutomationRecorderOptions();
+options.SearchControlHints.Add(new RecorderSearchControlHint("TableSearch", searchParts));
+
+Page.EnterSearch(static page => page.TableSearch, "orders");
+Page.ClearSearch(static page => page.TableSearch);
+Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
+```
+
+`EnterSearch`, `ClearSearch` и `ApplySearchFromHistory` покрывают ввод, очистку и выбор из истории. История остаётся необязательным состоянием того же контрола; `SearchHistoryResultsKind.ListBox` нужен только для результатов в `ListBox`. `ISearchPickerControl` остаётся отдельной абстракцией для relation picker, например `ServerSearchComboBox`.
+
+Для каждой таблицы регистрируется её собственный упорядоченный список колонок, после чего строка задаётся стабильными бизнес-полями именно этой таблицы:
+
+```csharp
+var resolver = innerResolver.WithGridColumns(
+    "OrdersGrid",
+    ["OrderId", "Customer", "Status", "Total"]);
+
+var order = GridRowSelector
+    .ByCell("OrderId", "ORD-42")
+    .AndCell("Customer", "North");
+
+Page.WaitUntilGridContainsRow(static page => page.OrdersGrid, order);
+Page.WaitUntilGridCellEquals(static page => page.OrdersGrid, order, "Status", "Ready");
+Page.OpenGridRow(static page => page.OrdersGrid, order);
+```
+
+Строки разрешаются заново при каждом опросе, поэтому вставка и сортировка не ломают селектор; для операции требуется одно уникальное совпадение. Ключ Recorder задаётся через `RecorderGridHint.RowIdentityColumnPropertyNames`; без него сохраняются прежние индексы строки и колонки. Существующие index-based overloads не меняются.
 
 ## Что остаётся на стороне потребителя
 

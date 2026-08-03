@@ -41,6 +41,15 @@ internal static class MainWindowFlaUiPageFactory
                         "ArmTableSearchInput",
                         "ArmTableSearchHistoryItemButton",
                         historyRootAutomationId: "ArmTableSearchHistoryRoot"))
+                .WithGridColumns(
+                    "EremexDemoDataGridAutomationBridge",
+                    ["EremexRow", "EremexValue", "EremexParity"])
+                .WithGridColumns(
+                    "ArmGridAutomationBridge",
+                    ["Key", "Value", "State"])
+                .WithGridColumns(
+                    "SearchPickerGridAutomationBridge",
+                    ["Key", "SelectedValue"])
                 .WithComboBoxFilter(
                     "ArmStatusFilter",
                     ComboBoxFilterParts.ByAutomationIds(

@@ -137,9 +137,10 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.WaitUntilExists => Enumerable.Empty<RecorderRuntimeValidationFinding>(),
             RecordedActionKind.WaitUntilGridRowsAtLeast => ValidateGridAction(step, target)
                 .Concat(RequireNonNegativeInt(step.IntValue, target, "grid row count")),
+            RecordedActionKind.WaitUntilGridContainsRow => ValidateGridAction(step, target)
+                .Concat(RequireNamedGridRow(step, target)),
             RecordedActionKind.WaitUntilGridCellEquals => ValidateGridAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
                 .Concat(RequireString(step, target, allowEmpty: true, "grid cell value")),
             RecordedActionKind.WaitUntilProgressAtLeast => ValidateControlType(step, target, UiControlType.ProgressBar)
                 .Concat(RequireDouble(step, target)),
@@ -158,18 +159,16 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.ApplySearchFromHistory => ValidateControlType(step, target, UiControlType.Search)
                 .Concat(RequireString(step, target, allowEmpty: false, "search history item")),
             RecordedActionKind.SearchAndSelectGridCell => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index")),
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: false)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
                 .Concat(RequireString(step, target, allowEmpty: false, "grid column name")),
             RecordedActionKind.ScrollGridToEnd => ValidateGridUserAction(step, target),
             RecordedActionKind.CopyGridCell => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index")),
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true)),
             RecordedActionKind.ExportGrid => ValidateGridUserAction(step, target),
             RecordedActionKind.SetDateRangeFilter => ValidateControlType(step, target, UiControlType.DateRangeFilter)
                 .Concat(RequireAtLeastOneDateBound(step, target)),
@@ -430,8 +429,66 @@ internal sealed class RecorderCommandRuntimeValidator
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        return RequireNonNegativeInt(step.RowIndex, target, "grid row index")
-            .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"));
+        return RequireGridCoordinates(step, target, requireTargetColumn: true);
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target,
+        bool requireTargetColumn)
+    {
+        if (step.GridRowConditions is null)
+        {
+            return requireTargetColumn
+                ? RequireNonNegativeInt(step.RowIndex, target, "grid row index")
+                    .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                : RequireNonNegativeInt(step.RowIndex, target, "grid row index");
+        }
+
+        var findings = new List<RecorderRuntimeValidationFinding>();
+        if (step.GridRowConditions.Count == 0
+            || step.GridRowConditions.Any(static condition => string.IsNullOrWhiteSpace(condition.ColumnName)))
+        {
+            findings.Add(Invalid(target, "payload-missing-grid-row-selector", "Named grid action requires at least one row condition with a column name."));
+        }
+
+        if (step.GridRowConditions
+            .Select(static condition => condition.ColumnName)
+            .Distinct(StringComparer.Ordinal)
+            .Count() != step.GridRowConditions.Count)
+        {
+            findings.Add(Invalid(target, "payload-duplicate-grid-row-column", "Named grid row selector contains duplicate column names."));
+        }
+
+        if (requireTargetColumn && string.IsNullOrWhiteSpace(step.GridTargetColumnName))
+        {
+            findings.Add(Invalid(target, "payload-missing-grid-target-column", "Named grid cell action requires a target column name."));
+        }
+
+        findings.Add(Warning(
+            target,
+            "grid-column-metadata-adapter-required",
+            "Named grid action requires stable runtime column metadata registered with WithGridColumns or supplied by the grid control."));
+
+        return findings;
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireNamedGridRow(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        if (step.GridRowConditions is null)
+        {
+            return
+            [
+                Invalid(
+                    target,
+                    "payload-missing-grid-row-selector",
+                    "Named grid row assertion requires at least one row condition.")
+            ];
+        }
+
+        return RequireGridCoordinates(step, target, requireTargetColumn: false);
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireString(

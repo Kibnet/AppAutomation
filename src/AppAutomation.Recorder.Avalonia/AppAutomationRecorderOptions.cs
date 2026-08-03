@@ -122,7 +122,10 @@ public sealed record RecorderGridHint(
     IReadOnlyList<string> ColumnPropertyNames,
     UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
     UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = false);
+    bool FallbackToName = false)
+{
+    public IReadOnlyList<string> RowIdentityColumnPropertyNames { get; init; } = Array.Empty<string>();
+}
 
 public sealed record RecorderGridActionHint(
     string SourceLocatorValue,

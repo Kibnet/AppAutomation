@@ -50,7 +50,9 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilExists => true,
             RecordedActionKind.WaitUntilProgressAtLeast => source is ProgressBar,
             RecordedActionKind.WaitUntilListBoxContains or RecordedActionKind.WaitUntilHasItemsAtLeast => source is ListBox,
-            RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
+            RecordedActionKind.WaitUntilGridRowsAtLeast
+                or RecordedActionKind.WaitUntilGridContainsRow
+                or RecordedActionKind.WaitUntilGridCellEquals => true,
             RecordedActionKind.WaitUntilNotificationContains => true,
             RecordedActionKind.SearchAndSelect or RecordedActionKind.SearchAndSelectGridCell => true,
             RecordedActionKind.ApplySearchFromHistory => true,

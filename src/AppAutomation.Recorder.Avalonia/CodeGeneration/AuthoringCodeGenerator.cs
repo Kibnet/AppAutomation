@@ -642,25 +642,42 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilExists => $"Page.WaitUntilExists(static page => page.{propertyName});",
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
-            RecordedActionKind.WaitUntilGridCellEquals => $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.WaitUntilGridContainsRow => $"Page.WaitUntilGridContainsRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});",
+            RecordedActionKind.WaitUntilGridCellEquals => HasNamedGridRow(step)
+                ? $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");"
+                : $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilProgressAtLeast => $"Page.WaitUntilProgressAtLeast(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.WaitUntilListBoxContains => $"Page.WaitUntilListBoxContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilHasItemsAtLeast => $"Page.WaitUntilHasItemsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
             RecordedActionKind.WaitUntilNotificationContains => $"Page.WaitUntilNotificationContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SearchAndSelect => $"Page.SearchAndSelect(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
-            RecordedActionKind.SearchAndSelectGridCell => $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
-            RecordedActionKind.OpenGridRow => $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
+            RecordedActionKind.SearchAndSelectGridCell => HasNamedGridRow(step)
+                ? $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");"
+                : $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
+            RecordedActionKind.OpenGridRow => HasNamedGridRow(step)
+                ? $"Page.OpenGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});"
+                : $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
             RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
-            RecordedActionKind.CopyGridCell => $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
+            RecordedActionKind.CopyGridCell => HasNamedGridRow(step)
+                ? $"Page.CopyGridCell(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)});"
+                : $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
             RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
             RecordedActionKind.SetDateRangeFilter => $"Page.SetDateRangeFilter(static page => page.{propertyName}, {FormatNullableDate(step.DateValue)}, {FormatNullableDate(step.SecondDateValue)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SetNumericRangeFilter => $"Page.SetNumericRangeFilter(static page => page.{propertyName}, {FormatNullableDouble(step.DoubleValue)}, {FormatNullableDouble(step.SecondDoubleValue)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SelectExportFolder => $"Page.SelectExportFolder(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalFolderExportCommitMode(step.FolderExportCommitMode)});",
-            RecordedActionKind.EditGridCellText => $"Page.EditGridCellText(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
-            RecordedActionKind.EditGridCellNumber => $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
-            RecordedActionKind.EditGridCellDate => $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
-            RecordedActionKind.SelectGridCellComboItem => $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.EditGridCellText => HasNamedGridRow(step)
+                ? $"Page.EditGridCellText(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellText(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.EditGridCellNumber => HasNamedGridRow(step)
+                ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.EditGridCellDate => HasNamedGridRow(step)
+                ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.SelectGridCellComboItem => HasNamedGridRow(step)
+                ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.DismissDialog => $"Page.DismissDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
@@ -757,6 +774,45 @@ internal sealed class AuthoringCodeGenerator
         return value is null or GridCellEditCommitMode.Commit
             ? string.Empty
             : $", GridCellEditCommitMode.{value.Value}";
+    }
+
+    private static bool HasNamedGridRow(RecordedStep step)
+    {
+        return step.GridRowConditions is { Count: > 0 };
+    }
+
+    private static string FormatGridRowSelector(RecordedStep step)
+    {
+        var conditions = step.GridRowConditions
+            ?? throw new InvalidOperationException("Named grid step does not contain row conditions.");
+        if (conditions.Count == 0)
+        {
+            throw new InvalidOperationException("Named grid step does not contain row conditions.");
+        }
+
+        var builder = new StringBuilder();
+        var first = conditions[0];
+        builder.Append("GridRowSelector.ByCell(\"")
+            .Append(EscapeString(first.ColumnName))
+            .Append("\", \"")
+            .Append(EscapeString(first.Value))
+            .Append("\")");
+        for (var index = 1; index < conditions.Count; index++)
+        {
+            var condition = conditions[index];
+            builder.Append(".AndCell(\"")
+                .Append(EscapeString(condition.ColumnName))
+                .Append("\", \"")
+                .Append(EscapeString(condition.Value))
+                .Append("\")");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string FormatGridTargetColumn(RecordedStep step)
+    {
+        return $"\"{EscapeString(step.GridTargetColumnName ?? string.Empty)}\"";
     }
 
     private static string EscapeString(string value)

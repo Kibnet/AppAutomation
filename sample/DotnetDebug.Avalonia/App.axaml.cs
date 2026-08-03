@@ -104,15 +104,24 @@ public partial class App : Application
         options.GridHints.Add(new RecorderGridHint(
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
-            ["EremexRow", "EremexValue", "EremexParity"]));
+            ["EremexRow", "EremexValue", "EremexParity"])
+        {
+            RowIdentityColumnPropertyNames = ["EremexRow"]
+        });
         options.GridHints.Add(new RecorderGridHint(
             "ArmEremexDataGridControl",
             "ArmGridAutomationBridge",
-            ["Key", "Value", "State"]));
+            ["Key", "Value", "State"])
+        {
+            RowIdentityColumnPropertyNames = ["Key"]
+        });
         options.GridHints.Add(new RecorderGridHint(
             "SearchPickerGridAutomationBridge",
             "SearchPickerGridAutomationBridge",
-            ["Key", "SelectedValue"]));
+            ["Key", "SelectedValue"])
+        {
+            RowIdentityColumnPropertyNames = ["Key"]
+        });
         options.GridActionHints.Add(new RecorderGridActionHint(
             "ArmGridOpenButton",
             "ArmGridAutomationBridge",

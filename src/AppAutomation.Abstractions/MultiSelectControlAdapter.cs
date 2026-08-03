@@ -1,5 +1,10 @@
 namespace AppAutomation.Abstractions;
 
+internal interface IMultiSelectCommittedStateControl
+{
+    bool TryGetCommittedItems(out IReadOnlyList<string> items);
+}
+
 /// <summary>
 /// Configuration for composing a multi-select popup from real primitive controls.
 /// </summary>
@@ -144,7 +149,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         }
     }
 
-    private sealed class MultiSelectControl : IMultiSelectControl
+    private sealed class MultiSelectControl : IMultiSelectControl, IMultiSelectCommittedStateControl
     {
         private readonly MultiSelectParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -229,6 +234,11 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             }
         }
 
+        public bool TryGetCommittedItems(out IReadOnlyList<string> items)
+        {
+            return _state.TryGetCommittedItems(out items);
+        }
+
         public void Open()
         {
             if (IsOpen)
@@ -245,9 +255,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             ArgumentNullException.ThrowIfNull(values);
 
             var items = ResolveItems();
-            var availableItems = items.Items;
-            ValidateAvailableItems(availableItems, values);
-            items.SetSelectedItems(values);
+            var availableItems = items.SetSelectedItemsAndGetAvailableItems(values);
             _state.SetPending(availableItems, values);
             if (string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
             {
@@ -324,24 +332,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _parts.FallbackToName);
         }
 
-        private static void ValidateAvailableItems(
-            IReadOnlyList<string> availableItems,
-            IEnumerable<string> requestedItems)
-        {
-            if (availableItems.Distinct(StringComparer.OrdinalIgnoreCase).Count() != availableItems.Count)
-            {
-                throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
-            }
-
-            var missingItems = requestedItems
-                .Where(requested => !availableItems.Contains(requested, StringComparer.OrdinalIgnoreCase))
-                .ToArray();
-            if (missingItems.Length > 0)
-            {
-                throw new InvalidOperationException(
-                    $"Multi-select items were not found: [{string.Join(", ", missingItems)}].");
-            }
-        }
     }
 
     private sealed class MultiSelectState
@@ -392,6 +382,15 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             {
                 items = _pendingItems.ToArray();
                 return _hasPendingItems;
+            }
+        }
+
+        public bool TryGetCommittedItems(out IReadOnlyList<string> items)
+        {
+            lock (_sync)
+            {
+                items = _committedItems.ToArray();
+                return _hasCommittedItems;
             }
         }
 

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add provider-neutral Recorder destination discovery and pre-record selection for existing source `partial` scenario classes, with generic support, compact scan feedback, collision-safe per-scenario files, and legacy preset compatibility.
 - Add provider-neutral multi-select popup authoring through `IMultiSelectControl`, `WithMultiSelect(...)`, `SelectMultiItems(...)`, and `CancelMultiSelection(...)`, with semantic Recorder capture for both Apply and Cancel, bounded position-aware traversal of virtualized items, and shared Headless/FlaUI replay.
 - Add cardinality-neutral `ComboBoxEditor` filter authoring through `IComboBoxFilterControl`, `WithComboBoxFilter(...)`, `ApplyFilterSelection(...)`, and `CancelFilterSelection(...)`; Recorder stores the actual `0..N` value set and Apply/Cancel outcome without branching on selection mode.
+- Add provider-neutral `SearchControl` authoring through `ISearchControl`, `WithSearchControl(...)`, `EnterSearch(...)`, `ClearSearch(...)`, and `ApplySearchFromHistory(...)`; one registration supports empty or later-populated history, while Recorder keeps manual input, clearing, and history selection as distinct semantic actions in shared Headless/FlaUI replay.
+- Add stable grid row authoring through `GridRowSelector`, `WithGridColumns(...)`, and named row/cell overloads; Recorder can opt individual grids into explicit single or composite identities while preserving legacy index-based output for unconfigured grids.
 
 ### Fixed
 

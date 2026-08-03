@@ -260,7 +260,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "Page.SearchAndSelect(static page => page.ArmServerSearchPicker, \"product\", \"Product 42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
-                "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, 0, 1, \"ga\", \"Gamma\");",
+                "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"Row-1\"), \"SelectedValue\", \"ga\", \"Gamma\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("ArmServerSearchPicker_OpenButton", StringComparison.Ordinal)).IsEqualTo(false);
         }
@@ -465,10 +465,10 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         using (Assert.Multiple())
         {
             await Assert.That(scenarioSource.Contains(
-                "Page.EditGridCellText(static page => page.ArmGridAutomationBridge, 0, 1, \"Edited-42\");",
+                "Page.EditGridCellText(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"), \"Value\", \"Edited-42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
-                "Page.OpenGridRow(static page => page.ArmGridAutomationBridge, 0);",
+                "Page.OpenGridRow(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.ScrollGridToEnd(static page => page.ArmGridAutomationBridge);",
@@ -477,7 +477,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "Page.SortGridByColumn(static page => page.ArmGridAutomationBridge, \"Value\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
-                "Page.CopyGridCell(static page => page.ArmGridAutomationBridge, 0, 1);",
+                "Page.CopyGridCell(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-05\"), \"Value\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.ExportGrid(static page => page.ArmGridAutomationBridge);",
