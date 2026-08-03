@@ -148,6 +148,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
     private AutomationElement FindElement(UiControlDefinition definition)
     {
+        if (definition.Scope is not null)
+        {
+            return FindScopedElement(definition)
+                ?? throw new ElementNotAvailableException(
+                    $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found "
+                    + $"inside scope [{definition.Scope.LocatorKind}:{definition.Scope.LocatorValue}].");
+        }
+
         var element = _window.FindFirstDescendant(CreateCondition(definition.LocatorValue, definition.LocatorKind));
         if (element is not null)
         {
@@ -179,32 +187,159 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
     }
 
+    private AutomationElement? FindScopedElement(UiControlDefinition definition)
+    {
+        return FindScopedCandidates(definition).FirstOrDefault(IsAttachedAndAvailable);
+    }
+
     private AutomationElement[] FindSearchHistoryButtons(UiControlDefinition definition)
     {
-        var direct = TryRead(() => _window.FindAllDescendants(CreateCondition(
-            definition.LocatorValue,
-            definition.LocatorKind))) ?? Array.Empty<AutomationElement>();
-        var detached = EnumerateDetachedProcessRoots()
-            .SelectMany(root => TryRead(() => root.FindAllDescendants(CreateCondition(
-                definition.LocatorValue,
-                definition.LocatorKind))) ?? Array.Empty<AutomationElement>());
-        var candidates = direct.Concat(detached);
-
-        if (definition.FallbackToName && definition.LocatorKind != UiLocatorKind.Name)
-        {
-            var fallback = TryRead(() => _window.FindAllDescendants(
-                _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>();
-            var detachedFallback = EnumerateDetachedProcessRoots()
-                .SelectMany(root => TryRead(() => root.FindAllDescendants(
-                    _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>());
-            candidates = candidates.Concat(fallback).Concat(detachedFallback);
-        }
+        var candidates = definition.Scope is null
+            ? GetProcessSearchRoots().SelectMany(root => FindCandidates(root, definition))
+            : FindScopedCandidates(definition);
 
         return candidates
             .Where(IsAttachedAndAvailable)
             .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Button)
-            .DistinctBy(candidate => TryRead(() => candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault))
+            .DistinctBy(GetAutomationElementIdentity)
             .ToArray();
+    }
+
+    private AutomationElement[] FindScopedCandidates(UiControlDefinition definition)
+    {
+        var scope = definition.Scope!;
+        var scopeRoots = FindScopeRoots(scope);
+        var directCandidates = scopeRoots
+            .SelectMany(root => FindCandidates(root, definition))
+            .Where(IsAttachedAndAvailable)
+            .ToArray();
+        if (directCandidates.Length > 0)
+        {
+            return directCandidates;
+        }
+
+        var anchors = scopeRoots.Length > 0
+            ? scopeRoots
+            : FindScopeAnchors(scope);
+        if (anchors.Length == 0)
+        {
+            return Array.Empty<AutomationElement>();
+        }
+
+        return GetProcessSearchRoots()
+            .Select(root => FindCandidates(root, definition)
+                .Where(IsAttachedAndAvailable)
+                .ToArray())
+            .Where(static candidates => candidates.Length > 0)
+            .OrderBy(candidates => candidates.Min(candidate =>
+                anchors.Min(anchor => GetBoundsDistanceSquared(anchor, candidate))))
+            .FirstOrDefault() ?? Array.Empty<AutomationElement>();
+    }
+
+    private AutomationElement[] FindCandidates(AutomationElement root, UiControlDefinition definition)
+    {
+        var candidates = TryRead(() => root.FindAllDescendants(CreateCondition(
+            definition.LocatorValue,
+            definition.LocatorKind))) ?? Array.Empty<AutomationElement>();
+        if (!definition.FallbackToName || definition.LocatorKind == UiLocatorKind.Name)
+        {
+            return candidates;
+        }
+
+        var fallback = TryRead(() => root.FindAllDescendants(
+            _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>();
+        return candidates.Concat(fallback).ToArray();
+    }
+
+    private AutomationElement[] GetProcessSearchRoots()
+    {
+        return new[] { (AutomationElement)_window }
+            .Concat(EnumerateDetachedProcessRoots())
+            .ToArray();
+    }
+
+    private AutomationElement[] FindScopeRoots(UiControlScope scope)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope.LocatorValue);
+        return GetProcessSearchRoots()
+            .SelectMany(root => new[] { root }.Concat(FindAutomationDescendants(root)))
+            .Where(candidate => MatchesLocator(candidate, scope))
+            .Where(candidate => TryRead(() => candidate.IsAvailable))
+            .DistinctBy(GetAutomationElementIdentity)
+            .ToArray();
+    }
+
+    private static string GetAutomationElementIdentity(AutomationElement candidate)
+    {
+        var runtimeId = TryRead(() => candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault);
+        if (runtimeId is { Length: > 0 })
+        {
+            return $"runtime:{string.Join(',', runtimeId)}";
+        }
+
+        return string.Join(
+            '|',
+            TryRead(() => candidate.FrameworkAutomationElement.ProcessId.ValueOrDefault),
+            TryRead(() => candidate.FrameworkAutomationElement.NativeWindowHandle.ValueOrDefault),
+            TryRead(() => candidate.ControlType),
+            TryRead(() => candidate.AutomationId),
+            TryRead(() => candidate.Name),
+            TryRead(() => candidate.BoundingRectangle));
+    }
+
+    private AutomationElement[] FindScopeAnchors(UiControlScope scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope.AnchorLocatorValue))
+        {
+            return Array.Empty<AutomationElement>();
+        }
+
+        var anchorScope = scope with { LocatorValue = scope.AnchorLocatorValue };
+        return FindScopeRoots(anchorScope);
+    }
+
+    private static long GetBoundsDistanceSquared(AutomationElement first, AutomationElement second)
+    {
+        var firstBounds = TryRead(() => first.BoundingRectangle);
+        var secondBounds = TryRead(() => second.BoundingRectangle);
+        if (firstBounds.Width <= 0
+            || firstBounds.Height <= 0
+            || secondBounds.Width <= 0
+            || secondBounds.Height <= 0)
+        {
+            return long.MaxValue;
+        }
+
+        var horizontalDistance = firstBounds.Right < secondBounds.Left
+            ? secondBounds.Left - firstBounds.Right
+            : secondBounds.Right < firstBounds.Left
+                ? firstBounds.Left - secondBounds.Right
+                : 0;
+        var verticalDistance = firstBounds.Bottom < secondBounds.Top
+            ? secondBounds.Top - firstBounds.Bottom
+            : secondBounds.Bottom < firstBounds.Top
+                ? firstBounds.Top - secondBounds.Bottom
+                : 0;
+        return (long)horizontalDistance * horizontalDistance
+            + (long)verticalDistance * verticalDistance;
+    }
+
+    private static bool MatchesLocator(AutomationElement candidate, UiControlScope scope)
+    {
+        var primaryValue = scope.LocatorKind switch
+        {
+            UiLocatorKind.AutomationId => TryRead(() => candidate.AutomationId),
+            UiLocatorKind.Name => TryRead(() => candidate.Name),
+            _ => null
+        };
+        if (string.Equals(primaryValue, scope.LocatorValue, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return scope.FallbackToName
+            && scope.LocatorKind != UiLocatorKind.Name
+            && string.Equals(TryRead(() => candidate.Name), scope.LocatorValue, StringComparison.Ordinal);
     }
 
     private PropertyCondition CreateCondition(string locatorValue, UiLocatorKind locatorKind)
@@ -643,7 +778,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public string Text => TryRead(() => Inner.Text) ?? ReadAutomationElementVisibleText(Inner) ?? string.Empty;
     }
 
-    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, ISelectableListBoxControl, IReadableTextControl
+    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, IExactSelectableListBoxControl, IReadableTextControl
     {
         public FlaUiListBoxControl(ListBox inner) : base(inner)
         {
@@ -679,28 +814,65 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         public void SelectItem(string itemText)
         {
+            SelectItem(itemText, TimeSpan.FromSeconds(1), exact: false);
+        }
+
+        public void SelectItemExact(string itemText)
+        {
+            SelectItem(itemText, TimeSpan.FromSeconds(1), exact: true);
+        }
+
+        internal void SelectItem(string itemText, TimeSpan timeout)
+        {
+            SelectItem(itemText, timeout, exact: false);
+        }
+
+        private void SelectItem(string itemText, TimeSpan timeout, bool exact)
+        {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
             var normalizedTarget = NormalizeLookupText(itemText);
-            var candidate = GetSelectableItems().FirstOrDefault(element =>
+            var stopwatch = Stopwatch.StartNew();
+            AutomationElement? candidate;
+            do
             {
-                var text = ReadAutomationElementText(element);
-                return string.Equals(
-                    NormalizeLookupText(text),
-                    normalizedTarget,
-                    StringComparison.OrdinalIgnoreCase);
-            });
+                candidate = ReadSelectableItems().FirstOrDefault(element =>
+                {
+                    var text = ReadAutomationElementText(element);
+                    return exact
+                        ? string.Equals(text, itemText, StringComparison.Ordinal)
+                        : string.Equals(
+                            NormalizeLookupText(text),
+                            normalizedTarget,
+                            StringComparison.OrdinalIgnoreCase);
+                });
+                if (candidate is not null)
+                {
+                    break;
+                }
+
+                Thread.Sleep(50);
+            }
+            while (stopwatch.Elapsed < timeout);
+
             if (candidate is null)
             {
                 throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
             }
 
-            if (TrySelect(candidate) && (SelectionMatches(normalizedTarget) || SelectionStateUnavailable()))
+            bool SelectionMatchesTarget()
+            {
+                return exact
+                    ? string.Equals(ReadSelectedText(), itemText, StringComparison.Ordinal)
+                    : SelectionMatches(normalizedTarget);
+            }
+
+            if (TrySelect(candidate) && (SelectionMatchesTarget() || SelectionStateUnavailable()))
             {
                 return;
             }
 
-            if (TryClick(candidate) && (SelectionMatches(normalizedTarget) || SelectionStateUnavailable()))
+            if (TryClick(candidate) && (SelectionMatchesTarget() || SelectionStateUnavailable()))
             {
                 return;
             }
@@ -965,22 +1137,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
             ArgumentNullException.ThrowIfNull(values);
             var normalizedValues = NormalizeRequestedItems(values);
-            var items = ReadAllItems();
-            if (items.Length > 0)
+            var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
+            DiscoverRequestedItems(items, normalizedValues);
+            if (items.Count > 0)
             {
-                _lastItems = items;
-                ValidateAvailableItems(items.Select(static item => item.Text), normalizedValues);
-                var changes = items
-                    .Where(item => item.IsChecked != normalizedValues.Contains(item.Text))
-                    .ToDictionary(
-                        static item => item.Text,
-                        item => normalizedValues.Contains(item.Text),
-                        StringComparer.OrdinalIgnoreCase);
-                ApplySelectionChanges(changes);
-                _lastItems = items
-                    .Select(item => item with { IsChecked = normalizedValues.Contains(item.Text) })
-                    .ToArray();
-                return items.Select(static item => item.Text).ToArray();
+                ValidateAvailableItems(items.Keys, normalizedValues);
+                ApplyExactSelection(items, normalizedValues);
+                _lastItems = items.Values.ToArray();
+                return _lastItems.Select(static item => item.Text).ToArray();
             }
 
             return SetSelectableItems(normalizedValues);
@@ -1122,16 +1286,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
-        private void ApplySelectionChanges(Dictionary<string, bool> changes)
+        private void DiscoverRequestedItems(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlySet<string> requestedValues)
         {
-            if (changes.Count == 0)
-            {
-                return;
-            }
-
-            var pendingChanges = new Dictionary<string, bool>(changes, StringComparer.OrdinalIgnoreCase);
-            ApplyCurrentSelectionChanges(pendingChanges);
-            if (pendingChanges.Count == 0)
+            var pendingValues = new HashSet<string>(requestedValues, StringComparer.OrdinalIgnoreCase);
+            AddCurrentItems(items, pendingValues);
+            if (pendingValues.Count == 0)
             {
                 return;
             }
@@ -1141,60 +1302,148 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             if (scroll is not null)
             {
                 var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-                TraverseSelectionChanges(pendingChanges, () => ScrollForward(scroll));
-                if (pendingChanges.Count > 0 && startingPosition > 0)
+                if (startingPosition < 100)
                 {
-                    TraverseSelectionChanges(pendingChanges, () => ScrollBackward(scroll));
+                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollForward(scroll));
                 }
+
+                if (pendingValues.Count > 0 && startingPosition > 0)
+                {
+                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollBackward(scroll));
+                }
+
+                return;
             }
-            else if (scrollBarRange is not null)
+
+            if (scrollBarRange is not null)
             {
                 var startingPosition = scrollBarRange.Value.ValueOrDefault;
                 var minimum = scrollBarRange.Minimum.ValueOrDefault;
-                TraverseSelectionChanges(pendingChanges, () => ScrollForward(scrollBarRange));
-                if (pendingChanges.Count > 0 && startingPosition > minimum)
+                var maximum = scrollBarRange.Maximum.ValueOrDefault;
+                if (startingPosition < maximum)
                 {
-                    TraverseSelectionChanges(pendingChanges, () => ScrollBackward(scrollBarRange));
+                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollForward(scrollBarRange));
                 }
-            }
 
-            if (pendingChanges.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    $"Multi-select items could not be revisited after validation: [{string.Join(", ", pendingChanges.Keys)}].");
+                if (pendingValues.Count > 0 && startingPosition > minimum)
+                {
+                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollBackward(scrollBarRange));
+                }
             }
         }
 
-        private void TraverseSelectionChanges(Dictionary<string, bool> pendingChanges, Func<bool> scroll)
+        private void TraverseUntilRequestedItemsFound(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            HashSet<string> pendingValues,
+            Func<bool> scroll)
         {
-            for (var step = 0; step < MaxScrollSteps && pendingChanges.Count > 0; step++)
+            for (var step = 0; step < MaxScrollSteps && pendingValues.Count > 0; step++)
             {
                 if (!scroll())
                 {
-                    WaitForBoundarySelectionChanges(pendingChanges);
+                    WaitForBoundaryItems(items);
+                    RemoveDiscoveredItems(pendingValues, items.Keys);
                     return;
                 }
 
-                ApplyCurrentSelectionChanges(pendingChanges);
+                AddCurrentItems(items, pendingValues);
             }
 
-            if (pendingChanges.Count > 0)
+            if (pendingValues.Count > 0)
             {
                 throw new InvalidOperationException(
-                    $"Multi-select selection traversal exceeded {MaxScrollSteps} vertical scroll steps.");
+                    $"Multi-select item lookup exceeded {MaxScrollSteps} vertical scroll steps.");
             }
         }
 
-        private void ApplyCurrentSelectionChanges(Dictionary<string, bool> pendingChanges)
+        private void AddCurrentItems(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            HashSet<string> pendingValues)
+        {
+            AddCurrentItems(items);
+            RemoveDiscoveredItems(pendingValues, items.Keys);
+        }
+
+        private static void RemoveDiscoveredItems(HashSet<string> pendingValues, IEnumerable<string> discoveredValues)
+        {
+            foreach (var value in discoveredValues)
+            {
+                pendingValues.Remove(value);
+            }
+        }
+
+        private void ApplyExactSelection(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlySet<string> requestedValues)
+        {
+            ApplyCurrentExactSelection(items, requestedValues);
+
+            var scroll = FindVerticalScrollPattern(Inner);
+            var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
+            if (scroll is not null)
+            {
+                var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
+                var needsBackwardTraversal = startingPosition > 0;
+                if (startingPosition < 100)
+                {
+                    TraverseExactSelection(items, requestedValues, () => ScrollForward(scroll));
+                }
+
+                if (needsBackwardTraversal)
+                {
+                    TraverseExactSelection(items, requestedValues, () => ScrollBackward(scroll));
+                }
+
+                return;
+            }
+
+            if (scrollBarRange is not null)
+            {
+                var startingPosition = scrollBarRange.Value.ValueOrDefault;
+                var minimum = scrollBarRange.Minimum.ValueOrDefault;
+                var maximum = scrollBarRange.Maximum.ValueOrDefault;
+                var needsBackwardTraversal = startingPosition > minimum;
+                if (startingPosition < maximum)
+                {
+                    TraverseExactSelection(items, requestedValues, () => ScrollForward(scrollBarRange));
+                }
+
+                if (needsBackwardTraversal)
+                {
+                    TraverseExactSelection(items, requestedValues, () => ScrollBackward(scrollBarRange));
+                }
+            }
+        }
+
+        private void TraverseExactSelection(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlySet<string> requestedValues,
+            Func<bool> scroll)
+        {
+            for (var step = 0; step < MaxScrollSteps; step++)
+            {
+                if (!scroll())
+                {
+                    WaitForBoundaryExactSelection(items, requestedValues);
+                    return;
+                }
+
+                ApplyCurrentExactSelection(items, requestedValues);
+            }
+
+            throw new InvalidOperationException(
+                $"Multi-select selection traversal exceeded {MaxScrollSteps} vertical scroll steps.");
+        }
+
+        private void ApplyCurrentExactSelection(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlySet<string> requestedValues)
         {
             foreach (var item in ReadCurrentItems())
             {
-                if (!pendingChanges.Remove(item.Text, out var shouldBeChecked))
-                {
-                    continue;
-                }
-
+                var shouldBeChecked = requestedValues.Contains(item.Text);
                 item.Control.SetChecked(shouldBeChecked, item.Text);
+                items[item.Text] = new MultiSelectItemSnapshot(item.Text, shouldBeChecked);
             }
         }
 
@@ -1207,14 +1456,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
-        private void WaitForBoundarySelectionChanges(Dictionary<string, bool> pendingChanges)
+        private void WaitForBoundaryExactSelection(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlySet<string> requestedValues)
         {
-            for (var attempt = 0;
-                 attempt < BoundaryRealizationAttempts && pendingChanges.Count > 0;
-                 attempt++)
+            for (var attempt = 0; attempt < BoundaryRealizationAttempts; attempt++)
             {
                 Thread.Sleep(BoundaryRealizationDelayMs);
-                ApplyCurrentSelectionChanges(pendingChanges);
+                ApplyCurrentExactSelection(items, requestedValues);
             }
         }
 
@@ -1513,20 +1762,25 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public IReadOnlyList<string> Items => _resolveButtons()
             .Select(ReadText)
             .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         public void Apply(string itemText)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
-            var normalizedTarget = NormalizeLookupText(itemText);
-            var button = _resolveButtons().FirstOrDefault(candidate =>
-                string.Equals(
-                    NormalizeLookupText(ReadText(candidate)),
-                    normalizedTarget,
-                    StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
-            new FlaUiButtonControl(button.AsButton()).Invoke();
+            var matches = _resolveButtons()
+                .Where(candidate => string.Equals(ReadText(candidate), itemText, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+            }
+
+            if (matches.Length > 1)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' is ambiguous.");
+            }
+
+            new FlaUiButtonControl(matches[0].AsButton()).Invoke();
         }
 
         private static string ReadText(AutomationElement button)
@@ -2290,6 +2544,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             ArgumentOutOfRangeException.ThrowIfNegative(request.RowIndex);
             ArgumentOutOfRangeException.ThrowIfNegative(request.ColumnIndex);
             ArgumentNullException.ThrowIfNull(request.Value);
+            if (request.TimeoutMs <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(request), "Grid edit timeout must be positive.");
+            }
 
             var cell = FindVisualCell(request.RowIndex, request.ColumnIndex)
                 ?? throw new InvalidOperationException(
@@ -2373,6 +2631,14 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a ServerSearchComboBox input.");
             }
 
+            var timeout = TimeSpan.FromMilliseconds(request.TimeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            TimeSpan RemainingTimeout()
+            {
+                var remaining = timeout - stopwatch.Elapsed;
+                return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+            }
+
             new FlaUiTextBoxControl(searchInput.AsTextBox()).Enter(request.SearchText);
 
             var inputAutomationId = TryRead(() => searchInput.AutomationId);
@@ -2380,14 +2646,17 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 ?? throw new InvalidOperationException(
                     $"ServerSearchComboBox input '{inputAutomationId}' does not use the expected '<Root>_Input' automation contract.");
             var resultsAutomationId = $"{editorAutomationId}_Results";
-            var results = WaitForProcessElementByAutomationId(resultsAutomationId, TimeSpan.FromMilliseconds(500));
+            var initialWait = RemainingTimeout() < TimeSpan.FromMilliseconds(500)
+                ? RemainingTimeout()
+                : TimeSpan.FromMilliseconds(500);
+            var results = WaitForProcessElementByAutomationId(resultsAutomationId, initialWait);
             if (results is null)
             {
                 var openButton = FindProcessElementByAutomationId($"{editorAutomationId}_OpenButton");
-                if (openButton is not null)
+                if (openButton is not null && RemainingTimeout() > TimeSpan.Zero)
                 {
                     openButton.Click();
-                    results = WaitForProcessElementByAutomationId(resultsAutomationId, TimeSpan.FromSeconds(5));
+                    results = WaitForProcessElementByAutomationId(resultsAutomationId, RemainingTimeout());
                 }
             }
 
@@ -2397,7 +2666,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                     $"ServerSearchComboBox results '{resultsAutomationId}' were not exposed as a ListBox for visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}'.");
             }
 
-            new FlaUiListBoxControl(results.AsListBox()).SelectItem(request.Value);
+            new FlaUiListBoxControl(results.AsListBox()).SelectItem(request.Value, RemainingTimeout());
         }
 
         private AutomationElement? WaitForProcessElementByAutomationId(string automationId, TimeSpan timeout)

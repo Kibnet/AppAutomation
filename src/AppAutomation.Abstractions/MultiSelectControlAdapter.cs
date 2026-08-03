@@ -214,7 +214,12 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                     return selectedItems;
                 }
 
-                return _state.CommittedItems;
+                if (_state.TryGetCommittedItems(out var committedItems))
+                {
+                    return committedItems;
+                }
+
+                return ReadInitialCommittedItems();
             }
         }
 
@@ -283,6 +288,30 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
 
             ResolveButton("CancelButton", _parts.CancelButtonLocator).Invoke();
             _state.DiscardPending();
+        }
+
+        private string[] ReadInitialCommittedItems()
+        {
+            Open();
+            var items = ResolveItems();
+            var selectedItems = items.SelectedItems.ToArray();
+            _state.Observe(items.Items, selectedItems);
+
+            if (!string.IsNullOrWhiteSpace(_parts.CancelButtonLocator))
+            {
+                Cancel();
+            }
+            else if (!string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
+            {
+                Apply();
+            }
+            else
+            {
+                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+                _state.DiscardPending();
+            }
+
+            return selectedItems;
         }
 
         private IUiControl ResolveRoot()

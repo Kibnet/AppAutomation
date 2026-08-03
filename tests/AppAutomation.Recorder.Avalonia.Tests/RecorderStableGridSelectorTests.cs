@@ -76,6 +76,49 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
+    public async Task Recorder_UsesDisplayedIdentityValueInsteadOfModelToString()
+    {
+        var fixture = new GridCaptureFixture(
+            [new OrderRow("ORD-42", "North", "Ready")],
+            identityColumns: ["OrderId"],
+            displayValue: static (row, columnIndex) => columnIndex == 0 ? "Order #42" : ValueAt(row, columnIndex));
+
+        var result = fixture.CaptureCell(rowIndex: 0, columnIndex: 2);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.GridRowConditions).IsEquivalentTo(
+            [
+                new RecordedGridRowCondition("OrderId", "Order #42")
+            ]);
+        }
+    }
+
+    [Test]
+    public async Task Recorder_FollowsDisplayedRowDataAfterSorting()
+    {
+        var fixture = new GridCaptureFixture(
+            [
+                new OrderRow("ORD-42", "North", "Ready"),
+                new OrderRow("ORD-41", "South", "Draft")
+            ],
+            identityColumns: ["OrderId"],
+            displayedAutomationRowIndex: static rowIndex => 1 - rowIndex);
+
+        var result = fixture.CaptureCell(rowIndex: 0, columnIndex: 2);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.GridRowConditions).IsEquivalentTo(
+            [
+                new RecordedGridRowCondition("OrderId", "ORD-42")
+            ]);
+        }
+    }
+
+    [Test]
     public async Task Recorder_RecordsRowAssertionWithStableIdentity()
     {
         var fixture = new GridCaptureFixture(
@@ -198,18 +241,50 @@ public sealed class RecorderStableGridSelectorTests
     {
         private readonly StackPanel _root = new();
         private readonly GridHost _grid;
+        private readonly Panel _bridge;
         private readonly IReadOnlyList<OrderRow> _rows;
         private readonly RecorderStepFactory _factory;
 
-        public GridCaptureFixture(IReadOnlyList<OrderRow> rows, IReadOnlyList<string> identityColumns)
+        public GridCaptureFixture(
+            IReadOnlyList<OrderRow> rows,
+            IReadOnlyList<string> identityColumns,
+            Func<OrderRow, int, string>? displayValue = null,
+            Func<int, int>? displayedAutomationRowIndex = null)
         {
             _rows = rows;
             _grid = new GridHost { ItemsSource = rows };
-            var bridge = new Border();
+            _bridge = new StackPanel();
             AutomationProperties.SetAutomationId(_grid, "OrdersGridVisual");
-            AutomationProperties.SetAutomationId(bridge, "OrdersGrid");
+            AutomationProperties.SetAutomationId(_bridge, "OrdersGrid");
             _root.Children.Add(_grid);
-            _root.Children.Add(bridge);
+            _root.Children.Add(_bridge);
+
+            for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+            {
+                for (var columnIndex = 0; columnIndex < 3; columnIndex++)
+                {
+                    var displayedCell = new TextBlock
+                    {
+                        Text = displayValue?.Invoke(rows[rowIndex], columnIndex)
+                            ?? ValueAt(rows[rowIndex], columnIndex),
+                        DataContext = rows[rowIndex]
+                    };
+                    AutomationProperties.SetAutomationId(
+                        displayedCell,
+                        $"OrdersGrid_Row{displayedAutomationRowIndex?.Invoke(rowIndex) ?? rowIndex}_Cell{columnIndex}");
+                    _bridge.Children.Add(displayedCell);
+
+                    var sourceCell = new TextBlock
+                    {
+                        Text = ValueAt(rows[rowIndex], columnIndex),
+                        DataContext = rows[rowIndex]
+                    };
+                    AutomationProperties.SetAutomationId(
+                        sourceCell,
+                        $"OrdersGridVisual_Row{rowIndex}_Cell{columnIndex}");
+                    _grid.Children.Add(sourceCell);
+                }
+            }
 
             var options = new AppAutomationRecorderOptions();
             options.GridHints.Add(new RecorderGridHint(
@@ -224,15 +299,12 @@ public sealed class RecorderStableGridSelectorTests
 
         public StepCreationResult CaptureCell(int rowIndex, int columnIndex)
         {
-            var row = _rows[rowIndex];
-            var values = new[] { row.OrderId, row.Customer, row.Status };
-            var cell = new TextBlock
-            {
-                Text = values[columnIndex],
-                DataContext = row
-            };
-            AutomationProperties.SetAutomationId(cell, $"OrdersGrid_Row{rowIndex}_Cell{columnIndex}");
-            _grid.Children.Add(cell);
+            var cell = _grid.Children
+                .OfType<TextBlock>()
+                .Single(candidate => string.Equals(
+                    AutomationProperties.GetAutomationId(candidate),
+                    $"OrdersGridVisual_Row{rowIndex}_Cell{columnIndex}",
+                    StringComparison.Ordinal));
             return _factory.TryCreateAssertionStep(cell, RecorderAssertionMode.Text);
         }
 
@@ -242,6 +314,17 @@ public sealed class RecorderStableGridSelectorTests
             _grid.Children.Add(row);
             return _factory.TryCreateAssertionStep(row, RecorderAssertionMode.Text);
         }
+    }
+
+    private static string ValueAt(OrderRow row, int columnIndex)
+    {
+        return columnIndex switch
+        {
+            0 => row.OrderId,
+            1 => row.Customer,
+            2 => row.Status,
+            _ => throw new ArgumentOutOfRangeException(nameof(columnIndex))
+        };
     }
 
     private sealed class GridHost : Panel

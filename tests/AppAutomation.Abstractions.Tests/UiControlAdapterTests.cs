@@ -124,6 +124,22 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task MultiSelectAdapter_ReadsInitialCommittedSelectionWhileClosed()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        var selectedItems = context.Page.StatusFilter.SelectedItems;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selectedItems).IsEquivalentTo(["Open"]);
+            await Assert.That(context.Items.IsAvailable).IsFalse();
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task MultiSelectAdapter_UsesProviderSelectionSnapshotWithoutPreReadingItems()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
@@ -186,6 +202,52 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(comboBox.SelectedIndex).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_WaitsForActionsEnabledByEarlierPhases()
+    {
+        var searchInput = new FakeTextBoxControl("ProductPickerInput");
+        var expandButton = new FakeButtonControl("ProductPickerExpand")
+        {
+            IsEnabled = false
+        };
+        var applyButton = new FakeButtonControl("ProductPickerApply")
+        {
+            IsEnabled = false,
+            OnInvoke = () => EnableAfterDelay(expandButton)
+        };
+        searchInput.OnEnter = _ => EnableAfterDelay(applyButton);
+        var results = new FakeSelectableListBoxControl(
+            "ProductPickerResults",
+            [new FakeListBoxItem("Item 42", "Item 42")]);
+        var resolver = new FakeResolver(
+                ("ProductPickerInput", searchInput),
+                ("ProductPickerApply", applyButton),
+                ("ProductPickerExpand", expandButton),
+                ("ProductPickerResults", results))
+            .WithSearchPicker(
+                "ProductPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "ProductPickerInput",
+                    "ProductPickerResults",
+                    "ProductPickerApply",
+                    "ProductPickerExpand",
+                    SearchPickerResultsKind.ListBox));
+        var page = new ProductPickerPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.ProductPicker,
+            "Item",
+            "Item 42",
+            timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(applyButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(expandButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(results.SelectedItemText).IsEqualTo("Item 42");
         }
     }
 
@@ -339,6 +401,9 @@ public sealed class UiControlAdapterTests
                     resultsKind: SearchPickerResultsKind.ListBox,
                     opensOnSearch: true));
         var page = new ServerSearchComboBoxPage(resolver);
+        expandButton.IsEnabled = false;
+
+        var isEnabledWithoutExpandAction = page.ServerSearchComboBox.IsEnabled;
 
         page.SearchAndSelect(
             static candidate => candidate.ServerSearchComboBox,
@@ -347,6 +412,7 @@ public sealed class UiControlAdapterTests
 
         using (Assert.Multiple())
         {
+            await Assert.That(isEnabledWithoutExpandAction).IsTrue();
             await Assert.That(expandButton.InvokeCount).IsEqualTo(0);
             await Assert.That(listBox.SelectedItemText).IsEqualTo("Product 42");
         }
@@ -1193,6 +1259,16 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class ProductPickerPageDefinitions
+    {
+        public static UiControlDefinition ProductPicker { get; } = new(
+            "ProductPicker",
+            UiControlType.SearchPicker,
+            "ProductPicker",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class SearchPickerPage : UiPage
     {
         public SearchPickerPage(IUiControlResolver resolver)
@@ -1244,6 +1320,17 @@ public sealed class UiControlAdapterTests
 
         public ISearchPickerControl ServerSearchComboBox =>
             Resolve<ISearchPickerControl>(ServerSearchComboBoxPageDefinitions.ServerSearchComboBox);
+    }
+
+    private sealed class ProductPickerPage : UiPage
+    {
+        public ProductPickerPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl ProductPicker =>
+            Resolve<ISearchPickerControl>(ProductPickerPageDefinitions.ProductPicker);
     }
 
     private sealed class SearchPickerInputPartPage : UiPage
@@ -1451,9 +1538,12 @@ public sealed class UiControlAdapterTests
 
         public string Text { get; set; }
 
+        public Action<string>? OnEnter { get; set; }
+
         public void Enter(string value)
         {
             Text = value;
+            OnEnter?.Invoke(value);
         }
     }
 
@@ -1482,13 +1572,30 @@ public sealed class UiControlAdapterTests
 
         public int InvokeCount { get; private set; }
 
+        public bool WasInvokedWhileDisabled { get; private set; }
+
         public Action? OnInvoke { get; init; }
 
         public void Invoke()
         {
+            if (!IsEnabled)
+            {
+                WasInvokedWhileDisabled = true;
+                throw new InvalidOperationException($"Button '{AutomationId}' is disabled.");
+            }
+
             InvokeCount++;
             OnInvoke?.Invoke();
         }
+    }
+
+    private static void EnableAfterDelay(FakeControlBase control)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            control.IsEnabled = true;
+        });
     }
 
     private sealed class FakeControl : FakeControlBase

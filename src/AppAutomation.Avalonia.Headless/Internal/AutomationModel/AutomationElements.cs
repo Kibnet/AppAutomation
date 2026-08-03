@@ -414,6 +414,33 @@ internal class ListBox : AutomationElement
         });
     }
 
+    public void SelectItemExact(string itemText)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        Ui(() =>
+        {
+            Control.Dispatcher.RunJobs();
+            var values = ReadItems(Native.Items);
+            var matches = values
+                .Where(candidate => string.Equals(candidate?.ToString(), itemText, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            if (matches.Length > 1)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous.");
+            }
+
+            Native.SelectedItem = matches[0];
+            Control.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
     private static IReadOnlyList<object?> ReadItems(IEnumerable? enumerable)
     {
         if (enumerable is null)

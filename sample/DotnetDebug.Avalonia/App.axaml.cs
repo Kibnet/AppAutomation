@@ -172,6 +172,7 @@ public partial class App : Application
             SearchControlParts.ByAutomationIds(
                 "ArmTableSearchInput",
                 "ArmTableSearchHistoryItemButton",
+                historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
                 historyRootAutomationId: "ArmTableSearchHistoryRoot")));
         options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
             "ArmStatusFilter",

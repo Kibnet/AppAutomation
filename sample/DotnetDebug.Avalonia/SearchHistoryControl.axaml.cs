@@ -28,9 +28,9 @@ public partial class SearchHistoryControl : UserControl
 
     public bool IsHistoryOpen => HistoryPopup.IsOpen;
 
-    private void OnSearchInputGotFocus(object? sender, FocusChangedEventArgs e) => OpenHistoryIfAvailable();
-
     private void OnSearchInputPointerPressed(object? sender, PointerPressedEventArgs e) => OpenHistoryIfAvailable();
+
+    private void OnHistoryOpenClick(object? sender, RoutedEventArgs e) => OpenHistoryIfAvailable();
 
     private void OnSearchInputLostFocus(object? sender, RoutedEventArgs e)
     {
@@ -55,6 +55,7 @@ public partial class SearchHistoryControl : UserControl
 
     public void OpenHistoryIfAvailable()
     {
+        HistoryPopup.PlacementTarget = SearchInput;
         HistoryPopup.IsOpen = _history.Count > 0;
     }
 
@@ -72,7 +73,7 @@ public partial class SearchHistoryControl : UserControl
     private void CloseHistoryIfFocusLeftControl()
     {
         var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() as Control;
-        if (ReferenceEquals(focused, SearchInput)
+        if (focused is not null && SearchInput.GetVisualDescendants().Prepend(SearchInput).Contains(focused)
             || focused is not null && HistoryRoot.GetVisualDescendants().Prepend(HistoryRoot).Contains(focused))
         {
             return;

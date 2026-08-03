@@ -15,107 +15,7 @@ public static partial class UiPageExtensions
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(values);
-        var control = Resolve(selector, page);
-        var expectedItems = ValidateExpectedMultiSelectItems(
-            page,
-            selector,
-            values,
-            control,
-            timeoutMs,
-            nameof(SelectMultiItems));
-
-        WaitUntil(
-            page,
-            selector,
-            () => control.IsEnabled,
-            timeoutMs,
-            $"Multi-select popup '{control.AutomationId}' is not enabled.",
-            expectedValue: "IsEnabled=true",
-            lastObservedValueFactory: () => $"IsEnabled={control.IsEnabled}",
-            operationName: nameof(SelectMultiItems));
-
-        try
-        {
-            control.Open();
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                "failed to open",
-                ex,
-                nameof(SelectMultiItems));
-        }
-
-        WaitUntil(
-            page,
-            selector,
-            () => control.IsOpen,
-            timeoutMs,
-            $"Multi-select popup '{control.AutomationId}' did not open.",
-            expectedValue: "IsOpen=true",
-            lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(SelectMultiItems));
-
-        try
-        {
-            control.SetSelectedItems(expectedItems);
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                "failed to select the requested items",
-                ex,
-                nameof(SelectMultiItems));
-        }
-
-        WaitUntil(
-            page,
-            selector,
-            () => MultiSelectSetsEqual(control.SelectedItems, expectedItems),
-            timeoutMs,
-            $"Multi-select popup '{control.AutomationId}' did not reach the requested pending selection.",
-            expectedValue: FormatMultiSelectItems(expectedItems),
-            lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(SelectMultiItems));
-
-        try
-        {
-            control.Apply();
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                "failed to apply the requested items",
-                ex,
-                nameof(SelectMultiItems));
-        }
-
-        WaitUntil(
-            page,
-            selector,
-            () => !control.IsOpen,
-            timeoutMs,
-            $"Multi-select popup '{control.AutomationId}' did not close after Apply.",
-            expectedValue: "IsOpen=false",
-            lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(SelectMultiItems));
-
-        return WaitUntilSelectedItemsEqual(page, selector, expectedItems, timeoutMs);
+        return ExecuteMultiSelectSelection(page, selector, values, timeoutMs, cancel: false);
     }
 
     /// <summary>
@@ -129,9 +29,23 @@ public static partial class UiPageExtensions
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(values);
+        return ExecuteMultiSelectSelection(page, selector, values, timeoutMs, cancel: true);
+    }
+
+    private static TSelf ExecuteMultiSelectSelection<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IMultiSelectControl>> selector,
+        IReadOnlyCollection<string> values,
+        int timeoutMs,
+        bool cancel)
+        where TSelf : UiPage
+    {
+        var operationName = cancel ? nameof(CancelMultiSelection) : nameof(SelectMultiItems);
+        var startedAtUtc = DateTimeOffset.UtcNow;
         var control = Resolve(selector, page);
         IReadOnlyList<string> cachedCommittedItems = [];
-        var hasCachedCommittedItems = control is IMultiSelectCommittedStateControl committedState
+        var hasCachedCommittedItems = cancel
+            && control is IMultiSelectCommittedStateControl committedState
             && committedState.TryGetCommittedItems(out cachedCommittedItems);
         var expectedItems = ValidateExpectedMultiSelectItems(
             page,
@@ -139,7 +53,8 @@ public static partial class UiPageExtensions
             values,
             control,
             timeoutMs,
-            nameof(CancelMultiSelection));
+            operationName,
+            startedAtUtc);
 
         WaitUntil(
             page,
@@ -149,24 +64,18 @@ public static partial class UiPageExtensions
             $"Multi-select popup '{control.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={control.IsEnabled}",
-            operationName: nameof(CancelMultiSelection));
+            operationName: operationName);
 
-        try
-        {
-            control.Open();
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                "failed to open",
-                ex,
-                nameof(CancelMultiSelection));
-        }
+        ExecuteMultiSelectAction(
+            page,
+            selector,
+            expectedItems,
+            control,
+            timeoutMs,
+            startedAtUtc,
+            control.Open,
+            "failed to open",
+            operationName);
 
         WaitUntil(
             page,
@@ -176,35 +85,34 @@ public static partial class UiPageExtensions
             $"Multi-select popup '{control.AutomationId}' did not open.",
             expectedValue: "IsOpen=true",
             lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(CancelMultiSelection));
+            operationName: operationName);
 
-        var committedItems = hasCachedCommittedItems
-            ? cachedCommittedItems.Select(NormalizeMultiSelectItem).ToArray()
-            : control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
-        EnsureMultiSelectPopupRemainsOpen(
-            page,
-            selector,
-            expectedItems,
-            control,
-            timeoutMs,
-            nameof(CancelMultiSelection));
-
-        try
+        IReadOnlyList<string> committedItems = expectedItems;
+        if (cancel)
         {
-            control.SetSelectedItems(expectedItems);
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
+            committedItems = hasCachedCommittedItems
+                ? cachedCommittedItems.Select(NormalizeMultiSelectItem).ToArray()
+                : control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
+            EnsureMultiSelectPopupRemainsOpen(
                 page,
                 selector,
                 expectedItems,
                 control,
                 timeoutMs,
-                "failed to select the requested pending items",
-                ex,
-                nameof(CancelMultiSelection));
+                operationName,
+                startedAtUtc);
         }
+
+        ExecuteMultiSelectAction(
+            page,
+            selector,
+            expectedItems,
+            control,
+            timeoutMs,
+            startedAtUtc,
+            () => control.SetSelectedItems(expectedItems),
+            cancel ? "failed to select the requested pending items" : "failed to select the requested items",
+            operationName);
 
         WaitUntil(
             page,
@@ -214,34 +122,28 @@ public static partial class UiPageExtensions
             $"Multi-select popup '{control.AutomationId}' did not reach the requested pending selection.",
             expectedValue: FormatMultiSelectItems(expectedItems),
             lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(CancelMultiSelection));
+            operationName: operationName);
 
-        try
-        {
-            control.Cancel();
-        }
-        catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
-        {
-            throw CreateMultiSelectException(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                "failed to cancel",
-                ex,
-                nameof(CancelMultiSelection));
-        }
+        ExecuteMultiSelectAction(
+            page,
+            selector,
+            expectedItems,
+            control,
+            timeoutMs,
+            startedAtUtc,
+            cancel ? control.Cancel : control.Apply,
+            cancel ? "failed to cancel" : "failed to apply the requested items",
+            operationName);
 
         WaitUntil(
             page,
             selector,
             () => !control.IsOpen,
             timeoutMs,
-            $"Multi-select popup '{control.AutomationId}' did not close after Cancel.",
+            $"Multi-select popup '{control.AutomationId}' did not close after {(cancel ? "Cancel" : "Apply")}.",
             expectedValue: "IsOpen=false",
             lastObservedValueFactory: () => DescribeMultiSelect(control),
-            operationName: nameof(CancelMultiSelection));
+            operationName: operationName);
 
         return WaitUntilSelectedItemsEqual(page, selector, committedItems, timeoutMs);
     }
@@ -257,6 +159,7 @@ public static partial class UiPageExtensions
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(values);
+        var startedAtUtc = DateTimeOffset.UtcNow;
         var control = Resolve(selector, page);
         var expectedItems = ValidateExpectedMultiSelectItems(
             page,
@@ -264,7 +167,8 @@ public static partial class UiPageExtensions
             values,
             control,
             timeoutMs,
-            nameof(WaitUntilSelectedItemsEqual));
+            nameof(WaitUntilSelectedItemsEqual),
+            startedAtUtc);
 
         WaitUntil(
             page,
@@ -285,7 +189,8 @@ public static partial class UiPageExtensions
         IReadOnlyCollection<string> values,
         IMultiSelectControl control,
         int timeoutMs,
-        string operationName)
+        string operationName,
+        DateTimeOffset startedAtUtc)
         where TSelf : UiPage
     {
         try
@@ -313,27 +218,26 @@ public static partial class UiPageExtensions
                 timeoutMs,
                 "received an invalid requested item set",
                 ex,
-                operationName);
+                operationName,
+                startedAtUtc);
         }
     }
 
-    private static void EnsureMultiSelectPopupRemainsOpen<TSelf>(
+    private static void ExecuteMultiSelectAction<TSelf>(
         TSelf page,
         Expression<Func<TSelf, IMultiSelectControl>> selector,
         IReadOnlyCollection<string> expectedItems,
         IMultiSelectControl control,
         int timeoutMs,
+        DateTimeOffset startedAtUtc,
+        Action action,
+        string failure,
         string operationName)
         where TSelf : UiPage
     {
-        if (control.IsOpen)
-        {
-            return;
-        }
-
         try
         {
-            control.Open();
+            action();
         }
         catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
         {
@@ -343,10 +247,38 @@ public static partial class UiPageExtensions
                 expectedItems,
                 control,
                 timeoutMs,
-                "closed while reading the committed selection and failed to reopen",
+                failure,
                 ex,
-                operationName);
+                operationName,
+                startedAtUtc);
         }
+    }
+
+    private static void EnsureMultiSelectPopupRemainsOpen<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IMultiSelectControl>> selector,
+        IReadOnlyCollection<string> expectedItems,
+        IMultiSelectControl control,
+        int timeoutMs,
+        string operationName,
+        DateTimeOffset startedAtUtc)
+        where TSelf : UiPage
+    {
+        if (control.IsOpen)
+        {
+            return;
+        }
+
+        ExecuteMultiSelectAction(
+            page,
+            selector,
+            expectedItems,
+            control,
+            timeoutMs,
+            startedAtUtc,
+            control.Open,
+            "closed while reading the committed selection and failed to reopen",
+            operationName);
 
         WaitUntil(
             page,
@@ -395,15 +327,15 @@ public static partial class UiPageExtensions
         int timeoutMs,
         string failure,
         Exception exception,
-        string operationName)
+        string operationName,
+        DateTimeOffset startedAtUtc)
         where TSelf : UiPage
     {
-        var now = DateTimeOffset.UtcNow;
         return CreateUiOperationException(
             page,
             selector,
             TimeSpan.FromMilliseconds(timeoutMs),
-            now,
+            startedAtUtc,
             $"Multi-select popup '{control.AutomationId}' {failure}.",
             FormatMultiSelectItems(expectedItems),
             () => DescribeMultiSelect(control),

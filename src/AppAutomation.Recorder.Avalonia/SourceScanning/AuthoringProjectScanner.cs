@@ -94,22 +94,29 @@ internal sealed class AuthoringProjectScanner
         ArgumentNullException.ThrowIfNull(target);
 
         var existingControlsByKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
+        var existingControlsByTypedKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
         var propertyNames = new HashSet<string>(StringComparer.Ordinal);
         var methodNames = new HashSet<string>(StringComparer.Ordinal);
-        ScannedClassInfo? pageClass = null;
-        ScannedClassInfo? scenarioClass = null;
+        var pageDeclarations = new List<(string FilePath, ClassDeclarationSyntax Declaration)>();
+        var scenarioDeclarations = new List<(string FilePath, ClassDeclarationSyntax Declaration)>();
 
-        foreach (var filePath in Directory.EnumerateFiles(target.ProjectDirectory, "*.cs", SearchOption.AllDirectories))
+        var syntaxTrees = Directory
+            .EnumerateFiles(target.ProjectDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(static filePath => !IsIgnoredPath(filePath))
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Select(filePath => CSharpSyntaxTree.ParseText(
+                File.ReadAllText(filePath),
+                path: filePath,
+                cancellationToken: cancellationToken))
+            .ToArray();
+        var compilation = CreateScanCompilation(syntaxTrees);
+
+        foreach (var syntaxTree in syntaxTrees)
         {
-            if (IsIgnoredPath(filePath))
-            {
-                continue;
-            }
-
             cancellationToken.ThrowIfCancellationRequested();
-
-            var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filePath), cancellationToken: cancellationToken);
+            var filePath = syntaxTree.FilePath;
             var root = syntaxTree.GetCompilationUnitRoot(cancellationToken);
+            var semanticModel = compilation.GetSemanticModel(syntaxTree, ignoreAccessibility: true);
 
             foreach (var declaration in root.DescendantNodes().OfType<ClassDeclarationSyntax>())
             {
@@ -118,11 +125,18 @@ internal sealed class AuthoringProjectScanner
                 if (string.Equals(namespaceName, target.PageNamespace, StringComparison.Ordinal)
                     && string.Equals(declaration.Identifier.ValueText, target.PageClassName, StringComparison.Ordinal))
                 {
-                    pageClass ??= CreateClassInfo(namespaceName, declaration);
-                    foreach (var controlInfo in ParseControls(declaration))
+                    if (!IsGeneratedFile(filePath))
+                    {
+                        pageDeclarations.Add((filePath, declaration));
+                    }
+
+                    foreach (var controlInfo in ParseControls(declaration, semanticModel, cancellationToken))
                     {
                         propertyNames.Add(controlInfo.PropertyName);
                         existingControlsByKey.TryAdd(CreateControlKey(controlInfo.LocatorKind, controlInfo.LocatorValue), controlInfo);
+                        existingControlsByTypedKey.TryAdd(
+                            CreateTypedControlKey(controlInfo.LocatorKind, controlInfo.LocatorValue, controlInfo.ControlType),
+                            controlInfo);
                     }
                 }
 
@@ -133,7 +147,7 @@ internal sealed class AuthoringProjectScanner
                 {
                     if (!IsGeneratedFile(filePath))
                     {
-                        scenarioClass ??= CreateClassInfo(namespaceName, declaration);
+                        scenarioDeclarations.Add((filePath, declaration));
                     }
 
                     foreach (var method in declaration.Members.OfType<MethodDeclarationSyntax>())
@@ -144,10 +158,14 @@ internal sealed class AuthoringProjectScanner
             }
         }
 
+        var pageClass = SelectPreferredClass(pageDeclarations, target.PageClassName);
+        var scenarioClass = SelectPreferredClass(scenarioDeclarations, target.ScenarioClassName);
+
         return new AuthoringProjectSnapshot(
             pageClass,
             scenarioClass,
             existingControlsByKey,
+            existingControlsByTypedKey,
             propertyNames,
             methodNames);
     }
@@ -163,18 +181,31 @@ internal sealed class AuthoringProjectScanner
             return Array.Empty<ExistingControlInfo>();
         }
 
-        var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filePath), cancellationToken: cancellationToken);
+        var syntaxTree = CSharpSyntaxTree.ParseText(
+            File.ReadAllText(filePath),
+            path: filePath,
+            cancellationToken: cancellationToken);
+        var compilation = CreateScanCompilation([syntaxTree]);
+        var semanticModel = compilation.GetSemanticModel(syntaxTree, ignoreAccessibility: true);
         var root = syntaxTree.GetCompilationUnitRoot(cancellationToken);
         return root
             .DescendantNodes()
             .OfType<ClassDeclarationSyntax>()
-            .SelectMany(ParseControls)
+            .SelectMany(declaration => ParseControls(declaration, semanticModel, cancellationToken))
             .ToArray();
     }
 
     internal static string CreateControlKey(UiLocatorKind locatorKind, string locatorValue)
     {
         return $"{locatorKind}:{locatorValue}";
+    }
+
+    internal static string CreateTypedControlKey(
+        UiLocatorKind locatorKind,
+        string locatorValue,
+        UiControlType controlType)
+    {
+        return $"{CreateControlKey(locatorKind, locatorValue)}:{controlType}";
     }
 
     private static bool IsIgnoredPath(string filePath)
@@ -232,7 +263,26 @@ internal sealed class AuthoringProjectScanner
         };
     }
 
-    private static ScannedClassInfo CreateClassInfo(string namespaceName, ClassDeclarationSyntax declaration)
+    private static ScannedClassInfo? SelectPreferredClass(
+        IReadOnlyList<(string FilePath, ClassDeclarationSyntax Declaration)> declarations,
+        string className)
+    {
+        var selected = declarations
+            .OrderByDescending(candidate => string.Equals(
+                Path.GetFileName(candidate.FilePath),
+                $"{className}.cs",
+                StringComparison.OrdinalIgnoreCase))
+            .ThenBy(static candidate => candidate.FilePath, StringComparer.Ordinal)
+            .FirstOrDefault();
+        return selected.Declaration is null
+            ? null
+            : CreateClassInfo(GetNamespaceName(selected.Declaration), selected.Declaration, selected.FilePath);
+    }
+
+    private static ScannedClassInfo CreateClassInfo(
+        string namespaceName,
+        ClassDeclarationSyntax declaration,
+        string filePath)
     {
         var modifiers = declaration.Modifiers
             .Where(static token => !token.IsKind(SyntaxKind.PartialKeyword))
@@ -242,6 +292,7 @@ internal sealed class AuthoringProjectScanner
         return new ScannedClassInfo(
             namespaceName,
             declaration.Identifier.ValueText,
+            filePath,
             modifiers.Length == 0 ? "internal" : string.Join(" ", modifiers),
             declaration.TypeParameterList?.ToString() ?? string.Empty,
             CreateTypeParameterSignature(declaration),
@@ -249,7 +300,10 @@ internal sealed class AuthoringProjectScanner
             declaration.Modifiers.Any(static token => token.IsKind(SyntaxKind.PartialKeyword)));
     }
 
-    private static IEnumerable<ExistingControlInfo> ParseControls(ClassDeclarationSyntax declaration)
+    private static IEnumerable<ExistingControlInfo> ParseControls(
+        ClassDeclarationSyntax declaration,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
     {
         foreach (var attributeList in declaration.AttributeLists)
         {
@@ -260,8 +314,16 @@ internal sealed class AuthoringProjectScanner
                     continue;
                 }
 
-                if (!TryReadStringLiteral(attribute.ArgumentList.Arguments[0].Expression, out var propertyName)
-                    || !TryReadStringLiteral(attribute.ArgumentList.Arguments[2].Expression, out var locatorValue))
+                if (!TryReadStringConstant(
+                        attribute.ArgumentList.Arguments[0].Expression,
+                        semanticModel,
+                        cancellationToken,
+                        out var propertyName)
+                    || !TryReadStringConstant(
+                        attribute.ArgumentList.Arguments[2].Expression,
+                        semanticModel,
+                        cancellationToken,
+                        out var locatorValue))
                 {
                     continue;
                 }
@@ -300,7 +362,11 @@ internal sealed class AuthoringProjectScanner
             || name.EndsWith("UiControlAttribute", StringComparison.Ordinal);
     }
 
-    private static bool TryReadStringLiteral(ExpressionSyntax expression, out string value)
+    private static bool TryReadStringConstant(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken,
+        out string value)
     {
         if (expression is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.StringLiteralExpression))
         {
@@ -308,8 +374,32 @@ internal sealed class AuthoringProjectScanner
             return true;
         }
 
+        var constant = semanticModel.GetConstantValue(expression, cancellationToken);
+        if (constant.HasValue && constant.Value is string constantValue)
+        {
+            value = constantValue;
+            return true;
+        }
+
         value = string.Empty;
         return false;
+    }
+
+    private static CSharpCompilation CreateScanCompilation(IEnumerable<SyntaxTree> syntaxTrees)
+    {
+        var references = new[]
+            {
+                typeof(object).Assembly.Location,
+                typeof(UiControlAttribute).Assembly.Location
+            }
+            .Where(static location => !string.IsNullOrWhiteSpace(location))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(static location => MetadataReference.CreateFromFile(location));
+        return CSharpCompilation.Create(
+            "AppAutomation.Recorder.SourceScan",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
     }
 
     private static bool? TryReadBoolean(ExpressionSyntax expression)

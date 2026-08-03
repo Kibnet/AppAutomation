@@ -617,6 +617,23 @@ public static partial class UiControlResolverExtensions
     }
 }
 
+internal interface ISearchPickerExecutionPhases
+{
+    bool IsSearchInputEnabled { get; }
+
+    bool IsApplyActionEnabled { get; }
+
+    bool RequiresExpandAction { get; }
+
+    bool IsExpandActionEnabled { get; }
+
+    void EnterSearchInput(string value);
+
+    void InvokeApplyAction();
+
+    void ExpandResults();
+}
+
 /// <summary>
 /// An adapter that creates composite <see cref="ISearchPickerControl"/> instances from primitive controls.
 /// </summary>
@@ -722,7 +739,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
                 StringComparison.Ordinal);
     }
 
-    private sealed class SearchPickerControl : ISearchPickerControl, IReadableTextControl
+    private sealed class SearchPickerControl : ISearchPickerControl, IReadableTextControl, ISearchPickerExecutionPhases
     {
         private readonly ITextBoxControl _searchInput;
         private readonly ISearchPickerResultsSurface _results;
@@ -757,7 +774,17 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         public bool IsEnabled =>
             _searchInput.IsEnabled
             && (_applyButton?.IsEnabled ?? true)
-            && (_expandButton?.IsEnabled ?? true);
+            && (_opensOnSearch || (_expandButton?.IsEnabled ?? true));
+
+        bool ISearchPickerExecutionPhases.IsSearchInputEnabled => _searchInput.IsEnabled;
+
+        bool ISearchPickerExecutionPhases.IsApplyActionEnabled => _applyButton?.IsEnabled ?? true;
+
+        bool ISearchPickerExecutionPhases.RequiresExpandAction => !_isExpanded;
+
+        bool ISearchPickerExecutionPhases.IsExpandActionEnabled =>
+            _isExpanded
+            || (_expandButton?.IsEnabled ?? _results.IsEnabled);
 
         public string SearchText => _searchInput.Text;
 
@@ -797,11 +824,15 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Search(string value)
         {
-            _selectionState.Clear();
-            _searchInput.Enter(value);
-            _applyButton?.Invoke();
-            _isExpanded = _opensOnSearch;
+            EnterSearchInput(value);
+            InvokeApplyAction();
         }
+
+        void ISearchPickerExecutionPhases.EnterSearchInput(string value) => EnterSearchInput(value);
+
+        void ISearchPickerExecutionPhases.InvokeApplyAction() => InvokeApplyAction();
+
+        void ISearchPickerExecutionPhases.ExpandResults() => Expand();
 
         public void Expand()
         {
@@ -830,6 +861,19 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             Expand();
             _results.SelectItem(itemText);
             _selectionState.Record(itemText, SearchText);
+        }
+
+        private void EnterSearchInput(string value)
+        {
+            _selectionState.Clear();
+            _isExpanded = false;
+            _searchInput.Enter(value);
+        }
+
+        private void InvokeApplyAction()
+        {
+            _applyButton?.Invoke();
+            _isExpanded = _opensOnSearch;
         }
     }
 

@@ -136,6 +136,14 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
     private AutomationElement FindElement(UiControlDefinition definition)
     {
+        if (definition.Scope is not null)
+        {
+            return FindScopedElement(definition)
+                ?? throw new InvalidOperationException(
+                    $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found "
+                    + $"inside scope [{definition.Scope.LocatorKind}:{definition.Scope.LocatorValue}].");
+        }
+
         var element = _window.FindFirstDescendant(CreateCondition(definition.LocatorValue, definition.LocatorKind));
         if (element is not null)
         {
@@ -167,22 +175,61 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
     }
 
-    private IReadOnlyList<Button> FindSearchHistoryButtons(UiControlDefinition definition)
+    private AutomationElement? FindScopedElement(UiControlDefinition definition)
     {
         return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-            ControlTree.EnumerateDescendants(_window.Native)
+        {
+            var scope = definition.Scope!;
+            var roots = ControlTree.EnumerateDescendants(_window.Native)
+                .Where(candidate => MatchesLocator(candidate, scope));
+            var match = roots
+                .SelectMany(ControlTree.EnumerateDescendants)
+                .FirstOrDefault(candidate => MatchesLocator(
+                    candidate,
+                    new UiControlScope(
+                        definition.LocatorValue,
+                        definition.LocatorKind,
+                        definition.FallbackToName)));
+            return match is null ? null : AutomationElement.WrapControl(match);
+        });
+    }
+
+    private Button[] FindSearchHistoryButtons(UiControlDefinition definition)
+    {
+        return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+        {
+            var roots = definition.Scope is null
+                ? new[] { (global::Avalonia.Controls.Control)_window.Native }
+                : ControlTree.EnumerateDescendants(_window.Native)
+                    .Where(candidate => MatchesLocator(candidate, definition.Scope))
+                    .ToArray();
+            return roots
+                .SelectMany(ControlTree.EnumerateDescendants)
                 .OfType<global::Avalonia.Controls.Button>()
                 .Where(candidate => MatchesSearchHistoryLocator(candidate, definition))
                 .Select(static candidate => AutomationElement.WrapControl(candidate).AsButton())
-                .ToArray());
+                .ToArray();
+        });
     }
 
     private static bool MatchesSearchHistoryLocator(
         global::Avalonia.Controls.Button candidate,
         UiControlDefinition definition)
     {
-        var locatorValue = definition.LocatorValue.Trim();
-        var primaryValue = definition.LocatorKind switch
+        return MatchesLocator(
+            candidate,
+            new UiControlScope(
+                definition.LocatorValue,
+                definition.LocatorKind,
+                definition.FallbackToName));
+    }
+
+    private static bool MatchesLocator(
+        global::Avalonia.Controls.Control candidate,
+        UiControlScope scope)
+    {
+        var locatorValue = scope.LocatorValue.Trim();
+        var primaryValue = scope.LocatorKind switch
         {
             UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(candidate),
             UiLocatorKind.Name => AutomationProperties.GetName(candidate),
@@ -193,8 +240,8 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return true;
         }
 
-        return definition.FallbackToName
-            && definition.LocatorKind != UiLocatorKind.Name
+        return scope.FallbackToName
+            && scope.LocatorKind != UiLocatorKind.Name
             && string.Equals(AutomationProperties.GetName(candidate), locatorValue, StringComparison.Ordinal);
     }
 
@@ -834,7 +881,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public string Text => Inner.Text ?? Name;
     }
 
-    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, ISelectableListBoxControl
+    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, IExactSelectableListBoxControl
     {
         public HeadlessListBoxControl(ListBox inner) : base(inner)
         {
@@ -848,6 +895,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public void SelectItem(string itemText)
         {
             Inner.SelectItem(itemText);
+        }
+
+        public void SelectItemExact(string itemText)
+        {
+            Inner.SelectItemExact(itemText);
         }
     }
 
@@ -1126,16 +1178,25 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public IReadOnlyList<string> Items => _resolveButtons()
             .Select(ReadText)
             .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         public void Apply(string itemText)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
-            var button = _resolveButtons().FirstOrDefault(candidate =>
-                string.Equals(ReadText(candidate), itemText, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
-            button.Invoke();
+            var matches = _resolveButtons()
+                .Where(candidate => string.Equals(ReadText(candidate), itemText, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+            }
+
+            if (matches.Length > 1)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' is ambiguous.");
+            }
+
+            matches[0].Invoke();
         }
 
         private static string ReadText(Button button)

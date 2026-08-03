@@ -58,6 +58,29 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
+    public async Task NamedEdit_FollowsRowWhenEditChangesItsPosition()
+    {
+        var fixture = new GridFixture(
+            Row("ORD-1", "Draft", "10"),
+            Row("ORD-2", "Ready", "20"));
+        fixture.Grid.AfterEdit = _ => fixture.Rows.Reverse();
+
+        fixture.CreatePage().EditGridCellText(
+            static page => page.Orders,
+            GridRowSelector.ByCell("OrderId", "ORD-2"),
+            "Status",
+            "Done",
+            timeoutMs: 250);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fixture.Rows[0].Cells[0].Value).IsEqualTo("ORD-2");
+            await Assert.That(fixture.Rows[0].Cells[1].Value).IsEqualTo("Done");
+            await Assert.That(fixture.Grid.LastRequest!.TimeoutMs).IsEqualTo(250);
+        }
+    }
+
+    [Test]
     public async Task WaitUntilGridContainsRow_ObservesRowAddedDuringWait()
     {
         var fixture = new GridFixture(Row("ORD-1", "Draft", "10"));
@@ -194,6 +217,10 @@ public sealed class GridRowSelectorTests
     private sealed class ActionEditableGrid(string automationId, IReadOnlyList<MutableRow> rows)
         : ReadOnlyGrid(automationId, rows), IGridUserActionControl, IEditableGridControl
     {
+        public Action<GridCellEditRequest>? AfterEdit { get; set; }
+
+        public GridCellEditRequest? LastRequest { get; private set; }
+
         public string? OpenedOrderId { get; private set; }
 
         public string? CopiedValue { get; private set; }
@@ -224,11 +251,14 @@ public sealed class GridRowSelectorTests
 
         public void EditCell(GridCellEditRequest request)
         {
+            LastRequest = request;
             if (request.CommitMode == GridCellEditCommitMode.Commit
                 && GetRowByIndex(request.RowIndex)?.Cells[request.ColumnIndex] is MutableCell cell)
             {
                 cell.Value = request.Value;
             }
+
+            AfterEdit?.Invoke(request);
         }
     }
 

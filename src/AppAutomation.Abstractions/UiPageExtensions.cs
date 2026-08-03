@@ -402,16 +402,34 @@ public static partial class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
         var searchPicker = Resolve(selector, page);
+        var executionPhases = searchPicker as ISearchPickerExecutionPhases;
         WaitUntil(
             page,
             selector,
-            () => searchPicker.IsEnabled,
+            () => executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled,
             timeoutMs,
-            $"Search picker '{searchPicker.AutomationId}' is not enabled.",
-            expectedValue: "IsEnabled=true",
-            lastObservedValueFactory: () => $"IsEnabled={searchPicker.IsEnabled}");
+            $"Search picker '{searchPicker.AutomationId}' input is not enabled.",
+            expectedValue: "SearchInputEnabled=true",
+            lastObservedValueFactory: () => $"SearchInputEnabled={executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled}");
 
-        searchPicker.Search(searchText);
+        if (executionPhases is null)
+        {
+            searchPicker.Search(searchText);
+        }
+        else
+        {
+            executionPhases.EnterSearchInput(searchText);
+            WaitUntil(
+                page,
+                selector,
+                () => executionPhases.IsApplyActionEnabled,
+                timeoutMs,
+                $"Search picker '{searchPicker.AutomationId}' apply action is not enabled.",
+                expectedValue: "ApplyActionEnabled=true",
+                lastObservedValueFactory: () => $"ApplyActionEnabled={executionPhases.IsApplyActionEnabled}");
+            executionPhases.InvokeApplyAction();
+        }
+
         WaitUntil(
             page,
             selector,
@@ -421,7 +439,23 @@ public static partial class UiPageExtensions
             expectedValue: searchText,
             lastObservedValueFactory: () => searchPicker.SearchText);
 
-        searchPicker.Expand();
+        if (executionPhases is null)
+        {
+            searchPicker.Expand();
+        }
+        else if (executionPhases.RequiresExpandAction)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => executionPhases.IsExpandActionEnabled,
+                timeoutMs,
+                $"Search picker '{searchPicker.AutomationId}' expand action is not enabled.",
+                expectedValue: "ExpandActionEnabled=true",
+                lastObservedValueFactory: () => $"ExpandActionEnabled={executionPhases.IsExpandActionEnabled}");
+            executionPhases.ExpandResults();
+        }
+
         var expectedItem = NormalizeLookupText(itemText);
         WaitUntil(
             page,
@@ -1697,7 +1731,10 @@ public static partial class UiPageExtensions
             value,
             editorKind,
             commitMode,
-            searchText);
+            searchText)
+        {
+            TimeoutMs = timeoutMs
+        };
 
         return ExecuteGridCellEdit(page, selector, request, timeoutMs, nameof(EditGridCell));
     }
@@ -2293,7 +2330,8 @@ public static partial class UiPageExtensions
         Expression<Func<TSelf, IGridControl>> selector,
         GridCellEditRequest request,
         int timeoutMs,
-        string actionName)
+        string actionName,
+        Func<IGridControl, string?>? observedValueFactory = null)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2301,7 +2339,9 @@ public static partial class UiPageExtensions
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
         var grid = Resolve(selector, page);
-        var originalValue = TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex);
+        observedValueFactory ??= candidate =>
+            TryReadGridCellValue(candidate, request.RowIndex, request.ColumnIndex);
+        var originalValue = observedValueFactory(grid);
         try
         {
             if (grid is not IEditableGridControl editableGrid)
@@ -2321,7 +2361,7 @@ public static partial class UiPageExtensions
                 startedAtUtc,
                 $"Grid '{grid.AutomationId}' failed to edit cell [{request.RowIndex},{request.ColumnIndex}].",
                 expectedValue: DescribeGridCellEditRequest(request),
-                lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                lastObservedValueFactory: () => observedValueFactory(grid),
                 actionName,
                 ex);
         }
@@ -2333,13 +2373,13 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => string.Equals(
-                TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                observedValueFactory(grid),
                 expectedValue,
                 StringComparison.Ordinal),
             timeoutMs,
             $"Grid '{grid.AutomationId}' cell [{request.RowIndex},{request.ColumnIndex}] did not reach expected edit result.",
             expectedValue: expectedValue,
-            lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+            lastObservedValueFactory: () => observedValueFactory(grid),
             actionName);
         return page;
     }

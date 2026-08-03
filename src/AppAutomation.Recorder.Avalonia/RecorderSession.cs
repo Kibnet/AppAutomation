@@ -63,12 +63,15 @@ internal sealed class RecorderSession :
     private string _lastFingerprint = string.Empty;
     private DateTimeOffset _lastRecordedAt;
     private Task<RecorderSaveResult>? _activeOperationTask;
+    private QueuedManagedOperation? _queuedManagedOperation;
     private string _busyDescription = string.Empty;
+    private bool _activeOperationIsAutosave;
     private readonly RecorderOutputDescription _defaultOutputDescription;
     private readonly bool _hasConfiguredLogger;
     private readonly string _diagnosticLogFilePath;
     private bool _isDiagnosticLogFileEnabled;
     private bool _pendingAutosave;
+    private bool _isCapturingPersistenceSnapshot;
     private int _diagnosticLogEntryCount;
     private string? _lastScenarioFilePath;
     private IReadOnlyList<RecordedScenarioDestination> _scenarioDestinations = Array.Empty<RecordedScenarioDestination>();
@@ -149,6 +152,8 @@ internal sealed class RecorderSession :
             Interval = TimeSpan.FromMilliseconds(350)
         };
         _sliderDebounceTimer.Tick += (_, _) => FlushPendingSlider();
+
+        AttachSearchPickerSelectionSources();
 
         LatestStatus = hotkeySettingsLoadError is null
             ? "Recorder attached. Use configured hotkeys or overlay controls to start."
@@ -640,6 +645,11 @@ internal sealed class RecorderSession :
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
     }
 
+    internal void CaptureAssertionForTesting(Control source, RecorderAssertionMode mode)
+    {
+        AddStep(_stepFactory.TryCreateAssertionStep(source, mode), source, $"Assertion:{mode}");
+    }
+
     internal void AttachInputHandlersForTesting()
     {
         RebindInputHandlers();
@@ -715,6 +725,41 @@ internal sealed class RecorderSession :
 
         _detachActions.Add(DetachInputHandlers);
         _detachActions.Add(() => _window.PropertyChanged -= OnWindowPropertyChanged);
+    }
+
+    private void AttachSearchPickerSelectionSources()
+    {
+        foreach (var source in _options.SearchPickerSelectionSources
+                     .Distinct<IRecorderSearchPickerSelectionSource>(ReferenceEqualityComparer.Instance))
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            source.SelectionConfirmed += OnSearchPickerSelectionConfirmed;
+            _detachActions.Add(() => source.SelectionConfirmed -= OnSearchPickerSelectionConfirmed);
+        }
+    }
+
+    private void OnSearchPickerSelectionConfirmed(
+        object? sender,
+        RecorderSearchPickerSelectionConfirmedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording)
+        {
+            return;
+        }
+
+        var result = _stepFactory.TryCreateSearchPickerStep(
+            e.SearchInput,
+            e.ResultsRoot,
+            e.SelectedValue,
+            _pendingTextBox,
+            _pendingTextValue);
+        if (!result.Success)
+        {
+            AddStep(result, e.ResultsRoot, "SearchPickerSelectionSource");
+            return;
+        }
+
+        CompleteSearchPickerSelection(result, e.SearchInput, e.ResultsRoot);
     }
 
     private void RebindInputHandlers()
@@ -1136,44 +1181,72 @@ internal sealed class RecorderSession :
 
     private bool TryRecordSearchPickerSelection(ComboBox comboBox)
     {
-        if (_pendingTextBox is null)
+        if (_pendingTextBox is not null)
+        {
+            var pendingResult = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, comboBox, _pendingTextValue);
+            if (pendingResult.Success)
+            {
+                CompleteSearchPickerSelection(pendingResult, _pendingTextBox, comboBox);
+                return true;
+            }
+        }
+
+        var capture = _stepFactory.TryCreateSearchPickerStep(comboBox, _pendingTextBox, _pendingTextValue);
+        if (!capture.IsConfigured)
         {
             return false;
         }
 
-        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, comboBox, _pendingTextValue);
-        if (!result.Success)
+        if (capture.HasSelection)
         {
-            return false;
+            CompleteSearchPickerSelection(capture.StepResult, capture.SearchInput, comboBox);
         }
 
-        _textDebounceTimer.Stop();
-        _pendingTextBox = null;
-        _pendingTextValue = null;
-        FlushPendingSliderIfSwitchingTo(comboBox);
-        AddStep(result, comboBox, "SearchPickerSelection");
         return true;
     }
 
     private bool TryRecordSearchPickerSelection(ListBox listBox)
     {
-        if (_pendingTextBox is null)
+        if (_pendingTextBox is not null)
+        {
+            var pendingResult = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, listBox, _pendingTextValue);
+            if (pendingResult.Success)
+            {
+                CompleteSearchPickerSelection(pendingResult, _pendingTextBox, listBox);
+                return true;
+            }
+        }
+
+        var capture = _stepFactory.TryCreateSearchPickerStep(listBox, _pendingTextBox, _pendingTextValue);
+        if (!capture.IsConfigured)
         {
             return false;
         }
 
-        var result = _stepFactory.TryCreateSearchPickerStep(_pendingTextBox, listBox, _pendingTextValue);
-        if (!result.Success)
+        if (capture.HasSelection)
         {
-            return false;
+            CompleteSearchPickerSelection(capture.StepResult, capture.SearchInput, listBox);
         }
 
-        _textDebounceTimer.Stop();
-        _pendingTextBox = null;
-        _pendingTextValue = null;
-        FlushPendingSliderIfSwitchingTo(listBox);
-        AddStep(result, listBox, "SearchPickerSelection");
         return true;
+    }
+
+    private void CompleteSearchPickerSelection(
+        StepCreationResult result,
+        TextBox? searchInput,
+        Control results)
+    {
+        if (ReferenceEquals(_pendingTextBox, searchInput))
+        {
+            DiscardPendingText();
+        }
+        else
+        {
+            FlushPendingTextIfSwitchingTo(results);
+        }
+
+        FlushPendingSliderIfSwitchingTo(results);
+        AddStep(result, results, "SearchPickerSelection");
     }
 
     private void OnListBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1276,11 +1349,8 @@ internal sealed class RecorderSession :
             ? clickSnapshot.SelectedValues
             : null;
         var comboBoxFilterResult = _stepFactory.TryCreateComboBoxFilterStep(source, capturedFilterValues);
-        if (comboBoxFilterResult.Success)
+        if (TryRecordCompositeStep(comboBoxFilterResult, source, "ComboBoxFilter"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(comboBoxFilterResult, source, "ComboBoxFilter");
             return true;
         }
 
@@ -1292,11 +1362,8 @@ internal sealed class RecorderSession :
 
         var isMultiSelectCommit = _stepFactory.IsMultiSelectCommit(source);
         var multiSelectResult = _stepFactory.TryCreateMultiSelectStep(source);
-        if (multiSelectResult.Success)
+        if (TryRecordCompositeStep(multiSelectResult, source, "MultiSelect"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(multiSelectResult, source, "MultiSelect");
             return true;
         }
 
@@ -1307,56 +1374,63 @@ internal sealed class RecorderSession :
         }
 
         var gridEditResult = _stepFactory.TryCreateGridEditStep(source);
-        if (gridEditResult.Success)
+        if (TryRecordCompositeStep(gridEditResult, source, "GridEdit"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(gridEditResult, source, "GridEdit");
             return true;
         }
 
         var dateRangeResult = _stepFactory.TryCreateDateRangeFilterStep(source);
-        if (dateRangeResult.Success)
+        if (TryRecordCompositeStep(dateRangeResult, source, "DateRangeFilter"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(dateRangeResult, source, "DateRangeFilter");
             return true;
         }
 
         var numericRangeResult = _stepFactory.TryCreateNumericRangeFilterStep(source);
-        if (numericRangeResult.Success)
+        if (TryRecordCompositeStep(numericRangeResult, source, "NumericRangeFilter"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(numericRangeResult, source, "NumericRangeFilter");
             return true;
         }
 
         var folderExportResult = _stepFactory.TryCreateFolderExportStep(source);
-        if (folderExportResult.Success)
+        if (TryRecordCompositeStep(folderExportResult, source, "FolderExport"))
         {
-            DiscardPendingText();
-            FlushPendingSliderIfSwitchingTo(source);
-            AddStep(folderExportResult, source, "FolderExport");
             return true;
         }
 
         var dialogResult = _stepFactory.TryCreateDialogActionStep(source);
-        if (dialogResult.Success)
+        if (TryRecordCompositeStep(dialogResult, source, "DialogAction", clearPendingInput: false))
         {
-            AddStep(dialogResult, source, "DialogAction");
             return true;
         }
 
         var notificationResult = _stepFactory.TryCreateNotificationActionStep(source);
-        if (notificationResult.Success)
+        if (TryRecordCompositeStep(notificationResult, source, "NotificationAction", clearPendingInput: false))
         {
-            AddStep(notificationResult, source, "NotificationAction");
             return true;
         }
 
         return false;
+    }
+
+    private bool TryRecordCompositeStep(
+        StepCreationResult result,
+        Control source,
+        string diagnosticContext,
+        bool clearPendingInput = true)
+    {
+        if (!result.Success)
+        {
+            return false;
+        }
+
+        if (clearPendingInput)
+        {
+            DiscardPendingText();
+            FlushPendingSliderIfSwitchingTo(source);
+        }
+
+        AddStep(result, source, diagnosticContext);
+        return true;
     }
 
     private bool TryRecordComboBoxFilterSelection(Control source)
@@ -2269,6 +2343,22 @@ internal sealed class RecorderSession :
         {
             if (_activeOperationTask is not null)
             {
+                if (_activeOperationIsAutosave && _queuedManagedOperation is null)
+                {
+                    var queuedCompletion = new TaskCompletionSource<RecorderSaveResult>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _queuedManagedOperation = new QueuedManagedOperation(
+                        operationName,
+                        operation,
+                        cancellationToken,
+                        queuedCompletion);
+                    _pendingAutosave = false;
+                    SetStatus(
+                        $"{operationName} queued until autosave completes.",
+                        LatestValidationStatus);
+                    return queuedCompletion.Task;
+                }
+
                 SetStatus(
                     $"{operationName} ignored while '{_busyDescription}' is in progress.",
                     RecorderValidationStatus.Warning);
@@ -2276,6 +2366,7 @@ internal sealed class RecorderSession :
             }
 
             _busyDescription = $"{operationName}...";
+            _activeOperationIsAutosave = false;
             SetStatus($"{operationName} in progress...", LatestValidationStatus);
             var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _activeOperationTask = operationCompletion.Task;
@@ -2286,7 +2377,7 @@ internal sealed class RecorderSession :
 
     private void RequestAutosaveIfRecording()
     {
-        if (_state != RecorderSessionState.Recording)
+        if (_state != RecorderSessionState.Recording || _isCapturingPersistenceSnapshot)
         {
             return;
         }
@@ -2306,6 +2397,7 @@ internal sealed class RecorderSession :
 
             _pendingAutosave = false;
             _busyDescription = "Autosave...";
+            _activeOperationIsAutosave = true;
             SetStatus("Autosave in progress...", LatestValidationStatus);
             var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _activeOperationTask = operationCompletion.Task;
@@ -2324,6 +2416,7 @@ internal sealed class RecorderSession :
         TaskCompletionSource<RecorderSaveResult> completion)
     {
         var startPendingAutosave = false;
+        QueuedManagedOperation? queuedManagedOperation = null;
         try
         {
             completion.TrySetResult(await operation(cancellationToken));
@@ -2344,8 +2437,17 @@ internal sealed class RecorderSession :
             lock (_operationSync)
             {
                 _activeOperationTask = null;
+                _activeOperationIsAutosave = false;
                 _busyDescription = string.Empty;
-                if (_pendingAutosave)
+                if (_queuedManagedOperation is not null)
+                {
+                    queuedManagedOperation = _queuedManagedOperation;
+                    _queuedManagedOperation = null;
+                    _pendingAutosave = false;
+                    _busyDescription = $"{queuedManagedOperation.OperationName}...";
+                    _activeOperationTask = queuedManagedOperation.Completion.Task;
+                }
+                else if (_pendingAutosave)
                 {
                     _pendingAutosave = false;
                     startPendingAutosave = _state == RecorderSessionState.Recording;
@@ -2353,7 +2455,18 @@ internal sealed class RecorderSession :
             }
 
             NotifySessionChanged();
-            if (startPendingAutosave)
+            if (queuedManagedOperation is not null)
+            {
+                SetStatus(
+                    $"{queuedManagedOperation.OperationName} in progress...",
+                    LatestValidationStatus);
+                _ = ExecuteManagedOperationAsync(
+                    queuedManagedOperation.OperationName,
+                    queuedManagedOperation.Operation,
+                    queuedManagedOperation.CancellationToken,
+                    queuedManagedOperation.Completion);
+            }
+            else if (startPendingAutosave)
             {
                 StartAutosaveOrQueue();
             }
@@ -2362,20 +2475,44 @@ internal sealed class RecorderSession :
 
     private async Task<RecorderSaveResult> SaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
     {
-        FlushPendingState();
-        var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
+        var stepsToPersist = CapturePersistenceSnapshot();
         var result = await _saveOperation(stepsToPersist, outputDirectory, cancellationToken);
         ApplySaveResult(result);
+        if (result.Success)
+        {
+            lock (_operationSync)
+            {
+                _pendingAutosave = false;
+            }
+        }
+        else
+        {
+            RequestAutosaveIfRecording();
+        }
+
         return result;
     }
 
     private async Task<RecorderSaveResult> AutosaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
     {
-        FlushPendingState();
-        var stepsToPersist = _steps.Where(static step => !step.IsIgnored).ToArray();
+        var stepsToPersist = CapturePersistenceSnapshot();
         var result = await _autosaveOperation(stepsToPersist, outputDirectory, cancellationToken);
         ApplySaveResult(result);
         return result;
+    }
+
+    private RecordedStep[] CapturePersistenceSnapshot()
+    {
+        _isCapturingPersistenceSnapshot = true;
+        try
+        {
+            FlushPendingState();
+            return _steps.Where(static step => !step.IsIgnored).ToArray();
+        }
+        finally
+        {
+            _isCapturingPersistenceSnapshot = false;
+        }
     }
 
     private RecordedStep RevalidateStep(RecordedStep step)
@@ -2396,7 +2533,7 @@ internal sealed class RecorderSession :
             };
         }
 
-        var validation = _selectorResolver.ResolveExisting(step.Control);
+        var validation = _selectorResolver.ResolveExisting(step);
         var revalidated = step with
         {
             ValidationStatus = validation.ValidationStatus,
@@ -2636,5 +2773,11 @@ internal sealed class RecorderSession :
     {
         SessionChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private sealed record QueuedManagedOperation(
+        string OperationName,
+        Func<CancellationToken, Task<RecorderSaveResult>> Operation,
+        CancellationToken CancellationToken,
+        TaskCompletionSource<RecorderSaveResult> Completion);
 
 }

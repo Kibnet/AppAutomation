@@ -4,11 +4,13 @@ namespace AppAutomation.Recorder.Avalonia;
 
 internal sealed class RecorderCommandRuntimeValidator
 {
+    private readonly AppAutomationRecorderOptions _recorderOptions;
     private readonly RecorderValidationOptions _options;
 
     public RecorderCommandRuntimeValidator(AppAutomationRecorderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _recorderOptions = options;
         _options = options.Validation;
     }
 
@@ -76,7 +78,7 @@ internal sealed class RecorderCommandRuntimeValidator
         return targets;
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateTarget(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateTarget(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -102,7 +104,7 @@ internal sealed class RecorderCommandRuntimeValidator
         }
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -218,7 +220,7 @@ internal sealed class RecorderCommandRuntimeValidator
         }
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -232,10 +234,16 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return finding;
         }
 
-        yield return Warning(
-            target,
-            "spinner-textbox-fallback",
-            "Spinner action is generated through a text-box fallback; verify the application exposes a writable spinner text part.");
+        if (!RecorderSpinnerProxyConfiguration.IsConfigured(
+                _recorderOptions,
+                step.Control.LocatorValue,
+                step.Control.LocatorKind))
+        {
+            yield return Warning(
+                target,
+                "spinner-textbox-fallback",
+                "Spinner action is generated through a text-box fallback; verify the application exposes a writable spinner text part.");
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateTextReadableAssertion(

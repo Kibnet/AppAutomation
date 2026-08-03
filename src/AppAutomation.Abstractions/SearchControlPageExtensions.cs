@@ -15,7 +15,16 @@ public static partial class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         var search = Resolve(selector, page);
         WaitUntilSearchEnabled(page, selector, search, timeoutMs);
-        search.EnterSearch(value);
+        if (search is ISearchControlExecutionPhases executionPhases)
+        {
+            executionPhases.EnterSearchInput(value);
+            WaitUntilSearchActionEnabled(page, selector, search, executionPhases, timeoutMs);
+            executionPhases.InvokeSearchAction();
+        }
+        else
+        {
+            search.EnterSearch(value);
+        }
         WaitUntil(
             page,
             selector,
@@ -36,7 +45,16 @@ public static partial class UiPageExtensions
     {
         var search = Resolve(selector, page);
         WaitUntilSearchEnabled(page, selector, search, timeoutMs);
-        search.ClearSearch();
+        if (search is ISearchControlExecutionPhases executionPhases)
+        {
+            executionPhases.EnterSearchInput(string.Empty);
+            WaitUntilSearchActionEnabled(page, selector, search, executionPhases, timeoutMs);
+            executionPhases.InvokeSearchAction();
+        }
+        else
+        {
+            search.ClearSearch();
+        }
         WaitUntil(
             page,
             selector,
@@ -59,6 +77,11 @@ public static partial class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         var search = Resolve(selector, page);
         WaitUntilSearchEnabled(page, selector, search, timeoutMs);
+        if (search is ISearchControlExecutionPhases executionPhases)
+        {
+            WaitUntilHistoryActionEnabled(page, selector, search, executionPhases, timeoutMs);
+        }
+
         search.OpenHistory();
         WaitUntil(
             page,
@@ -95,5 +118,41 @@ public static partial class UiPageExtensions
             $"Search control '{search.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={search.IsEnabled}");
+    }
+
+    private static void WaitUntilSearchActionEnabled<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, ISearchControl>> selector,
+        ISearchControl search,
+        ISearchControlExecutionPhases executionPhases,
+        int timeoutMs)
+        where TSelf : UiPage
+    {
+        WaitUntil(
+            page,
+            selector,
+            () => executionPhases.IsSearchActionEnabled,
+            timeoutMs,
+            $"Search control '{search.AutomationId}' action is not enabled.",
+            expectedValue: "SearchActionEnabled=true",
+            lastObservedValueFactory: () => $"SearchActionEnabled={executionPhases.IsSearchActionEnabled}");
+    }
+
+    private static void WaitUntilHistoryActionEnabled<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, ISearchControl>> selector,
+        ISearchControl search,
+        ISearchControlExecutionPhases executionPhases,
+        int timeoutMs)
+        where TSelf : UiPage
+    {
+        WaitUntil(
+            page,
+            selector,
+            () => executionPhases.IsHistoryOpenActionEnabled,
+            timeoutMs,
+            $"Search control '{search.AutomationId}' history action is not enabled.",
+            expectedValue: "HistoryActionEnabled=true",
+            lastObservedValueFactory: () => $"HistoryActionEnabled={executionPhases.IsHistoryOpenActionEnabled}");
     }
 }

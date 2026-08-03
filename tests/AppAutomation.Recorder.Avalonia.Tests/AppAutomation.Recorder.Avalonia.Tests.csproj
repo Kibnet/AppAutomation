@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\AppAutomation.Authoring\AppAutomation.Authoring.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Recorder.Avalonia\AppAutomation.Recorder.Avalonia.csproj" />
   </ItemGroup>
 </Project>

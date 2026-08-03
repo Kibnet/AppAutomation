@@ -139,6 +139,28 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task SearchHistory_ReadsItemsFromItsPopupScope()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        page.ArmTableSearch.OpenHistory();
+
+        var historyItems = UiWait.Until(
+            () => page.ArmTableSearch.HistoryItems,
+            static items => items.Count == 3,
+            DesktopControlWaitOptions,
+            "Search history items did not become available.");
+
+        await Assert.That(historyItems)
+            .IsEquivalentTo(["orders", "customers", "reports"]);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();

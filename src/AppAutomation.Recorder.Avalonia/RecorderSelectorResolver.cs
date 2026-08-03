@@ -134,6 +134,10 @@ internal sealed class RecorderSelectorResolver
         var validation = ValidateSelector(targetLocatorValue, alias.TargetLocatorKind);
         var aliasMessage =
             $"Mapped recorder locator '{sourceLocatorKind}:{sourceLocatorValue}' to stable locator '{alias.TargetLocatorKind}:{targetLocatorValue}'.";
+        var isConfiguredSpinnerProxy = RecorderSpinnerProxyConfiguration.IsConfigured(
+            _options,
+            targetLocatorValue,
+            alias.TargetLocatorKind);
 
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -143,7 +147,7 @@ internal sealed class RecorderSelectorResolver
                 alias.TargetLocatorKind,
                 alias.FallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                CombineMessage(warning, aliasMessage)),
+                isConfiguredSpinnerProxy ? warning : CombineMessage(warning, aliasMessage)),
             message: validation.Message ?? aliasMessage,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
@@ -161,6 +165,29 @@ internal sealed class RecorderSelectorResolver
             validation.Status,
             validation.Message,
             validation.CanPersist);
+    }
+
+    internal ExistingControlResolutionResult ResolveExisting(RecordedStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+
+        var logicalResolution = ResolveExisting(step.Control);
+        if (!logicalResolution.CanPersist
+            || !RequiresSpinnerProxyValidation(step.ActionKind)
+            || !TryResolveSpinnerProxyAlias(step.Control, out var proxyAlias))
+        {
+            return logicalResolution;
+        }
+
+        var interactiveValidation = ValidateSelector(
+            proxyAlias.SourceLocatorValue.Trim(),
+            proxyAlias.SourceLocatorKind);
+        return new ExistingControlResolutionResult(
+            interactiveValidation.MatchedControl is not null,
+            interactiveValidation.MatchedControl,
+            MaxStatus(logicalResolution.ValidationStatus, interactiveValidation.Status),
+            CombineMessage(logicalResolution.ValidationMessage, interactiveValidation.Message),
+            interactiveValidation.CanPersist);
     }
 
     private SelectorValidationResult ValidateSelector(Control expectedControl, string locatorValue, UiLocatorKind locatorKind)
@@ -280,6 +307,33 @@ internal sealed class RecorderSelectorResolver
             candidate.LocatorKind == locatorKind
             && string.Equals(candidate.LocatorValue.Trim(), locatorValue, StringComparison.Ordinal))!;
         return hint is not null;
+    }
+
+    private bool TryResolveSpinnerProxyAlias(
+        RecordedControlDescriptor descriptor,
+        out RecorderLocatorAlias alias)
+    {
+        alias = null!;
+        return descriptor.ControlType == UiControlType.TextBox
+            && RecorderSpinnerProxyConfiguration.TryResolveAlias(
+                _options,
+                descriptor.LocatorValue,
+                descriptor.LocatorKind,
+                out alias);
+    }
+
+    private static bool RequiresSpinnerProxyValidation(RecordedActionKind actionKind)
+    {
+        return actionKind is RecordedActionKind.SetSpinnerValue
+            or RecordedActionKind.WaitUntilTextEquals
+            or RecordedActionKind.WaitUntilTextContains;
+    }
+
+    private static RecorderValidationStatus MaxStatus(
+        RecorderValidationStatus left,
+        RecorderValidationStatus right)
+    {
+        return (RecorderValidationStatus)Math.Max((int)left, (int)right);
     }
 
     private static bool TryGetNameLocator(Control control, out string locator)

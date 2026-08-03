@@ -152,6 +152,12 @@ internal sealed record StepCreationResult(bool Success, RecordedStep? Step, stri
     }
 }
 
+internal sealed record SearchPickerSelectionCaptureResult(
+    bool IsConfigured,
+    bool HasSelection,
+    TextBox? SearchInput,
+    StepCreationResult StepResult);
+
 internal sealed record ResolvedControlResult(
     bool Success,
     RecordedControlDescriptor? Control,
@@ -191,6 +197,7 @@ internal sealed record ResolvedControlResult(
 internal sealed record AuthoringTargetConfiguration(
     string ProjectDirectory,
     string OutputDirectory,
+    string AutosaveDirectory,
     string PageNamespace,
     string PageClassName,
     string ScenarioNamespace,
@@ -214,6 +221,7 @@ internal sealed record RecorderOutputDescription(
 internal sealed record ScannedClassInfo(
     string Namespace,
     string Name,
+    string SourceFilePath,
     string ModifiersText,
     string TypeParameterListText,
     string TypeParameterSignature,
@@ -243,5 +251,6 @@ internal sealed record AuthoringProjectSnapshot(
     ScannedClassInfo? PageClass,
     ScannedClassInfo? ScenarioClass,
     IReadOnlyDictionary<string, ExistingControlInfo> ExistingControlsByKey,
+    IReadOnlyDictionary<string, ExistingControlInfo> ExistingControlsByTypedKey,
     IReadOnlySet<string> ExistingControlPropertyNames,
     IReadOnlySet<string> ExistingScenarioMethodNames);

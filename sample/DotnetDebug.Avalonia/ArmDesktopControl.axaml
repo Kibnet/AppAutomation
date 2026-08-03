@@ -45,6 +45,7 @@
               <TextBlock Text="Server picker" />
               <local:ServerSearchComboBox x:Name="ArmServerSearchPicker"
                                           Width="220"
+                                          HorizontalAlignment="Left"
                                           automation:AutomationProperties.AutomationId="ArmServerSearchPicker"
                                           CurrentSelectedChanged="OnArmServerPickerSelected"
                                           ItemList="{Binding ArmServerItems}"
@@ -191,6 +192,7 @@
               <TextBlock Text="Combo-box filter" />
               <editors:ComboBoxEditor x:Name="ArmStatusFilterEditor"
                                       Width="220"
+                                      HorizontalAlignment="Left"
                                       Classes="filterComboBox"
                                       automation:AutomationProperties.AutomationId="ArmStatusFilter"
                                       Loaded="OnArmStatusFilterLoaded"

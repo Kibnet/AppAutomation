@@ -227,6 +227,72 @@ internal sealed class RecorderStepFactory
             capturedSearchText);
     }
 
+    public SearchPickerSelectionCaptureResult TryCreateSearchPickerStep(
+        ComboBox results,
+        TextBox? pendingSearchInput,
+        string? capturedSearchText)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+
+        return TryCreateSearchPickerSelectionCapture(
+            results,
+            SearchPickerResultsKind.ComboBox,
+            ExtractSelectionText(results.SelectedItem),
+            pendingSearchInput,
+            capturedSearchText);
+    }
+
+    public SearchPickerSelectionCaptureResult TryCreateSearchPickerStep(
+        ListBox results,
+        TextBox? pendingSearchInput,
+        string? capturedSearchText)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+
+        return TryCreateSearchPickerSelectionCapture(
+            results,
+            SearchPickerResultsKind.ListBox,
+            ExtractSelectionText(results.SelectedItem),
+            pendingSearchInput,
+            capturedSearchText);
+    }
+
+    public StepCreationResult TryCreateSearchPickerStep(
+        TextBox searchInput,
+        Control results,
+        string selectedText,
+        TextBox? pendingSearchInput,
+        string? capturedSearchText)
+    {
+        ArgumentNullException.ThrowIfNull(searchInput);
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedText);
+
+        var matchingHints = FindExplicitSearchPickerHints(searchInput, results).ToArray();
+        if (matchingHints.Length == 0)
+        {
+            return StepCreationResult.Unsupported(
+                "Controls are not configured as a recorder search picker selection source.");
+        }
+
+        if (matchingHints.Length > 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Search picker selection source matches {matchingHints.Length} configured hints; "
+                + "SearchInputLocator and ResultsLocator must identify one picker.");
+        }
+
+        var relatedCapturedSearchText = ReferenceEquals(pendingSearchInput, searchInput)
+            ? capturedSearchText
+            : null;
+        return TryCreateConfiguredSearchPickerStep(
+            searchInput,
+            results,
+            selectedText,
+            relatedCapturedSearchText,
+            matchingHints[0]);
+    }
+
     public bool ShouldSuppressSearchPickerButton(Control? source)
     {
         return source is not null
@@ -1476,15 +1542,98 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Controls are not configured as a recorder search picker.");
         }
 
-        var searchText = (capturedSearchText ?? searchInput.Text)?.Trim();
-        if (string.IsNullOrWhiteSpace(searchText))
+        return TryCreateConfiguredSearchPickerStep(
+            searchInput,
+            results,
+            selectedText,
+            capturedSearchText,
+            hint);
+    }
+
+    private SearchPickerSelectionCaptureResult TryCreateSearchPickerSelectionCapture(
+        Control results,
+        SearchPickerResultsKind resultsKind,
+        string? selectedText,
+        TextBox? pendingSearchInput,
+        string? capturedSearchText)
+    {
+        var matchingHints = FindSearchPickerHints(results, resultsKind).ToArray();
+        if (matchingHints.Length == 0)
         {
-            return StepCreationResult.Unsupported("Search picker search text is empty.");
+            return new SearchPickerSelectionCaptureResult(
+                IsConfigured: false,
+                HasSelection: false,
+                SearchInput: null,
+                StepCreationResult.Unsupported("Control is not configured as a recorder search picker result."));
         }
 
         if (string.IsNullOrWhiteSpace(selectedText))
         {
+            return new SearchPickerSelectionCaptureResult(
+                IsConfigured: true,
+                HasSelection: false,
+                SearchInput: null,
+                StepCreationResult.Unsupported("Search picker does not have a selected result to record."));
+        }
+
+        if (matchingHints.Length > 1)
+        {
+            return new SearchPickerSelectionCaptureResult(
+                IsConfigured: true,
+                HasSelection: true,
+                SearchInput: null,
+                StepCreationResult.Unsupported(
+                    $"Search picker results match {matchingHints.Length} configured hints; ResultsLocator must identify one picker."));
+        }
+
+        var hint = matchingHints[0];
+        if (!TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var control)
+            || control is not TextBox searchInput)
+        {
+            return new SearchPickerSelectionCaptureResult(
+                IsConfigured: true,
+                HasSelection: true,
+                SearchInput: null,
+                StepCreationResult.Unsupported(
+                    $"Configured search picker input '{hint.Parts.SearchInputLocator}' could not be resolved as a TextBox."));
+        }
+
+        var relatedCapturedSearchText = ReferenceEquals(pendingSearchInput, searchInput)
+            ? capturedSearchText
+            : null;
+        var result = TryCreateConfiguredSearchPickerStep(
+            searchInput,
+            results,
+            selectedText,
+            relatedCapturedSearchText,
+            hint);
+
+        return new SearchPickerSelectionCaptureResult(
+            IsConfigured: true,
+            HasSelection: true,
+            searchInput,
+            result);
+    }
+
+    private StepCreationResult TryCreateConfiguredSearchPickerStep(
+        TextBox searchInput,
+        Control results,
+        string? selectedText,
+        string? capturedSearchText,
+        RecorderSearchPickerHint hint)
+    {
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
             return StepCreationResult.Unsupported("Search picker does not have a selected result to record.");
+        }
+
+        var searchText = ResolveSearchPickerSearchText(
+            capturedSearchText,
+            searchInput.Text,
+            selectedText);
+        if (searchText is null)
+        {
+            return StepCreationResult.Unsupported("Search picker search text is empty.");
         }
 
         var warning = "Recorded composite search picker from configured parts.";
@@ -1505,6 +1654,56 @@ internal sealed class RecorderStepFactory
                 Warning: warning,
                 ItemValue: selectedText.Trim()),
             warning);
+    }
+
+    private IEnumerable<RecorderSearchPickerHint> FindSearchPickerHints(
+        Control results,
+        SearchPickerResultsKind resultsKind)
+    {
+        return _options.SearchPickerHints.Where(candidate =>
+            candidate.Parts.ResultsKind == resultsKind
+            && !string.IsNullOrWhiteSpace(candidate.LocatorValue)
+            && TryGetLocator(results, candidate.Parts.LocatorKind, out var resultsLocator)
+            && string.Equals(
+                candidate.Parts.ResultsLocator.Trim(),
+                resultsLocator,
+                StringComparison.Ordinal));
+    }
+
+    private IEnumerable<RecorderSearchPickerHint> FindExplicitSearchPickerHints(
+        TextBox searchInput,
+        Control results)
+    {
+        return _options.SearchPickerHints.Where(candidate =>
+            !string.IsNullOrWhiteSpace(candidate.LocatorValue)
+            && TryGetLocator(searchInput, candidate.Parts.LocatorKind, out var searchInputLocator)
+            && TryGetLocator(results, candidate.Parts.LocatorKind, out var resultsLocator)
+            && string.Equals(
+                candidate.Parts.SearchInputLocator.Trim(),
+                searchInputLocator,
+                StringComparison.Ordinal)
+            && string.Equals(
+                candidate.Parts.ResultsLocator.Trim(),
+                resultsLocator,
+                StringComparison.Ordinal));
+    }
+
+    private static string? ResolveSearchPickerSearchText(
+        string? capturedSearchText,
+        string? currentSearchText,
+        string? selectedText)
+    {
+        if (!string.IsNullOrWhiteSpace(capturedSearchText))
+        {
+            return capturedSearchText.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentSearchText))
+        {
+            return currentSearchText.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(selectedText) ? null : selectedText.Trim();
     }
 
     private StepCreationResult TryCreateGridSearchPickerStep(
@@ -2070,21 +2269,15 @@ internal sealed class RecorderStepFactory
         for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
         {
             var dataContext = current.DataContext;
-            if (dataContext is null || !TryFindItemIndex(items, dataContext, out rowIndex, out var item))
+            if (dataContext is null || !TryFindItemIndex(items, dataContext, out rowIndex, out _))
             {
                 continue;
             }
 
             if (hasSourceColumnIndex)
             {
-                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[sourceColumnIndex], out var sourceColumnValue)
-                    || !string.Equals(sourceColumnValue, observedText, StringComparison.Ordinal))
-                {
-                    return false;
-                }
-
                 columnIndex = sourceColumnIndex;
-                cellValue = sourceColumnValue;
+                cellValue = observedText;
                 return true;
             }
 
@@ -2093,7 +2286,12 @@ internal sealed class RecorderStepFactory
             var matchedColumnCount = 0;
             for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
             {
-                if (!TryReadPropertyValue(item, hint.ColumnPropertyNames[candidateColumnIndex], out var candidateValue)
+                if (!TryReadDisplayedGridCellValue(
+                        gridSource,
+                        items[rowIndex],
+                        rowIndex,
+                        candidateColumnIndex,
+                        out var candidateValue)
                     || !string.Equals(candidateValue, observedText, StringComparison.Ordinal))
                 {
                     continue;
@@ -2355,7 +2553,25 @@ internal sealed class RecorderStepFactory
                 $"Grid '{targetGridLocatorValue}' row identity is empty after excluding target column '{targetColumnName}'.");
         }
 
-        if (!TryReadGridIdentity(item, effectiveIdentityColumns, out var conditions, out var readError))
+        var displayedGrid = TryFindControl(
+                targetGridLocatorValue,
+                targetGridLocatorKind,
+                out var targetGrid)
+            ? targetGrid
+            : gridSource;
+        if (!TryReadGridIdentity(
+                displayedGrid,
+                item,
+                rowIndex,
+                hint,
+                effectiveIdentityColumns,
+                out var conditions,
+                out var readError))
+        {
+            return StepCreationResult.Unsupported(readError);
+        }
+
+        if (!TryReadGridModelIdentity(item, effectiveIdentityColumns, out var modelIdentity, out readError))
         {
             return StepCreationResult.Unsupported(readError);
         }
@@ -2364,12 +2580,16 @@ internal sealed class RecorderStepFactory
         foreach (var candidate in items)
         {
             if (candidate is null
-                || !TryReadGridIdentity(candidate, effectiveIdentityColumns, out var candidateConditions, out readError))
+                || !TryReadGridModelIdentity(
+                    candidate,
+                    effectiveIdentityColumns,
+                    out var candidateIdentity,
+                    out readError))
             {
                 return StepCreationResult.Unsupported(readError);
             }
 
-            if (candidateConditions.SequenceEqual(conditions))
+            if (candidateIdentity.SequenceEqual(modelIdentity, StringComparer.Ordinal))
             {
                 matchingRows++;
             }
@@ -2422,7 +2642,10 @@ internal sealed class RecorderStepFactory
     }
 
     private static bool TryReadGridIdentity(
-        object item,
+        Control gridSource,
+        object rowItem,
+        int rowIndex,
+        RecorderGridHint hint,
         IReadOnlyList<string> identityColumns,
         out IReadOnlyList<RecordedGridRowCondition> conditions,
         out string error)
@@ -2431,10 +2654,15 @@ internal sealed class RecorderStepFactory
         for (var index = 0; index < identityColumns.Count; index++)
         {
             var columnName = identityColumns[index];
-            if (!TryReadPropertyValue(item, columnName, out var value))
+            var columnIndex = hint.ColumnPropertyNames
+                .Select(static candidate => candidate.Trim())
+                .ToList()
+                .FindIndex(candidate => string.Equals(candidate, columnName, StringComparison.Ordinal));
+            if (columnIndex < 0
+                || !TryReadDisplayedGridCellValue(gridSource, rowItem, rowIndex, columnIndex, out var value))
             {
                 conditions = Array.Empty<RecordedGridRowCondition>();
-                error = $"Grid row type '{item.GetType().FullName}' does not expose configured identity property '{columnName}'.";
+                error = $"Grid '{hint.TargetLocatorValue}' row {rowIndex} does not expose visible identity cell '{columnName}'.";
                 return false;
             }
 
@@ -2444,6 +2672,70 @@ internal sealed class RecorderStepFactory
         conditions = result;
         error = string.Empty;
         return true;
+    }
+
+    private static bool TryReadGridModelIdentity(
+        object item,
+        IReadOnlyList<string> identityColumns,
+        out IReadOnlyList<string> values,
+        out string error)
+    {
+        var result = new string[identityColumns.Count];
+        for (var index = 0; index < identityColumns.Count; index++)
+        {
+            var columnName = identityColumns[index];
+            if (!TryReadPropertyValue(item, columnName, out result[index]))
+            {
+                values = Array.Empty<string>();
+                error = $"Grid row type '{item.GetType().FullName}' does not expose configured identity property '{columnName}'.";
+                return false;
+            }
+        }
+
+        values = result;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadDisplayedGridCellValue(
+        Control gridSource,
+        object? rowItem,
+        int rowIndex,
+        int columnIndex,
+        out string value)
+    {
+        foreach (var candidate in EnumerateDescendantControls(gridSource))
+        {
+            var automationId = AutomationProperties.GetAutomationId(candidate);
+            if (!TryParseVisualGridIndex(automationId, "_Cell", out var candidateColumnIndex)
+                || candidateColumnIndex != columnIndex)
+            {
+                continue;
+            }
+
+            if (rowItem is not null)
+            {
+                if (!ReferenceEquals(candidate.DataContext, rowItem))
+                {
+                    continue;
+                }
+            }
+            else if (!TryParseVisualGridIndex(automationId, "_Row", out var candidateRowIndex)
+                     || candidateRowIndex != rowIndex)
+            {
+                continue;
+            }
+
+            var displayedValue = ExtractTextValue(candidate);
+            if (displayedValue is not null)
+            {
+                value = displayedValue.Trim();
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private StepCreationResult TryCreateGridEditTextStep(

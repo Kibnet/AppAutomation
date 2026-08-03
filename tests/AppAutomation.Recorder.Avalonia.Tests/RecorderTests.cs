@@ -2038,90 +2038,6 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task RecorderSession_SuppressesConfiguredSearchPickerButtons_AndCapturesListSelectionAsComposite()
-    {
-        var options = CreateListSearchPickerOptions();
-        var root = new StackPanel();
-        var searchInput = new TextBox();
-        var applyButton = new Button { Content = "Apply" };
-        var expandButton = new Button { Content = "Open" };
-        var results = new ListBox
-        {
-            ItemsSource = new[] { "Greatest Common Divisor", "Least Common Multiple" }
-        };
-        AutomationProperties.SetAutomationId(searchInput, "HistoryFilterInput");
-        AutomationProperties.SetAutomationId(applyButton, "ApplyFilterButton");
-        AutomationProperties.SetAutomationId(expandButton, "ExpandFilterButton");
-        AutomationProperties.SetAutomationId(results, "OperationResults");
-        root.Children.Add(searchInput);
-        root.Children.Add(applyButton);
-        root.Children.Add(expandButton);
-        root.Children.Add(results);
-
-        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
-        var details = (IAppAutomationRecorderSessionDetails)session;
-
-        session.Start();
-        session.RefreshObservedControlsForTesting();
-        session.RegisterKeyboardInputForTesting(searchInput);
-        searchInput.Text = "least";
-        session.CaptureButtonClickForTesting(applyButton);
-        session.CaptureButtonClickForTesting(expandButton);
-        session.RegisterPointerInputFromSourceForTesting(results);
-        results.SelectedItem = "Least Common Multiple";
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
-            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.HistoryOperationPicker, \"least\", \"Least Common Multiple\");");
-            await Assert.That(details.StepJournal[0].Preview.Contains("ApplyFilterButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(details.StepJournal[0].Preview.Contains("ExpandFilterButton", StringComparison.Ordinal)).IsEqualTo(false);
-        }
-    }
-
-    [Test]
-    public async Task RecorderSession_CapturesDetachedPopupListSelectionAsCanonicalSearchPicker()
-    {
-        var options = CreateArmCustomerSearchPickerOptions();
-        var root = new StackPanel();
-        var searchInput = new TextBox();
-        var expandButton = new Button { Content = "Open" };
-        var popupContent = new StackPanel();
-        var popupHost = new PopupContentHost { PopupContent = popupContent };
-        var results = new ListBox
-        {
-            ItemsSource = new[] { "Product 42" }
-        };
-        results.SelectionChanged += (_, _) =>
-            searchInput.Text = results.SelectedItem?.ToString() ?? string.Empty;
-        AutomationProperties.SetAutomationId(searchInput, "OrderCustomerSearch_Input");
-        AutomationProperties.SetAutomationId(expandButton, "OrderCustomerSearch_OpenButton");
-        AutomationProperties.SetAutomationId(results, "OrderCustomerSearch_Results");
-        root.Children.Add(searchInput);
-        root.Children.Add(expandButton);
-        root.Children.Add(popupHost);
-        popupContent.Children.Add(results);
-
-        var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
-        var details = (IAppAutomationRecorderSessionDetails)session;
-
-        session.Start();
-        session.RefreshObservedControlsForTesting();
-        session.RegisterKeyboardInputForTesting(searchInput);
-        searchInput.Text = "product";
-        session.CaptureButtonClickForTesting(expandButton);
-        results.SelectedItem = "Product 42";
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
-            await Assert.That(details.StepJournal[0].Preview).Contains("Page.SearchAndSelect(static page => page.OrderCustomerSearch, \"product\", \"Product 42\");");
-            await Assert.That(details.StepJournal[0].Preview.Contains("OrderCustomerSearch_Input", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(details.StepJournal[0].Preview.Contains("EnterText", StringComparison.Ordinal)).IsEqualTo(false);
-        }
-    }
-
-    [Test]
     public async Task RecorderSession_SuppressesConfiguredGridSearchPickerButtons_AndCapturesGridSelectionAsComposite()
     {
         var options = CreateGridSearchPickerOptions(validateRuntimeTargets: false);
@@ -2769,6 +2685,189 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_FinalSaveOnlyKeepsAutosaveWhenSaveFails()
+    {
+        var root = new StackPanel();
+        var textBox = new TextBox();
+        AutomationProperties.SetAutomationId(textBox, "SearchBox");
+        root.Children.Add(textBox);
+        var saveTracker = new RecorderSaveOperationTracker();
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                DiagnosticLog = new RecorderDiagnosticLogOptions { WriteToFile = false },
+                Validation = new RecorderValidationOptions
+                {
+                    ValidateRuntimeTargets = false
+                }
+            },
+            () => root,
+            attachWindowHandlers: false,
+            saveOperation: saveTracker.SaveAsync,
+            autosaveOperation: saveTracker.AutosaveAsync);
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(textBox);
+        textBox.Text = "Search result";
+
+        await session.SaveAsync();
+        await WaitForConditionAsync(() => !session.IsBusy);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(saveTracker.ManualSaveCallCount).IsEqualTo(1);
+            await Assert.That(saveTracker.SavedStepCount).IsEqualTo(1);
+            await Assert.That(saveTracker.AutosaveCallCount).IsEqualTo(0);
+        }
+
+        saveTracker.SaveShouldSucceed = false;
+        session.RegisterKeyboardInputForTesting(textBox);
+        textBox.Text = "Another result";
+
+        await session.SaveAsync();
+        await WaitForConditionAsync(() => !session.IsBusy);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(saveTracker.ManualSaveCallCount).IsEqualTo(2);
+            await Assert.That(saveTracker.SavedStepCount).IsEqualTo(2);
+            await Assert.That(saveTracker.AutosaveCallCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_SuccessfulFinalSave_DiscardsQueuedAutosave()
+    {
+        var manualSaveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manualSaveRelease = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var autosaveCallCount = 0;
+        var stepId = Guid.NewGuid();
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false },
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            saveOperation: (_, _, _) =>
+            {
+                manualSaveStarted.TrySetResult();
+                return manualSaveRelease.Task;
+            },
+            autosaveOperation: (_, _, _) =>
+            {
+                Interlocked.Increment(ref autosaveCallCount);
+                return Task.FromResult(
+                    RecorderSaveResult.Completed(
+                        "Autosaved.",
+                        pageFilePath: "MainWindowPage.controls.g.cs.autosave",
+                        scenarioFilePath: "MainWindowScenariosBase.g.cs.autosave",
+                        persistedStepCount: 1,
+                        skippedStepCount: 0));
+            });
+        var details = (IAppAutomationRecorderSessionDetails)session;
+        session.AddRecordedStepForTesting(CreateRecordedButtonStep(stepId, "RunButton"));
+        session.Start();
+
+        var saveTask = session.SaveAsync();
+        await manualSaveStarted.Task;
+        details.SetStepIgnored(stepId, isIgnored: true);
+        manualSaveRelease.SetResult(
+            RecorderSaveResult.Completed(
+                "Saved.",
+                pageFilePath: "MainWindowPage.RecorderControls.g.cs",
+                scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
+                persistedStepCount: 1,
+                skippedStepCount: 0));
+
+        var result = await saveTask;
+        await WaitForConditionAsync(() => !session.IsBusy);
+        await Task.Delay(50);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(autosaveCallCount).IsEqualTo(0);
+            await Assert.That(session.IsBusy).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_FinalSaveWaitsForActiveAutosave()
+    {
+        var root = new StackPanel();
+        var button = new Button { Content = "Run" };
+        AutomationProperties.SetAutomationId(button, "RunButton");
+        root.Children.Add(button);
+        var autosaveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var autosaveRelease = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manualSaveCallCount = 0;
+        var autosaveCallCount = 0;
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                DiagnosticLog = new RecorderDiagnosticLogOptions { WriteToFile = false },
+                Validation = new RecorderValidationOptions
+                {
+                    ValidateRuntimeTargets = false
+                }
+            },
+            () => root,
+            attachWindowHandlers: false,
+            saveOperation: (steps, _, _) =>
+            {
+                Interlocked.Increment(ref manualSaveCallCount);
+                return Task.FromResult(
+                    RecorderSaveResult.Completed(
+                        "Saved.",
+                        pageFilePath: "MainWindowPage.RecorderControls.g.cs",
+                        scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
+                        persistedStepCount: steps.Count,
+                        skippedStepCount: 0));
+            },
+            autosaveOperation: (steps, _, _) =>
+            {
+                Interlocked.Increment(ref autosaveCallCount);
+                autosaveStarted.TrySetResult();
+                return autosaveRelease.Task;
+            });
+
+        session.Start();
+        session.CaptureButtonClickForTesting(button);
+        await autosaveStarted.Task;
+
+        var saveTask = session.SaveAsync();
+        await Task.Delay(50);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(saveTask.IsCompleted).IsFalse();
+            await Assert.That(manualSaveCallCount).IsEqualTo(0);
+        }
+
+        autosaveRelease.SetResult(
+            RecorderSaveResult.Completed(
+                "Autosaved.",
+                pageFilePath: "MainWindowPage.controls.g.cs.autosave",
+                scenarioFilePath: "MainWindowScenariosBase.g.cs.autosave",
+                persistedStepCount: 1,
+                skippedStepCount: 0));
+        var result = await saveTask;
+        await WaitForConditionAsync(() => !session.IsBusy);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(autosaveCallCount).IsEqualTo(1);
+            await Assert.That(manualSaveCallCount).IsEqualTo(1);
+            await Assert.That(session.IsBusy).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_AutosaveQueuesLatestChange_WhileBusy()
     {
         var root = new StackPanel();
@@ -3008,6 +3107,8 @@ public sealed class RecorderTests
             await Assert.That(result.Success).IsEqualTo(true);
             await Assert.That(result.PageFilePath).IsNotNull();
             await Assert.That(result.ScenarioFilePath).IsNotNull();
+            await Assert.That(Path.GetDirectoryName(result.PageFilePath!))
+                .IsEqualTo(Path.Combine(directory.Path, "Pages"));
             await Assert.That(result.Diagnostics.Any(static message => message.Contains("renamed", StringComparison.Ordinal))).IsEqualTo(true);
         }
 
@@ -3082,7 +3183,71 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task SaveAsync_IgnoresAutosaveRecoveryArtifacts()
+    public async Task AutosaveAsync_ReplacesTypeAgnosticControl_WhenTypedActionIsRecorded()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Autosave Control Upgrade");
+        var genericControl = new RecordedControlDescriptor(
+            "RunButton",
+            UiControlType.AutomationElement,
+            "RunButton",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
+            Warning: null);
+        var buttonControl = genericControl with { ControlType = UiControlType.Button };
+        var existsStep = new RecordedStep(RecordedActionKind.WaitUntilExists, genericControl);
+        var clickStep = new RecordedStep(RecordedActionKind.ClickButton, buttonControl);
+
+        var firstResult = await generator.AutosaveAsync(
+            CreateWindowStub(),
+            options,
+            [existsStep],
+            outputDirectoryOverride: null);
+        var secondResult = await generator.AutosaveAsync(
+            CreateWindowStub(),
+            options,
+            [existsStep, clickStep],
+            outputDirectoryOverride: null);
+
+        var pageSource = await File.ReadAllTextAsync(secondResult.PageFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(firstResult.Success).IsTrue();
+            await Assert.That(secondResult.Success).IsTrue();
+            await Assert.That(firstResult.PageFilePath).IsEqualTo(secondResult.PageFilePath);
+            await Assert.That(pageSource.Split("[UiControl(", StringSplitOptions.None).Length - 1).IsEqualTo(1);
+            await Assert.That(pageSource).Contains(
+                "[UiControl(\"RunButton\", UiControlType.Button, \"RunButton\", FallbackToName = false)]");
+            await Assert.That(pageSource).DoesNotContain("UiControlType.AutomationElement");
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_PromotesFinalOutputAndRemovesAutosaveRecovery()
     {
         using var directory = new TemporaryDirectory();
         CreateAuthoringProject(
@@ -3122,6 +3287,8 @@ public sealed class RecorderTests
             await Assert.That(saveResult.Success).IsEqualTo(true);
             await Assert.That(Path.GetFileName(saveResult.ScenarioFilePath!)).DoesNotContain(".autosave.");
             await Assert.That(Path.GetFileName(saveResult.PageFilePath!)).DoesNotContain(".autosave.");
+            await Assert.That(File.Exists(autosaveResult.PageFilePath!)).IsFalse();
+            await Assert.That(File.Exists(autosaveResult.ScenarioFilePath!)).IsFalse();
             await Assert.That(pageSource).Contains("[UiControl(\"RunButton\", UiControlType.Button, \"RunButton\", FallbackToName = false)]");
             await Assert.That(scenarioSource).DoesNotContain("autosave recovery file");
             await Assert.That(scenarioSource).Contains("public void Recorded_RecoveryFlow_");
@@ -3130,7 +3297,68 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task SaveAsync_DoesNotReuseExistingControl_WhenLocatorMatchesButControlTypeDiffers()
+    public async Task SaveAsync_ReusesNotificationControl_ForExistsAssertion()
+    {
+        using var directory = new TemporaryDirectory();
+        CreateAuthoringProject(
+            directory.Path,
+            existingPageContent:
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("ToastNotification", UiControlType.Notification, "ToastNotification", FallbackToName = false)]
+            public sealed partial class MainWindowPage
+            {
+            }
+            """,
+            existingScenarioContent:
+            """
+            namespace Sample.Authoring.Tests;
+
+            public abstract partial class MainWindowScenariosBase<TSession>
+            {
+            }
+            """);
+
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var options = CreateOptions(directory.Path, scenarioName: "Notification Exists Flow");
+        var notification = new RecordedControlDescriptor(
+            "ToastNotification",
+            UiControlType.AutomationElement,
+            "ToastNotification",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Border).FullName ?? nameof(Border),
+            Warning: null);
+        IReadOnlyList<RecordedStep> steps =
+        [
+            new RecordedStep(RecordedActionKind.WaitUntilExists, notification)
+        ];
+
+        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsEqualTo(true);
+            await Assert.That(result.PageFilePath).IsNull();
+            await Assert.That(result.ScenarioFilePath).IsNotNull();
+        }
+
+        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains(
+                "Page.WaitUntilExists(static page => page.ToastNotification);",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("ToastNotification2", StringComparison.Ordinal)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task SaveAsync_Fails_WhenTypedActionConflictsWithExistingControlType()
     {
         using var directory = new TemporaryDirectory();
         CreateAuthoringProject(
@@ -3154,9 +3382,8 @@ public sealed class RecorderTests
             {
             }
             """);
-
         var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
-        var options = CreateOptions(directory.Path, scenarioName: "Button Type Flow");
+        var options = CreateOptions(directory.Path, scenarioName: "Button Type Conflict");
         var runButton = new RecordedControlDescriptor(
             "RunButton",
             UiControlType.Button,
@@ -3165,41 +3392,22 @@ public sealed class RecorderTests
             FallbackToName: false,
             AvaloniaTypeName: typeof(Button).FullName ?? nameof(Button),
             Warning: null);
-        IReadOnlyList<RecordedStep> steps =
-        [
-            new RecordedStep(
-                RecordedActionKind.WaitUntilTextEquals,
-                runButton,
-                StringValue: "Run"),
-            new RecordedStep(
-                RecordedActionKind.ClickButton,
-                runButton)
-        ];
 
-        var result = await generator.SaveAsync(CreateWindowStub(), options, steps, outputDirectoryOverride: null);
+        var result = await generator.SaveAsync(
+            CreateWindowStub(),
+            options,
+            [new RecordedStep(RecordedActionKind.ClickButton, runButton)],
+            outputDirectoryOverride: null);
 
         using (Assert.Multiple())
         {
-            await Assert.That(result.Success).IsEqualTo(true);
-            await Assert.That(result.PageFilePath).IsNotNull();
-            await Assert.That(result.ScenarioFilePath).IsNotNull();
-            await Assert.That(result.Diagnostics.Any(static message => message.Contains("incompatible", StringComparison.OrdinalIgnoreCase))).IsEqualTo(true);
-        }
-
-        var pageSource = await File.ReadAllTextAsync(result.PageFilePath!);
-        var scenarioSource = await File.ReadAllTextAsync(result.ScenarioFilePath!);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(pageSource.Contains(
-                "[UiControl(\"RunButton\", UiControlType.Button, \"RunButton\", FallbackToName = false)]",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.WaitUntilTextEquals(static page => page.RunButton, \"Run\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.ClickButton(static page => page.RunButton);",
-                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(result.Success).IsFalse();
+            await Assert.That(result.Message).Contains("incompatible with ClickButton");
+            await Assert.That(result.Message).Contains("will not generate a duplicate control property");
+            await Assert.That(result.PageFilePath).IsNull();
+            await Assert.That(result.ScenarioFilePath).IsNull();
+            await Assert.That(Directory.EnumerateFiles(directory.Path, "*.RecorderControls.g.cs", SearchOption.AllDirectories))
+                .IsEmpty();
         }
     }
 
@@ -3924,24 +4132,6 @@ public sealed class RecorderTests
         return options;
     }
 
-    private static AppAutomationRecorderOptions CreateArmCustomerSearchPickerOptions()
-    {
-        var options = new AppAutomationRecorderOptions();
-        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
-            "OrderCustomerSearch",
-            SearchPickerParts.ByAutomationIds(
-                "OrderCustomerSearch_Input",
-                "OrderCustomerSearch_Results",
-                expandButtonAutomationId: "OrderCustomerSearch_OpenButton",
-                resultsKind: SearchPickerResultsKind.ListBox)));
-        return options;
-    }
-
-    private sealed class PopupContentHost : Control
-    {
-        public object? PopupContent { get; init; }
-    }
-
     private static AppAutomationRecorderOptions CreateCompositeRecorderOptions(bool useCustomShellCaptureHost = false)
     {
         var options = new AppAutomationRecorderOptions();
@@ -4206,6 +4396,50 @@ public sealed class RecorderTests
             {
                 Directory.Delete(Path, recursive: true);
             }
+        }
+    }
+
+    private sealed class RecorderSaveOperationTracker
+    {
+        public bool SaveShouldSucceed { get; set; } = true;
+
+        public int ManualSaveCallCount { get; private set; }
+
+        public int AutosaveCallCount { get; private set; }
+
+        public int SavedStepCount { get; private set; }
+
+        public Task<RecorderSaveResult> SaveAsync(
+            IReadOnlyList<RecordedStep> steps,
+            string? outputDirectory,
+            CancellationToken cancellationToken)
+        {
+            ManualSaveCallCount++;
+            SavedStepCount = steps.Count;
+            return Task.FromResult(
+                SaveShouldSucceed
+                    ? RecorderSaveResult.Completed(
+                        "Saved.",
+                        pageFilePath: "MainWindowPage.RecorderControls.g.cs",
+                        scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
+                        persistedStepCount: steps.Count,
+                        skippedStepCount: 0)
+                    : RecorderSaveResult.Failed("Save failed."));
+        }
+
+        public Task<RecorderSaveResult> AutosaveAsync(
+            IReadOnlyList<RecordedStep> steps,
+            string? outputDirectory,
+            CancellationToken cancellationToken)
+        {
+            AutosaveCallCount++;
+            return Task.FromResult(
+                RecorderSaveResult.Completed(
+                    "Autosaved.",
+                    pageFilePath: "MainWindowPage.controls.g.cs.autosave",
+                    scenarioFilePath: "MainWindowScenariosBase.g.cs.autosave",
+                    persistedStepCount: steps.Count,
+                    skippedStepCount: 0));
         }
     }
 

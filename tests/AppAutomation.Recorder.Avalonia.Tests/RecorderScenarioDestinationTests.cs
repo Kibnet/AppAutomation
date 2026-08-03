@@ -137,54 +137,131 @@ public sealed class RecorderScenarioDestinationTests
     }
 
     [Test]
-    public async Task SelectedDestination_SaveCreatesUniqueGenericPartials()
+    public async Task SelectedDestination_ReusesCanonicalGenericPartials()
     {
         using var project = CreateGenericScenarioProject();
         var context = project.CreateSaveContext();
 
         var first = await project.SaveAsync(context);
         var second = await project.SaveAsync(context);
-        var firstSource = await File.ReadAllTextAsync(first.ScenarioFilePath!);
-        var secondSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
 
         using (Assert.Multiple())
         {
             await Assert.That(first.Success).IsTrue();
             await Assert.That(second.Success).IsTrue();
-            await Assert.That(first.ScenarioFilePath).IsNotEqualTo(second.ScenarioFilePath);
-            await Assert.That(first.PageFilePath).IsNotEqualTo(second.PageFilePath);
+            await Assert.That(first.ScenarioFilePath).IsEqualTo(second.ScenarioFilePath);
+            await Assert.That(Path.GetFileName(first.ScenarioFilePath!))
+                .IsEqualTo("CreateCustomerTests.RecorderScenarios.g.cs");
+            await Assert.That(Path.GetFileName(first.PageFilePath!))
+                .IsEqualTo("MainWindowPage.RecorderControls.g.cs");
+            await Assert.That(second.PageFilePath).IsNull();
             await Assert.That(Path.GetDirectoryName(first.ScenarioFilePath!))
                 .IsEqualTo(Path.Combine(project.RootPath, "Recorded", "Customers"));
-            await Assert.That(firstSource).Contains("namespace Sample.Authoring.Tests.Customers;");
-            await Assert.That(firstSource).Contains("partial class CreateCustomerTests<TSession, TSetup>");
-            await Assert.That(ExtractMethodName(firstSource)).IsNotEqualTo(ExtractMethodName(secondSource));
+            await Assert.That(Path.GetDirectoryName(first.PageFilePath!)).IsEqualTo(project.RootPath);
+            await Assert.That(Directory.EnumerateFiles(
+                    Path.Combine(project.RootPath, "Recorded", "Customers"),
+                    "*.RecorderScenarios.g.cs",
+                    SearchOption.TopDirectoryOnly).Count())
+                .IsEqualTo(1);
+            await Assert.That(scenarioSource).Contains("namespace Sample.Authoring.Tests.Customers;");
+            await Assert.That(scenarioSource).Contains("partial class CreateCustomerTests<TSession, TSetup>");
+            await Assert.That(CountRecordedMethods(scenarioSource)).IsEqualTo(2);
         }
     }
 
     [Test]
-    public async Task SelectedDestination_SaveDoesNotModifyPreviousGeneratedFiles()
+    public async Task SelectedDestination_MergesNewControlsWithoutChangingUserSources()
     {
-        using var project = CreateGenericScenarioProject();
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario);
         var context = project.CreateSaveContext();
-        var first = await project.SaveAsync(context);
-        var firstScenarioSource = await File.ReadAllTextAsync(first.ScenarioFilePath!);
-        var firstPageSource = await File.ReadAllTextAsync(first.PageFilePath!);
-        var firstScenarioWriteTime = File.GetLastWriteTimeUtc(first.ScenarioFilePath!);
-        var firstPageWriteTime = File.GetLastWriteTimeUtc(first.PageFilePath!);
+        var pageSourcePath = project.SourcePath(RecorderScenarioDestinationSources.MainWindowPage.Name);
+        var scenarioSourcePath = project.SourcePath(RecorderScenarioDestinationSources.RootScenario.Name);
+        var originalPageSource = await File.ReadAllTextAsync(pageSourcePath);
+        var originalScenarioSource = await File.ReadAllTextAsync(scenarioSourcePath);
 
-        await project.SaveAsync(context);
+        var first = await project.SaveAsync(context, automationId: "SaveButton");
+        var second = await project.SaveAsync(context, automationId: "CancelButton");
+        var controlsSource = await File.ReadAllTextAsync(second.PageFilePath!);
 
         using (Assert.Multiple())
         {
-            await Assert.That(await File.ReadAllTextAsync(first.ScenarioFilePath!)).IsEqualTo(firstScenarioSource);
-            await Assert.That(File.GetLastWriteTimeUtc(first.ScenarioFilePath!)).IsEqualTo(firstScenarioWriteTime);
-            await Assert.That(await File.ReadAllTextAsync(first.PageFilePath!)).IsEqualTo(firstPageSource);
-            await Assert.That(File.GetLastWriteTimeUtc(first.PageFilePath!)).IsEqualTo(firstPageWriteTime);
+            await Assert.That(first.PageFilePath).IsEqualTo(second.PageFilePath);
+            await Assert.That(first.ScenarioFilePath).IsEqualTo(second.ScenarioFilePath);
+            await Assert.That(controlsSource).Contains("\"SaveButton\"");
+            await Assert.That(controlsSource).Contains("\"CancelButton\"");
+            await Assert.That(Directory.EnumerateFiles(project.RootPath, "*.RecorderControls.g.cs", SearchOption.AllDirectories).Count())
+                .IsEqualTo(1);
+            await Assert.That(await File.ReadAllTextAsync(pageSourcePath)).IsEqualTo(originalPageSource);
+            await Assert.That(await File.ReadAllTextAsync(scenarioSourcePath)).IsEqualTo(originalScenarioSource);
         }
     }
 
     [Test]
-    public async Task SelectedDestination_ExportCreatesUniqueFilesInRequestedDirectory()
+    public async Task SelectedDestination_ResolvesConstControlsAcrossPartialsAndAddsOnlyNewControls()
+    {
+        var automationIds = new RecorderSourceFile(
+            "RecorderAutomationIds.cs",
+            """
+            namespace Sample.Authoring.Pages;
+
+            internal static class RecorderAutomationIds
+            {
+                public const string SaveButton = "SaveButton";
+            }
+            """);
+        var manualControls = new RecorderSourceFile(
+            "MainWindowPage.Manual.cs",
+            """
+            using AppAutomation.Abstractions;
+
+            namespace Sample.Authoring.Pages;
+
+            [UiControl("SaveButton", UiControlType.Button, RecorderAutomationIds.SaveButton)]
+            [UiControl("CancelButton", UiControlType.Button, CancelButtonAutomationId)]
+            public partial class MainWindowPage
+            {
+                private const string CancelButtonAutomationId = "CancelButton";
+            }
+            """);
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            automationIds,
+            manualControls,
+            RecorderScenarioDestinationSources.RootScenario);
+        var context = project.CreateSaveContext();
+
+        var qualifiedConstantResult = await project.SaveAsync(context, automationId: "SaveButton");
+        var localConstantResult = await project.SaveAsync(context, automationId: "CancelButton");
+        var newControlResult = await project.SaveAsync(context, automationId: "NewButton");
+        var repeatedResult = await project.SaveAsync(context, automationId: "NewButton");
+        var controlsSource = await File.ReadAllTextAsync(newControlResult.PageFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(qualifiedConstantResult.Success).IsTrue();
+            await Assert.That(qualifiedConstantResult.PageFilePath).IsNull();
+            await Assert.That(localConstantResult.Success).IsTrue();
+            await Assert.That(localConstantResult.PageFilePath).IsNull();
+            await Assert.That(newControlResult.Success).IsTrue();
+            await Assert.That(newControlResult.PageFilePath).IsNotNull();
+            await Assert.That(repeatedResult.Success).IsTrue();
+            await Assert.That(repeatedResult.PageFilePath).IsNull();
+            await Assert.That(controlsSource).Contains("[UiControl(\"NewButton\", UiControlType.Button, \"NewButton\"");
+            await Assert.That(controlsSource).DoesNotContain("[UiControl(\"SaveButton\"");
+            await Assert.That(controlsSource).DoesNotContain("[UiControl(\"CancelButton\"");
+            await Assert.That(Regex.Count(
+                    controlsSource,
+                    "\\[UiControl\\(\\\"NewButton\\\"",
+                    RegexOptions.CultureInvariant))
+                .IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_ExportReusesCanonicalFileInRequestedDirectory()
     {
         using var project = CreateGenericScenarioProject();
         var context = project.CreateSaveContext();
@@ -192,14 +269,179 @@ public sealed class RecorderScenarioDestinationTests
 
         var first = await project.SaveAsync(context, exportDirectory);
         var second = await project.SaveAsync(context, exportDirectory);
-        var firstSource = await File.ReadAllTextAsync(first.ScenarioFilePath!);
-        var secondSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
+        var scenarioSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
 
         using (Assert.Multiple())
         {
             await Assert.That(Path.GetDirectoryName(first.ScenarioFilePath!)).IsEqualTo(exportDirectory);
-            await Assert.That(second.ScenarioFilePath).IsNotEqualTo(first.ScenarioFilePath);
-            await Assert.That(ExtractMethodName(secondSource)).IsNotEqualTo(ExtractMethodName(firstSource));
+            await Assert.That(second.ScenarioFilePath).IsEqualTo(first.ScenarioFilePath);
+            await Assert.That(CountRecordedMethods(scenarioSource)).IsEqualTo(2);
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_UsesIndependentCanonicalFilePerDestination()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario,
+            RecorderScenarioDestinationSources.OperationScenarios);
+        var destinations = project.Discover().Destinations;
+        var rootContext = new RecorderScenarioSaveContext(
+            destinations.Single(static destination => destination.DisplayName == "Scenarios"),
+            "Root flow",
+            "root-draft");
+        var operationContext = new RecorderScenarioSaveContext(
+            destinations.Single(static destination => destination.DisplayName == "Operations.OperationScenarios"),
+            "Operation flow",
+            "operation-draft");
+
+        var rootSave = await project.SaveAsync(rootContext);
+        var operationSave = await project.SaveAsync(operationContext);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(rootSave.ScenarioFilePath).IsNotEqualTo(operationSave.ScenarioFilePath);
+            await Assert.That(Path.GetFileName(rootSave.ScenarioFilePath!))
+                .IsEqualTo("Scenarios.RecorderScenarios.g.cs");
+            await Assert.That(Path.GetFileName(operationSave.ScenarioFilePath!))
+                .IsEqualTo("OperationScenarios.RecorderScenarios.g.cs");
+            await Assert.That(File.Exists(rootSave.ScenarioFilePath!)).IsTrue();
+            await Assert.That(File.Exists(operationSave.ScenarioFilePath!)).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_DoesNotOverwriteMalformedCanonicalScenario()
+    {
+        using var project = CreateGenericScenarioProject();
+        var context = project.CreateSaveContext();
+        var first = await project.SaveAsync(context);
+        const string malformedSource =
+            "// <auto-generated by AppAutomation Recorder />\nnamespace Sample.Authoring.Tests.Customers;\npublic partial class CreateCustomerTests<TSession, TSetup> {";
+        await File.WriteAllTextAsync(first.ScenarioFilePath!, malformedSource);
+
+        var second = await project.SaveAsync(context);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(second.Success).IsFalse();
+            await Assert.That(second.Message).Contains("invalid C#");
+            await Assert.That(await File.ReadAllTextAsync(first.ScenarioFilePath!)).IsEqualTo(malformedSource);
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_CanonicalGeneratedFilesCompileTogether()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage,
+            RecorderScenarioDestinationSources.CompilableScenario);
+        var context = project.CreateSaveContext();
+
+        await project.SaveAsync(context, automationId: "SaveButton");
+        var second = await project.SaveAsync(context, automationId: "CancelButton");
+        var errors = RecorderGeneratedSourceCompiler.Compile(project.RootPath);
+        var scenarioSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(errors).IsEmpty();
+            await Assert.That(CountRecordedMethods(scenarioSource)).IsEqualTo(2);
+            await Assert.That(Regex.Count(scenarioSource, "\\[Test\\]", RegexOptions.CultureInvariant))
+                .IsEqualTo(2);
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_FinalSaveRemovesAllAutosavesForStableDestination()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario);
+        var firstDraft = project.CreateSaveContext(draftIdentity: "draft-a");
+        var secondDraft = firstDraft with { DraftIdentity = "draft-b" };
+        var otherNamedDraft = project.CreateSaveContext("Other flow", "other-name-draft");
+        var finalContext = firstDraft with { DraftIdentity = "final-save" };
+
+        var firstAutosave = await project.AutosaveAsync(firstDraft);
+        var secondAutosave = await project.AutosaveAsync(secondDraft);
+        var otherNamedAutosave = await project.AutosaveAsync(otherNamedDraft);
+        var legacyAutosavePaths = new[]
+            {
+                firstAutosave.PageFilePath!,
+                firstAutosave.ScenarioFilePath!
+            };
+        foreach (var filePath in legacyAutosavePaths)
+        {
+            var legacySource = string.Join(
+                Environment.NewLine,
+                (await File.ReadAllLinesAsync(filePath)).Where(static line =>
+                    !line.StartsWith(
+                        "// AppAutomation recorder autosave destination:",
+                        StringComparison.Ordinal)));
+            await File.WriteAllTextAsync(filePath, legacySource);
+        }
+
+        var relocatedAutosavePaths = new[]
+            {
+                secondAutosave.PageFilePath!,
+                secondAutosave.ScenarioFilePath!,
+                otherNamedAutosave.PageFilePath!,
+                otherNamedAutosave.ScenarioFilePath!
+            }
+            .Select((filePath, index) =>
+            {
+                var relocatedPath = Path.Combine(
+                    Path.GetDirectoryName(filePath)!,
+                    $"recovery-{index}.g.cs.autosave");
+                File.Move(filePath, relocatedPath);
+                return relocatedPath;
+            })
+            .ToArray();
+        var exportDirectory = Path.Combine(project.RootPath, "Export");
+        var finalSave = await project.SaveWithFreshGeneratorAsync(finalContext, exportDirectory);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(finalSave.Success).IsTrue();
+            await Assert.That(legacyAutosavePaths.Where(File.Exists)).IsEmpty();
+            await Assert.That(relocatedAutosavePaths.Where(File.Exists)).IsEmpty();
+            await Assert.That(Path.GetFileName(finalSave.PageFilePath!))
+                .IsEqualTo("MainWindowPage.RecorderControls.g.cs");
+            await Assert.That(Path.GetFileName(finalSave.ScenarioFilePath!))
+                .IsEqualTo("Scenarios.RecorderScenarios.g.cs");
+            await Assert.That(Path.GetDirectoryName(finalSave.ScenarioFilePath!)).IsEqualTo(exportDirectory);
+        }
+    }
+
+    [Test]
+    public async Task SelectedDestination_FinalSaveKeepsAutosavesForAnotherDestination()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.TwoRootScenarios);
+        var destinations = project.Discover().Destinations;
+        var savedContext = new RecorderScenarioSaveContext(
+            destinations.Single(static destination => destination.ScenarioClassName == "Scenarios"),
+            "Shared flow",
+            "saved-draft");
+        var otherContext = new RecorderScenarioSaveContext(
+            destinations.Single(static destination => destination.ScenarioClassName == "OtherScenarios"),
+            "Shared flow",
+            "other-draft");
+
+        var savedAutosave = await project.AutosaveAsync(savedContext);
+        var otherAutosave = await project.AutosaveAsync(otherContext);
+        var finalSave = await project.SaveWithFreshGeneratorAsync(savedContext);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(finalSave.Success).IsTrue();
+            await Assert.That(File.Exists(savedAutosave.PageFilePath!)).IsFalse();
+            await Assert.That(File.Exists(savedAutosave.ScenarioFilePath!)).IsFalse();
+            await Assert.That(File.Exists(otherAutosave.PageFilePath!)).IsTrue();
+            await Assert.That(File.Exists(otherAutosave.ScenarioFilePath!)).IsTrue();
         }
     }
 
@@ -344,12 +586,12 @@ public sealed class RecorderScenarioDestinationTests
             ?? throw new InvalidOperationException($"Recorder overlay control '{name}' was not found.");
     }
 
-    private static string ExtractMethodName(string source)
+    private static int CountRecordedMethods(string source)
     {
-        return Regex.Match(
+        return Regex.Count(
             source,
-            "public void (?<name>[^\\(]+)\\(",
-            RegexOptions.CultureInvariant).Groups["name"].Value;
+            "public void Recorded_[^\\(]+\\(",
+            RegexOptions.CultureInvariant);
     }
 }
 

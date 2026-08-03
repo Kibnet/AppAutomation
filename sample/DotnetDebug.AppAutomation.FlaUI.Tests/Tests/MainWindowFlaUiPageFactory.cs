@@ -40,6 +40,7 @@ internal static class MainWindowFlaUiPageFactory
                     SearchControlParts.ByAutomationIds(
                         "ArmTableSearchInput",
                         "ArmTableSearchHistoryItemButton",
+                        historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
                         historyRootAutomationId: "ArmTableSearchHistoryRoot"))
                 .WithGridColumns(
                     "EremexDemoDataGridAutomationBridge",

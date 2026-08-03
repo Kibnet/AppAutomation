@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -47,47 +48,63 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor ConflictingPropertyRule = new(
+        id: "EUA005",
+        title: "Conflicting UiControl property",
+        messageFormat: "Page '{0}' declares UiControl property '{1}' with conflicting definitions",
+        category: "AppAutomation.Authoring",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor ConflictingLocatorRule = new(
+        id: "EUA006",
+        title: "Conflicting UiControl locator",
+        messageFormat: "Page '{0}' assigns {1} locator '{2}' to both '{3}' and '{4}'",
+        category: "AppAutomation.Authoring",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var candidates = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 UiControlAttributeMetadataName,
                 static (node, _) => node is ClassDeclarationSyntax,
-                static (attributeContext, _) => BuildCandidate(attributeContext))
+                static (attributeContext, cancellationToken) => BuildCandidate(attributeContext, cancellationToken))
             .Where(static candidate => candidate is not null)
             .Select(static (candidate, _) => candidate!);
 
-        context.RegisterSourceOutput(candidates, static (productionContext, candidate) =>
+        var generationInputs = context.CompilationProvider.Combine(
+            candidates
+                .Collect()
+                .Select(static (collectedCandidates, _) => MergeCandidates(collectedCandidates)));
+        context.RegisterSourceOutput(generationInputs, static (productionContext, source) =>
         {
-            EmitPageSource(productionContext, candidate);
-        });
-
-        var manifestInputs = context.CompilationProvider.Combine(candidates.Collect());
-        context.RegisterSourceOutput(manifestInputs, static (productionContext, source) =>
-        {
-            EmitManifestSource(productionContext, source.Left, source.Right);
+            EmitSources(productionContext, source.Left, source.Right);
         });
     }
 
-    private static PageCandidate? BuildCandidate(GeneratorAttributeSyntaxContext context)
+    private static PagePartCandidate? BuildCandidate(
+        GeneratorAttributeSyntaxContext context,
+        CancellationToken cancellationToken)
     {
-        if (context.TargetSymbol is not INamedTypeSymbol classSymbol)
+        if (context.TargetSymbol is not INamedTypeSymbol classSymbol
+            || context.TargetNode is not ClassDeclarationSyntax classSyntax)
         {
             return null;
         }
 
-        var classSyntax = classSymbol.DeclaringSyntaxReferences
-            .Select(static reference => reference.GetSyntax())
+        var declarations = classSymbol.DeclaringSyntaxReferences
+            .Select(reference => reference.GetSyntax(cancellationToken))
             .OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault();
-
-        if (classSyntax is null)
-        {
-            return null;
-        }
+            .ToArray();
 
         var controls = ImmutableArray.CreateBuilder<UiControlDescriptor>();
-        foreach (var attribute in context.Attributes)
+        foreach (var attribute in context.Attributes
+                     .OrderBy(
+                         static item => item.ApplicationSyntaxReference?.SyntaxTree.FilePath ?? string.Empty,
+                         StringComparer.Ordinal)
+                     .ThenBy(static item => item.ApplicationSyntaxReference?.Span.Start ?? int.MaxValue))
         {
             if (attribute.ConstructorArguments.Length < 3)
             {
@@ -123,7 +140,11 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
                 controlTypeValue.Value,
                 locatorValue!,
                 locatorKind,
-                fallbackToName));
+                fallbackToName,
+                attribute.ApplicationSyntaxReference?.GetSyntax(cancellationToken).GetLocation()
+                    ?? classSyntax.Identifier.GetLocation(),
+                attribute.ApplicationSyntaxReference?.SyntaxTree.FilePath ?? string.Empty,
+                attribute.ApplicationSyntaxReference?.Span.Start ?? int.MaxValue));
         }
 
         if (controls.Count == 0)
@@ -131,25 +152,81 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             return null;
         }
 
-        return new PageCandidate(
+        return new PagePartCandidate(
             classSymbol,
-            classSyntax.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.PartialKeyword)),
+            declarations.Length > 0
+                && declarations.All(static declaration =>
+                    declaration.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.PartialKeyword))),
             classSyntax.Identifier.GetLocation(),
+            classSyntax.SyntaxTree.FilePath ?? string.Empty,
+            classSyntax.SpanStart,
             controls.ToImmutable());
     }
 
-    private static void EmitPageSource(SourceProductionContext context, PageCandidate candidate)
+    private static ImmutableArray<PageCandidate> MergeCandidates(
+        ImmutableArray<PagePartCandidate> candidates)
     {
-        if (!ValidateCandidate(context, candidate, reportDiagnostics: true))
+        if (candidates.IsDefaultOrEmpty)
         {
-            return;
+            return ImmutableArray<PageCandidate>.Empty;
         }
 
-        var source = RenderPageSource(candidate);
-        context.AddSource($"{candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.UiControls.g.cs", source);
+        return candidates
+            .GroupBy(
+                static candidate => candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                StringComparer.Ordinal)
+            .OrderBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => MergeCandidateGroup(group))
+            .ToImmutableArray();
     }
 
-    private static void EmitManifestSource(
+    private static PageCandidate MergeCandidateGroup(IEnumerable<PagePartCandidate> candidateGroup)
+    {
+        var parts = candidateGroup
+            .OrderBy(static candidate => candidate.SourcePath, StringComparer.Ordinal)
+            .ThenBy(static candidate => candidate.SourceSpanStart)
+            .ToArray();
+        var controls = ImmutableArray.CreateBuilder<UiControlDescriptor>();
+        var conflicts = ImmutableArray.CreateBuilder<UiControlConflict>();
+        var controlsByProperty = new Dictionary<string, UiControlDescriptor>(StringComparer.Ordinal);
+        var controlsByLocator = new Dictionary<LocatorIdentity, UiControlDescriptor>();
+
+        foreach (var control in parts
+                     .SelectMany(static part => part.Controls)
+                     .OrderBy(static item => item.SourcePath, StringComparer.Ordinal)
+                     .ThenBy(static item => item.SourceSpanStart))
+        {
+            if (controlsByProperty.TryGetValue(control.PropertyName, out var propertyMatch))
+            {
+                if (!propertyMatch.HasSameDefinition(control))
+                {
+                    conflicts.Add(new UiControlConflict(UiControlConflictKind.Property, propertyMatch, control));
+                }
+
+                continue;
+            }
+
+            var locatorIdentity = new LocatorIdentity(control.LocatorKindValue, control.LocatorValue);
+            if (controlsByLocator.TryGetValue(locatorIdentity, out var locatorMatch))
+            {
+                conflicts.Add(new UiControlConflict(UiControlConflictKind.Locator, locatorMatch, control));
+                continue;
+            }
+
+            controlsByProperty.Add(control.PropertyName, control);
+            controlsByLocator.Add(locatorIdentity, control);
+            controls.Add(control);
+        }
+
+        return new PageCandidate(
+            parts[0].ClassSymbol,
+            parts.All(static part => part.IsPartial),
+            parts[0].Location,
+            controls.ToImmutable(),
+            conflicts.ToImmutable());
+    }
+
+    private static void EmitSources(
         SourceProductionContext context,
         Compilation compilation,
         ImmutableArray<PageCandidate> candidates)
@@ -160,28 +237,62 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         }
 
         var validCandidates = new List<PageCandidate>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in candidates)
         {
-            if (!ValidateCandidate(context, candidate, reportDiagnostics: false))
+            if (!ValidateCandidate(context, candidate, reportDiagnostics: true)
+                || !ValidateControlConflicts(context, candidate))
             {
                 continue;
             }
 
-            var pageKey = candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-            if (seen.Add(pageKey))
-            {
-                validCandidates.Add(candidate);
-            }
+            EmitPageSource(context, candidate);
+            validCandidates.Add(candidate);
         }
 
-        if (validCandidates.Count == 0)
+        if (validCandidates.Count > 0)
         {
-            return;
+            EmitManifestSource(context, compilation, validCandidates);
+        }
+    }
+
+    private static void EmitPageSource(SourceProductionContext context, PageCandidate candidate)
+    {
+        var source = RenderPageSource(candidate);
+        context.AddSource($"{candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.UiControls.g.cs", source);
+    }
+
+    private static void EmitManifestSource(
+        SourceProductionContext context,
+        Compilation compilation,
+        IReadOnlyList<PageCandidate> candidates)
+    {
+        var source = RenderManifestSource(compilation, candidates);
+        context.AddSource("UiLocatorManifestProvider.g.cs", source);
+    }
+
+    private static bool ValidateControlConflicts(SourceProductionContext context, PageCandidate candidate)
+    {
+        foreach (var conflict in candidate.Conflicts)
+        {
+            var diagnostic = conflict.Kind == UiControlConflictKind.Property
+                ? Diagnostic.Create(
+                    ConflictingPropertyRule,
+                    conflict.Conflicting.Location,
+                    candidate.ClassSymbol.Name,
+                    conflict.Conflicting.PropertyName)
+                : Diagnostic.Create(
+                    ConflictingLocatorRule,
+                    conflict.Conflicting.Location,
+                    candidate.ClassSymbol.Name,
+                    ResolveLocatorKind(conflict.Conflicting.LocatorKindValue),
+                    conflict.Conflicting.LocatorValue,
+                    conflict.Existing.PropertyName,
+                    conflict.Conflicting.PropertyName);
+
+            context.ReportDiagnostic(diagnostic);
         }
 
-        var source = RenderManifestSource(compilation, validCandidates);
-        context.AddSource("UiLocatorManifestProvider.g.cs", source);
+        return candidate.Conflicts.IsDefaultOrEmpty;
     }
 
     private static bool ValidateCandidate(SourceProductionContext context, PageCandidate candidate, bool reportDiagnostics)
@@ -222,7 +333,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             {
                 if (reportDiagnostics)
                 {
-                    context.ReportDiagnostic(Diagnostic.Create(InvalidPropertyNameRule, candidate.Location, control.PropertyName));
+                    context.ReportDiagnostic(Diagnostic.Create(InvalidPropertyNameRule, control.Location, control.PropertyName));
                 }
 
                 return false;
@@ -493,11 +604,42 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             INamedTypeSymbol classSymbol,
             bool isPartial,
             Location location,
+            ImmutableArray<UiControlDescriptor> controls,
+            ImmutableArray<UiControlConflict> conflicts)
+        {
+            ClassSymbol = classSymbol;
+            IsPartial = isPartial;
+            Location = location;
+            Controls = controls;
+            Conflicts = conflicts;
+        }
+
+        public INamedTypeSymbol ClassSymbol { get; }
+
+        public bool IsPartial { get; }
+
+        public Location Location { get; }
+
+        public ImmutableArray<UiControlDescriptor> Controls { get; }
+
+        public ImmutableArray<UiControlConflict> Conflicts { get; }
+    }
+
+    private sealed class PagePartCandidate
+    {
+        public PagePartCandidate(
+            INamedTypeSymbol classSymbol,
+            bool isPartial,
+            Location location,
+            string sourcePath,
+            int sourceSpanStart,
             ImmutableArray<UiControlDescriptor> controls)
         {
             ClassSymbol = classSymbol;
             IsPartial = isPartial;
             Location = location;
+            SourcePath = sourcePath;
+            SourceSpanStart = sourceSpanStart;
             Controls = controls;
         }
 
@@ -506,6 +648,10 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         public bool IsPartial { get; }
 
         public Location Location { get; }
+
+        public string SourcePath { get; }
+
+        public int SourceSpanStart { get; }
 
         public ImmutableArray<UiControlDescriptor> Controls { get; }
     }
@@ -517,13 +663,19 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             int controlTypeValue,
             string locatorValue,
             int locatorKindValue,
-            bool fallbackToName)
+            bool fallbackToName,
+            Location location,
+            string sourcePath,
+            int sourceSpanStart)
         {
             PropertyName = propertyName;
             ControlTypeValue = controlTypeValue;
             LocatorValue = locatorValue;
             LocatorKindValue = locatorKindValue;
             FallbackToName = fallbackToName;
+            Location = location;
+            SourcePath = sourcePath;
+            SourceSpanStart = sourceSpanStart;
         }
 
         public string PropertyName { get; }
@@ -535,5 +687,77 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         public int LocatorKindValue { get; }
 
         public bool FallbackToName { get; }
+
+        public Location Location { get; }
+
+        public string SourcePath { get; }
+
+        public int SourceSpanStart { get; }
+
+        public bool HasSameDefinition(UiControlDescriptor other)
+        {
+            return string.Equals(PropertyName, other.PropertyName, StringComparison.Ordinal)
+                && ControlTypeValue == other.ControlTypeValue
+                && string.Equals(LocatorValue, other.LocatorValue, StringComparison.Ordinal)
+                && LocatorKindValue == other.LocatorKindValue
+                && FallbackToName == other.FallbackToName;
+        }
+    }
+
+    private sealed class UiControlConflict
+    {
+        public UiControlConflict(
+            UiControlConflictKind kind,
+            UiControlDescriptor existing,
+            UiControlDescriptor conflicting)
+        {
+            Kind = kind;
+            Existing = existing;
+            Conflicting = conflicting;
+        }
+
+        public UiControlConflictKind Kind { get; }
+
+        public UiControlDescriptor Existing { get; }
+
+        public UiControlDescriptor Conflicting { get; }
+    }
+
+    private enum UiControlConflictKind
+    {
+        Property,
+        Locator
+    }
+
+    private readonly struct LocatorIdentity : IEquatable<LocatorIdentity>
+    {
+        public LocatorIdentity(int kind, string value)
+        {
+            Kind = kind;
+            Value = value;
+        }
+
+        private int Kind { get; }
+
+        private string Value { get; }
+
+        public bool Equals(LocatorIdentity other)
+        {
+            return Kind == other.Kind
+                && string.Equals(Value, other.Value, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is LocatorIdentity other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (Kind * 397) ^ StringComparer.Ordinal.GetHashCode(Value);
+            }
+        }
     }
 }

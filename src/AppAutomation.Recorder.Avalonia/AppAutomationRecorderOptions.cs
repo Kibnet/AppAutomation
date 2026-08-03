@@ -49,6 +49,9 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
 
+    public IList<IRecorderSearchPickerSelectionSource> SearchPickerSelectionSources { get; } =
+        new List<IRecorderSearchPickerSelectionSource>();
+
     public IList<RecorderSearchControlHint> SearchControlHints { get; } = new List<RecorderSearchControlHint>();
 
     public IList<RecorderMultiSelectHint> MultiSelectHints { get; } = new List<RecorderMultiSelectHint>();

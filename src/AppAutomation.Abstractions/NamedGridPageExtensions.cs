@@ -109,7 +109,23 @@ public static partial class UiPageExtensions
         var grid = Resolve(selector, page);
         var columnIndex = ResolveColumnIndex(grid, columnName);
         var rowIndex = WaitForUniqueRowIndex(page, selector, rowSelector, timeoutMs, nameof(EditGridCell));
-        return EditGridCell(page, selector, rowIndex, columnIndex, value, editorKind, commitMode, searchText, timeoutMs);
+        var request = new GridCellEditRequest(
+            rowIndex,
+            columnIndex,
+            value,
+            editorKind,
+            commitMode,
+            searchText)
+        {
+            TimeoutMs = timeoutMs
+        };
+        return ExecuteGridCellEdit(
+            page,
+            selector,
+            request,
+            timeoutMs,
+            nameof(EditGridCell),
+            candidate => TryReadNamedGridCellValue(candidate, rowSelector, columnIndex));
     }
 
     /// <summary>

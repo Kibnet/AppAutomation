@@ -82,6 +82,14 @@ internal static class RecorderScenarioDestinationSources
         public partial class Scenarios;
         """);
 
+    public static RecorderSourceFile TwoRootScenarios { get; } = new(
+        "Scenarios.cs",
+        """
+        namespace Sample.Authoring.Tests;
+        public partial class Scenarios;
+        public partial class OtherScenarios;
+        """);
+
     public static RecorderSourceFile MainWindowPage { get; } = new(
         "MainWindowPage.cs",
         """
@@ -95,6 +103,35 @@ internal static class RecorderScenarioDestinationSources
         namespace Sample.Authoring.Pages;
         [UiControl("SaveButton", UiControlType.Button, "SaveButton")]
         public partial class MainWindowPage;
+        """);
+
+    public static RecorderSourceFile CompilableMainWindowPage { get; } = new(
+        "MainWindowPage.cs",
+        """
+        using AppAutomation.Abstractions;
+
+        namespace Sample.Authoring.Pages;
+
+        public sealed partial class MainWindowPage : UiPage
+        {
+            public MainWindowPage(IUiControlResolver resolver) : base(resolver)
+            {
+            }
+        }
+        """);
+
+    public static RecorderSourceFile CompilableScenario { get; } = new(
+        "Scenarios.cs",
+        """
+        using Sample.Authoring.Pages;
+
+        namespace Sample.Authoring.Tests;
+
+        public partial class Scenarios
+        {
+            private const string DesktopUiConstraint = "DesktopUi";
+            private MainWindowPage Page => null!;
+        }
         """);
 }
 
@@ -152,9 +189,23 @@ internal sealed class RecorderScenarioDestinationProject : IDisposable
 
     public Task<RecorderSaveResult> SaveAsync(
         RecorderScenarioSaveContext context,
-        string? outputDirectory = null)
+        string? outputDirectory = null,
+        string automationId = "SaveButton")
     {
         return Generator.SaveAsync(
+            RecorderTestWindow.CreateStub(),
+            Options,
+            [RecorderTestSteps.CreateButtonClick(automationId)],
+            outputDirectory,
+            context);
+    }
+
+    public Task<RecorderSaveResult> SaveWithFreshGeneratorAsync(
+        RecorderScenarioSaveContext context,
+        string? outputDirectory = null)
+    {
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        return generator.SaveAsync(
             RecorderTestWindow.CreateStub(),
             Options,
             [RecorderTestSteps.CreateButtonClick("SaveButton")],

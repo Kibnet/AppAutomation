@@ -140,6 +140,15 @@ public interface ISelectableListBoxControl : IListBoxControl
 }
 
 /// <summary>
+/// Optional list-box capability for selecting one item by exact display text.
+/// </summary>
+public interface IExactSelectableListBoxControl : ISelectableListBoxControl
+{
+    /// <summary>Selects an item using ordinal, case-sensitive display-text matching.</summary>
+    void SelectItemExact(string itemText);
+}
+
+/// <summary>
 /// Represents a check box control with a tri-state checked value.
 /// </summary>
 public interface ICheckBoxControl : IUiControl
@@ -1009,7 +1018,13 @@ public sealed record GridCellEditRequest(
     string Value,
     GridCellEditorKind EditorKind = GridCellEditorKind.Text,
     GridCellEditCommitMode CommitMode = GridCellEditCommitMode.Commit,
-    string? SearchText = null);
+    string? SearchText = null)
+{
+    /// <summary>
+    /// Maximum time available to provider-specific editor discovery and selection.
+    /// </summary>
+    public int TimeoutMs { get; init; } = 5000;
+}
 
 /// <summary>
 /// Represents a grid control that can activate and edit cells.

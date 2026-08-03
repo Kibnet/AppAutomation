@@ -5,15 +5,22 @@
   <Grid>
     <TextBox x:Name="SearchInput"
              Width="220"
+             HorizontalAlignment="Left"
              Watermark="Search"
-             GotFocus="OnSearchInputGotFocus"
              LostFocus="OnSearchInputLostFocus"
              PointerPressed="OnSearchInputPointerPressed"
-             automation:AutomationProperties.AutomationId="ArmTableSearchInput" />
+             automation:AutomationProperties.AutomationId="ArmTableSearchInput">
+      <TextBox.InnerRightContent>
+        <Button Width="28"
+                Padding="0"
+                Content="▼"
+                Click="OnHistoryOpenClick"
+                automation:AutomationProperties.AutomationId="ArmTableSearchHistoryOpenButton" />
+      </TextBox.InnerRightContent>
+    </TextBox>
 
     <Popup x:Name="HistoryPopup"
-           Placement="Bottom"
-           PlacementTarget="{Binding #SearchInput}"
+           Placement="BottomEdgeAlignedLeft"
            IsLightDismissEnabled="True">
       <Border x:Name="HistoryRoot"
               Width="220"

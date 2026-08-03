@@ -1,5 +1,16 @@
 namespace AppAutomation.Abstractions;
 
+internal interface ISearchControlExecutionPhases
+{
+    bool IsSearchActionEnabled { get; }
+
+    bool IsHistoryOpenActionEnabled { get; }
+
+    void EnterSearchInput(string value);
+
+    void InvokeSearchAction();
+}
+
 /// <summary>
 /// Configuration for composing one logical search control from its input and history popup parts.
 /// </summary>
@@ -112,10 +123,10 @@ public sealed class SearchControlAdapter : IUiControlAdapter
         return new DeferredHistoryItemsControl(() => _parts.HistoryResultsKind switch
         {
             SearchHistoryResultsKind.Buttons => resolver.Resolve<ISearchHistoryItemsControl>(
-                CreateDefinition("HistoryButtons", UiControlType.Button, _parts.HistoryResultsLocator)),
+                CreateHistoryDefinition("HistoryButtons", UiControlType.Button, _parts.HistoryResultsLocator)),
             SearchHistoryResultsKind.ListBox => new ListBoxHistoryItemsControl(
                 resolver.Resolve<ISelectableListBoxControl>(
-                    CreateDefinition("HistoryList", UiControlType.ListBox, _parts.HistoryResultsLocator))),
+                    CreateHistoryDefinition("HistoryList", UiControlType.ListBox, _parts.HistoryResultsLocator))),
             _ => throw new NotSupportedException(
                 $"Search control '{_propertyName}' does not support history kind '{_parts.HistoryResultsKind}'.")
         }, _parts.HistoryResultsLocator);
@@ -145,7 +156,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             }
             catch
             {
-                return false;
+                return CreateHistoryItems(resolver).IsAvailable;
             }
         };
     }
@@ -172,6 +183,23 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             _parts.FallbackToName);
     }
 
+    private UiControlDefinition CreateHistoryDefinition(string suffix, UiControlType type, string locator)
+    {
+        var definition = CreateDefinition(suffix, type, locator);
+        return string.IsNullOrWhiteSpace(_parts.HistoryRootLocator)
+            ? definition
+            : definition with
+            {
+                Scope = new UiControlScope(
+                    _parts.HistoryRootLocator,
+                    _parts.LocatorKind,
+                    _parts.FallbackToName)
+                {
+                    AnchorLocatorValue = _parts.SearchInputLocator
+                }
+            };
+    }
+
     private static void ValidateOptionalLocator(string? locator, string parameterName)
     {
         if (locator is not null)
@@ -180,13 +208,14 @@ public sealed class SearchControlAdapter : IUiControlAdapter
         }
     }
 
-    private sealed class SearchControl : ISearchControl, IReadableTextControl
+    private sealed class SearchControl : ISearchControl, IReadableTextControl, ISearchControlExecutionPhases
     {
         private readonly ITextBoxControl _input;
         private readonly ISearchHistoryItemsControl _history;
         private readonly IButtonControl? _searchButton;
         private readonly IButtonControl? _historyOpenButton;
         private readonly Func<bool> _isHistoryAvailable;
+        private bool _historyOpenRequested;
 
         public SearchControl(
             string automationId,
@@ -208,10 +237,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
 
         public string Name => _input.Name;
 
-        public bool IsEnabled =>
-            _input.IsEnabled
-            && (_searchButton?.IsEnabled ?? true)
-            && (_historyOpenButton?.IsEnabled ?? true);
+        public bool IsEnabled => _input.IsEnabled;
 
         public string Text => _input.Text;
 
@@ -219,43 +245,75 @@ public sealed class SearchControlAdapter : IUiControlAdapter
 
         public bool IsHistoryOpen => _isHistoryAvailable();
 
+        bool ISearchControlExecutionPhases.IsSearchActionEnabled => _searchButton?.IsEnabled ?? true;
+
+        bool ISearchControlExecutionPhases.IsHistoryOpenActionEnabled =>
+            IsHistoryOpen
+            || (_historyOpenButton?.IsEnabled ?? _input.IsEnabled);
+
         public void EnterSearch(string value)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(value);
-            _input.Enter(value);
-            _searchButton?.Invoke();
+            EnterSearchInput(value);
+            InvokeSearchAction();
         }
 
         public void ClearSearch()
         {
-            _input.Enter(string.Empty);
-            _searchButton?.Invoke();
+            EnterSearchInput(string.Empty);
+            InvokeSearchAction();
         }
+
+        void ISearchControlExecutionPhases.EnterSearchInput(string value) => EnterSearchInput(value);
+
+        void ISearchControlExecutionPhases.InvokeSearchAction() => InvokeSearchAction();
 
         public void OpenHistory()
         {
             if (IsHistoryOpen)
             {
+                _historyOpenRequested = true;
                 return;
             }
 
             if (_historyOpenButton is not null)
             {
                 _historyOpenButton.Invoke();
+                _historyOpenRequested = true;
                 return;
             }
 
             // Entering the existing value focuses the real editor in desktop providers.
             // ARM SearchControl opens history from the editor's focus/pointer handlers.
             _input.Enter(_input.Text);
+            _historyOpenRequested = true;
         }
 
         public void ApplySearchFromHistory(string value)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(value);
-            OpenHistory();
-            _history.Apply(value);
+            if (!_historyOpenRequested && !IsHistoryOpen)
+            {
+                OpenHistory();
+            }
+
+            try
+            {
+                _history.Apply(value);
+            }
+            finally
+            {
+                _historyOpenRequested = false;
+            }
         }
+
+        private void EnterSearchInput(string value)
+        {
+            _historyOpenRequested = false;
+            _input.Enter(value);
+        }
+
+        private void InvokeSearchAction() => _searchButton?.Invoke();
     }
 
     private sealed class DeferredHistoryItemsControl : ISearchHistoryItemsControl
@@ -319,7 +377,38 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             .Where(static item => !string.IsNullOrWhiteSpace(item))
             .ToArray();
 
-        public void Apply(string itemText) => _inner.SelectItem(itemText);
+        public void Apply(string itemText)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+            var items = Items;
+            var exactMatches = items
+                .Where(candidate => string.Equals(candidate, itemText, StringComparison.Ordinal))
+                .ToArray();
+            if (exactMatches.Length == 0)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+            }
+
+            if (exactMatches.Length > 1)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' is ambiguous.");
+            }
+
+            if (_inner is IExactSelectableListBoxControl exactListBox)
+            {
+                exactListBox.SelectItemExact(exactMatches[0]);
+                return;
+            }
+
+            if (items.Count(candidate => string.Equals(candidate, itemText, StringComparison.OrdinalIgnoreCase)) > 1)
+            {
+                throw new NotSupportedException(
+                    $"Search history list '{AutomationId}' must expose {nameof(IExactSelectableListBoxControl)} "
+                    + "when item texts differ only by case.");
+            }
+
+            _inner.SelectItem(exactMatches[0]);
+        }
     }
 
     private sealed class DeferredButtonControl : IButtonControl

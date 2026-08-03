@@ -366,6 +366,31 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessSearchHistory_IsExactAndScopedToItsSearchControl()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(CreateSearchHistoryWindow);
+        var page = new SearchControlPage(
+            new HeadlessControlResolver(context.Window)
+                .WithSearchControl(
+                    "TableSearch",
+                    SearchControlParts.ByAutomationIds(
+                        "TableSearchInput",
+                        "SearchHistoryItemButton",
+                        historyRootAutomationId: "TableSearchHistoryRoot")));
+
+        var historyItems = page.TableSearch.HistoryItems;
+        page.TableSearch.ApplySearchFromHistory("orders");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(historyItems).IsEquivalentTo(["Orders", "orders"]);
+            await Assert.That(context.ClickCounts).IsEquivalentTo([0, 1, 0]);
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessShellNavigation_ActivatesExistingPaneByAutomationId()
     {
         using var headless = StartHeadlessRuntime();
@@ -756,6 +781,36 @@ Console.WriteLine("Fake desktop");
         return new Window { Content = root };
     }
 
+    private static SearchHistoryWindowContext CreateSearchHistoryWindow()
+    {
+        var clickCounts = new int[3];
+        var root = new StackPanel();
+        var searchRoot = new StackPanel();
+        var unrelatedRoot = new StackPanel();
+        AutomationProperties.SetAutomationId(searchRoot, "TableSearchHistoryRoot");
+        AutomationProperties.SetAutomationId(unrelatedRoot, "OtherSearchHistoryRoot");
+
+        var input = new TextBox();
+        AutomationProperties.SetAutomationId(input, "TableSearchInput");
+        root.Children.Add(input);
+
+        AddHistoryButton(searchRoot, "Orders", () => clickCounts[0]++);
+        AddHistoryButton(searchRoot, "orders", () => clickCounts[1]++);
+        AddHistoryButton(unrelatedRoot, "orders", () => clickCounts[2]++);
+        root.Children.Add(searchRoot);
+        root.Children.Add(unrelatedRoot);
+        return new SearchHistoryWindowContext(new Window { Content = root }, clickCounts);
+    }
+
+    private static void AddHistoryButton(Panel root, string text, Action onClick)
+    {
+        var button = new Button { Content = text };
+        AutomationProperties.SetAutomationId(button, "SearchHistoryItemButton");
+        AutomationProperties.SetName(button, text);
+        button.Click += (_, _) => onClick();
+        root.Children.Add(button);
+    }
+
     private static ShellWindowContext CreateShellWindow()
     {
         var orders = new ShellPaneModel("ordersViewModel", "Заказы") { IsActive = true };
@@ -775,6 +830,8 @@ Console.WriteLine("Fake desktop");
     }
 
     private sealed record LaunchPayload(string UserName);
+
+    private sealed record SearchHistoryWindowContext(Window Window, int[] ClickCounts);
 
     private sealed class VisualGridPage : UiPage
     {
@@ -831,6 +888,25 @@ Console.WriteLine("Fake desktop");
             "OrderCustomerSearch",
             UiControlType.SearchPicker,
             "OrderCustomerSearch");
+    }
+
+    private sealed class SearchControlPage : UiPage
+    {
+        public SearchControlPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchControl TableSearch =>
+            Resolve<ISearchControl>(SearchControlPageDefinitions.TableSearch);
+    }
+
+    public static class SearchControlPageDefinitions
+    {
+        public static UiControlDefinition TableSearch { get; } = new(
+            "TableSearch",
+            UiControlType.Search,
+            "TableSearch");
     }
 
     private sealed class ShellPage : UiPage

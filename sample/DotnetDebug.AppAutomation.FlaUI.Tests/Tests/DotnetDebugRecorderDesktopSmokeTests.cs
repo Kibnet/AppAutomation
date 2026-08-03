@@ -173,7 +173,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var scenarioPath = await WaitForScenarioFileAsync(
             selectedOutputDirectory,
             scenarioName,
-            patternOverride: $"MainWindowScenariosBase.{scenarioName}.*.g.cs");
+            patternOverride: "MainWindowScenariosBase.RecorderScenarios.g.cs");
         var scenarioSource = await File.ReadAllTextAsync(scenarioPath);
 
         using (Assert.Multiple())
@@ -290,8 +290,11 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null && candidate.IsAvailable && !candidate.IsOffscreen,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             "SearchControl history item was not found.")!;
-        var historyVerticalOffset = historyItem.BoundingRectangle.Top - searchInput.BoundingRectangle.Bottom;
-        TryCaptureDesktopElement(session.MainWindow, "search-control-history-popup.png");
+        _ = UiWait.Until(
+            () => historyItem.BoundingRectangle.Top - searchInput.BoundingRectangle.Bottom,
+            static offset => offset >= -1 && offset <= 100,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "SearchControl history popup did not stay adjacent to its editor.");
 
         page.ApplySearchFromHistory(static candidate => candidate.ArmTableSearch, "orders");
 
@@ -302,7 +305,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(historyVerticalOffset >= -1 && historyVerticalOffset <= 100).IsTrue();
             await Assert.That(page.ArmTableSearch.IsHistoryOpen).IsFalse();
             await Assert.That(scenarioSource).Contains(
                 "Page.ApplySearchFromHistory(static page => page.ArmTableSearch, \"orders\");");
@@ -564,7 +566,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             WorkingDirectory = baseOptions.WorkingDirectory,
             Arguments = baseOptions.Arguments,
             EnvironmentVariables = environmentVariables,
-            DisposeCallback = baseOptions.DisposeCallback,
+            DisposeCallback = CreateRecorderDisposeCallback(baseOptions.DisposeCallback),
             MainWindowTimeout = baseOptions.MainWindowTimeout,
             PollInterval = baseOptions.PollInterval,
             WindowPlacement = baseOptions.WindowPlacement
@@ -597,10 +599,34 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             WorkingDirectory = baseOptions.WorkingDirectory,
             Arguments = baseOptions.Arguments,
             EnvironmentVariables = environmentVariables,
-            DisposeCallback = baseOptions.DisposeCallback,
+            DisposeCallback = CreateRecorderDisposeCallback(baseOptions.DisposeCallback),
             MainWindowTimeout = baseOptions.MainWindowTimeout,
             PollInterval = baseOptions.PollInterval,
             WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
+    private static Action CreateRecorderDisposeCallback(Action? baseDisposeCallback)
+    {
+        var generatedControlsPath = Path.Combine(
+            ResolveAuthoringProjectDirectory(),
+            "Pages",
+            "MainWindowPage.RecorderControls.g.cs");
+        var removeGeneratedControls = !File.Exists(generatedControlsPath);
+
+        return () =>
+        {
+            try
+            {
+                baseDisposeCallback?.Invoke();
+            }
+            finally
+            {
+                if (removeGeneratedControls)
+                {
+                    File.Delete(generatedControlsPath);
+                }
+            }
         };
     }
 
@@ -699,7 +725,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         string? patternOverride = null)
     {
         var pattern = patternOverride
-            ?? $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+            ?? "MainWindowScenariosBase.RecorderScenarios.g.cs";
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Exception? lastReadError = null;
         var nextRetryAt = TimeSpan.Zero;
@@ -754,7 +780,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             return null;
         }
 
-        var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+        const string pattern = "MainWindowScenariosBase.RecorderScenarios.g.cs";
         return Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
             .Select(File.GetLastWriteTimeUtc)
             .OrderByDescending(static timestamp => timestamp)
