@@ -39,6 +39,13 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return (TControl)(object)new HeadlessMultiSelectItemsControl(FindElement(definition));
         }
 
+        if (typeof(TControl) == typeof(ISearchHistoryItemsControl))
+        {
+            return (TControl)(object)new HeadlessSearchHistoryItemsControl(
+                () => FindSearchHistoryButtons(definition),
+                definition.LocatorValue);
+        }
+
         object resolved = definition.ControlType switch
         {
             UiControlType.TextBox => new HeadlessTextBoxControl(FindElement(definition).AsTextBox()),
@@ -158,6 +165,37 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         throw new InvalidOperationException(
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
+    }
+
+    private IReadOnlyList<Button> FindSearchHistoryButtons(UiControlDefinition definition)
+    {
+        return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            ControlTree.EnumerateDescendants(_window.Native)
+                .OfType<global::Avalonia.Controls.Button>()
+                .Where(candidate => MatchesSearchHistoryLocator(candidate, definition))
+                .Select(static candidate => AutomationElement.WrapControl(candidate).AsButton())
+                .ToArray());
+    }
+
+    private static bool MatchesSearchHistoryLocator(
+        global::Avalonia.Controls.Button candidate,
+        UiControlDefinition definition)
+    {
+        var locatorValue = definition.LocatorValue.Trim();
+        var primaryValue = definition.LocatorKind switch
+        {
+            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(candidate),
+            UiLocatorKind.Name => AutomationProperties.GetName(candidate),
+            _ => null
+        };
+        if (string.Equals(primaryValue, locatorValue, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return definition.FallbackToName
+            && definition.LocatorKind != UiLocatorKind.Name
+            && string.Equals(AutomationProperties.GetName(candidate), locatorValue, StringComparison.Ordinal);
     }
 
     private PropertyCondition CreateCondition(string locatorValue, UiLocatorKind locatorKind)
@@ -1062,6 +1100,50 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
 
         private sealed record MultiSelectCheckBox(string Text, global::Avalonia.Controls.CheckBox Control);
+    }
+
+    private sealed class HeadlessSearchHistoryItemsControl : ISearchHistoryItemsControl
+    {
+        private readonly Func<IReadOnlyList<Button>> _resolveButtons;
+        private readonly string _locator;
+
+        public HeadlessSearchHistoryItemsControl(
+            Func<IReadOnlyList<Button>> resolveButtons,
+            string locator)
+        {
+            _resolveButtons = resolveButtons;
+            _locator = locator;
+        }
+
+        public string AutomationId => _locator;
+
+        public string Name => _locator;
+
+        public bool IsEnabled => _resolveButtons().Any(static button => button.IsEnabled);
+
+        public bool IsAvailable => _resolveButtons().Any(static button => button.IsAvailable);
+
+        public IReadOnlyList<string> Items => _resolveButtons()
+            .Select(ReadText)
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        public void Apply(string itemText)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+            var button = _resolveButtons().FirstOrDefault(candidate =>
+                string.Equals(ReadText(candidate), itemText, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+            button.Invoke();
+        }
+
+        private static string ReadText(Button button)
+        {
+            return !string.IsNullOrWhiteSpace(button.Name)
+                ? button.Name
+                : button.Text;
+        }
     }
 
     private sealed class HeadlessComboBoxControl : HeadlessControlBase<ComboBox>, IComboBoxControl, IReadableTextControl

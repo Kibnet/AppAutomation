@@ -268,6 +268,51 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeSearchControlSavesHistoryStepAndKeepsPopupAdjacent()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("SearchControl");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var searchInput = FindElement(session, "ArmTableSearchInput");
+
+        page.ArmTableSearch.OpenHistory();
+        var historyItem = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmTableSearchHistoryItemButton"))
+                .FirstOrDefault(element =>
+                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null && candidate.IsAvailable && !candidate.IsOffscreen,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "SearchControl history item was not found.")!;
+        var historyVerticalOffset = historyItem.BoundingRectangle.Top - searchInput.BoundingRectangle.Bottom;
+        TryCaptureDesktopElement(session.MainWindow, "search-control-history-popup.png");
+
+        page.ApplySearchFromHistory(static candidate => candidate.ArmTableSearch, "orders");
+
+        var scenarioSource = await SaveAndReadScenarioSourceAsync(
+            session,
+            outputDirectory.FullPath,
+            scenarioName);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(historyVerticalOffset >= -1 && historyVerticalOffset <= 100).IsTrue();
+            await Assert.That(page.ArmTableSearch.IsHistoryOpen).IsFalse();
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplySearchFromHistory(static page => page.ArmTableSearch, \"orders\");");
+            await Assert.That(scenarioSource).DoesNotContain("Page.EnterText(static page => page.ArmTableSearch");
+            await Assert.That(scenarioSource).DoesNotContain("ArmTableSearchHistoryItemButton");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeMultiSelectCapturesConfirmedAndCanceledSelections()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();

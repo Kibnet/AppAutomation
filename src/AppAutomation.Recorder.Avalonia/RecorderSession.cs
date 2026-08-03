@@ -609,6 +609,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryRecordSearchHistoryAction(source))
+        {
+            return;
+        }
+
         if (TrySuppressSearchPickerButtonClick(source))
         {
             return;
@@ -1058,6 +1063,11 @@ internal sealed class RecorderSession :
 
         var eventSource = e.Source as Control;
         if (IsDatePickerTemplateButton(eventSource))
+        {
+            return;
+        }
+
+        if (TryRecordSearchHistoryAction(eventSource))
         {
             return;
         }
@@ -1984,6 +1994,24 @@ internal sealed class RecorderSession :
         }
 
         AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
+    }
+
+    private bool TryRecordSearchHistoryAction(Control? source)
+    {
+        if (source is null || !_stepFactory.IsSearchHistoryAction(source))
+        {
+            return false;
+        }
+
+        if (_pendingTextBox is not null && _stepFactory.IsSearchHistoryPair(_pendingTextBox, source))
+        {
+            _textDebounceTimer.Stop();
+            _pendingTextBox = null;
+            _pendingTextValue = null;
+        }
+
+        AddStep(_stepFactory.TryCreateSearchHistoryStep(source), source, "SearchHistorySelection");
+        return true;
     }
 
     private void FlushPendingSlider()

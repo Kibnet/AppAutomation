@@ -35,6 +35,12 @@ internal static class MainWindowFlaUiPageFactory
                         expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                         resultsKind: SearchPickerResultsKind.ListBox,
                         opensOnSearch: true))
+                .WithSearchControl(
+                    "ArmTableSearch",
+                    SearchControlParts.ByAutomationIds(
+                        "ArmTableSearchInput",
+                        "ArmTableSearchHistoryItemButton",
+                        historyRootAutomationId: "ArmTableSearchHistoryRoot"))
                 .WithComboBoxFilter(
                     "ArmStatusFilter",
                     ComboBoxFilterParts.ByAutomationIds(

@@ -52,7 +52,10 @@ public enum RecordedActionKind
     SelectMultiItems = 44,
     CancelMultiSelection = 45,
     ApplyFilterSelection = 46,
-    CancelFilterSelection = 47
+    CancelFilterSelection = 47,
+    EnterSearch = 48,
+    ClearSearch = 49,
+    ApplySearchFromHistory = 50
 }
 
 public enum RecorderAssertionMode

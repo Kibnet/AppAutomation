@@ -232,6 +232,7 @@ internal static class RecorderCaptureDiagnostics
         return step?.Control.ControlType switch
         {
             UiControlType.SearchPicker
+                or UiControlType.Search
                 or UiControlType.DateRangeFilter
                 or UiControlType.NumericRangeFilter
                 or UiControlType.Dialog

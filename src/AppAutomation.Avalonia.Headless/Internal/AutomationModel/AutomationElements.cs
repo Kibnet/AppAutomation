@@ -1,12 +1,12 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Interactivity;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
 
 namespace AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 
@@ -307,7 +307,13 @@ internal class TextBox : AutomationElement
 
     public void Enter(string value)
     {
-        Text = value;
+        Ui(() =>
+        {
+            Native.Focus();
+            Native.Text = value;
+            Control.Dispatcher.RunJobs();
+            return true;
+        });
     }
 }
 

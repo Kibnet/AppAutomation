@@ -254,6 +254,48 @@ public interface ISearchPickerControl : IUiControl
 }
 
 /// <summary>
+/// Represents a search input with an optional, dynamically populated history popup.
+/// </summary>
+/// <remarks>
+/// Empty history is a state of this control, not a different capability or implementation.
+/// </remarks>
+public interface ISearchControl : IUiControl
+{
+    /// <summary>Gets the current search text.</summary>
+    string Text { get; }
+
+    /// <summary>Gets the history items currently exposed by the popup.</summary>
+    IReadOnlyList<string> HistoryItems { get; }
+
+    /// <summary>Gets a value indicating whether the history popup is currently open.</summary>
+    bool IsHistoryOpen { get; }
+
+    /// <summary>Enters a non-empty search value.</summary>
+    void EnterSearch(string value);
+
+    /// <summary>Clears the current search value.</summary>
+    void ClearSearch();
+
+    /// <summary>Opens history when history is available.</summary>
+    void OpenHistory();
+
+    /// <summary>Applies an exact value from search history.</summary>
+    void ApplySearchFromHistory(string value);
+}
+
+/// <summary>
+/// Provider primitive used by <see cref="ISearchControl"/> to expose and invoke history items.
+/// </summary>
+public interface ISearchHistoryItemsControl : IUiControlAvailability
+{
+    /// <summary>Gets the currently visible history item texts.</summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>Invokes the history item with the requested display text.</summary>
+    void Apply(string itemText);
+}
+
+/// <summary>
 /// Represents the checkbox-items surface inside a multi-select popup.
 /// </summary>
 public interface IMultiSelectItemsControl : IUiControl

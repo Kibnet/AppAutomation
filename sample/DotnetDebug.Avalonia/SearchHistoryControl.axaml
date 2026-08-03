@@ -1,0 +1,49 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             x:Class="DotnetDebug.Avalonia.SearchHistoryControl">
+  <Grid>
+    <TextBox x:Name="SearchInput"
+             Width="220"
+             Watermark="Search"
+             GotFocus="OnSearchInputGotFocus"
+             LostFocus="OnSearchInputLostFocus"
+             PointerPressed="OnSearchInputPointerPressed"
+             automation:AutomationProperties.AutomationId="ArmTableSearchInput" />
+
+    <Popup x:Name="HistoryPopup"
+           Placement="Bottom"
+           PlacementTarget="{Binding #SearchInput}"
+           IsLightDismissEnabled="True">
+      <Border x:Name="HistoryRoot"
+              Width="220"
+              Padding="6"
+              BorderBrush="#69727D"
+              BorderThickness="1"
+              CornerRadius="4"
+              Background="#111519"
+              automation:AutomationProperties.AutomationId="ArmTableSearchHistoryRoot">
+        <Grid RowDefinitions="Auto,*">
+          <TextBlock Text="History"
+                     Margin="6,2,6,4"
+                     FontWeight="SemiBold" />
+          <ListBox x:Name="HistoryList"
+                   Grid.Row="1"
+                   MaxHeight="160"
+                   BorderThickness="0">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Button Content="{Binding .}"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Click="OnHistoryItemClick"
+                        automation:AutomationProperties.AutomationId="ArmTableSearchHistoryItemButton"
+                        automation:AutomationProperties.Name="{Binding .}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+    </Popup>
+  </Grid>
+</UserControl>

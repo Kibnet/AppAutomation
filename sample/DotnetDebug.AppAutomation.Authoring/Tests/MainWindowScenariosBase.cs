@@ -11,6 +11,19 @@ namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
     where TSession : class, IUiTestSession
 {
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmSearch_EntersClearsAndAppliesHistory()
+    {
+        Page
+            .SelectTabItem(static page => page.ArmDesktopTabItem)
+            .EnterSearch(static page => page.ArmTableSearch, "manual search")
+            .ClearSearch(static page => page.ArmTableSearch)
+            .ApplySearchFromHistory(static page => page.ArmTableSearch, "orders");
+
+        await Assert.That(Page.ArmTableSearch.Text).IsEqualTo("orders");
+    }
+
     private const int DelayedStatusTimeoutMs = 3000;
     private const string DelayedStatusReadyText = "Delayed status ready";
 

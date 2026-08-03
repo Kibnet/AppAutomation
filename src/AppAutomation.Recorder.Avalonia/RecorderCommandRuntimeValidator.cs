@@ -152,6 +152,11 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SearchAndSelect => ValidateControlType(step, target, UiControlType.SearchPicker)
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
+            RecordedActionKind.EnterSearch => ValidateControlType(step, target, UiControlType.Search)
+                .Concat(RequireString(step, target, allowEmpty: false, "search text")),
+            RecordedActionKind.ClearSearch => ValidateControlType(step, target, UiControlType.Search),
+            RecordedActionKind.ApplySearchFromHistory => ValidateControlType(step, target, UiControlType.Search)
+                .Concat(RequireString(step, target, allowEmpty: false, "search history item")),
             RecordedActionKind.SearchAndSelectGridCell => ValidateGridUserAction(step, target)
                 .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
                 .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
@@ -258,6 +263,7 @@ internal sealed class RecorderCommandRuntimeValidator
                          UiControlType.TabItem,
                          UiControlType.Grid,
                          UiControlType.SearchPicker,
+                         UiControlType.Search,
                          UiControlType.Dialog,
                          UiControlType.Notification,
                          UiControlType.FolderExport,

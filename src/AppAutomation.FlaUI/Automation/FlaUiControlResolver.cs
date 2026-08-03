@@ -52,6 +52,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return (TControl)(object)new FlaUiMultiSelectItemsControl(FindElement(definition));
         }
 
+        if (typeof(TControl) == typeof(ISearchHistoryItemsControl))
+        {
+            return (TControl)(object)new FlaUiSearchHistoryItemsControl(
+                () => FindSearchHistoryButtons(definition),
+                definition.LocatorValue);
+        }
+
         object resolved = definition.ControlType switch
         {
             UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox()),
@@ -170,6 +177,34 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
         throw new ElementNotAvailableException(
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
+    }
+
+    private AutomationElement[] FindSearchHistoryButtons(UiControlDefinition definition)
+    {
+        var direct = TryRead(() => _window.FindAllDescendants(CreateCondition(
+            definition.LocatorValue,
+            definition.LocatorKind))) ?? Array.Empty<AutomationElement>();
+        var detached = EnumerateDetachedProcessRoots()
+            .SelectMany(root => TryRead(() => root.FindAllDescendants(CreateCondition(
+                definition.LocatorValue,
+                definition.LocatorKind))) ?? Array.Empty<AutomationElement>());
+        var candidates = direct.Concat(detached);
+
+        if (definition.FallbackToName && definition.LocatorKind != UiLocatorKind.Name)
+        {
+            var fallback = TryRead(() => _window.FindAllDescendants(
+                _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>();
+            var detachedFallback = EnumerateDetachedProcessRoots()
+                .SelectMany(root => TryRead(() => root.FindAllDescendants(
+                    _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>());
+            candidates = candidates.Concat(fallback).Concat(detachedFallback);
+        }
+
+        return candidates
+            .Where(IsAttachedAndAvailable)
+            .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Button)
+            .DistinctBy(candidate => TryRead(() => candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault))
+            .ToArray();
     }
 
     private PropertyCondition CreateCondition(string locatorValue, UiLocatorKind locatorKind)
@@ -1338,6 +1373,55 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             string Text,
             AutomationElement Control,
             bool IsSelected);
+    }
+
+    private sealed class FlaUiSearchHistoryItemsControl : ISearchHistoryItemsControl
+    {
+        private readonly Func<AutomationElement[]> _resolveButtons;
+        private readonly string _locator;
+
+        public FlaUiSearchHistoryItemsControl(
+            Func<AutomationElement[]> resolveButtons,
+            string locator)
+        {
+            _resolveButtons = resolveButtons;
+            _locator = locator;
+        }
+
+        public string AutomationId => _locator;
+
+        public string Name => _locator;
+
+        public bool IsEnabled => _resolveButtons().Any(candidate => TryRead(() => candidate.IsEnabled));
+
+        public bool IsAvailable => _resolveButtons().Any(candidate =>
+            TryRead(() => candidate.IsAvailable && !candidate.IsOffscreen));
+
+        public IReadOnlyList<string> Items => _resolveButtons()
+            .Select(ReadText)
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        public void Apply(string itemText)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var button = _resolveButtons().FirstOrDefault(candidate =>
+                string.Equals(
+                    NormalizeLookupText(ReadText(candidate)),
+                    normalizedTarget,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+            new FlaUiButtonControl(button.AsButton()).Invoke();
+        }
+
+        private static string ReadText(AutomationElement button)
+        {
+            return ReadAutomationElementVisibleText(button)
+                ?? TryRead(() => button.Name)
+                ?? string.Empty;
+        }
     }
 
     private sealed class FlaUiComboBoxControl : FlaUiControlBase<ComboBox>, IComboBoxControl, IReadableTextControl

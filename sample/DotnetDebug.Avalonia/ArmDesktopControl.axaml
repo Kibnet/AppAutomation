@@ -21,9 +21,9 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Primitives, wrappers and search"
                      FontWeight="SemiBold" />
-          <UniformGrid Columns="2"
-                       Rows="1">
-            <StackPanel Margin="0,0,8,0"
+          <Grid ColumnDefinitions="*,*,*">
+            <StackPanel Grid.Column="0"
+                        Margin="0,0,8,0"
                         Spacing="6">
               <TextBlock Text="Copy wrapper" />
               <TextBox x:Name="ArmCopyTextBox"
@@ -39,7 +39,8 @@
                      automation:AutomationProperties.AutomationId="ArmCopyResultLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0,0,0"
+            <StackPanel Grid.Column="1"
+                        Margin="8,0"
                         Spacing="6">
               <TextBlock Text="Server picker" />
               <local:ServerSearchComboBox x:Name="ArmServerSearchPicker"
@@ -56,7 +57,17 @@
                      Content="Server picker idle"
                      automation:AutomationProperties.AutomationId="ArmServerPickerStatusLabel" />
             </StackPanel>
-          </UniformGrid>
+
+            <StackPanel Grid.Column="2"
+                        Margin="8,0,0,0"
+                        Spacing="6">
+              <TextBlock Text="Table search" />
+              <local:SearchHistoryControl x:Name="ArmTableSearchControl"
+                                          automation:AutomationProperties.AutomationId="ArmTableSearch" />
+              <Label Content="Search with history"
+                     automation:AutomationProperties.AutomationId="ArmTableSearchStatusLabel" />
+            </StackPanel>
+          </Grid>
         </StackPanel>
       </Border>
 

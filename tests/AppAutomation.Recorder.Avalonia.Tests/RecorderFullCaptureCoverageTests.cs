@@ -374,7 +374,10 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
             new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"]),
             new RecordedStep(RecordedActionKind.ApplyFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: ["Open"]),
-            new RecordedStep(RecordedActionKind.CancelFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: [])
+            new RecordedStep(RecordedActionKind.CancelFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: []),
+            new RecordedStep(RecordedActionKind.EnterSearch, Descriptor("TableSearch", UiControlType.Search), StringValue: "orders"),
+            new RecordedStep(RecordedActionKind.ClearSearch, Descriptor("TableSearch", UiControlType.Search)),
+            new RecordedStep(RecordedActionKind.ApplySearchFromHistory, Descriptor("TableSearch", UiControlType.Search), StringValue: "customers")
         ];
     }
 

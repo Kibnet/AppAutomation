@@ -28,7 +28,10 @@ internal sealed class RecorderStepValidator
     {
         return actionKind switch
         {
-            RecordedActionKind.EnterText or RecordedActionKind.SetSpinnerValue => source is TextBox,
+            RecordedActionKind.EnterText
+                or RecordedActionKind.SetSpinnerValue
+                or RecordedActionKind.EnterSearch
+                or RecordedActionKind.ClearSearch => source is TextBox,
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,
@@ -50,6 +53,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilGridRowsAtLeast or RecordedActionKind.WaitUntilGridCellEquals => true,
             RecordedActionKind.WaitUntilNotificationContains => true,
             RecordedActionKind.SearchAndSelect or RecordedActionKind.SearchAndSelectGridCell => true,
+            RecordedActionKind.ApplySearchFromHistory => true,
             RecordedActionKind.SelectMultiItems
                 or RecordedActionKind.CancelMultiSelection
                 or RecordedActionKind.ApplyFilterSelection

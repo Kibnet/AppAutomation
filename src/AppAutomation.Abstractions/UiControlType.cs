@@ -172,5 +172,10 @@ public enum UiControlType
     /// <summary>
     /// A logical ComboBoxEditor-style filter with an exact selected item set. Maps to <see cref="IComboBoxFilterControl"/>.
     /// </summary>
-    ComboBoxFilter = 32
+    ComboBoxFilter = 32,
+
+    /// <summary>
+    /// A search input with optional history. Maps to <see cref="ISearchControl"/>.
+    /// </summary>
+    Search = 33
 }

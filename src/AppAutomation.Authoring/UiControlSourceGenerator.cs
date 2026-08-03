@@ -406,6 +406,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             30 => "global::AppAutomation.Abstractions.IShellNavigationControl",
             31 => "global::AppAutomation.Abstractions.IMultiSelectControl",
             32 => "global::AppAutomation.Abstractions.IComboBoxFilterControl",
+            33 => "global::AppAutomation.Abstractions.ISearchControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -446,6 +447,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             30 => "ShellNavigation",
             31 => "MultiSelect",
             32 => "ComboBoxFilter",
+            33 => "Search",
             _ => "AutomationElement"
         };
     }

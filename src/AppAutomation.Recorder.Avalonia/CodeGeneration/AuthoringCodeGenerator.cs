@@ -671,6 +671,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.CancelMultiSelection => $"Page.CancelMultiSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
             RecordedActionKind.ApplyFilterSelection => $"Page.ApplyFilterSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
             RecordedActionKind.CancelFilterSelection => $"Page.CancelFilterSelection(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});",
+            RecordedActionKind.EnterSearch => $"Page.EnterSearch(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.ClearSearch => $"Page.ClearSearch(static page => page.{propertyName});",
+            RecordedActionKind.ApplySearchFromHistory => $"Page.ApplySearchFromHistory(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 

@@ -103,6 +103,32 @@ internal sealed class RecorderStepFactory
     {
         ArgumentNullException.ThrowIfNull(textBox);
 
+        if (TryResolveSearchControlHint(textBox, out var searchHint))
+        {
+            var searchText = textBox.Text ?? string.Empty;
+            var actionKind = string.IsNullOrEmpty(searchText)
+                ? RecordedActionKind.ClearSearch
+                : RecordedActionKind.EnterSearch;
+            var warning = actionKind == RecordedActionKind.ClearSearch
+                ? "Recorded search clear from configured SearchControl input."
+                : "Recorded search input from configured SearchControl input.";
+            var searchDescriptor = CreateCompositeDescriptor(
+                searchHint.LocatorValue,
+                UiControlType.Search,
+                searchHint.LocatorKind,
+                searchHint.FallbackToName,
+                textBox,
+                warning);
+            return CreateStep(
+                textBox,
+                new RecordedStep(
+                    actionKind,
+                    searchDescriptor,
+                    StringValue: actionKind == RecordedActionKind.EnterSearch ? searchText : null,
+                    Warning: warning),
+                warning);
+        }
+
         var locatorResult = _selectorResolver.Resolve(textBox, UiControlType.TextBox);
         if (!locatorResult.Success || locatorResult.Control is null)
         {
@@ -232,7 +258,75 @@ internal sealed class RecorderStepFactory
             || _options.ComboBoxFilterHints.Any(hint =>
                 MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)
                 || (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
-                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)));
+                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)))
+            || _options.SearchControlHints.Any(hint =>
+                MatchesAnyLocator(
+                    source,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.SearchButtonLocator,
+                    hint.Parts.HistoryOpenButtonLocator));
+    }
+
+    public StepCreationResult TryCreateSearchHistoryStep(Control? source)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a SearchControl history hint for this interaction.");
+        }
+
+        var matches = FindSearchHistoryHints(source).ToArray();
+        if (matches.Length == 0)
+        {
+            return StepCreationResult.Unsupported("Recorder does not have a SearchControl history hint for this interaction.");
+        }
+
+        if (matches.Length > 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Recorder SearchControl history configuration is ambiguous for this interaction ({matches.Length} hints matched).");
+        }
+
+        var hint = matches[0];
+        var value = FirstNonWhiteSpace(
+            AutomationProperties.GetName(source),
+            ExtractTextValue(source),
+            source.DataContext?.ToString());
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return StepCreationResult.Unsupported("Search history item does not expose a non-empty value.");
+        }
+
+        var warning = "Recorded SearchControl history selection from configured history results.";
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.Search,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning);
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.ApplySearchFromHistory,
+                descriptor,
+                StringValue: value.Trim(),
+                Warning: warning),
+            warning);
+    }
+
+    public bool IsSearchHistoryAction(Control? source)
+    {
+        return source is not null && FindSearchHistoryHints(source).Any();
+    }
+
+    public bool IsSearchHistoryPair(TextBox input, Control historySource)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(historySource);
+
+        return _options.SearchControlHints.Any(hint =>
+            MatchesLocator(input, hint.Parts.LocatorKind, hint.Parts.SearchInputLocator)
+            && MatchesLocator(historySource, hint.Parts.LocatorKind, hint.Parts.HistoryResultsLocator));
     }
 
     public StepCreationResult TryCreateComboBoxFilterStep(
@@ -613,6 +707,30 @@ internal sealed class RecorderStepFactory
             || MatchesNumericRangeTextPart(textBox)
             || MatchesFolderExportPathPart(textBox)
             || MatchesGridEditValuePart(textBox);
+    }
+
+    private bool TryResolveSearchControlHint(TextBox input, out RecorderSearchControlHint hint)
+    {
+        var matches = _options.SearchControlHints
+            .Where(candidate => MatchesLocator(
+                input,
+                candidate.Parts.LocatorKind,
+                candidate.Parts.SearchInputLocator))
+            .ToArray();
+        if (matches.Length == 1)
+        {
+            hint = matches[0];
+            return true;
+        }
+
+        hint = null!;
+        return false;
+    }
+
+    private IEnumerable<RecorderSearchControlHint> FindSearchHistoryHints(Control source)
+    {
+        return _options.SearchControlHints.Where(hint =>
+            MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.HistoryResultsLocator));
     }
 
     public bool ShouldRetainPendingTextForCompositeSelection(TextBox textBox)
