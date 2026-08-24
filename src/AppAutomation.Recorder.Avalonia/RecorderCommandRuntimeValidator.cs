@@ -123,6 +123,8 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetSliderValue => ValidateControlType(step, target, UiControlType.Slider)
                 .Concat(RequireDouble(step, target)),
             RecordedActionKind.SetSpinnerValue => ValidateSpinnerAction(step, target),
+            RecordedActionKind.SetTime => ValidateControlType(step, target, UiControlType.TimePicker)
+                .Concat(RequireTime(step, target)),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
@@ -130,6 +132,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireDate(step, target)),
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains => ValidateTextReadableAssertion(step, target),
             RecordedActionKind.WaitUntilValueEquals => ValidateSpinnerValueAssertion(step, target),
+            RecordedActionKind.WaitUntilTimeEquals => ValidateControlType(step, target, UiControlType.TimePicker)
+                .Concat(RequireTime(step, target)),
             RecordedActionKind.WaitUntilIsChecked => ValidateControlType(step, target, UiControlType.CheckBox)
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsToggled => ValidateControlType(step, target, UiControlType.ToggleButton)
@@ -188,6 +192,9 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.EditGridCellDate => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireDate(step, target)),
+            RecordedActionKind.EditGridCellTime => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireTime(step, target)),
             RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
@@ -445,6 +452,15 @@ internal sealed class RecorderCommandRuntimeValidator
         return step.DateValue.HasValue
             ? []
             : [Invalid(target, "payload-missing-date", $"Recorded action '{step.ActionKind}' requires a date payload.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireTime(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.TimeValue is { } time && time >= TimeSpan.Zero && time < TimeSpan.FromDays(1)
+            ? []
+            : [Invalid(target, "payload-missing-time", $"Recorded action '{step.ActionKind}' requires a time-of-day payload.")];
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireAtLeastOneDateBound(

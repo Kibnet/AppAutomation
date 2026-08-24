@@ -32,6 +32,7 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.EnterSearch
                 or RecordedActionKind.ClearSearch => source is TextBox,
             RecordedActionKind.SetSpinnerValue => source is TextBox or NumericUpDown,
+            RecordedActionKind.SetTime => source is TimePicker,
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,
@@ -44,6 +45,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains =>
                 source is TextBox or TextBlock or Label or Button,
             RecordedActionKind.WaitUntilValueEquals => source is TextBox or NumericUpDown,
+            RecordedActionKind.WaitUntilTimeEquals => source is TimePicker or TextBox,
             RecordedActionKind.WaitUntilIsChecked => source is CheckBox,
             RecordedActionKind.WaitUntilIsToggled => source is ToggleButton and not CheckBox and not RadioButton,
             RecordedActionKind.WaitUntilIsSelected => source is RadioButton or TabItem,
@@ -72,6 +74,7 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.EditGridCellText
                 or RecordedActionKind.EditGridCellNumber
                 or RecordedActionKind.EditGridCellDate
+                or RecordedActionKind.EditGridCellTime
                 or RecordedActionKind.SelectGridCellComboItem => true,
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog

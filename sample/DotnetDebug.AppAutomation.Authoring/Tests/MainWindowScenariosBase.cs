@@ -555,6 +555,20 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task DateTime_SetTimePicker_PreservesSeconds()
+    {
+        var expected = new TimeSpan(9, 45, 30);
+
+        Page
+            .SelectTabItem(static page => page.DateTimeTabItem)
+            .SetTime(static page => page.StartTimePicker, expected)
+            .WaitUntilTimeEquals(static page => page.StartTimePicker, expected);
+
+        await Assert.That(Page.StartTimePicker.SelectedTime).IsEqualTo(expected);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task TabControl_NavigatesAcrossTabs_WithExpectedControls()
     {
         Page

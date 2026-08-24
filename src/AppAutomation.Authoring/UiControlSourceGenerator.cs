@@ -518,6 +518,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             31 => "global::AppAutomation.Abstractions.IMultiSelectControl",
             32 => "global::AppAutomation.Abstractions.IComboBoxFilterControl",
             33 => "global::AppAutomation.Abstractions.ISearchControl",
+            34 => "global::AppAutomation.Abstractions.ITimePickerControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -559,6 +560,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             31 => "MultiSelect",
             32 => "ComboBoxFilter",
             33 => "Search",
+            34 => "TimePicker",
             _ => "AutomationElement"
         };
     }

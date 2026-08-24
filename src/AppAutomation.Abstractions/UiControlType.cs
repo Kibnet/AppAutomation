@@ -177,5 +177,10 @@ public enum UiControlType
     /// <summary>
     /// A search input with optional history. Maps to <see cref="ISearchControl"/>.
     /// </summary>
-    Search = 33
+    Search = 33,
+
+    /// <summary>
+    /// A time picker control. Maps to <see cref="ITimePickerControl"/>.
+    /// </summary>
+    TimePicker = 34
 }

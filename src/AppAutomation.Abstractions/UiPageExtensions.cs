@@ -973,6 +973,69 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Sets the selected time of day on a time picker.
+    /// </summary>
+    public static TSelf SetTime<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITimePickerControl>> selector,
+        TimeSpan time,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(time, nameof(time));
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "time-picker");
+        var timePicker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Time picker '{timePicker.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={timePicker.IsEnabled}");
+        if (timePicker is ITimePickerOperationControl operationControl)
+        {
+            operationControl.SetSelectedTime(time, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            timePicker.SelectedTime = time;
+        }
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.SelectedTime == time,
+            budget.RemainingMilliseconds,
+            $"Time picker '{timePicker.AutomationId}' did not reach expected time.",
+            expectedValue: time.ToString("c", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => timePicker.SelectedTime?.ToString("c", CultureInfo.InvariantCulture) ?? "<null>");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a time picker reaches the expected time of day.
+    /// </summary>
+    public static TSelf WaitUntilTimeEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITimePickerControl>> selector,
+        TimeSpan expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(expected, nameof(expected));
+        var timePicker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.SelectedTime == expected,
+            timeoutMs,
+            $"Time picker '{timePicker.AutomationId}' did not reach expected time.",
+            expectedValue: expected.ToString("c", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => timePicker.SelectedTime?.ToString("c", CultureInfo.InvariantCulture) ?? "<null>");
+        return page;
+    }
+
+    /// <summary>
     /// Sets the selected date on a calendar control.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -1872,6 +1935,31 @@ public static partial class UiPageExtensions
             columnIndex,
             value.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             GridCellEditorKind.Date,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a grid cell with an invariant, lossless time-of-day value.
+    /// </summary>
+    public static TSelf EditGridCellTime<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        TimeSpan value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(value, nameof(value));
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("c", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Time,
             commitMode,
             timeoutMs: timeoutMs);
     }
@@ -2852,6 +2940,14 @@ public static partial class UiPageExtensions
     private static bool SpinnerValuesEqual(double actual, double expected)
     {
         return Math.Abs(actual - expected) < 0.001;
+    }
+
+    private static void ValidateTimeOfDay(TimeSpan value, string parameterName)
+    {
+        if (value < TimeSpan.Zero || value >= TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(parameterName, value, "Time picker value must be within one day.");
+        }
     }
 
     private static bool TextMatches(string? actual, string expected)

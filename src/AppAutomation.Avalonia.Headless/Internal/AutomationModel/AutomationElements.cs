@@ -102,6 +102,8 @@ internal class AutomationElement
 
     public DateTimePicker AsDateTimePicker() => this as DateTimePicker ?? new DateTimePicker(RequireControl<global::Avalonia.Controls.DatePicker>());
 
+    public TimePicker AsTimePicker() => this as TimePicker ?? new TimePicker(RequireControl<global::Avalonia.Controls.TimePicker>());
+
     public Spinner AsSpinner()
     {
         if (this is Spinner spinner)
@@ -196,6 +198,7 @@ internal class AutomationElement
             global::Avalonia.Controls.NumericUpDown numericUpDown => new Spinner(numericUpDown),
             global::Avalonia.Controls.ProgressBar progressBar => new ProgressBar(progressBar),
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
+            global::Avalonia.Controls.TimePicker timePicker => new TimePicker(timePicker),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
             global::Avalonia.Controls.TabControl tabControl => new Tab(tabControl),
             global::Avalonia.Controls.TabItem tabItem => new TabItem(tabItem),
@@ -662,6 +665,25 @@ internal class DateTimePicker : AutomationElement
         set => Ui(() =>
         {
             Native.SelectedDate = value?.Date;
+            return true;
+        });
+    }
+}
+
+internal class TimePicker : AutomationElement
+{
+    internal TimePicker(global::Avalonia.Controls.TimePicker timePicker) : base(timePicker)
+    {
+    }
+
+    private global::Avalonia.Controls.TimePicker Native => (global::Avalonia.Controls.TimePicker)Control;
+
+    public TimeSpan? SelectedTime
+    {
+        get => Ui(() => Native.SelectedTime);
+        set => Ui(() =>
+        {
+            Native.SelectedTime = value;
             return true;
         });
     }

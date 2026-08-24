@@ -330,7 +330,10 @@ internal sealed class RecorderStepFactory
                     source,
                     hint.Parts.LocatorKind,
                     hint.Parts.SearchButtonLocator,
-                    hint.Parts.HistoryOpenButtonLocator));
+                    hint.Parts.HistoryOpenButtonLocator))
+            || _options.TimePickerHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator));
     }
 
     public StepCreationResult TryCreateSearchHistoryStep(Control? source)
@@ -753,6 +756,7 @@ internal sealed class RecorderStepFactory
             GridCellEditorKind.Text => TryCreateGridEditTextStep(source, descriptor, warning, hint),
             GridCellEditorKind.Number => TryCreateGridEditNumberStep(source, descriptor, warning, hint),
             GridCellEditorKind.Date => TryCreateGridEditDateStep(source, descriptor, warning, hint),
+            GridCellEditorKind.Time => TryCreateGridEditTimeStep(source, descriptor, warning, hint),
             GridCellEditorKind.ComboBox => TryCreateGridEditComboStep(source, descriptor, warning, hint),
             GridCellEditorKind.SearchPicker => StepCreationResult.Unsupported(
                 "Grid search picker edit is recorded through RecorderGridSearchPickerHint."),
@@ -767,6 +771,7 @@ internal sealed class RecorderStepFactory
         return MatchesDateRangeTextPart(textBox)
             || MatchesNumericRangeTextPart(textBox)
             || MatchesFolderExportPathPart(textBox)
+            || MatchesTimePickerInputPart(textBox)
             || MatchesGridEditValuePart(textBox);
     }
 
@@ -799,7 +804,8 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(textBox);
 
         return MatchesSearchPickerTextPart(textBox)
-            || MatchesGridSearchPickerTextPart(textBox);
+            || MatchesGridSearchPickerTextPart(textBox)
+            || MatchesTimePickerInputPart(textBox);
     }
 
     public bool IsCompositeSelectionPair(TextBox searchInput, Control results)
@@ -1055,6 +1061,12 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
+    public bool ShouldSuppressCompositeTimeSelection(TimePicker timePicker)
+    {
+        ArgumentNullException.ThrowIfNull(timePicker);
+        return MatchesGridEditValuePart(timePicker);
+    }
+
     public StepCreationResult TryCreateSpinnerStep(NumericUpDown spinner)
     {
         ArgumentNullException.ThrowIfNull(spinner);
@@ -1081,6 +1093,129 @@ internal sealed class RecorderStepFactory
                 ValidationMessage: locatorResult.ValidationMessage,
                 CanPersist: locatorResult.CanPersist),
             locatorResult.Message);
+    }
+
+    public StepCreationResult TryCreateTimePickerStep(
+        TimePicker timePicker,
+        RecorderTimePickerHint? configuredHint = null)
+    {
+        ArgumentNullException.ThrowIfNull(timePicker);
+        if (timePicker.SelectedTime is not { } selectedTime)
+        {
+            return StepCreationResult.Unsupported("TimePicker does not have a selected time.");
+        }
+
+        if (configuredHint is null)
+        {
+            var matchingHints = FindTimePickerHints(timePicker).ToArray();
+            if (matchingHints.Length > 1)
+            {
+                return StepCreationResult.Unsupported(
+                    $"TimePicker matches {matchingHints.Length} recorder hints; configure a unique time surface locator.");
+            }
+
+            configuredHint = matchingHints.SingleOrDefault();
+        }
+        if (configuredHint is not null)
+        {
+            var descriptor = CreateCompositeDescriptor(
+                configuredHint.LocatorValue,
+                UiControlType.TimePicker,
+                configuredHint.LocatorKind,
+                configuredHint.FallbackToName,
+                timePicker,
+                warning: null);
+            return CreateStep(
+                timePicker,
+                new RecordedStep(
+                    RecordedActionKind.SetTime,
+                    descriptor,
+                    TimeValue: selectedTime),
+                "Recorded configured time picker selection.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(timePicker, UiControlType.TimePicker);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        return CreateStep(
+            timePicker,
+            new RecordedStep(
+                RecordedActionKind.SetTime,
+                locatorResult.Control,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist,
+                TimeValue: selectedTime),
+            locatorResult.Message);
+    }
+
+    public bool TryResolveTimePickerHint(TimePicker timePicker, out RecorderTimePickerHint hint)
+    {
+        var matches = FindTimePickerHints(timePicker).ToArray();
+        hint = matches.Length == 1 ? matches[0] : null!;
+        return matches.Length == 1;
+    }
+
+    public bool IsTimePickerInput(TextBox textBox, RecorderTimePickerHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+        ArgumentNullException.ThrowIfNull(hint);
+        return !string.IsNullOrWhiteSpace(hint.Parts.InputLocator)
+            && MatchesLocator(textBox, hint.Parts.LocatorKind, hint.Parts.InputLocator);
+    }
+
+    public bool IsTimePickerPart(Control? source, RecorderTimePickerHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        return source is not null
+            && (MatchesLocator(source, hint.LocatorKind, hint.LocatorValue)
+                || MatchesAnyLocator(
+                    source,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.RootLocator,
+                    hint.Parts.TimePickerLocator,
+                    hint.Parts.InputLocator,
+                    hint.Parts.OpenButtonLocator,
+                    hint.Parts.PopupRootLocator,
+                    hint.Parts.ConfirmButtonLocator,
+                    hint.Parts.CancelButtonLocator));
+    }
+
+    public bool TryResolveTimePickerButton(
+        Control? source,
+        out RecorderTimePickerHint hint,
+        out bool isConfirm)
+    {
+        hint = null!;
+        isConfirm = false;
+        if (source is null)
+        {
+            return false;
+        }
+
+        foreach (var candidate in _options.TimePickerHints)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate.Parts.ConfirmButtonLocator)
+                && MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.ConfirmButtonLocator))
+            {
+                hint = candidate;
+                isConfirm = true;
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(candidate.Parts.CancelButtonLocator)
+                && MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.CancelButtonLocator))
+            {
+                hint = candidate;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public StepCreationResult TryCreateDatePickerStep(DatePicker datePicker)
@@ -1182,7 +1317,8 @@ internal sealed class RecorderStepFactory
                     ValidationStatus: locatorResult.ValidationStatus,
                     ValidationMessage: locatorResult.ValidationMessage,
                     CanPersist: locatorResult.CanPersist,
-                    IntValue: candidate.IntValue),
+                    IntValue: candidate.IntValue,
+                    TimeValue: candidate.TimeValue),
                 locatorResult.Message);
         }
 
@@ -1466,6 +1602,7 @@ internal sealed class RecorderStepFactory
             ComboBox => UiControlType.ComboBox,
             ListBox => UiControlType.ListBox,
             Slider => UiControlType.Slider,
+            TimePicker => UiControlType.TimePicker,
             DatePicker => UiControlType.DateTimePicker,
             Calendar => UiControlType.Calendar,
             TabItem => UiControlType.TabItem,
@@ -2851,6 +2988,36 @@ internal sealed class RecorderStepFactory
             excludeTargetColumnFromIdentity: true);
     }
 
+    private StepCreationResult TryCreateGridEditTimeStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+            || valueControl is not TimePicker { SelectedTime: { } value })
+        {
+            return StepCreationResult.Unsupported("Grid time edit hint value locator does not expose a selected time.");
+        }
+
+        return CreateGridStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.EditGridCellTime,
+                descriptor,
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode,
+                TimeValue: value),
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
+    }
+
     private StepCreationResult TryCreateGridEditComboStep(
         Control source,
         RecordedControlDescriptor descriptor,
@@ -3391,6 +3558,17 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
+    private bool MatchesTimePickerInputPart(TextBox textBox)
+    {
+        return _options.TimePickerHints.Any(hint => IsTimePickerInput(textBox, hint));
+    }
+
+    private IEnumerable<RecorderTimePickerHint> FindTimePickerHints(TimePicker timePicker)
+    {
+        return _options.TimePickerHints.Where(hint =>
+            MatchesLocator(timePicker, hint.Parts.LocatorKind, hint.Parts.TimePickerLocator));
+    }
+
     private static bool HasExactLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
     {
         return !string.IsNullOrWhiteSpace(locatorValue)
@@ -3559,6 +3737,7 @@ internal sealed class RecorderStepFactory
         [
             new ProgressAssertionExtractor(),
             new ListBoxAssertionExtractor(),
+            new TimePickerAssertionExtractor(options),
             new SpinnerAssertionExtractor(options),
             new TextAssertionExtractor(),
             new CheckedAssertionExtractor(),
@@ -3607,6 +3786,58 @@ internal sealed class RecorderStepFactory
                 RecordedActionKind.WaitUntilValueEquals,
                 DoubleValue: value);
             return true;
+        }
+    }
+
+    private sealed class TimePickerAssertionExtractor : IRecorderAssertionExtractor
+    {
+        private readonly AppAutomationRecorderOptions _options;
+
+        public TimePickerAssertionExtractor(AppAutomationRecorderOptions options)
+        {
+            _options = options;
+        }
+
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+            {
+                return false;
+            }
+
+            var selectedTime = control switch
+            {
+                TimePicker { SelectedTime: { } value } => value,
+                TextBox textBox when MatchesConfiguredInput(textBox)
+                    && TryParseTime(textBox.Text, out var value) => value,
+                _ => (TimeSpan?)null
+            };
+            if (selectedTime is null)
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                UiControlType.TimePicker,
+                RecordedActionKind.WaitUntilTimeEquals)
+            {
+                TimeValue = selectedTime.Value
+            };
+            return true;
+        }
+
+        private bool MatchesConfiguredInput(TextBox textBox)
+        {
+            return _options.TimePickerHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.InputLocator)
+                && MatchesLocator(textBox, hint.Parts.LocatorKind, hint.Parts.InputLocator));
+        }
+
+        private static bool TryParseTime(string? text, out TimeSpan value)
+        {
+            return TimeSpan.TryParse(text?.Trim(), System.Globalization.CultureInfo.CurrentCulture, out value)
+                || TimeSpan.TryParse(text?.Trim(), System.Globalization.CultureInfo.InvariantCulture, out value);
         }
     }
 

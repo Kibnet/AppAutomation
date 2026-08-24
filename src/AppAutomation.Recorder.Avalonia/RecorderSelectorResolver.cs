@@ -138,6 +138,9 @@ internal sealed class RecorderSelectorResolver
             _options,
             targetLocatorValue,
             alias.TargetLocatorKind);
+        var isConfiguredTimePicker = _options.TimePickerHints.Any(hint =>
+            hint.LocatorKind == alias.TargetLocatorKind
+            && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
 
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -147,7 +150,7 @@ internal sealed class RecorderSelectorResolver
                 alias.TargetLocatorKind,
                 alias.FallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                isConfiguredSpinnerProxy ? warning : CombineMessage(warning, aliasMessage)),
+                isConfiguredSpinnerProxy || isConfiguredTimePicker ? warning : CombineMessage(warning, aliasMessage)),
             message: validation.Message ?? aliasMessage,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
@@ -172,8 +175,40 @@ internal sealed class RecorderSelectorResolver
         ArgumentNullException.ThrowIfNull(step);
 
         var logicalResolution = ResolveExisting(step.Control);
-        if (!logicalResolution.CanPersist
-            || !RequiresSpinnerProxyValidation(step.ActionKind)
+        if (!logicalResolution.CanPersist)
+        {
+            return logicalResolution;
+        }
+
+        if (RequiresTimePickerPartValidation(step.ActionKind)
+            && TryResolveTimePickerPart(step.Control, out var timePickerLocator, out var timePickerLocatorKind))
+        {
+            var timePickerMatches = FindMatches(timePickerLocator, timePickerLocatorKind);
+            if (timePickerMatches.Length == 0)
+            {
+                return new ExistingControlResolutionResult(
+                    true,
+                    null,
+                    logicalResolution.ValidationStatus,
+                    logicalResolution.ValidationMessage,
+                    logicalResolution.CanPersist);
+            }
+
+            var timeValidation = ValidateSelector(timePickerLocator, timePickerLocatorKind);
+            if (timeValidation.MatchedControl is null && timeValidation.CanPersist)
+            {
+                return logicalResolution;
+            }
+
+            return new ExistingControlResolutionResult(
+                timeValidation.MatchedControl is not null,
+                timeValidation.MatchedControl,
+                MaxStatus(logicalResolution.ValidationStatus, timeValidation.Status),
+                CombineMessage(logicalResolution.ValidationMessage, timeValidation.Message),
+                timeValidation.CanPersist);
+        }
+
+        if (!RequiresSpinnerProxyValidation(step.ActionKind)
             || !TryResolveSpinnerProxyAlias(step.Control, out var proxyAlias))
         {
             return logicalResolution;
@@ -225,12 +260,7 @@ internal sealed class RecorderSelectorResolver
             return new SelectorValidationResult(baseStatus, baseMessage, true, null);
         }
 
-        var matches = root
-            .GetVisualDescendants()
-            .OfType<Control>()
-            .Prepend(root)
-            .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
-            .ToArray();
+        var matches = FindMatches(locatorValue, locatorKind);
 
         if (matches.Length == 0)
         {
@@ -251,6 +281,19 @@ internal sealed class RecorderSelectorResolver
         }
 
         return new SelectorValidationResult(baseStatus, baseMessage, true, matches[0]);
+    }
+
+    private Control[] FindMatches(string locatorValue, UiLocatorKind locatorKind)
+    {
+        var root = _validationRootProvider?.Invoke();
+        return root is null
+            ? []
+            : root
+                .GetVisualDescendants()
+                .OfType<Control>()
+                .Prepend(root)
+                .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
+                .ToArray();
     }
 
     private static bool MatchesLocator(Control candidate, string locatorValue, UiLocatorKind locatorKind)
@@ -277,6 +320,23 @@ internal sealed class RecorderSelectorResolver
             && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))!;
         if (alias is not null && !string.IsNullOrWhiteSpace(alias.TargetLocatorValue))
         {
+            return true;
+        }
+
+        var timePickerHint = _options.TimePickerHints.FirstOrDefault(candidate =>
+            candidate.Parts.LocatorKind == locatorKind
+            && (string.Equals(candidate.Parts.TimePickerLocator.Trim(), locatorValue, StringComparison.Ordinal)
+                || (!string.IsNullOrWhiteSpace(candidate.Parts.InputLocator)
+                    && string.Equals(candidate.Parts.InputLocator.Trim(), locatorValue, StringComparison.Ordinal))));
+        if (timePickerHint is not null)
+        {
+            alias = new RecorderLocatorAlias(
+                locatorValue,
+                timePickerHint.LocatorValue,
+                UiControlType.TimePicker,
+                timePickerHint.Parts.LocatorKind,
+                timePickerHint.LocatorKind,
+                timePickerHint.FallbackToName);
             return true;
         }
 
@@ -328,6 +388,24 @@ internal sealed class RecorderSelectorResolver
             or RecordedActionKind.WaitUntilValueEquals
             or RecordedActionKind.WaitUntilTextEquals
             or RecordedActionKind.WaitUntilTextContains;
+    }
+
+    private bool TryResolveTimePickerPart(
+        RecordedControlDescriptor descriptor,
+        out string locatorValue,
+        out UiLocatorKind locatorKind)
+    {
+        var hint = _options.TimePickerHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == descriptor.LocatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), descriptor.LocatorValue.Trim(), StringComparison.Ordinal));
+        locatorValue = hint?.Parts.TimePickerLocator ?? string.Empty;
+        locatorKind = hint?.Parts.LocatorKind ?? UiLocatorKind.AutomationId;
+        return hint is not null && !string.IsNullOrWhiteSpace(locatorValue);
+    }
+
+    private static bool RequiresTimePickerPartValidation(RecordedActionKind actionKind)
+    {
+        return actionKind is RecordedActionKind.SetTime or RecordedActionKind.WaitUntilTimeEquals;
     }
 
     private static RecorderValidationStatus MaxStatus(

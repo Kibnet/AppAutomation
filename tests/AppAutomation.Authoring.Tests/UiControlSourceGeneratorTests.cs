@@ -32,6 +32,7 @@ namespace Sample.Pages;
 [UiControl("Categories", UiControlType.MultiSelect, "Categories")]
 [UiControl("StatusFilter", UiControlType.ComboBoxFilter, "StatusFilter")]
 [UiControl("TableSearch", UiControlType.Search, "TableSearch")]
+[UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -62,6 +63,7 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMultiSelectControl Categories => Resolve<global::AppAutomation.Abstractions.IMultiSelectControl>(MainWindowPageDefinitions.Categories);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IComboBoxFilterControl StatusFilter => Resolve<global::AppAutomation.Abstractions.IComboBoxFilterControl>(MainWindowPageDefinitions.StatusFilter);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ISearchControl TableSearch => Resolve<global::AppAutomation.Abstractions.ISearchControl>(MainWindowPageDefinitions.TableSearch);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITimePickerControl StartTimePicker => Resolve<global::AppAutomation.Abstractions.ITimePickerControl>(MainWindowPageDefinitions.StartTimePicker);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");

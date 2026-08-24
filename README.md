@@ -299,6 +299,7 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - provider-neutral multi-select popup abstraction `IMultiSelectControl` with `WithMultiSelect(...)`;
 - cardinality-neutral combo-box filter abstraction `IComboBoxFilterControl` with `WithComboBoxFilter(...)`;
 - logical spinner actions through `ISpinnerControl`; custom text-backed wrappers can use `WithSpinnerTextBoxProxy(...)`;
+- lossless time-of-day actions through `ITimePickerControl`; composite popup wrappers register stable parts with `WithTimePicker(...)`;
 - provider-neutral search abstraction `ISearchControl` with `WithSearchControl(...)` and optional history;
 - stable grid row selectors through `GridRowSelector` and `WithGridColumns(...)`;
 - package-based smoke path via `eng/smoke-consumer.ps1`.
@@ -715,6 +716,7 @@ dotnet test --solution MyApp.sln -c Debug
 - provider-neutral абстракция popup-мультиселектора `IMultiSelectControl` с `WithMultiSelect(...)`;
 - cardinality-neutral абстракция combo-box фильтра `IComboBoxFilterControl` с `WithComboBoxFilter(...)`;
 - логические действия Spinner через `ISpinnerControl`; для custom wrapper с текстовой частью есть `WithSpinnerTextBoxProxy(...)`;
+- точные действия со временем через `ITimePickerControl`; составной popup-wrapper регистрируется по stable parts через `WithTimePicker(...)`;
 - provider-neutral абстракция поиска `ISearchControl` с `WithSearchControl(...)` и необязательной историей;
 - стабильные селекторы строк таблиц через `GridRowSelector` и `WithGridColumns(...)`;
 - готовый сценарий быстрой проверки через `eng/smoke-consumer.ps1`.

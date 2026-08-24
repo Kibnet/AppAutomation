@@ -1074,9 +1074,11 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SelectTabItem => $"Page.SelectTabItem(static page => page.{propertyName});",
             RecordedActionKind.SelectTreeItem => $"Page.SelectTreeItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue)});",
+            RecordedActionKind.SetTime => $"Page.SetTime(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.WaitUntilTextEquals => $"Page.WaitUntilTextEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilTextContains => $"Page.WaitUntilTextContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilValueEquals => $"Page.WaitUntilValueEquals(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
+            RecordedActionKind.WaitUntilTimeEquals => $"Page.WaitUntilTimeEquals(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.WaitUntilIsChecked => $"Page.WaitUntilIsChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1116,6 +1118,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.EditGridCellDate => HasNamedGridRow(step)
                 ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.EditGridCellTime => HasNamedGridRow(step)
+                ? $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.SelectGridCellComboItem => HasNamedGridRow(step)
                 ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
@@ -1306,6 +1311,13 @@ internal sealed class AuthoringCodeGenerator
     {
         var date = (value ?? DateTime.Today).Date;
         return $"new global::System.DateTime({date.Year}, {date.Month}, {date.Day})";
+    }
+
+    private static string FormatTimeSpan(TimeSpan? value)
+    {
+        return value.HasValue
+            ? $"new global::System.TimeSpan({value.Value.Ticks}L)"
+            : "default";
     }
 
     private static string FormatNullableDate(DateTime? value)

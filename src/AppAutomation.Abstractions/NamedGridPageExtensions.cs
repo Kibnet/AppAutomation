@@ -193,6 +193,35 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Edits a named cell with an invariant time-of-day value in the uniquely selected row.
+    /// </summary>
+    public static TSelf EditGridCellTime<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        TimeSpan value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (value < TimeSpan.Zero || value >= TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Grid time value must be within one day.");
+        }
+
+        return EditGridCell(
+            page,
+            selector,
+            rowSelector,
+            columnName,
+            value.ToString("c", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Time,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
     /// Selects a combo-box item in a named cell of the uniquely selected row.
     /// </summary>
     public static TSelf SelectGridCellComboItem<TSelf>(

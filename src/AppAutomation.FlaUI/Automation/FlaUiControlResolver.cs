@@ -73,6 +73,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             UiControlType.ProgressBar => new FlaUiProgressBarControl(FindElement(definition).AsProgressBar()),
             UiControlType.Calendar => new FlaUiCalendarControl(FindElement(definition).AsCalendar()),
             UiControlType.DateTimePicker => new FlaUiDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
+            UiControlType.TimePicker => new FlaUiTimePickerControl(FindElement(definition)),
             UiControlType.Spinner => new FlaUiSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new FlaUiTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new FlaUiTabItemControl(FindElement(definition).AsTabItem()),
@@ -2237,6 +2238,109 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
+    private sealed class FlaUiTimePickerControl : FlaUiControlBase<AutomationElement>, ITimePickerControl
+    {
+        public FlaUiTimePickerControl(AutomationElement inner) : base(inner)
+        {
+        }
+
+        public TimeSpan? SelectedTime
+        {
+            get => ReadTime();
+            set
+            {
+                if (!value.HasValue || !TrySetTime(value.Value))
+                {
+                    throw new InvalidOperationException("Unable to set the selected time for this TimePicker.");
+                }
+            }
+        }
+
+        private TimeSpan? ReadTime()
+        {
+            var text = ReadValueText();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            if (TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out var invariantTime)
+                || TimeSpan.TryParse(text, CultureInfo.CurrentCulture, out invariantTime))
+            {
+                return invariantTime;
+            }
+
+            return DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.None, out var dateTime)
+                || DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out dateTime)
+                    ? dateTime.TimeOfDay
+                    : null;
+        }
+
+        private string? ReadValueText()
+        {
+            var value = TryRead(() => Inner.Patterns.Value.IsSupported
+                ? Inner.Patterns.Value.Pattern.Value
+                : null);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+
+            return TryRead(() => FindTextInput()?.Text);
+        }
+
+        private bool TrySetTime(TimeSpan value)
+        {
+            foreach (var candidate in new[]
+                     {
+                         value.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture),
+                         value.ToString(@"hh\:mm", CultureInfo.InvariantCulture)
+                     })
+            {
+                try
+                {
+                    if (Inner.Patterns.Value.IsSupported)
+                    {
+                        Inner.Patterns.Value.Pattern.SetValue(candidate);
+                    }
+                    else if (FindTextInput() is { } textBox)
+                    {
+                        textBox.Text = candidate;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (ReadTime() == value)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private TextBox? FindTextInput()
+        {
+            try
+            {
+                return Inner.FindAllDescendants()
+                    .FirstOrDefault(static candidate => candidate.ControlType == ControlType.Edit)
+                    ?.AsTextBox();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
     private sealed class FlaUiSpinnerControl : FlaUiControlBase<Spinner>, ISpinnerControl
     {
         public FlaUiSpinnerControl(Spinner inner) : base(inner)
@@ -2597,6 +2701,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return;
             }
 
+            if (request.EditorKind == GridCellEditorKind.Time)
+            {
+                var time = ParseGridTime(request.Value);
+                new FlaUiTimePickerControl(cell).SelectedTime = time;
+                return;
+            }
+
             if (_fallback is IEditableGridControl editableFallback)
             {
                 editableFallback.EditCell(request);
@@ -2700,6 +2811,18 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
 
             new FlaUiListBoxControl(results.AsListBox()).SelectItem(request.Value, RemainingTimeout());
+        }
+
+        private static TimeSpan ParseGridTime(string value)
+        {
+            if (TimeSpan.TryParseExact(value, "c", CultureInfo.InvariantCulture, out var time)
+                && time >= TimeSpan.Zero
+                && time < TimeSpan.FromDays(1))
+            {
+                return time;
+            }
+
+            throw new InvalidOperationException($"Grid time value '{value}' is not a valid invariant time of day.");
         }
 
         private AutomationElement? WaitForProcessElementByAutomationId(string automationId, TimeSpan timeout)

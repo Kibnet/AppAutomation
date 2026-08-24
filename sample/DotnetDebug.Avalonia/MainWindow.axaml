@@ -282,6 +282,10 @@
                                     automation:AutomationProperties.Name="EndDatePicker"
                                     automation:AutomationProperties.AutomationId="EndDatePicker"
                                     Width="190" />
+                        <TimePicker x:Name="StartTimePicker"
+                                    automation:AutomationProperties.Name="StartTimePicker"
+                                    automation:AutomationProperties.AutomationId="StartTimePicker"
+                                    Width="150" />
                         <Button x:Name="DateDiffButton"
                                 automation:AutomationProperties.AutomationId="DateDiffButton"
                                 Content="Compute difference"

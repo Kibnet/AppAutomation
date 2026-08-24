@@ -583,6 +583,7 @@ public sealed class UiPageExtensionsTests
             new MutableFakeGridCellControl("OldText"),
             new MutableFakeGridCellControl("1"),
             new MutableFakeGridCellControl("2026-01-01"),
+            new MutableFakeGridCellControl("08:00:00"),
             new MutableFakeGridCellControl("OldCombo"),
             new MutableFakeGridCellControl("OldSearch")
         };
@@ -595,22 +596,25 @@ public sealed class UiPageExtensionsTests
             .EditGridCellText(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 0, "NewText")
             .EditGridCellNumber(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 1, 12.5)
             .EditGridCellDate(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 2, new DateTime(2026, 4, 22))
-            .SelectGridCellComboItem(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 3, "ComboValue")
-            .SearchAndSelectGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 4, "Combo", "SearchValue");
+            .EditGridCellTime(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 3, new TimeSpan(9, 45, 30))
+            .SelectGridCellComboItem(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 4, "ComboValue")
+            .SearchAndSelectGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 5, "Combo", "SearchValue");
 
         using (Assert.Multiple())
         {
             await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
-            await Assert.That(grid.Requests.Count).IsEqualTo(5);
+            await Assert.That(grid.Requests.Count).IsEqualTo(6);
             await Assert.That(grid.Requests[0].EditorKind).IsEqualTo(GridCellEditorKind.Text);
             await Assert.That(grid.Requests[1].EditorKind).IsEqualTo(GridCellEditorKind.Number);
             await Assert.That(grid.Requests[1].Value).IsEqualTo("12.5");
             await Assert.That(grid.Requests[2].EditorKind).IsEqualTo(GridCellEditorKind.Date);
             await Assert.That(grid.Requests[2].Value).IsEqualTo("2026-04-22");
-            await Assert.That(grid.Requests[3].EditorKind).IsEqualTo(GridCellEditorKind.ComboBox);
-            await Assert.That(grid.Requests[4].EditorKind).IsEqualTo(GridCellEditorKind.SearchPicker);
-            await Assert.That(grid.Requests[4].SearchText).IsEqualTo("Combo");
-            await Assert.That(cells[4].Value).IsEqualTo("SearchValue");
+            await Assert.That(grid.Requests[3].EditorKind).IsEqualTo(GridCellEditorKind.Time);
+            await Assert.That(grid.Requests[3].Value).IsEqualTo("09:45:30");
+            await Assert.That(grid.Requests[4].EditorKind).IsEqualTo(GridCellEditorKind.ComboBox);
+            await Assert.That(grid.Requests[5].EditorKind).IsEqualTo(GridCellEditorKind.SearchPicker);
+            await Assert.That(grid.Requests[5].SearchText).IsEqualTo("Combo");
+            await Assert.That(cells[5].Value).IsEqualTo("SearchValue");
         }
     }
 

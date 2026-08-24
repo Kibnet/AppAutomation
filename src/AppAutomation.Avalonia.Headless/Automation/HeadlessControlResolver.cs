@@ -60,6 +60,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             UiControlType.ProgressBar => new HeadlessProgressBarControl(FindElement(definition).AsProgressBar()),
             UiControlType.Calendar => new HeadlessCalendarControl(FindElement(definition).AsCalendar()),
             UiControlType.DateTimePicker => new HeadlessDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
+            UiControlType.TimePicker => new HeadlessTimePickerControl(FindElement(definition).AsTimePicker()),
             UiControlType.Spinner => new HeadlessSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new HeadlessTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new HeadlessTabItemControl(FindElement(definition).AsTabItem()),
@@ -496,6 +497,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             global::Avalonia.Controls.Button button => button.Content?.ToString(),
             global::Avalonia.Controls.ComboBox comboBox => ReadComboBoxItemText(comboBox.SelectedItem),
             global::Avalonia.Controls.DatePicker datePicker => datePicker.SelectedDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            global::Avalonia.Controls.TimePicker timePicker => timePicker.SelectedTime?.ToString("c", System.Globalization.CultureInfo.InvariantCulture),
             global::Avalonia.Controls.TabItem tabItem => tabItem.Header?.ToString(),
             global::Avalonia.Controls.TreeViewItem treeViewItem => treeViewItem.Header?.ToString(),
             global::Avalonia.Controls.Slider slider => slider.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -1338,6 +1340,19 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
+    private sealed class HeadlessTimePickerControl : HeadlessControlBase<TimePicker>, ITimePickerControl
+    {
+        public HeadlessTimePickerControl(TimePicker inner) : base(inner)
+        {
+        }
+
+        public TimeSpan? SelectedTime
+        {
+            get => Inner.SelectedTime;
+            set => Inner.SelectedTime = value;
+        }
+    }
+
     private sealed class HeadlessSpinnerControl : HeadlessControlBase<Spinner>, ISpinnerControl
     {
         public HeadlessSpinnerControl(Spinner inner) : base(inner)
@@ -1589,6 +1604,10 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                     when request.EditorKind == GridCellEditorKind.Date:
                     datePicker.SelectedDate = ParseDate(request.Value);
                     return true;
+                case global::Avalonia.Controls.TimePicker timePicker
+                    when request.EditorKind == GridCellEditorKind.Time:
+                    timePicker.SelectedTime = ParseTime(request.Value);
+                    return true;
                 case global::Avalonia.Controls.ComboBox comboBox
                     when request.EditorKind == GridCellEditorKind.ComboBox:
                     return TrySelectComboBoxItem(comboBox, request.Value);
@@ -1596,6 +1615,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                     when request.EditorKind is GridCellEditorKind.Text
                         or GridCellEditorKind.Number
                         or GridCellEditorKind.Date
+                        or GridCellEditorKind.Time
                         or GridCellEditorKind.ComboBox:
                     textBox.Text = request.Value;
                     return true;
@@ -1701,6 +1721,18 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             }
 
             throw new InvalidOperationException($"Grid cell date value '{value}' could not be parsed.");
+        }
+
+        private static TimeSpan ParseTime(string value)
+        {
+            if (TimeSpan.TryParseExact(value, "c", System.Globalization.CultureInfo.InvariantCulture, out var time)
+                && time >= TimeSpan.Zero
+                && time < TimeSpan.FromDays(1))
+            {
+                return time;
+            }
+
+            throw new InvalidOperationException($"Grid time value '{value}' is not a valid invariant time of day.");
         }
 
         private static string NormalizeLookupText(string? value)

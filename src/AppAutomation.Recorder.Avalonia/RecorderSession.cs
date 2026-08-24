@@ -56,6 +56,8 @@ internal sealed class RecorderSession :
     private string? _pendingTextValue;
     private Slider? _pendingSlider;
     private NumericUpDown? _pendingSpinner;
+    private TimePicker? _pendingTimePicker;
+    private RecorderTimePickerHint? _pendingTimePickerHint;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
@@ -447,6 +449,7 @@ internal sealed class RecorderSession :
         _textDebounceTimer.Stop();
         _sliderDebounceTimer.Stop();
         _spinnerDebounceTimer.Stop();
+        DiscardPendingTimePicker();
 
         foreach (var detachAction in _observedControlDetachers.Values)
         {
@@ -618,7 +621,14 @@ internal sealed class RecorderSession :
 
     internal void CaptureButtonClickForTesting(Control? source)
     {
-        if (IsDatePickerTemplateButton(source))
+        DiscardPendingTimePickerIfSwitchingTo(source);
+
+        if (IsPickerTemplateButton(source))
+        {
+            return;
+        }
+
+        if (TryHandleTimePickerButton(source))
         {
             return;
         }
@@ -946,6 +956,9 @@ internal sealed class RecorderSession :
             case Slider slider:
                 slider.PropertyChanged += OnSliderPropertyChanged;
                 return () => slider.PropertyChanged -= OnSliderPropertyChanged;
+            case TimePicker timePicker:
+                timePicker.PropertyChanged += OnTimePickerPropertyChanged;
+                return () => timePicker.PropertyChanged -= OnTimePickerPropertyChanged;
             case DatePicker datePicker:
                 datePicker.PropertyChanged += OnDatePickerPropertyChanged;
                 return () => datePicker.PropertyChanged -= OnDatePickerPropertyChanged;
@@ -959,7 +972,9 @@ internal sealed class RecorderSession :
 
     private static bool IsObservableControl(Control control)
     {
-        if (control is TextBox && FindAncestorOrSelf<NumericUpDown>(control) is not null)
+        if (control is TextBox
+            && (FindAncestorOrSelf<NumericUpDown>(control) is not null
+                || FindAncestorOrSelf<TimePicker>(control) is not null))
         {
             return false;
         }
@@ -971,6 +986,7 @@ internal sealed class RecorderSession :
             or TreeView
             or Slider
             or NumericUpDown
+            or TimePicker
             or DatePicker
             or Calendar;
     }
@@ -982,6 +998,7 @@ internal sealed class RecorderSession :
             return;
         }
 
+        DiscardPendingTimePickerIfSwitchingTo(e.Source as Control);
         CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(e.Source as Control));
         var control = ResolveInteractionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
@@ -1041,6 +1058,7 @@ internal sealed class RecorderSession :
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
+            DiscardPendingTimePickerIfSwitchingTo(focused);
             if (e.Key is Key.Enter or Key.Space)
             {
                 CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(focused));
@@ -1132,7 +1150,13 @@ internal sealed class RecorderSession :
         }
 
         var eventSource = e.Source as Control;
-        if (IsDatePickerTemplateButton(eventSource))
+        DiscardPendingTimePickerIfSwitchingTo(eventSource);
+        if (IsPickerTemplateButton(eventSource))
+        {
+            return;
+        }
+
+        if (TryHandleTimePickerButton(eventSource))
         {
             return;
         }
@@ -1530,6 +1554,44 @@ internal sealed class RecorderSession :
         _spinnerDebounceTimer.Start();
     }
 
+    private void OnTimePickerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording
+            || sender is not TimePicker timePicker
+            || !WasRecentlyTriggeredByUser(timePicker)
+            || !string.Equals(e.Property.Name, nameof(TimePicker.SelectedTime), StringComparison.Ordinal)
+            || timePicker.SelectedTime is null)
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressCompositeTimeSelection(timePicker))
+        {
+            return;
+        }
+
+        FlushPendingSliderIfSwitchingTo(timePicker);
+        FlushPendingSpinnerIfSwitchingTo(timePicker);
+
+        if (_stepFactory.TryResolveTimePickerHint(timePicker, out var hint))
+        {
+            DiscardPendingTimePickerText(hint);
+            if (hint.Parts.CommitMode == TimePickerCommitMode.Confirm)
+            {
+                _pendingTimePicker = timePicker;
+                _pendingTimePickerHint = hint;
+                return;
+            }
+        }
+        else
+        {
+            FlushPendingTextIfSwitchingTo(timePicker);
+        }
+
+        DiscardPendingTimePicker();
+        AddStep(_stepFactory.TryCreateTimePickerStep(timePicker), timePicker, "TimePickerSelection");
+    }
+
     private void OnDatePickerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (_state != RecorderSessionState.Recording || sender is not DatePicker datePicker || !WasRecentlyTriggeredByUser(datePicker))
@@ -1638,6 +1700,11 @@ internal sealed class RecorderSession :
 
     private bool ShouldSuppressTemplateTextEntry(TextBox textBox)
     {
+        if (FindAncestorOrSelf<TimePicker>(textBox) is not null)
+        {
+            return true;
+        }
+
         if (IsComboBoxTemplateTextBox(textBox))
         {
             return true;
@@ -2076,6 +2143,7 @@ internal sealed class RecorderSession :
             step.FilterCommitMode?.ToString() ?? string.Empty,
             step.FolderExportCommitMode?.ToString() ?? string.Empty,
             step.GridCellEditCommitMode?.ToString() ?? string.Empty,
+            step.TimeValue?.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.CanPersist);
     }
 
@@ -2104,6 +2172,57 @@ internal sealed class RecorderSession :
         FlushPendingText();
         FlushPendingSlider();
         FlushPendingSpinner();
+        DiscardPendingTimePicker();
+    }
+
+    private bool TryHandleTimePickerButton(Control? source)
+    {
+        if (!_stepFactory.TryResolveTimePickerButton(source, out var hint, out var isConfirm))
+        {
+            return false;
+        }
+
+        var pendingTimePicker = _pendingTimePicker;
+        var isPendingSelectionForHint = pendingTimePicker is not null
+            && Equals(_pendingTimePickerHint, hint);
+        DiscardPendingTimePickerText(hint);
+        DiscardPendingTimePicker();
+
+        if (isConfirm && isPendingSelectionForHint)
+        {
+            AddStep(
+                _stepFactory.TryCreateTimePickerStep(pendingTimePicker!, hint),
+                pendingTimePicker,
+                "TimePickerSelection");
+        }
+
+        return true;
+    }
+
+    private void DiscardPendingTimePicker()
+    {
+        _pendingTimePicker = null;
+        _pendingTimePickerHint = null;
+    }
+
+    private void DiscardPendingTimePickerIfSwitchingTo(Control? source)
+    {
+        var hint = _pendingTimePickerHint;
+        if (hint is null || _stepFactory.IsTimePickerPart(source, hint))
+        {
+            return;
+        }
+
+        DiscardPendingTimePickerText(hint);
+        DiscardPendingTimePicker();
+    }
+
+    private void DiscardPendingTimePickerText(RecorderTimePickerHint hint)
+    {
+        if (_pendingTextBox is not null && _stepFactory.IsTimePickerInput(_pendingTextBox, hint))
+        {
+            DiscardPendingText();
+        }
     }
 
     private void FlushPendingText()
@@ -2282,6 +2401,12 @@ internal sealed class RecorderSession :
 
     private static Control? ResolveInteractionOwner(Control? control)
     {
+        var timePicker = FindAncestorOrSelf<TimePicker>(control);
+        if (timePicker is not null)
+        {
+            return timePicker;
+        }
+
         var spinner = FindAncestorOrSelf<NumericUpDown>(control);
         if (spinner is not null)
         {
@@ -2299,6 +2424,7 @@ internal sealed class RecorderSession :
                 case TreeView:
                 case Slider:
                 case NumericUpDown:
+                case TimePicker:
                 case DatePicker:
                 case Calendar:
                 case CheckBox:
@@ -2332,7 +2458,7 @@ internal sealed class RecorderSession :
         IReadOnlyList<string> SelectedValues,
         DateTimeOffset CapturedAt);
 
-    private static bool IsDatePickerTemplateButton(Control? control)
+    private static bool IsPickerTemplateButton(Control? control)
     {
         var button = FindAncestorOrSelf<Button>(control);
         if (button is null || !IsKnownPickerTemplateButton(button))
@@ -2347,7 +2473,7 @@ internal sealed class RecorderSession :
                 continue;
             }
 
-            if (candidate is DatePicker or Calendar)
+            if (candidate is DatePicker or Calendar or TimePicker)
             {
                 return true;
             }

@@ -275,7 +275,7 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessVisualGrid_EditGridCellDateAndCombo_CommitsTypedValues()
+    public async Task HeadlessVisualGrid_EditGridCellTypedValues_Commits()
     {
         using var headless = StartHeadlessRuntime();
         var window = HeadlessRuntime.Dispatch(CreateVisualGridWindowWithEditors);
@@ -283,21 +283,27 @@ public sealed class LaunchContractTests
 
         page
             .EditGridCellDate(
-                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                static candidate => candidate.TypedEditorsGrid,
                 0,
                 1,
                 new DateTime(2026, 4, 22))
             .SelectGridCellComboItem(
-                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                static candidate => candidate.TypedEditorsGrid,
                 0,
                 2,
-                "Ready");
+                "Ready")
+            .EditGridCellTime(
+                static candidate => candidate.TypedEditorsGrid,
+                0,
+                3,
+                new TimeSpan(13, 45, 30));
 
-        var cells = page.EremexDemoDataGridAutomationBridge.GetRowByIndex(0)!.Cells;
+        var cells = page.TypedEditorsGrid.GetRowByIndex(0)!.Cells;
         using (Assert.Multiple())
         {
             await Assert.That(cells[1].Value).IsEqualTo("2026-04-22");
             await Assert.That(cells[2].Value).IsEqualTo("Ready");
+            await Assert.That(cells[3].Value).IsEqualTo("13:45:30");
         }
     }
 
@@ -719,16 +725,19 @@ Console.WriteLine("Fake desktop");
             ItemsSource = new[] { "Draft", "Ready" },
             SelectedIndex = 0
         };
-        AutomationProperties.SetAutomationId(row, "EremexDemoDataGridAutomationBridge_Row0");
-        AutomationProperties.SetAutomationId(firstCell, "EremexDemoDataGridAutomationBridge_Row0_Cell0");
-        AutomationProperties.SetAutomationId(dateCell, "EremexDemoDataGridAutomationBridge_Row0_Cell1");
-        AutomationProperties.SetAutomationId(comboCell, "EremexDemoDataGridAutomationBridge_Row0_Cell2");
+        var timeCell = new TimePicker { SelectedTime = new TimeSpan(8, 0, 0) };
+        AutomationProperties.SetAutomationId(row, "TypedEditorsGrid_Row0");
+        AutomationProperties.SetAutomationId(firstCell, "TypedEditorsGrid_Row0_Cell0");
+        AutomationProperties.SetAutomationId(dateCell, "TypedEditorsGrid_Row0_Cell1");
+        AutomationProperties.SetAutomationId(comboCell, "TypedEditorsGrid_Row0_Cell2");
+        AutomationProperties.SetAutomationId(timeCell, "TypedEditorsGrid_Row0_Cell3");
         row.Children.Add(firstCell);
         row.Children.Add(dateCell);
         row.Children.Add(comboCell);
+        row.Children.Add(timeCell);
 
         var bridge = new StackPanel();
-        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(bridge, "TypedEditorsGrid");
         bridge.Children.Add(row);
 
         return new Window { Content = bridge };
@@ -842,6 +851,9 @@ Console.WriteLine("Fake desktop");
 
         public IGridControl EremexDemoDataGridAutomationBridge =>
             Resolve<IGridControl>(VisualGridPageDefinitions.EremexDemoDataGridAutomationBridge);
+
+        public IGridControl TypedEditorsGrid =>
+            Resolve<IGridControl>(VisualGridPageDefinitions.TypedEditorsGrid);
     }
 
     public static class VisualGridPageDefinitions
@@ -850,6 +862,11 @@ Console.WriteLine("Fake desktop");
             "EremexDemoDataGridAutomationBridge",
             UiControlType.Grid,
             "EremexDemoDataGridAutomationBridge");
+
+        public static UiControlDefinition TypedEditorsGrid { get; } = new(
+            "TypedEditorsGrid",
+            UiControlType.Grid,
+            "TypedEditorsGrid");
     }
 
     private sealed class ProxyEditorPage : UiPage

@@ -60,6 +60,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("CalendarErrorText", UiControlType.Label, "CalendarErrorText")]
 [UiControl("StartDatePicker", UiControlType.DateTimePicker, "StartDatePicker")]
 [UiControl("EndDatePicker", UiControlType.DateTimePicker, "EndDatePicker")]
+[UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
 [UiControl("DateDiffButton", UiControlType.Button, "DateDiffButton")]
 [UiControl("DateResult", UiControlType.Label, "DateResult")]
 [UiControl("DateDiffList", UiControlType.ListBox, "DateDiffList")]

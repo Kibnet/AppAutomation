@@ -84,11 +84,17 @@ public sealed class RecorderFullCaptureCoverageTests
                 RowIndex: 0,
                 ColumnIndex: 3),
             new RecordedStep(
+                RecordedActionKind.EditGridCellTime,
+                Descriptor("EditableGrid", UiControlType.Grid),
+                RowIndex: 0,
+                ColumnIndex: 4,
+                TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(
                 RecordedActionKind.SelectGridCellComboItem,
                 Descriptor("EditableGrid", UiControlType.Grid),
                 StringValue: "Approved",
                 RowIndex: 0,
-                ColumnIndex: 4),
+                ColumnIndex: 5),
             new RecordedStep(
                 RecordedActionKind.SelectMultiItems,
                 Descriptor("Categories", UiControlType.MultiSelect),
@@ -128,7 +134,10 @@ public sealed class RecorderFullCaptureCoverageTests
                 "Page.EditGridCellDate(static page => page.EditableGrid, 0, 3, new global::System.DateTime(2026, 4, 28));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
-                "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 4, \"Approved\");",
+                "Page.EditGridCellTime(static page => page.EditableGrid, 0, 4, new global::System.TimeSpan(351300000000L));",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 5, \"Approved\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
                 "Page.SelectMultiItems(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
@@ -337,9 +346,11 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.SelectTabItem, Descriptor("ControlMixTabItem", UiControlType.TabItem)),
             new RecordedStep(RecordedActionKind.SelectTreeItem, Descriptor("NavigationTree", UiControlType.Tree), StringValue: "Orders"),
             new RecordedStep(RecordedActionKind.SetDate, Descriptor("StartDatePicker", UiControlType.DateTimePicker), DateValue: date),
+            new RecordedStep(RecordedActionKind.SetTime, Descriptor("StartTimePicker", UiControlType.TimePicker), TimeValue: new TimeSpan(9, 45, 30)),
             new RecordedStep(RecordedActionKind.WaitUntilTextEquals, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
             new RecordedStep(RecordedActionKind.WaitUntilTextContains, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
             new RecordedStep(RecordedActionKind.WaitUntilValueEquals, Descriptor("CountSpinner", UiControlType.Spinner), DoubleValue: 7),
+            new RecordedStep(RecordedActionKind.WaitUntilTimeEquals, Descriptor("StartTimePicker", UiControlType.TimePicker), TimeValue: new TimeSpan(9, 45, 30)),
             new RecordedStep(RecordedActionKind.WaitUntilIsChecked, Descriptor("AgreeCheckBox", UiControlType.CheckBox), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsToggled, Descriptor("PinToggleButton", UiControlType.ToggleButton), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsSelected, Descriptor("PrimaryRadioButton", UiControlType.RadioButton), BoolValue: true),
@@ -375,7 +386,8 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.EditGridCellText, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "Edited"),
             new RecordedStep(RecordedActionKind.EditGridCellNumber, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 2, DoubleValue: 42.5),
             new RecordedStep(RecordedActionKind.EditGridCellDate, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 3, DateValue: date),
-            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "Approved"),
+            new RecordedStep(RecordedActionKind.EditGridCellTime, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 5, StringValue: "Approved"),
             new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
             new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"]),
             new RecordedStep(RecordedActionKind.ApplyFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: ["Open"]),

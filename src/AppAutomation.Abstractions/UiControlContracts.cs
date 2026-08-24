@@ -495,6 +495,17 @@ public interface IDateTimePickerControl : IUiControl
 }
 
 /// <summary>
+/// Represents a time-of-day picker control.
+/// </summary>
+public interface ITimePickerControl : IUiControl
+{
+    /// <summary>
+    /// Gets or sets the selected time of day.
+    /// </summary>
+    TimeSpan? SelectedTime { get; set; }
+}
+
+/// <summary>
 /// Represents a numeric spinner (up/down) control.
 /// </summary>
 public interface ISpinnerControl : IUiControl
@@ -984,7 +995,12 @@ public enum GridCellEditorKind
     /// <summary>
     /// A composite search picker editor.
     /// </summary>
-    SearchPicker = 4
+    SearchPicker = 4,
+
+    /// <summary>
+    /// A time-of-day picker editor.
+    /// </summary>
+    Time = 5
 }
 
 /// <summary>
