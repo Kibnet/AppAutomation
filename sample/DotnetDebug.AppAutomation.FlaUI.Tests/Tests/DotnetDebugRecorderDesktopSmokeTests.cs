@@ -87,7 +87,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
         var page = MainWindowFlaUiPageFactory.Create(session);
         page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
-        ReplaceText(session, "MixCountSpinner", "7");
+        page.SetSpinnerValue(static candidate => candidate.MixCountSpinner, 7);
 
         var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
 

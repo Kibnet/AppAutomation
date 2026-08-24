@@ -1,3 +1,4 @@
+using AppAutomation.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -95,6 +96,41 @@ public sealed class RecorderComboBoxFilterCaptureTests
             "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"Closed\" });");
     }
 
+    [Test]
+    public async Task ConfiguredFilter_DoesNotProduceRuntimeAdapterWarning()
+    {
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "StatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "StatusFilterRoot",
+                "StatusFilterOpenButton",
+                "StatusFilterItems",
+                "StatusFilterApplyButton",
+                "StatusFilterCancelButton")));
+        var step = new RecordedStep(
+            RecordedActionKind.ApplyFilterSelection,
+            new RecordedControlDescriptor(
+                "StatusFilter",
+                UiControlType.ComboBoxFilter,
+                "StatusFilter",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(global::Avalonia.Controls.Control).FullName
+                    ?? nameof(global::Avalonia.Controls.Control),
+                Warning: null),
+            StringValues: ["Closed"]);
+
+        var result = new RecorderCommandRuntimeValidator(options).Validate(step);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(result.RuntimeValidationFindings).IsNotNull();
+            await Assert.That(result.RuntimeValidationFindings!.Any(static finding => finding.ShouldSurface)).IsFalse();
+        }
+    }
+
     private static async Task AssertSemanticStep(RecorderSession session, string expectedCommand)
     {
         using (Assert.Multiple())
@@ -104,6 +140,8 @@ public sealed class RecorderComboBoxFilterCaptureTests
             await Assert.That(session.StepJournal[0].Preview).DoesNotContain("Page.SetChecked");
             await Assert.That(session.StepJournal[0].Preview).DoesNotContain("Page.SelectListBoxItem");
             await Assert.That(session.StepJournal[0].Preview).DoesNotContain("StatusFilterApplyButton");
+            await Assert.That(session.StepJournal[0].Preview).DoesNotContain("recorder warning");
+            await Assert.That(session.StepJournal[0].Preview).DoesNotContain("configured parts");
         }
     }
 }

@@ -435,25 +435,20 @@ internal sealed class RecorderStepFactory
 
         selectedValues = selectedValues.OrderBy(static value => value, StringComparer.Ordinal).ToArray();
 
-        var warning = actionKind == RecordedActionKind.ApplyFilterSelection
-            ? "Recorded ComboBox filter Apply action from configured parts."
-            : "Recorded ComboBox filter Cancel action from configured parts.";
         var descriptor = CreateCompositeDescriptor(
             hint.LocatorValue,
             UiControlType.ComboBoxFilter,
             hint.LocatorKind,
             hint.FallbackToName,
             source,
-            warning);
+            warning: null);
 
         return CreateStep(
             source,
             new RecordedStep(
                 actionKind,
                 descriptor,
-                Warning: warning,
-                StringValues: selectedValues),
-            warning);
+                StringValues: selectedValues));
     }
 
     public bool IsComboBoxFilterAction(Control? source)
@@ -1053,6 +1048,34 @@ internal sealed class RecorderStepFactory
                 RecordedActionKind.SetSliderValue,
                 locatorResult.Control,
                 DoubleValue: slider.Value,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
+    }
+
+    public StepCreationResult TryCreateSpinnerStep(NumericUpDown spinner)
+    {
+        ArgumentNullException.ThrowIfNull(spinner);
+
+        if (spinner.Value is not { } value)
+        {
+            return StepCreationResult.Unsupported("Spinner does not have a numeric value.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(spinner, UiControlType.Spinner);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        return CreateStep(
+            spinner,
+            new RecordedStep(
+                RecordedActionKind.SetSpinnerValue,
+                locatorResult.Control,
+                DoubleValue: decimal.ToDouble(value),
                 Warning: locatorResult.Control.Warning,
                 ValidationStatus: locatorResult.ValidationStatus,
                 ValidationMessage: locatorResult.ValidationMessage,
@@ -3303,7 +3326,7 @@ internal sealed class RecorderStepFactory
         UiLocatorKind locatorKind,
         bool fallbackToName,
         Control source,
-        string warning)
+        string? warning)
     {
         return new RecordedControlDescriptor(
             RecorderNaming.CreateControlPropertyName(locatorValue, controlType),
@@ -3536,12 +3559,55 @@ internal sealed class RecorderStepFactory
         [
             new ProgressAssertionExtractor(),
             new ListBoxAssertionExtractor(),
+            new SpinnerAssertionExtractor(options),
             new TextAssertionExtractor(),
             new CheckedAssertionExtractor(),
             new EnabledAssertionExtractor(),
             new ExistsAssertionExtractor(),
             .. options.AssertionExtractors
         ];
+    }
+
+    private sealed class SpinnerAssertionExtractor : IRecorderAssertionExtractor
+    {
+        private readonly AppAutomationRecorderOptions _options;
+
+        public SpinnerAssertionExtractor(AppAutomationRecorderOptions options)
+        {
+            _options = options;
+        }
+
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+            {
+                return false;
+            }
+
+            double? value = control switch
+            {
+                NumericUpDown { Value: { } numericValue } => decimal.ToDouble(numericValue),
+                TextBox textBox when RecorderSpinnerProxyConfiguration.IsInteractivePart(_options, textBox)
+                    && double.TryParse(
+                        textBox.Text?.Trim(),
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var parsedValue) => parsedValue,
+                _ => null
+            };
+
+            if (value is null)
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                UiControlType.Spinner,
+                RecordedActionKind.WaitUntilValueEquals,
+                DoubleValue: value);
+            return true;
+        }
     }
 
     private static RecorderStepReviewState ResolveReviewState(RecordedStep step)

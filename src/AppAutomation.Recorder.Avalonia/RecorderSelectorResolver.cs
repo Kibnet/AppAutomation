@@ -314,7 +314,7 @@ internal sealed class RecorderSelectorResolver
         out RecorderLocatorAlias alias)
     {
         alias = null!;
-        return descriptor.ControlType == UiControlType.TextBox
+        return descriptor.ControlType == UiControlType.Spinner
             && RecorderSpinnerProxyConfiguration.TryResolveAlias(
                 _options,
                 descriptor.LocatorValue,
@@ -325,6 +325,7 @@ internal sealed class RecorderSelectorResolver
     private static bool RequiresSpinnerProxyValidation(RecordedActionKind actionKind)
     {
         return actionKind is RecordedActionKind.SetSpinnerValue
+            or RecordedActionKind.WaitUntilValueEquals
             or RecordedActionKind.WaitUntilTextEquals
             or RecordedActionKind.WaitUntilTextContains;
     }

@@ -129,6 +129,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetDate => ValidateControlType(step, target, [UiControlType.DateTimePicker, UiControlType.Calendar])
                 .Concat(RequireDate(step, target)),
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains => ValidateTextReadableAssertion(step, target),
+            RecordedActionKind.WaitUntilValueEquals => ValidateSpinnerValueAssertion(step, target),
             RecordedActionKind.WaitUntilIsChecked => ValidateControlType(step, target, UiControlType.CheckBox)
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsToggled => ValidateControlType(step, target, UiControlType.ToggleButton)
@@ -224,7 +225,7 @@ internal sealed class RecorderCommandRuntimeValidator
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        foreach (var finding in ValidateControlType(step, target, UiControlType.TextBox))
+        foreach (var finding in ValidateControlType(step, target, [UiControlType.Spinner, UiControlType.TextBox]))
         {
             yield return finding;
         }
@@ -234,7 +235,8 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return finding;
         }
 
-        if (!RecorderSpinnerProxyConfiguration.IsConfigured(
+        if (step.Control.ControlType == UiControlType.TextBox
+            && !RecorderSpinnerProxyConfiguration.IsConfigured(
                 _recorderOptions,
                 step.Control.LocatorValue,
                 step.Control.LocatorKind))
@@ -307,7 +309,7 @@ internal sealed class RecorderCommandRuntimeValidator
             "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.");
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateComboBoxFilterAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateComboBoxFilterAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -318,7 +320,8 @@ internal sealed class RecorderCommandRuntimeValidator
             "payload-invalid-combo-box-filter-values",
             "Combo-box filter action requires distinct non-empty item texts.",
             "combo-box-filter-adapter-required",
-            "Combo-box filter action requires registered composite parts or a consumer IComboBoxFilterControl adapter.");
+            "Combo-box filter action requires registered composite parts or a consumer IComboBoxFilterControl adapter.",
+            includeAdapterWarning: !IsConfiguredComboBoxFilter(step));
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSelectionSetAction(
@@ -328,7 +331,8 @@ internal sealed class RecorderCommandRuntimeValidator
         string invalidPayloadCode,
         string invalidPayloadMessage,
         string adapterWarningCode,
-        string adapterWarningMessage)
+        string adapterWarningMessage,
+        bool includeAdapterWarning = true)
     {
         foreach (var finding in ValidateControlType(step, target, controlType))
         {
@@ -342,7 +346,35 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return Invalid(target, invalidPayloadCode, invalidPayloadMessage);
         }
 
-        yield return Warning(target, adapterWarningCode, adapterWarningMessage);
+        if (includeAdapterWarning)
+        {
+            yield return Warning(target, adapterWarningCode, adapterWarningMessage);
+        }
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerValueAssertion(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(step, target, UiControlType.Spinner))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in RequireDouble(step, target))
+        {
+            yield return finding;
+        }
+    }
+
+    private bool IsConfiguredComboBoxFilter(RecordedStep step)
+    {
+        return _recorderOptions.ComboBoxFilterHints.Any(hint =>
+            hint.LocatorKind == step.Control.LocatorKind
+            && string.Equals(
+                hint.LocatorValue.Trim(),
+                step.Control.LocatorValue.Trim(),
+                StringComparison.Ordinal));
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(

@@ -167,7 +167,7 @@ public static class RecorderProxyConfigurationExtensions
     }
 
     /// <summary>
-    /// Configures a spinner-like editor that records through a text-box surface.
+    /// Configures a logical spinner that records through a writable text-box surface.
     /// </summary>
     public static AppAutomationRecorderOptions ConfigureSpinnerProxy(
         this AppAutomationRecorderOptions options,
@@ -177,9 +177,10 @@ public static class RecorderProxyConfigurationExtensions
         UiLocatorKind innerLocatorKind = UiLocatorKind.AutomationId,
         bool fallbackToName = false)
     {
-        return options.ConfigureTextBoxProxy(
+        return options.ConfigureProxy(
             logicalLocatorValue,
             innerLocatorValue,
+            UiControlType.Spinner,
             RecorderActionHint.SpinnerTextBox,
             logicalLocatorKind,
             innerLocatorKind,

@@ -28,7 +28,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("MixAdvancedToggle", UiControlType.ToggleButton, "MixAdvancedToggle")]
 [UiControl("MixDirectionAscendingRadio", UiControlType.RadioButton, "MixDirectionAscendingRadio")]
 [UiControl("MixDirectionDescendingRadio", UiControlType.RadioButton, "MixDirectionDescendingRadio")]
-[UiControl("MixCountSpinner", UiControlType.TextBox, "MixCountSpinner")]
+[UiControl("MixCountSpinner", UiControlType.Spinner, "MixCountSpinner")]
 [UiControl("MixSpeedSlider", UiControlType.Slider, "MixSpeedSlider")]
 [UiControl("MixRunButton", UiControlType.Button, "MixRunButton")]
 [UiControl("MixClearButton", UiControlType.Button, "MixClearButton")]

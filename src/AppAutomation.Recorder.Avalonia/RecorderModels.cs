@@ -56,7 +56,8 @@ public enum RecordedActionKind
     EnterSearch = 48,
     ClearSearch = 49,
     ApplySearchFromHistory = 50,
-    WaitUntilGridContainsRow = 51
+    WaitUntilGridContainsRow = 51,
+    WaitUntilValueEquals = 52
 }
 
 public enum RecorderAssertionMode

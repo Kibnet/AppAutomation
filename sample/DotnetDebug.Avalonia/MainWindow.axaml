@@ -186,10 +186,13 @@
 
                         <StackPanel Spacing="6" MinWidth="220">
                             <TextBlock Text="Steps/Range" />
-                            <TextBox x:Name="MixCountSpinner"
-                                     automation:AutomationProperties.AutomationId="MixCountSpinner"
-                                     automation:AutomationProperties.Name="MixCountSpinner"
-                                     Text="8" />
+                            <NumericUpDown x:Name="MixCountSpinner"
+                                           automation:AutomationProperties.AutomationId="MixCountSpinner"
+                                           automation:AutomationProperties.Name="MixCountSpinner"
+                                           Minimum="0"
+                                           Maximum="1000"
+                                           Increment="1"
+                                           Value="8" />
                             <Slider x:Name="MixSpeedSlider"
                                     automation:AutomationProperties.AutomationId="MixSpeedSlider"
                                     Minimum="1"

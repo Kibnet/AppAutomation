@@ -84,7 +84,6 @@ public partial class App : Application
                 : new RecorderHotkeys { Save = saveHotkey },
             AllowNameLocators = false
         };
-        options.ControlHints.Add(new RecorderControlHint("MixCountSpinner", RecorderActionHint.SpinnerTextBox));
         options.MultiSelectHints.Add(new RecorderMultiSelectHint(
             "MultiSelection",
             MultiSelectParts.ByAutomationIds(

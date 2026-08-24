@@ -590,7 +590,27 @@ public sealed class RecorderTests
             await Assert.That(result.Step).IsNotNull();
             await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SetSpinnerValue);
             await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("MixCountEditor");
-            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.TextBox);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.Spinner);
+            await Assert.That(result.Step.DoubleValue).IsEqualTo(10.5);
+        }
+    }
+
+    [Test]
+    public async Task NumericUpDown_CapturesLogicalSpinnerValue()
+    {
+        var spinner = new NumericUpDown { Value = 10.5m };
+        AutomationProperties.SetAutomationId(spinner, "QuantitySpinner");
+        var factory = new RecorderStepFactory(new AppAutomationRecorderOptions());
+
+        var result = factory.TryCreateSpinnerStep(spinner);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step).IsNotNull();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.SetSpinnerValue);
+            await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.Spinner);
+            await Assert.That(result.Step.Control.LocatorValue).IsEqualTo("QuantitySpinner");
             await Assert.That(result.Step.DoubleValue).IsEqualTo(10.5);
         }
     }
@@ -2790,6 +2810,60 @@ public sealed class RecorderTests
             await Assert.That(result.Success).IsTrue();
             await Assert.That(autosaveCallCount).IsEqualTo(0);
             await Assert.That(session.IsBusy).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesNumericUpDown_AsOneSpinnerStep()
+    {
+        var root = new StackPanel();
+        var spinner = new NumericUpDown { Value = 8 };
+        AutomationProperties.SetAutomationId(spinner, "QuantitySpinner");
+        root.Children.Add(spinner);
+        using var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false },
+            () => root,
+            attachWindowHandlers: false);
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(spinner);
+        spinner.Value = 12;
+        session.FlushPendingStateForTesting();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(session.StepJournal[0].Preview).Contains(
+                "Page.SetSpinnerValue(static page => page.QuantitySpinner, 12);");
+            await Assert.That(session.StepJournal[0].Preview).DoesNotContain("Page.EnterText");
+            await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task RecorderSession_CapturesNumericUpDownValueAssertion()
+    {
+        var root = new StackPanel();
+        var spinner = new NumericUpDown { Value = 12 };
+        AutomationProperties.SetAutomationId(spinner, "QuantitySpinner");
+        root.Children.Add(spinner);
+        using var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false },
+            () => root,
+            attachWindowHandlers: false);
+
+        session.Start();
+        session.CaptureAssertionForTesting(spinner, RecorderAssertionMode.Text);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(session.StepJournal[0].Preview).Contains(
+                "Page.WaitUntilValueEquals(static page => page.QuantitySpinner, 12);");
+            await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
         }
     }
 

@@ -213,7 +213,7 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
         Page.SetSpinnerValue(p => p.MixCountSpinner, 10);
 
-        await Assert.That(Page.MixCountSpinner.Text).IsEqualTo("10");
+        await Assert.That(Page.MixCountSpinner.Value).IsEqualTo(10);
 
         Page
             .SetSliderValue(p => p.MixSpeedSlider, 4)

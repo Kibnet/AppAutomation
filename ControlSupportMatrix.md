@@ -21,7 +21,8 @@ next to cover the widest possible set of `ControlType`.
 
 | Control | Avalonia in MainWindow | UiControlType | Support level in AppAutomation | Comment |
 |---|---|---|---|---|
-| TextInput | `NumbersInput`, `MixInput`, `HistoryFilterInput`, `MixCountSpinner` | `TextBox` | full | Via `EnterText`, read/write value |
+| TextInput | `NumbersInput`, `MixInput`, `HistoryFilterInput` | `TextBox` | full | Via `EnterText`, read/write value |
+| Spinner | `MixCountSpinner` (`NumericUpDown`) and configured text-backed wrappers | `Spinner` | full | `SetSpinnerValue` and `WaitUntilValueEquals`; Recorder keeps the logical outer locator |
 | Button | `CalculateButton`, `ApplyFilterButton`, ... | `Button` | full | Via `ClickButton` |
 | Label | `ResultText`, `ModeLabel`, ... | `Label` | full | Read text and `WaitUntilNameEquals` |
 | ListBox | `StepsList`, `HistoryList`, `SeriesList`, `DateDiffList`, `HierarchySelectionList` | `ListBox` | full | `WaitUntilHasItemsAtLeast`, `WaitUntilListBoxContains`, `ReadListBox` fallback |
@@ -96,7 +97,7 @@ Recommended automation contract for Arm.Srv:
 
 | Control | Avalonia in MainWindow | Reason |
 |---|---|---|
-| Spinner (`MixCountSpinner` visually TextBox) | currently as `UiControlType.TextBox` | In the current template this is a text field, not a full Spinner control; DSL supports both paths (`Spinner` and `TextBox`). |
+| Spinner (`MixCountSpinner`) | `UiControlType.Spinner` | Native `NumericUpDown` and configured text-backed wrappers share the logical Spinner contract. |
 
 ## Recommended mapping for less obvious Avalonia controls
 
@@ -158,7 +159,8 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 
 | Контрол | Avalonia в MainWindow | UiControlType | Уровень поддержки в AppAutomation | Комментарий |
 |---|---|---|---|---|
-| TextInput | `NumbersInput`, `MixInput`, `HistoryFilterInput`, `MixCountSpinner` | `TextBox` | полная | Через `EnterText`, чтение/запись значения |
+| TextInput | `NumbersInput`, `MixInput`, `HistoryFilterInput` | `TextBox` | полная | Через `EnterText`, чтение/запись значения |
+| Spinner | `MixCountSpinner` (`NumericUpDown`) и настроенные wrapper с текстовой частью | `Spinner` | полная | `SetSpinnerValue` и `WaitUntilValueEquals`; Recorder сохраняет locator внешнего логического элемента |
 | Button | `CalculateButton`, `ApplyFilterButton`, ... | `Button` | полная | Через `ClickButton` |
 | Label | `ResultText`, `ModeLabel`, ... | `Label` | полная | Чтение текста и `WaitUntilNameEquals` |
 | ListBox | `StepsList`, `HistoryList`, `SeriesList`, `DateDiffList`, `HierarchySelectionList` | `ListBox` | полная | `WaitUntilHasItemsAtLeast`, `WaitUntilListBoxContains`, `ReadListBox` fallback |
@@ -233,7 +235,7 @@ popup editors) и attached behaviors.
 
 | Контрол | Avalonia в MainWindow | Причина |
 |---|---|---|
-| Spinner (`MixCountSpinner` визуально TextBox) | пока как `UiControlType.TextBox` | В текущем шаблоне это текстовое поле, а не полноценный Spinner control; DSL поддерживает оба пути (`Spinner` и `TextBox`). |
+| Spinner (`MixCountSpinner`) | `UiControlType.Spinner` | Native `NumericUpDown` и настроенные wrapper с текстовой частью используют единый логический контракт Spinner. |
 
 ## Рекомендуемое соответствие для менее очевидных Avalonia-контролов
 

@@ -156,7 +156,7 @@ public partial class MainWindow : Window
         SeriesProgressBar.Value = 0;
 
         var mode = ResolveSeriesMode();
-        var count = ParseInputAsNonNegativeInt(MixCountSpinner.Text, defaultValue: 8);
+        var count = decimal.ToInt32(MixCountSpinner.Value ?? 8);
         var speed = Math.Max(1, (int)Math.Round(MixSpeedSlider.Value));
         var includeDetails = MixShowDetailsCheck.IsChecked == true;
         var useAdvanced = MixAdvancedToggle.IsChecked == true;
@@ -178,7 +178,7 @@ public partial class MainWindow : Window
     {
         MixInput.Text = string.Empty;
         MixResultTextClear();
-        MixCountSpinner.Text = "8";
+        MixCountSpinner.Value = 8;
         MixSpeedSlider.Value = 5;
         MixShowDetailsCheck.IsChecked = false;
         MixAdvancedToggle.IsChecked = false;

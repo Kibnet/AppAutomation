@@ -2246,7 +2246,40 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public double Value
         {
             get => TryRead(() => Inner.Value);
-            set => Inner.Value = value;
+            set
+            {
+                try
+                {
+                    Inner.Value = value;
+                }
+                catch (ArgumentException) when (TryEnterValue(value))
+                {
+                    // Avalonia NumericUpDown can expose a RangeValue pattern that rejects
+                    // values accepted by its visible editor. Use that real editor as the
+                    // provider fallback and let the Page postcondition verify the result.
+                }
+            }
+        }
+
+        private bool TryEnterValue(double value)
+        {
+            var input = TryRead(() => Inner.FindAllDescendants()
+                .FirstOrDefault(static candidate => candidate.ControlType == ControlType.Edit)
+                ?.AsTextBox());
+            var text = value.ToString("R", CultureInfo.InvariantCulture);
+            if (input is not null && TryRead(() => input.IsEnabled))
+            {
+                input.EnterText(text);
+                Keyboard.Press(VirtualKeyShort.RETURN);
+                return true;
+            }
+
+            Inner.Focus();
+            Inner.Click();
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            Keyboard.Type(text);
+            Keyboard.Press(VirtualKeyShort.RETURN);
+            return true;
         }
     }
 

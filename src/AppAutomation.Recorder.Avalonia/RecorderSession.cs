@@ -42,6 +42,7 @@ internal sealed class RecorderSession :
     private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
     private readonly DispatcherTimer _textDebounceTimer;
     private readonly DispatcherTimer _sliderDebounceTimer;
+    private readonly DispatcherTimer _spinnerDebounceTimer;
     private readonly DispatcherTimer? _observationTimer;
     private readonly AppAutomationRecorderOptions _options;
     private RecorderHotkeyMap _hotkeyMap;
@@ -54,6 +55,7 @@ internal sealed class RecorderSession :
     private TextBox? _pendingTextBox;
     private string? _pendingTextValue;
     private Slider? _pendingSlider;
+    private NumericUpDown? _pendingSpinner;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
@@ -152,6 +154,12 @@ internal sealed class RecorderSession :
             Interval = TimeSpan.FromMilliseconds(350)
         };
         _sliderDebounceTimer.Tick += (_, _) => FlushPendingSlider();
+
+        _spinnerDebounceTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(350)
+        };
+        _spinnerDebounceTimer.Tick += (_, _) => FlushPendingSpinner();
 
         AttachSearchPickerSelectionSources();
 
@@ -438,6 +446,7 @@ internal sealed class RecorderSession :
         _observationTimer?.Stop();
         _textDebounceTimer.Stop();
         _sliderDebounceTimer.Stop();
+        _spinnerDebounceTimer.Stop();
 
         foreach (var detachAction in _observedControlDetachers.Values)
         {
@@ -642,6 +651,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        FlushPendingSpinnerIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
     }
 
@@ -821,6 +831,11 @@ internal sealed class RecorderSession :
             FlushPendingSlider();
         }
 
+        if (_pendingSpinner is not null && !currentControls.Contains(_pendingSpinner))
+        {
+            FlushPendingSpinner();
+        }
+
         foreach (var observedControl in _observedControlDetachers.Keys.ToArray())
         {
             if (currentControls.Contains(observedControl))
@@ -905,6 +920,9 @@ internal sealed class RecorderSession :
     {
         switch (control)
         {
+            case NumericUpDown spinner:
+                spinner.PropertyChanged += OnSpinnerPropertyChanged;
+                return () => spinner.PropertyChanged -= OnSpinnerPropertyChanged;
             case TextBox textBox:
                 textBox.PropertyChanged += OnTextBoxPropertyChanged;
                 textBox.LostFocus += OnTextBoxLostFocus;
@@ -941,12 +959,18 @@ internal sealed class RecorderSession :
 
     private static bool IsObservableControl(Control control)
     {
+        if (control is TextBox && FindAncestorOrSelf<NumericUpDown>(control) is not null)
+        {
+            return false;
+        }
+
         return control is TextBox
             or ComboBox
             or ListBox
             or TabControl
             or TreeView
             or Slider
+            or NumericUpDown
             or DatePicker
             or Calendar;
     }
@@ -962,6 +986,7 @@ internal sealed class RecorderSession :
         var control = ResolveInteractionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        FlushPendingSpinnerIfSwitchingTo(control);
         RegisterPointerInput(control);
 
         if (FindAncestorOrSelf<Button>(e.Source as Control) is null)
@@ -1140,6 +1165,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        FlushPendingSpinnerIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? eventSource, "ButtonClick");
     }
 
@@ -1176,6 +1202,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(comboBox);
         FlushPendingSliderIfSwitchingTo(comboBox);
+        FlushPendingSpinnerIfSwitchingTo(comboBox);
         AddStep(_stepFactory.TryCreateComboBoxStep(comboBox), comboBox, "ComboBoxSelection");
     }
 
@@ -1246,6 +1273,7 @@ internal sealed class RecorderSession :
         }
 
         FlushPendingSliderIfSwitchingTo(results);
+        FlushPendingSpinnerIfSwitchingTo(results);
         AddStep(result, results, "SearchPickerSelection");
     }
 
@@ -1287,6 +1315,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(listBox);
         FlushPendingSliderIfSwitchingTo(listBox);
+        FlushPendingSpinnerIfSwitchingTo(listBox);
         AddStep(_stepFactory.TryCreateListBoxStep(listBox), listBox, "ListBoxSelection");
     }
 
@@ -1304,6 +1333,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(tabControl);
         FlushPendingSliderIfSwitchingTo(tabControl);
+        FlushPendingSpinnerIfSwitchingTo(tabControl);
         AddStep(_stepFactory.TryCreateTabSelectionStep(tabControl), tabControl, "TabSelection");
     }
 
@@ -1321,6 +1351,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(treeView);
         FlushPendingSliderIfSwitchingTo(treeView);
+        FlushPendingSpinnerIfSwitchingTo(treeView);
         AddStep(_stepFactory.TryCreateTreeSelectionStep(treeView), treeView, "TreeSelection");
     }
 
@@ -1427,6 +1458,7 @@ internal sealed class RecorderSession :
         {
             DiscardPendingText();
             FlushPendingSliderIfSwitchingTo(source);
+            FlushPendingSpinnerIfSwitchingTo(source);
         }
 
         AddStep(result, source, diagnosticContext);
@@ -1443,6 +1475,7 @@ internal sealed class RecorderSession :
         var result = _stepFactory.TryCreateComboBoxFilterStep(source);
         DiscardPendingText();
         FlushPendingSliderIfSwitchingTo(source);
+        FlushPendingSpinnerIfSwitchingTo(source);
         AddStep(result, source, "ComboBoxFilter");
         return true;
     }
@@ -1457,6 +1490,7 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(source);
         FlushPendingSliderIfSwitchingTo(source);
+        FlushPendingSpinnerIfSwitchingTo(source);
         AddStep(result, source, "ShellNavigation");
         return true;
     }
@@ -1479,6 +1513,23 @@ internal sealed class RecorderSession :
         _sliderDebounceTimer.Start();
     }
 
+    private void OnSpinnerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording
+            || sender is not NumericUpDown spinner
+            || !WasRecentlyTriggeredByUser(spinner)
+            || !string.Equals(e.Property.Name, nameof(NumericUpDown.Value), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        FlushPendingTextIfSwitchingTo(spinner);
+        FlushPendingSliderIfSwitchingTo(spinner);
+        _pendingSpinner = spinner;
+        _spinnerDebounceTimer.Stop();
+        _spinnerDebounceTimer.Start();
+    }
+
     private void OnDatePickerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
         if (_state != RecorderSessionState.Recording || sender is not DatePicker datePicker || !WasRecentlyTriggeredByUser(datePicker))
@@ -1495,6 +1546,7 @@ internal sealed class RecorderSession :
         {
             FlushPendingTextIfSwitchingTo(datePicker);
             FlushPendingSliderIfSwitchingTo(datePicker);
+            FlushPendingSpinnerIfSwitchingTo(datePicker);
             AddStep(_stepFactory.TryCreateDatePickerStep(datePicker), datePicker, "DatePickerSelection");
         }
     }
@@ -1510,6 +1562,7 @@ internal sealed class RecorderSession :
         {
             FlushPendingTextIfSwitchingTo(calendar);
             FlushPendingSliderIfSwitchingTo(calendar);
+            FlushPendingSpinnerIfSwitchingTo(calendar);
             AddStep(_stepFactory.TryCreateCalendarStep(calendar), calendar, "CalendarSelection");
         }
     }
@@ -1739,6 +1792,7 @@ internal sealed class RecorderSession :
         var control = _lastHoveredControl ?? GetFocusedWindowControl();
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
+        FlushPendingSpinnerIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
     }
 
@@ -2049,6 +2103,7 @@ internal sealed class RecorderSession :
     {
         FlushPendingText();
         FlushPendingSlider();
+        FlushPendingSpinner();
     }
 
     private void FlushPendingText()
@@ -2101,6 +2156,19 @@ internal sealed class RecorderSession :
         AddStep(_stepFactory.TryCreateSliderStep(slider), slider, "SliderValue");
     }
 
+    private void FlushPendingSpinner()
+    {
+        _spinnerDebounceTimer.Stop();
+        if (_pendingSpinner is null)
+        {
+            return;
+        }
+
+        var spinner = _pendingSpinner;
+        _pendingSpinner = null;
+        AddStep(_stepFactory.TryCreateSpinnerStep(spinner), spinner, "SpinnerValue");
+    }
+
     private void FlushPendingTextIfSwitchingTo(Control? control)
     {
         if (_pendingTextBox is null)
@@ -2134,6 +2202,21 @@ internal sealed class RecorderSession :
         }
 
         FlushPendingSlider();
+    }
+
+    private void FlushPendingSpinnerIfSwitchingTo(Control? control)
+    {
+        if (_pendingSpinner is null)
+        {
+            return;
+        }
+
+        if (control is not null && AreRelated(_pendingSpinner, control))
+        {
+            return;
+        }
+
+        FlushPendingSpinner();
     }
 
     private bool HasPendingCompositeSelection(Control results)
@@ -2199,6 +2282,12 @@ internal sealed class RecorderSession :
 
     private static Control? ResolveInteractionOwner(Control? control)
     {
+        var spinner = FindAncestorOrSelf<NumericUpDown>(control);
+        if (spinner is not null)
+        {
+            return spinner;
+        }
+
         foreach (var candidate in EnumerateRelatedControls(control))
         {
             switch (candidate)
@@ -2209,6 +2298,7 @@ internal sealed class RecorderSession :
                 case TabControl:
                 case TreeView:
                 case Slider:
+                case NumericUpDown:
                 case DatePicker:
                 case Calendar:
                 case CheckBox:

@@ -315,11 +315,49 @@ public static partial class UiPageExtensions
     /// <exception cref="UiOperationException">Thrown when the control is not enabled or the value was not set successfully.</exception>
     public static TSelf SetSpinnerValue<TSelf>(
         this TSelf page,
+        Expression<Func<TSelf, ISpinnerControl>> selector,
+        double value,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Spinner value must be finite.");
+        }
+
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
+        var spinner = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => spinner.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Spinner '{spinner.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={spinner.IsEnabled}");
+        spinner.Value = value;
+        WaitUntil(
+            page,
+            selector,
+            () => SpinnerValuesEqual(spinner.Value, value),
+            budget.RemainingMilliseconds,
+            $"Spinner '{spinner.AutomationId}' did not reach expected value.",
+            expectedValue: value.ToString(CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => spinner.Value.ToString(CultureInfo.InvariantCulture));
+        return page;
+    }
+
+    /// <summary>
+    /// Sets a numeric value in a legacy spinner-like text box control.
+    /// </summary>
+    public static TSelf SetSpinnerValue<TSelf>(
+        this TSelf page,
         Expression<Func<TSelf, ITextBoxControl>> selector,
         double value,
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
         var textBox = Resolve(selector, page);
         var expected = value.ToString(CultureInfo.InvariantCulture);
         textBox.Enter(expected);
@@ -327,10 +365,37 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => string.Equals(textBox.Text?.Trim(), expected, StringComparison.Ordinal),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Spinner-like text box '{textBox.AutomationId}' did not reach expected value.",
             expectedValue: expected,
             lastObservedValueFactory: () => textBox.Text);
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a spinner reaches the expected numeric value.
+    /// </summary>
+    public static TSelf WaitUntilValueEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ISpinnerControl>> selector,
+        double expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (!double.IsFinite(expected))
+        {
+            throw new ArgumentOutOfRangeException(nameof(expected), expected, "Spinner value must be finite.");
+        }
+
+        var spinner = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => SpinnerValuesEqual(spinner.Value, expected),
+            timeoutMs,
+            $"Spinner '{spinner.AutomationId}' did not reach expected value.",
+            expectedValue: expected.ToString(CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => spinner.Value.ToString(CultureInfo.InvariantCulture));
         return page;
     }
 
@@ -2782,6 +2847,11 @@ public static partial class UiPageExtensions
     private static string? FirstNonWhiteSpace(params string?[] values)
     {
         return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static bool SpinnerValuesEqual(double actual, double expected)
+    {
+        return Math.Abs(actual - expected) < 0.001;
     }
 
     private static bool TextMatches(string? actual, string expected)

@@ -1076,6 +1076,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue)});",
             RecordedActionKind.WaitUntilTextEquals => $"Page.WaitUntilTextEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilTextContains => $"Page.WaitUntilTextContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.WaitUntilValueEquals => $"Page.WaitUntilValueEquals(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.WaitUntilIsChecked => $"Page.WaitUntilIsChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",

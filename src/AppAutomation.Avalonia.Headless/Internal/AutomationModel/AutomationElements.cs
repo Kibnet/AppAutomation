@@ -114,6 +114,11 @@ internal class AutomationElement
             return new Spinner(textBox);
         }
 
+        if (Control is global::Avalonia.Controls.NumericUpDown numericUpDown)
+        {
+            return new Spinner(numericUpDown);
+        }
+
         throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to Spinner.");
     }
 
@@ -188,6 +193,7 @@ internal class AutomationElement
             global::Avalonia.Controls.ComboBox comboBox => new ComboBox(comboBox),
             global::Avalonia.Controls.ListBox listBox => new ListBox(listBox),
             global::Avalonia.Controls.Slider slider => new Slider(slider),
+            global::Avalonia.Controls.NumericUpDown numericUpDown => new Spinner(numericUpDown),
             global::Avalonia.Controls.ProgressBar progressBar => new ProgressBar(progressBar),
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
@@ -667,22 +673,45 @@ internal class Spinner : AutomationElement
     {
     }
 
-    private global::Avalonia.Controls.TextBox Native => (global::Avalonia.Controls.TextBox)Control;
+    internal Spinner(global::Avalonia.Controls.NumericUpDown numericUpDown) : base(numericUpDown)
+    {
+    }
 
     public double Value
     {
         get => Ui(() =>
         {
-            var text = Native.Text ?? string.Empty;
-            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-                ? value
-                : 0;
+            return Control switch
+            {
+                global::Avalonia.Controls.NumericUpDown numericUpDown => decimal.ToDouble(numericUpDown.Value ?? 0),
+                global::Avalonia.Controls.TextBox textBox => ParseTextValue(textBox),
+                _ => throw new InvalidOperationException($"Control '{Control.GetType().Name}' is not a spinner.")
+            };
         });
         set => Ui(() =>
         {
-            Native.Text = value.ToString(CultureInfo.InvariantCulture);
+            switch (Control)
+            {
+                case global::Avalonia.Controls.NumericUpDown numericUpDown:
+                    numericUpDown.Value = checked((decimal)value);
+                    break;
+                case global::Avalonia.Controls.TextBox textBox:
+                    textBox.Text = value.ToString("R", CultureInfo.InvariantCulture);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Control '{Control.GetType().Name}' is not a spinner.");
+            }
+
             return true;
         });
+    }
+
+    private static double ParseTextValue(global::Avalonia.Controls.TextBox textBox)
+    {
+        var text = textBox.Text ?? string.Empty;
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
     }
 }
 
