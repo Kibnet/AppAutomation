@@ -141,6 +141,9 @@ internal sealed class RecorderSelectorResolver
         var isConfiguredTimePicker = _options.TimePickerHints.Any(hint =>
             hint.LocatorKind == alias.TargetLocatorKind
             && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
+        var isConfiguredSingleSelect = _options.SingleSelectHints.Any(hint =>
+            hint.LocatorKind == alias.TargetLocatorKind
+            && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
 
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -150,7 +153,9 @@ internal sealed class RecorderSelectorResolver
                 alias.TargetLocatorKind,
                 alias.FallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                isConfiguredSpinnerProxy || isConfiguredTimePicker ? warning : CombineMessage(warning, aliasMessage)),
+                isConfiguredSpinnerProxy || isConfiguredTimePicker || isConfiguredSingleSelect
+                    ? warning
+                    : CombineMessage(warning, aliasMessage)),
             message: validation.Message ?? aliasMessage,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
@@ -178,6 +183,33 @@ internal sealed class RecorderSelectorResolver
         if (!logicalResolution.CanPersist)
         {
             return logicalResolution;
+        }
+
+        if (step.ActionKind == RecordedActionKind.SelectComboItem
+            && TryResolveSingleSelectPart(step.Control, out var singleSelectHint))
+        {
+            var resultsMatches = FindMatches(
+                singleSelectHint.Parts.ResultsLocator,
+                singleSelectHint.Parts.LocatorKind);
+            if (resultsMatches.Length == 0)
+            {
+                return new ExistingControlResolutionResult(
+                    true,
+                    null,
+                    logicalResolution.ValidationStatus,
+                    logicalResolution.ValidationMessage,
+                    logicalResolution.CanPersist);
+            }
+
+            var resultsValidation = ValidateSelector(
+                singleSelectHint.Parts.ResultsLocator,
+                singleSelectHint.Parts.LocatorKind);
+            return new ExistingControlResolutionResult(
+                resultsValidation.MatchedControl is not null,
+                resultsValidation.MatchedControl,
+                MaxStatus(logicalResolution.ValidationStatus, resultsValidation.Status),
+                CombineMessage(logicalResolution.ValidationMessage, resultsValidation.Message),
+                resultsValidation.CanPersist);
         }
 
         if (RequiresTimePickerPartValidation(step.ActionKind)
@@ -340,6 +372,21 @@ internal sealed class RecorderSelectorResolver
             return true;
         }
 
+        var singleSelectHint = _options.SingleSelectHints.FirstOrDefault(candidate =>
+            candidate.Parts.LocatorKind == locatorKind
+            && string.Equals(candidate.Parts.ResultsLocator.Trim(), locatorValue, StringComparison.Ordinal));
+        if (singleSelectHint is not null)
+        {
+            alias = new RecorderLocatorAlias(
+                locatorValue,
+                singleSelectHint.LocatorValue,
+                UiControlType.ComboBox,
+                singleSelectHint.Parts.LocatorKind,
+                singleSelectHint.LocatorKind,
+                singleSelectHint.FallbackToName);
+            return true;
+        }
+
         var gridHint = _options.GridHints.FirstOrDefault(candidate =>
             candidate.SourceLocatorKind == locatorKind
             && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal));
@@ -401,6 +448,16 @@ internal sealed class RecorderSelectorResolver
         locatorValue = hint?.Parts.TimePickerLocator ?? string.Empty;
         locatorKind = hint?.Parts.LocatorKind ?? UiLocatorKind.AutomationId;
         return hint is not null && !string.IsNullOrWhiteSpace(locatorValue);
+    }
+
+    private bool TryResolveSingleSelectPart(
+        RecordedControlDescriptor descriptor,
+        out RecorderSingleSelectHint hint)
+    {
+        hint = _options.SingleSelectHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == descriptor.LocatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), descriptor.LocatorValue.Trim(), StringComparison.Ordinal))!;
+        return hint is not null;
     }
 
     private static bool RequiresTimePickerPartValidation(RecordedActionKind actionKind)

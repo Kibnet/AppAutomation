@@ -36,7 +36,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,
-            RecordedActionKind.SelectComboItem => source is ComboBox,
+            RecordedActionKind.SelectComboItem => source is ComboBox or ListBox,
             RecordedActionKind.SelectListBoxItem => source is ListBox,
             RecordedActionKind.SetSliderValue => source is Slider,
             RecordedActionKind.SelectTabItem => source is TabItem,

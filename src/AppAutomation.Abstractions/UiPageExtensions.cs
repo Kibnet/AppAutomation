@@ -225,13 +225,20 @@ public static partial class UiPageExtensions
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "combo-box selection");
 
         var comboBox = Resolve(selector, page);
+        if (comboBox is ISingleSelectOperationControl operationControl)
+        {
+            operationControl.SelectItem(itemText, budget.RemainingMilliseconds);
+            return page;
+        }
+
         WaitUntil(
             page,
             selector,
             () => comboBox.IsEnabled,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"ComboBox '{comboBox.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={comboBox.IsEnabled}");
@@ -258,7 +265,7 @@ public static partial class UiPageExtensions
             () => comboBox.SelectedIndex == index.Value
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Text), target, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Name), target, StringComparison.OrdinalIgnoreCase),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"ComboBox '{comboBox.AutomationId}' failed to select item.",
             expectedValue: itemText,
             lastObservedValueFactory: () => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name ?? $"SelectedIndex={comboBox.SelectedIndex}");

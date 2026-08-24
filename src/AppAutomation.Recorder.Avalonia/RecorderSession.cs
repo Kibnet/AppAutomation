@@ -58,6 +58,9 @@ internal sealed class RecorderSession :
     private NumericUpDown? _pendingSpinner;
     private TimePicker? _pendingTimePicker;
     private RecorderTimePickerHint? _pendingTimePickerHint;
+    private StepCreationResult? _pendingSingleSelectStep;
+    private RecorderSingleSelectHint? _pendingSingleSelectHint;
+    private Control? _pendingSingleSelectSource;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
@@ -622,6 +625,7 @@ internal sealed class RecorderSession :
     internal void CaptureButtonClickForTesting(Control? source)
     {
         DiscardPendingTimePickerIfSwitchingTo(source);
+        DiscardPendingSingleSelectIfSwitchingTo(source);
 
         if (IsPickerTemplateButton(source))
         {
@@ -633,12 +637,22 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryHandleSingleSelectButton(source))
+        {
+            return;
+        }
+
         if (TryRecordSearchHistoryAction(source))
         {
             return;
         }
 
         if (TrySuppressSearchPickerButtonClick(source))
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressSingleSelectButton(source))
         {
             return;
         }
@@ -999,6 +1013,7 @@ internal sealed class RecorderSession :
         }
 
         DiscardPendingTimePickerIfSwitchingTo(e.Source as Control);
+        DiscardPendingSingleSelectIfSwitchingTo(e.Source as Control);
         CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(e.Source as Control));
         var control = ResolveInteractionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
@@ -1059,6 +1074,7 @@ internal sealed class RecorderSession :
         if (focused is not null)
         {
             DiscardPendingTimePickerIfSwitchingTo(focused);
+            DiscardPendingSingleSelectIfSwitchingTo(focused);
             if (e.Key is Key.Enter or Key.Space)
             {
                 CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(focused));
@@ -1151,6 +1167,7 @@ internal sealed class RecorderSession :
 
         var eventSource = e.Source as Control;
         DiscardPendingTimePickerIfSwitchingTo(eventSource);
+        DiscardPendingSingleSelectIfSwitchingTo(eventSource);
         if (IsPickerTemplateButton(eventSource))
         {
             return;
@@ -1161,12 +1178,22 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryHandleSingleSelectButton(eventSource))
+        {
+            return;
+        }
+
         if (TryRecordSearchHistoryAction(eventSource))
         {
             return;
         }
 
         if (TrySuppressSearchPickerButtonClick(eventSource))
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressSingleSelectButton(eventSource))
         {
             return;
         }
@@ -1219,6 +1246,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryRecordSingleSelectSelection(comboBox))
+        {
+            return;
+        }
+
         if (TryRecordSearchPickerSelection(comboBox))
         {
             return;
@@ -1253,6 +1285,50 @@ internal sealed class RecorderSession :
             CompleteSearchPickerSelection(capture.StepResult, capture.SearchInput, comboBox);
         }
 
+        return true;
+    }
+
+    private bool TryRecordSingleSelectSelection(ComboBox comboBox)
+    {
+        return CompleteSingleSelectSelection(_stepFactory.TryCreateSingleSelectStep(comboBox), comboBox);
+    }
+
+    private bool TryRecordSingleSelectSelection(ListBox listBox)
+    {
+        return CompleteSingleSelectSelection(_stepFactory.TryCreateSingleSelectStep(listBox), listBox);
+    }
+
+    private bool CompleteSingleSelectSelection(SingleSelectCaptureResult capture, Control source)
+    {
+        if (!capture.IsConfigured)
+        {
+            return false;
+        }
+
+        if (!capture.HasSelection)
+        {
+            return true;
+        }
+
+        if (capture.Hint is null || !capture.StepResult.Success)
+        {
+            LogSemanticCaptureFailure("SingleSelectSelection", source, capture.StepResult);
+            return false;
+        }
+
+        DiscardPendingSingleSelectText(capture.Hint);
+        FlushPendingSliderIfSwitchingTo(source);
+        FlushPendingSpinnerIfSwitchingTo(source);
+        DiscardPendingSingleSelect();
+        if (capture.Hint.Parts.CommitMode == SingleSelectCommitMode.Confirm)
+        {
+            _pendingSingleSelectStep = capture.StepResult;
+            _pendingSingleSelectHint = capture.Hint;
+            _pendingSingleSelectSource = source;
+            return true;
+        }
+
+        AddStep(capture.StepResult, source, "SingleSelectSelection");
         return true;
     }
 
@@ -1318,6 +1394,11 @@ internal sealed class RecorderSession :
         }
 
         if (TryRecordComboBoxFilterSelection(listBox))
+        {
+            return;
+        }
+
+        if (TryRecordSingleSelectSelection(listBox))
         {
             return;
         }
@@ -1935,6 +2016,17 @@ internal sealed class RecorderSession :
             message);
     }
 
+    private void LogSemanticCaptureFailure(
+        string captureAction,
+        Control source,
+        StepCreationResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.Message))
+        {
+            LogCaptureFailure(captureAction, source, result.Message);
+        }
+    }
+
     private void LogRecordedStepDiagnostics(string captureAction, Control? source, RecordedStep step)
     {
         var runtimeFindings = step.RuntimeValidationFindings ?? Array.Empty<RecorderRuntimeValidationFinding>();
@@ -2173,6 +2265,7 @@ internal sealed class RecorderSession :
         FlushPendingSlider();
         FlushPendingSpinner();
         DiscardPendingTimePicker();
+        DiscardPendingSingleSelect();
     }
 
     private bool TryHandleTimePickerButton(Control? source)
@@ -2220,6 +2313,56 @@ internal sealed class RecorderSession :
     private void DiscardPendingTimePickerText(RecorderTimePickerHint hint)
     {
         if (_pendingTextBox is not null && _stepFactory.IsTimePickerInput(_pendingTextBox, hint))
+        {
+            DiscardPendingText();
+        }
+    }
+
+    private bool TryHandleSingleSelectButton(Control? source)
+    {
+        if (!_stepFactory.TryResolveSingleSelectButton(source, out var hint, out var isConfirm))
+        {
+            return false;
+        }
+
+        var pendingStep = _pendingSingleSelectStep;
+        var pendingSource = _pendingSingleSelectSource;
+        var hasPendingSelection = pendingStep is not null
+            && pendingSource is not null
+            && Equals(_pendingSingleSelectHint, hint);
+        DiscardPendingSingleSelectText(hint);
+        DiscardPendingSingleSelect();
+
+        if (isConfirm && hasPendingSelection)
+        {
+            AddStep(pendingStep!, pendingSource, "SingleSelectSelection");
+        }
+
+        return true;
+    }
+
+    private void DiscardPendingSingleSelect()
+    {
+        _pendingSingleSelectStep = null;
+        _pendingSingleSelectHint = null;
+        _pendingSingleSelectSource = null;
+    }
+
+    private void DiscardPendingSingleSelectIfSwitchingTo(Control? source)
+    {
+        var hint = _pendingSingleSelectHint;
+        if (hint is null || _stepFactory.IsSingleSelectPart(source, hint))
+        {
+            return;
+        }
+
+        DiscardPendingSingleSelectText(hint);
+        DiscardPendingSingleSelect();
+    }
+
+    private void DiscardPendingSingleSelectText(RecorderSingleSelectHint hint)
+    {
+        if (_pendingTextBox is not null && _stepFactory.IsSingleSelectInput(_pendingTextBox, hint))
         {
             DiscardPendingText();
         }

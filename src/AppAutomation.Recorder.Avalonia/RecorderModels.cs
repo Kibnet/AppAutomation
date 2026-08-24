@@ -163,6 +163,12 @@ internal sealed record SearchPickerSelectionCaptureResult(
     TextBox? SearchInput,
     StepCreationResult StepResult);
 
+internal sealed record SingleSelectCaptureResult(
+    bool IsConfigured,
+    bool HasSelection,
+    RecorderSingleSelectHint? Hint,
+    StepCreationResult StepResult);
+
 internal sealed record ResolvedControlResult(
     bool Success,
     RecordedControlDescriptor? Control,

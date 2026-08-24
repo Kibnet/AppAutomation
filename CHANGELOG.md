@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add provider-neutral confirmed-selection sources so Recorder captures custom popup selectors as one logical `SearchAndSelect(...)` while preserving input-only and standard selector behavior.
 - Add logical Spinner recording, numeric assertions, native Avalonia `NumericUpDown` replay, and a provider-neutral text-part adapter for custom spinner wrappers.
 - Add lossless `TimePicker` recording, assertions, composite confirm/cancel registration, semantic grid editing, and shared Headless/FlaUI replay.
+- Add provider-neutral single-selection parts so editable and non-editable composite editors record and replay through the existing `SelectComboItem(...)` command.
 
 ### Fixed
 

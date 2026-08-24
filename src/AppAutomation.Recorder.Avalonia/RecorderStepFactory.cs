@@ -195,6 +195,108 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
+    public SingleSelectCaptureResult TryCreateSingleSelectStep(ComboBox results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        return TryCreateSingleSelectStepCore(
+            results,
+            SingleSelectResultsKind.ComboBox,
+            ExtractSelectionText(results.SelectedItem));
+    }
+
+    public SingleSelectCaptureResult TryCreateSingleSelectStep(ListBox results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        return TryCreateSingleSelectStepCore(
+            results,
+            SingleSelectResultsKind.ListBox,
+            ExtractSelectionText(results.SelectedItem));
+    }
+
+    public bool IsSingleSelectPair(TextBox input, Control results)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(results);
+        return _options.SingleSelectHints.Any(hint =>
+            IsSingleSelectInput(input, hint)
+            && IsSingleSelectResults(results, hint));
+    }
+
+    public bool IsSingleSelectInput(TextBox input, RecorderSingleSelectHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(hint);
+        return !string.IsNullOrWhiteSpace(hint.Parts.InputLocator)
+            && MatchesLocator(input, hint.Parts.LocatorKind, hint.Parts.InputLocator);
+    }
+
+    public bool ShouldSuppressSingleSelectInput(TextBox input)
+    {
+        return _options.SingleSelectHints.Any(hint =>
+            !hint.Parts.PersistInputText && IsSingleSelectInput(input, hint));
+    }
+
+    public bool IsSingleSelectPart(Control? source, RecorderSingleSelectHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        return EnumerateRelatedControls(source).Any(current =>
+            MatchesLocator(current, hint.LocatorKind, hint.LocatorValue)
+                || MatchesAnyLocator(
+                    current,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.RootLocator,
+                    hint.Parts.ResultsLocator,
+                    hint.Parts.InputLocator,
+                    hint.Parts.OpenButtonLocator,
+                    hint.Parts.SelectedValueLocator,
+                    hint.Parts.PopupRootLocator,
+                    hint.Parts.ConfirmButtonLocator,
+                    hint.Parts.CancelButtonLocator));
+    }
+
+    public bool TryResolveSingleSelectButton(
+        Control? source,
+        out RecorderSingleSelectHint hint,
+        out bool isConfirm)
+    {
+        hint = null!;
+        isConfirm = false;
+        if (source is null)
+        {
+            return false;
+        }
+
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            foreach (var candidate in _options.SingleSelectHints)
+            {
+                if (!string.IsNullOrWhiteSpace(candidate.Parts.ConfirmButtonLocator)
+                    && MatchesLocator(current, candidate.Parts.LocatorKind, candidate.Parts.ConfirmButtonLocator))
+                {
+                    hint = candidate;
+                    isConfirm = true;
+                    return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(candidate.Parts.CancelButtonLocator)
+                    && MatchesLocator(current, candidate.Parts.LocatorKind, candidate.Parts.CancelButtonLocator))
+                {
+                    hint = candidate;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public bool ShouldSuppressSingleSelectButton(Control? source)
+    {
+        return EnumerateRelatedControls(source).Any(current => _options.SingleSelectHints.Any(hint =>
+            !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+            && MatchesLocator(current, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)));
+    }
+
     public StepCreationResult TryCreateSearchPickerStep(
         TextBox searchInput,
         ComboBox results,
@@ -772,6 +874,7 @@ internal sealed class RecorderStepFactory
             || MatchesNumericRangeTextPart(textBox)
             || MatchesFolderExportPathPart(textBox)
             || MatchesTimePickerInputPart(textBox)
+            || ShouldSuppressSingleSelectInput(textBox)
             || MatchesGridEditValuePart(textBox);
     }
 
@@ -805,7 +908,8 @@ internal sealed class RecorderStepFactory
 
         return MatchesSearchPickerTextPart(textBox)
             || MatchesGridSearchPickerTextPart(textBox)
-            || MatchesTimePickerInputPart(textBox);
+            || MatchesTimePickerInputPart(textBox)
+            || _options.SingleSelectHints.Any(hint => IsSingleSelectInput(textBox, hint));
     }
 
     public bool IsCompositeSelectionPair(TextBox searchInput, Control results)
@@ -813,7 +917,8 @@ internal sealed class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(searchInput);
         ArgumentNullException.ThrowIfNull(results);
 
-        return results switch
+        return IsSingleSelectPair(searchInput, results)
+            || results switch
         {
             ComboBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _)
                 || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _),
@@ -2988,6 +3093,77 @@ internal sealed class RecorderStepFactory
             excludeTargetColumnFromIdentity: true);
     }
 
+    private SingleSelectCaptureResult TryCreateSingleSelectStepCore(
+        Control results,
+        SingleSelectResultsKind resultsKind,
+        string? selectedText)
+    {
+        var matchingHints = _options.SingleSelectHints
+            .Where(hint => hint.Parts.ResultsKind == resultsKind && IsSingleSelectResults(results, hint))
+            .ToArray();
+        if (matchingHints.Length == 0)
+        {
+            return new SingleSelectCaptureResult(
+                IsConfigured: false,
+                HasSelection: false,
+                Hint: null,
+                StepCreationResult.Unsupported("Control is not configured as a recorder single-selection result."));
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return new SingleSelectCaptureResult(
+                IsConfigured: true,
+                HasSelection: false,
+                matchingHints.Length == 1 ? matchingHints[0] : null,
+                StepCreationResult.Unsupported("Single-selection editor does not have a selected item to record."));
+        }
+
+        if (matchingHints.Length > 1)
+        {
+            return new SingleSelectCaptureResult(
+                IsConfigured: true,
+                HasSelection: true,
+                Hint: null,
+                StepCreationResult.Unsupported(
+                    $"Single-selection results match {matchingHints.Length} configured hints; ResultsLocator must identify one editor."));
+        }
+
+        var hint = matchingHints[0];
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.ComboBox,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            results,
+            warning: null);
+        var logicalValidation = _selectorResolver.ResolveExisting(descriptor);
+        if (!logicalValidation.CanPersist)
+        {
+            return new SingleSelectCaptureResult(
+                IsConfigured: true,
+                HasSelection: true,
+                hint,
+                StepCreationResult.Unsupported(
+                    logicalValidation.ValidationMessage
+                    ?? $"Single-selection locator '{hint.LocatorKind}:{hint.LocatorValue}' is invalid."));
+        }
+
+        var result = CreateStep(
+            results,
+            new RecordedStep(
+                RecordedActionKind.SelectComboItem,
+                descriptor,
+                StringValue: selectedText.Trim()),
+            message: null);
+
+        return new SingleSelectCaptureResult(
+            IsConfigured: true,
+            HasSelection: true,
+            hint,
+            result);
+    }
+
     private StepCreationResult TryCreateGridEditTimeStep(
         Control source,
         RecordedControlDescriptor descriptor,
@@ -3567,6 +3743,17 @@ internal sealed class RecorderStepFactory
     {
         return _options.TimePickerHints.Where(hint =>
             MatchesLocator(timePicker, hint.Parts.LocatorKind, hint.Parts.TimePickerLocator));
+    }
+
+    private static bool IsSingleSelectResults(Control results, RecorderSingleSelectHint hint)
+    {
+        return (hint.Parts.ResultsKind switch
+            {
+                SingleSelectResultsKind.ComboBox => results is ComboBox,
+                SingleSelectResultsKind.ListBox => results is ListBox,
+                _ => false
+            })
+            && MatchesLocator(results, hint.Parts.LocatorKind, hint.Parts.ResultsLocator);
     }
 
     private static bool HasExactLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
