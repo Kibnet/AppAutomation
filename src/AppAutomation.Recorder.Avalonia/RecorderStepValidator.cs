@@ -36,6 +36,8 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.SetExpanded => source is Expander,
             RecordedActionKind.SetColor => source is Control,
             RecordedActionKind.InvokeMenuItem => source is Menu or MenuItem,
+            RecordedActionKind.InvokeContextMenuItem =>
+                source.ContextMenu is not null || source.ContextFlyout is MenuFlyout,
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,

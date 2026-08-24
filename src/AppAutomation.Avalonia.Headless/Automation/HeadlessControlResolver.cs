@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics;
 using System.Text;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
@@ -558,7 +557,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             .ToArray();
     }
 
-    private abstract class HeadlessControlBase<TControl> : IUiControlAvailability
+    private abstract class HeadlessControlBase<TControl> : IUiControlAvailability, IContextMenuOwnerControl
         where TControl : AutomationElement
     {
         protected HeadlessControlBase(TControl inner)
@@ -576,6 +575,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         public bool IsAvailable => Inner.IsAvailable
             && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => Inner.Control.IsEffectivelyVisible);
+
+        public void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs)
+        {
+            HeadlessContextMenuRuntime.Invoke(Inner.Control, path, timeoutMs);
+        }
     }
 
     private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>, IReadableTextControl
@@ -1370,6 +1374,106 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public void Collapse() => Inner.Collapse();
     }
 
+    private static class HeadlessContextMenuRuntime
+    {
+        public static void Invoke(AvaloniaControl owner, IReadOnlyList<string> path, int timeoutMs)
+        {
+            var exactPath = MenuPathValue.Normalize(path);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "context-menu");
+            var ownerAutomationId = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
+                () => AutomationProperties.GetAutomationId(owner) ?? owner.Name ?? owner.GetType().Name);
+            UiWait.Until(
+                () => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
+                    () => owner.IsEffectivelyEnabled),
+                static enabled => enabled,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Context-menu owner '{ownerAutomationId}' did not become enabled.");
+
+            var contextMenu = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
+                () => owner.ContextMenu);
+            var menuFlyout = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
+                () => owner.ContextFlyout as global::Avalonia.Controls.MenuFlyout);
+            if (contextMenu is null && menuFlyout is null)
+            {
+                throw new InvalidOperationException(
+                    $"Control '{ownerAutomationId}' does not expose a ContextMenu or MenuFlyout.");
+            }
+
+            try
+            {
+                if (contextMenu is not null)
+                {
+                    AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    {
+                        contextMenu.Open(owner);
+                        owner.Dispatcher.RunJobs();
+                        return true;
+                    });
+                    WaitUntilOpen(
+                        () => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => contextMenu.IsOpen),
+                        budget);
+                    HeadlessMenuControl.InvokePath(
+                        () => WrapItems(contextMenu.Items),
+                        exactPath,
+                        budget);
+                    return;
+                }
+
+                AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                {
+                    menuFlyout!.ShowAt(owner);
+                    owner.Dispatcher.RunJobs();
+                    return true;
+                });
+                WaitUntilOpen(
+                    () => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => menuFlyout!.IsOpen),
+                    budget);
+                HeadlessMenuControl.InvokePath(
+                    () => WrapItems(menuFlyout!.Items),
+                    exactPath,
+                    budget);
+            }
+            finally
+            {
+                AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                {
+                    contextMenu?.Close();
+                    menuFlyout?.Hide();
+                    owner.Dispatcher.RunJobs();
+                    return true;
+                });
+            }
+        }
+
+        private static MenuItem[] WrapItems(IEnumerable items)
+        {
+            return items
+                .OfType<global::Avalonia.Controls.MenuItem>()
+                .Select(static item => new MenuItem(item))
+                .ToArray();
+        }
+
+        private static void WaitUntilOpen(
+            Func<bool> isOpen,
+            UiOperationTimeoutBudget budget)
+        {
+            UiWait.Until(
+                isOpen,
+                static open => open,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                "The owner's context menu did not open.");
+        }
+    }
+
     private sealed class HeadlessMenuControl : HeadlessControlBase<Menu>, IMenuControl
     {
         public HeadlessMenuControl(Menu inner) : base(inner)
@@ -1380,24 +1484,32 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         {
             var exactPath = MenuPathValue.Normalize(path);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            var stopwatch = Stopwatch.StartNew();
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu");
             UiWait.Until(
                 () => Inner.IsEnabled,
                 static enabled => enabled,
                 new UiWaitOptions
                 {
-                    Timeout = Remaining(stopwatch, timeoutMs),
+                    Timeout = budget.Remaining,
                     PollInterval = TimeSpan.FromMilliseconds(50)
                 },
                 $"Menu '{AutomationId}' did not become enabled.");
-            Func<MenuItem[]> currentItems = () => Inner.Items;
+            InvokePath(() => Inner.Items, exactPath, budget);
+        }
+
+        internal static void InvokePath(
+            Func<MenuItem[]> rootItems,
+            IReadOnlyList<string> exactPath,
+            UiOperationTimeoutBudget budget)
+        {
+            Func<MenuItem[]> currentItems = rootItems;
             var openedItems = new List<MenuItem>();
             try
             {
                 for (var index = 0; index < exactPath.Count; index++)
                 {
                     var caption = exactPath[index];
-                    var item = FindUniqueItem(currentItems, caption, Remaining(stopwatch, timeoutMs));
+                    var item = FindUniqueItem(currentItems, caption, budget.Remaining);
                     if (index == exactPath.Count - 1)
                     {
                         item.Invoke();
@@ -1415,7 +1527,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                         static expanded => expanded,
                         new UiWaitOptions
                         {
-                            Timeout = Remaining(stopwatch, timeoutMs),
+                            Timeout = budget.Remaining,
                             PollInterval = TimeSpan.FromMilliseconds(50)
                         },
                         $"Menu item '{caption}' did not open its submenu.");
@@ -1454,13 +1566,6 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                     $"Menu item caption '{caption}' is ambiguous among siblings ({matches.Length} matches).");
         }
 
-        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
-        {
-            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
-            return remaining > TimeSpan.Zero
-                ? remaining
-                : throw new TimeoutException("The menu operation exceeded its timeout.");
-        }
     }
 
     private sealed class HeadlessMenuItemControl : HeadlessControlBase<MenuItem>, IMenuItemControl
@@ -1471,7 +1576,16 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
         public void Invoke(int timeoutMs)
         {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu-item");
+            UiWait.Until(
+                () => Inner.IsEnabled,
+                static enabled => enabled,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{AutomationId}' did not become enabled.");
             Inner.Invoke();
         }
     }

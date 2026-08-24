@@ -83,6 +83,8 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("MainMenu", UiControlType.Menu, "MainMenu")]
 [UiControl("RefreshMenuItem", UiControlType.MenuItem, "RefreshMenuItem")]
 [UiControl("MenuStatusLabel", UiControlType.Label, "MenuStatusLabel")]
+[UiControl("ContextTarget", UiControlType.Button, "ContextTarget")]
+[UiControl("ContextMenuStatusLabel", UiControlType.Label, "ContextMenuStatusLabel")]
 [UiControl("ArmStatusFilter", UiControlType.ComboBoxFilter, "ArmStatusFilter")]
 [UiControl("ArmStatusFilterStatusLabel", UiControlType.Label, "ArmStatusFilterStatusLabel")]
 [UiControl("ArmEremexDataGridHost", UiControlType.AutomationElement, "ArmEremexDataGridHost")]

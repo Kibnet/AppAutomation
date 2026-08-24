@@ -495,6 +495,17 @@ public interface IMenuItemControl : IUiControl
 }
 
 /// <summary>
+/// Optional runtime capability implemented by controls that can own a context menu.
+/// </summary>
+public interface IContextMenuOwnerControl : IUiControl
+{
+    /// <summary>
+    /// Opens the owner's context menu and invokes one exact root-to-leaf item path.
+    /// </summary>
+    void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs);
+}
+
+/// <summary>
 /// Represents a slider control for selecting a value within a range.
 /// </summary>
 public interface ISliderControl : IUiControl

@@ -154,6 +154,65 @@ internal sealed class RecorderStepFactory
                 CanPersist: menuLocator.CanPersist));
     }
 
+    public StepCreationResult TryCreateContextMenuItemStep(
+        MenuItem? item,
+        Control? owner,
+        out bool belongsToOwner)
+    {
+        belongsToOwner = false;
+        if (item is null || owner is null)
+        {
+            return StepCreationResult.Unsupported(
+                "Recorder could not associate the context-menu item with a stable owner.");
+        }
+
+        var itemRoots = EnumerateContextMenuItemRoots(owner).ToArray();
+        foreach (var rootItems in itemRoots)
+        {
+            if (!TryFindMenuItemPath(rootItems, item, out var itemPath))
+            {
+                continue;
+            }
+
+            belongsToOwner = true;
+            if (!TryValidateMenuPath(rootItems, itemPath, out var path, out var pathError))
+            {
+                return StepCreationResult.Unsupported(pathError);
+            }
+
+            var ownerLocator = _selectorResolver.Resolve(owner, ClassifyControlType(owner));
+            if (!ownerLocator.Success || ownerLocator.Control is null)
+            {
+                return StepCreationResult.Unsupported(ownerLocator.Message);
+            }
+
+            return CreateStep(
+                item,
+                new RecordedStep(
+                    RecordedActionKind.InvokeContextMenuItem,
+                    ownerLocator.Control,
+                    StringValues: path,
+                    Warning: ownerLocator.Control.Warning,
+                    ValidationStatus: ownerLocator.ValidationStatus,
+                    ValidationMessage: ownerLocator.ValidationMessage,
+                    CanPersist: ownerLocator.CanPersist));
+        }
+
+        return StepCreationResult.Unsupported(
+            "The selected menu item does not belong to the pending context-menu owner.");
+    }
+
+    public bool BelongsToContextMenuOwner(MenuItem? item, Control? owner)
+    {
+        if (item is null || owner is null)
+        {
+            return false;
+        }
+
+        return EnumerateContextMenuItemRoots(owner)
+            .Any(rootItems => TryFindMenuItemPath(rootItems, item, out _));
+    }
+
     public StepCreationResult TryCreateTextEntryStep(TextBox textBox)
     {
         ArgumentNullException.ThrowIfNull(textBox);
@@ -231,7 +290,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("ComboBox does not have a selected item to record.");
         }
 
-        var locatorResult = _selectorResolver.Resolve(comboBox, UiControlType.ComboBox);
+        var locatorResult = _selectorResolver.ResolvePrimitiveSelection(comboBox, UiControlType.ComboBox);
         if (!locatorResult.Success || locatorResult.Control is null)
         {
             return StepCreationResult.Unsupported(locatorResult.Message);
@@ -1237,7 +1296,7 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("ListBox does not have a selected item to record.");
         }
 
-        var locatorResult = _selectorResolver.Resolve(listBox, UiControlType.ListBox);
+        var locatorResult = _selectorResolver.ResolvePrimitiveSelection(listBox, UiControlType.ListBox);
         if (!locatorResult.Success || locatorResult.Control is null)
         {
             return StepCreationResult.Unsupported(locatorResult.Message);
@@ -4229,6 +4288,80 @@ internal sealed class RecorderStepFactory
         }
 
         path = captions;
+        message = string.Empty;
+        return true;
+    }
+
+    private static IEnumerable<MenuItem[]> EnumerateContextMenuItemRoots(Control owner)
+    {
+        if (owner.ContextMenu is { } contextMenu)
+        {
+            yield return contextMenu.Items.OfType<MenuItem>().ToArray();
+        }
+
+        if (owner.ContextFlyout is MenuFlyout menuFlyout)
+        {
+            yield return menuFlyout.Items.OfType<MenuItem>().ToArray();
+        }
+    }
+
+    private static bool TryFindMenuItemPath(
+        IReadOnlyList<MenuItem> items,
+        MenuItem target,
+        out IReadOnlyList<MenuItem> path)
+    {
+        foreach (var item in items)
+        {
+            if (ReferenceEquals(item, target))
+            {
+                path = [item];
+                return true;
+            }
+
+            if (TryFindMenuItemPath(item.Items.OfType<MenuItem>().ToArray(), target, out var childPath))
+            {
+                path = new[] { item }.Concat(childPath).ToArray();
+                return true;
+            }
+        }
+
+        path = [];
+        return false;
+    }
+
+    private static bool TryValidateMenuPath(
+        IReadOnlyList<MenuItem> rootItems,
+        IReadOnlyList<MenuItem> itemPath,
+        out IReadOnlyList<string> captions,
+        out string message)
+    {
+        var values = new string[itemPath.Count];
+        IReadOnlyList<MenuItem> siblings = rootItems;
+        for (var index = 0; index < itemPath.Count; index++)
+        {
+            var caption = ReadMenuCaption(itemPath[index]);
+            if (string.IsNullOrWhiteSpace(caption))
+            {
+                captions = [];
+                message = "A context-menu item in the selected path does not expose visible caption text.";
+                return false;
+            }
+
+            var duplicateCount = siblings.Count(sibling =>
+                string.Equals(ReadMenuCaption(sibling), caption, StringComparison.Ordinal));
+            if (duplicateCount > 1)
+            {
+                captions = [];
+                message =
+                    $"Context-menu item caption '{caption}' is ambiguous among siblings ({duplicateCount} matches).";
+                return false;
+            }
+
+            values[index] = caption;
+            siblings = itemPath[index].Items.OfType<MenuItem>().ToArray();
+        }
+
+        captions = values;
         message = string.Empty;
         return true;
     }

@@ -106,6 +106,16 @@ public partial class ArmDesktopControl : UserControl
         MenuStatusLabel.Content = "Menu: refreshed";
     }
 
+    private void OnContextPinMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        ContextMenuStatusLabel.Content = "Context: pinned";
+    }
+
+    private void OnContextSummaryMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        ContextMenuStatusLabel.Content = "Context: summary exported";
+    }
+
     private void OnArmStatusFilterLoaded(object? sender, RoutedEventArgs e)
     {
         if (sender is PopupEditor popupEditor)

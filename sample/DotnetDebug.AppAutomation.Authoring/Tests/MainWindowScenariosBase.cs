@@ -430,6 +430,34 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task ContextMenuItems_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .InvokeContextMenuItem(p => p.ContextTarget, ["Pin"])
+            .WaitUntilNameEquals(p => p.ContextMenuStatusLabel, "Context: pinned")
+            .InvokeContextMenuItem(p => p.ContextTarget, ["Export", "Summary"])
+            .WaitUntilNameEquals(p => p.ContextMenuStatusLabel, "Context: summary exported");
+
+        await UiAssert.TextEqualsAsync(
+            () => Page.ContextMenuStatusLabel.Text,
+            "Context: summary exported");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DisabledContextMenuItem_IsRejected()
+    {
+        Page.SelectTabItem(p => p.ArmDesktopTabItem);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            Page.InvokeContextMenuItem(p => p.ContextTarget, ["Disabled action"]));
+
+        await Assert.That(exception.Message).Contains("disabled");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_GridActionsAndEditableCells_Work()
     {
         var firstRow = GridRowSelector.ByCell("Key", "ARM-01");

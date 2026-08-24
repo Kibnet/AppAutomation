@@ -161,32 +161,6 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task MenuItems_InvokeDirectLocatorAndNestedPath_AndRejectDisabledItem()
-    {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
-
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
-        var page = MainWindowFlaUiPageFactory.Create(session);
-        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
-
-        page
-            .InvokeMenuItem(static candidate => candidate.RefreshMenuItem)
-            .WaitUntilNameEquals(static candidate => candidate.MenuStatusLabel, "Menu: refreshed")
-            .InvokeMenuItem(static candidate => candidate.MainMenu, ["Actions", "Export", "Snapshot"])
-            .WaitUntilNameEquals(static candidate => candidate.MenuStatusLabel, "Menu: snapshot exported");
-
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            page.InvokeMenuItem(static candidate => candidate.MainMenu, ["Actions", "Disabled action"]));
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(page.MenuStatusLabel.Text).IsEqualTo("Menu: snapshot exported");
-            await Assert.That(exception.Message).Contains("disabled");
-        }
-    }
-
-    [Test]
-    [NotInParallel("DesktopUi")]
     public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();

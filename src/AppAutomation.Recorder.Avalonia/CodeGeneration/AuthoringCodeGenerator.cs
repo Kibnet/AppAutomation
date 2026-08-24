@@ -316,7 +316,8 @@ internal sealed class AuthoringCodeGenerator
 
     private static bool IsTypeAgnosticControlAction(RecordedActionKind actionKind)
     {
-        return actionKind == RecordedActionKind.WaitUntilExists;
+        return actionKind is RecordedActionKind.WaitUntilExists
+            or RecordedActionKind.InvokeContextMenuItem;
     }
 
     private static string CreateIncompatibleControlMessage(
@@ -1086,6 +1087,8 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.InvokeMenuItem when step.Control.ControlType == UiControlType.Menu =>
                 $"Page.InvokeMenuItem(static page => page.{propertyName}, {FormatOrderedStringValues(step.StringValues)});",
             RecordedActionKind.InvokeMenuItem => $"Page.InvokeMenuItem(static page => page.{propertyName});",
+            RecordedActionKind.InvokeContextMenuItem =>
+                $"Page.InvokeContextMenuItem(static page => page.{propertyName}, {FormatOrderedStringValues(step.StringValues)});",
             RecordedActionKind.WaitUntilIsChecked => $"Page.WaitUntilIsChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",

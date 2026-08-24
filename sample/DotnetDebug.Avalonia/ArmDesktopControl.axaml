@@ -108,7 +108,7 @@
               </Border>
             </StackPanel>
           </Grid>
-          <Grid ColumnDefinitions="Auto,*"
+          <Grid ColumnDefinitions="Auto,Auto,*"
                 ColumnSpacing="12">
             <StackPanel Grid.Column="0"
                         Orientation="Horizontal"
@@ -130,11 +130,34 @@
                 </MenuItem>
               </Menu>
             </StackPanel>
-            <Label x:Name="MenuStatusLabel"
-                   Grid.Column="1"
-                   VerticalAlignment="Center"
-                   Content="Menu idle"
-                   automation:AutomationProperties.AutomationId="MenuStatusLabel" />
+            <Button x:Name="ContextTarget"
+                    Grid.Column="1"
+                    Padding="10,4"
+                    Content="Context target"
+                    automation:AutomationProperties.AutomationId="ContextTarget">
+              <Button.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Pin"
+                            Click="OnContextPinMenuItemClick" />
+                  <MenuItem Header="_Export">
+                    <MenuItem Header="Summary"
+                              Click="OnContextSummaryMenuItemClick" />
+                  </MenuItem>
+                  <MenuItem Header="Disabled action"
+                            IsEnabled="False" />
+                </ContextMenu>
+              </Button.ContextMenu>
+            </Button>
+            <StackPanel Grid.Column="2"
+                        VerticalAlignment="Center"
+                        Spacing="2">
+              <Label x:Name="MenuStatusLabel"
+                     Content="Menu idle"
+                     automation:AutomationProperties.AutomationId="MenuStatusLabel" />
+              <Label x:Name="ContextMenuStatusLabel"
+                     Content="Context menu idle"
+                     automation:AutomationProperties.AutomationId="ContextMenuStatusLabel" />
+            </StackPanel>
           </Grid>
         </StackPanel>
       </Border>

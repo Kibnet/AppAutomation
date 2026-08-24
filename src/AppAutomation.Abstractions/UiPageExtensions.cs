@@ -354,6 +354,31 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Opens a control's context menu and invokes one exact root-to-leaf item path.
+    /// </summary>
+    public static TSelf InvokeContextMenuItem<TSelf, TControl>(
+        this TSelf page,
+        Expression<Func<TSelf, TControl>> selector,
+        IReadOnlyList<string> path,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+        where TControl : class, IUiControl
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var exactPath = MenuPathValue.Normalize(path);
+        var owner = Resolve(selector, page);
+        if (owner is not IContextMenuOwnerControl contextMenuOwner)
+        {
+            throw new NotSupportedException(
+                $"Runtime '{page.Capabilities.AdapterId}' does not expose context-menu invocation for " +
+                $"control '{owner.AutomationId}'.");
+        }
+
+        contextMenuOwner.InvokeContextMenuItem(exactPath, timeoutMs);
+        return page;
+    }
+
+    /// <summary>
     /// Invokes one leaf item through an exact root-to-leaf menu path.
     /// </summary>
     public static TSelf InvokeMenuItem<TSelf>(

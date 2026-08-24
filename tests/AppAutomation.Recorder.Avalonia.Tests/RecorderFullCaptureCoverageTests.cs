@@ -350,6 +350,7 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.SetExpanded, Descriptor("DetailsExpander", UiControlType.Expander), BoolValue: true),
             new RecordedStep(RecordedActionKind.SetColor, Descriptor("AccentColor", UiControlType.ColorPicker), StringValue: "#FF336699"),
             new RecordedStep(RecordedActionKind.InvokeMenuItem, Descriptor("MainMenu", UiControlType.Menu), StringValues: ["Actions", "Export"]),
+            new RecordedStep(RecordedActionKind.InvokeContextMenuItem, Descriptor("ItemSurface", UiControlType.AutomationElement), StringValues: ["Actions", "Pin"]),
             new RecordedStep(RecordedActionKind.WaitUntilTextEquals, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
             new RecordedStep(RecordedActionKind.WaitUntilTextContains, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
             new RecordedStep(RecordedActionKind.WaitUntilValueEquals, Descriptor("CountSpinner", UiControlType.Spinner), DoubleValue: 7),

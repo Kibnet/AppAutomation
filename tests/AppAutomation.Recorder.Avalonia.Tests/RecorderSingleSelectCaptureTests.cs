@@ -140,4 +140,24 @@ public sealed class RecorderSingleSelectCaptureTests
                 .Contains("Page.SelectComboItem(static page => page.StandardCategoryCombo, \"Search result\");");
         }
     }
+
+    [Test]
+    public async Task InvalidSemanticHint_LogsFailureAndKeepsPrimitiveSelection()
+    {
+        var logger = new RecorderCaptureTestLogger();
+        using var recorder = SingleSelectCaptureFixture.CreateInvalidSemanticComboBox(logger);
+
+        recorder.Start();
+        recorder.Select("Search result");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(recorder.Session.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(recorder.OnlyStep.Preview)
+                .Contains("Page.SelectComboItem(static page => page.StandardCategoryCombo, \"Search result\");");
+            await Assert.That(logger.Entries.Any(static entry =>
+                entry.EventId.Id == RecorderDiagnosticsEventIds.CaptureFailed.Id
+                && entry.Message.Contains("could not be re-resolved", StringComparison.OrdinalIgnoreCase))).IsTrue();
+        }
+    }
 }

@@ -66,7 +66,8 @@ public enum RecordedActionKind
     SetColor = 58,
     WaitUntilColorEquals = 59,
     EditGridCellColor = 60,
-    InvokeMenuItem = 61
+    InvokeMenuItem = 61,
+    InvokeContextMenuItem = 62
 }
 
 public enum RecorderAssertionMode

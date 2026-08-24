@@ -35,6 +35,35 @@ public sealed class MenuControlTests
         await Assert.That(resolver.LastPath).IsNull();
     }
 
+    [Test]
+    public async Task InvokeContextMenuItem_UsesOwnerAndExactPath()
+    {
+        var resolver = new MenuResolver();
+        var page = new MenuPage(resolver);
+
+        page.InvokeContextMenuItem(
+            static candidate => candidate.ContextOwner,
+            ["Actions", "Pin"],
+            timeoutMs: 2400);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolver.ContextTimeoutMs).IsEqualTo(2400);
+            await Assert.That(resolver.ContextPath).IsEquivalentTo(["Actions", "Pin"]);
+        }
+    }
+
+    [Test]
+    public async Task InvokeContextMenuItem_RejectsEmptyPathBeforeRuntimeMutation()
+    {
+        var resolver = new MenuResolver();
+        var page = new MenuPage(resolver);
+
+        await Assert.That(() => page.InvokeContextMenuItem(static candidate => candidate.ContextOwner, []))
+            .Throws<ArgumentException>();
+        await Assert.That(resolver.ContextPath).IsNull();
+    }
+
     private sealed class MenuPage : UiPage
     {
         private static readonly UiControlDefinition MenuDefinition = new(
@@ -47,6 +76,11 @@ public sealed class MenuControlTests
             UiControlType.MenuItem,
             "RefreshItem");
 
+        private static readonly UiControlDefinition ContextOwnerDefinition = new(
+            "ItemSurface",
+            UiControlType.Button,
+            "ItemSurface");
+
         public MenuPage(IUiControlResolver resolver)
             : base(resolver)
         {
@@ -55,17 +89,21 @@ public sealed class MenuControlTests
         public IMenuControl MainMenu => Resolve<IMenuControl>(MenuDefinition);
 
         public IMenuItemControl RefreshItem => Resolve<IMenuItemControl>(ItemDefinition);
+
+        public IButtonControl ContextOwner => Resolve<IButtonControl>(ContextOwnerDefinition);
     }
 
     private sealed class MenuResolver : IUiControlResolver
     {
         private readonly FakeMenu _menu;
         private readonly FakeMenuItem _item;
+        private readonly FakeContextOwner _contextOwner;
 
         public MenuResolver()
         {
             _menu = new FakeMenu(this);
             _item = new FakeMenuItem(this);
+            _contextOwner = new FakeContextOwner(this);
         }
 
         public int DirectInvocations { get; private set; }
@@ -76,6 +114,10 @@ public sealed class MenuControlTests
 
         public IReadOnlyList<string>? LastPath { get; private set; }
 
+        public int ContextTimeoutMs { get; private set; }
+
+        public IReadOnlyList<string>? ContextPath { get; private set; }
+
         public UiRuntimeCapabilities Capabilities { get; } = new("menu-test");
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
@@ -85,6 +127,7 @@ public sealed class MenuControlTests
             {
                 UiControlType.Menu => _menu,
                 UiControlType.MenuItem => _item,
+                UiControlType.Button => _contextOwner,
                 _ => throw new InvalidOperationException($"Unexpected type '{definition.ControlType}'.")
             };
             return (TControl)control;
@@ -117,6 +160,23 @@ public sealed class MenuControlTests
             {
                 owner.DirectInvocations++;
                 owner.DirectTimeoutMs = timeoutMs;
+            }
+        }
+
+        private sealed class FakeContextOwner(MenuResolver owner) : IButtonControl, IContextMenuOwnerControl
+        {
+            public string AutomationId => "ItemSurface";
+
+            public string Name => "Item surface";
+
+            public bool IsEnabled => true;
+
+            public void Invoke() => throw new InvalidOperationException("Button invocation was not expected.");
+
+            public void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs)
+            {
+                owner.ContextPath = path.ToArray();
+                owner.ContextTimeoutMs = timeoutMs;
             }
         }
     }

@@ -108,6 +108,32 @@ internal sealed class SingleSelectCaptureFixture : IDisposable
             CreateOptions());
     }
 
+    public static SingleSelectCaptureFixture CreateInvalidSemanticComboBox(RecorderCaptureTestLogger logger)
+    {
+        var root = new Grid();
+        var results = CreateControl<ComboBox>("StandardCategoryCombo");
+        results.ItemsSource = new[] { "Item 42", "Search result" };
+        root.Children.Add(results);
+
+        var options = new AppAutomationRecorderOptions
+        {
+            ShowOverlay = false,
+            Logger = logger,
+            DiagnosticLog = new RecorderDiagnosticLogOptions { WriteToFile = false }
+        };
+        options.SingleSelectHints.Add(new RecorderSingleSelectHint(
+            "CategorySelector",
+            SingleSelectParts.ByAutomationIds("CategorySelector", "StandardCategoryCombo")));
+        return CreateSession(
+            root,
+            results,
+            input: null,
+            confirmButton: null,
+            cancelButton: null,
+            unrelatedButton: null,
+            options);
+    }
+
     public void Start() => Session.Start();
 
     public void Type(string text)

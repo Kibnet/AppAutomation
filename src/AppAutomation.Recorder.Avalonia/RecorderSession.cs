@@ -64,6 +64,7 @@ internal sealed class RecorderSession :
     private StepCreationResult? _pendingColorPickerStep;
     private RecorderColorPickerHint? _pendingColorPickerHint;
     private Control? _pendingColorPickerSource;
+    private Control? _pendingContextMenuOwner;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
@@ -607,6 +608,29 @@ internal sealed class RecorderSession :
         RegisterPointerInput(ResolveInteractionOwner(source));
     }
 
+    internal void RegisterContextMenuOwnerForTesting(Control owner, bool keyboard = false)
+    {
+        _pendingContextMenuOwner = FindContextMenuOwner(owner);
+        if (keyboard)
+        {
+            RegisterKeyboardInput(owner);
+        }
+        else
+        {
+            RegisterPointerInput(owner);
+        }
+    }
+
+    internal void CancelContextMenuForTesting()
+    {
+        _pendingContextMenuOwner = null;
+    }
+
+    internal void RegisterContextMenuItemPointerForTesting(Control source)
+    {
+        DiscardPendingContextMenuOwnerIfSwitchingTo(source);
+    }
+
     internal void FlushPendingStateForTesting()
     {
         FlushPendingState();
@@ -939,6 +963,16 @@ internal sealed class RecorderSession :
             {
                 CollectObservableControls(detachedRoot, controls, visited);
             }
+
+            if (control.ContextMenu is { } contextMenu)
+            {
+                CollectMenuItems(contextMenu.Items.OfType<MenuItem>(), controls, visited);
+            }
+
+            if (control.ContextFlyout is MenuFlyout menuFlyout)
+            {
+                CollectMenuItems(menuFlyout.Items.OfType<MenuItem>(), controls, visited);
+            }
         }
 
         foreach (var menuItem in root.GetLogicalDescendants().OfType<MenuItem>())
@@ -1076,19 +1110,32 @@ internal sealed class RecorderSession :
             return;
         }
 
-        DiscardPendingTimePickerIfSwitchingTo(e.Source as Control);
-        DiscardPendingSingleSelectIfSwitchingTo(e.Source as Control);
-        DiscardPendingColorPickerIfSwitchingTo(e.Source as Control);
-        CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(e.Source as Control));
-        var control = ResolveInteractionOwner(e.Source as Control);
+        var source = e.Source as Control;
+        var control = ResolveInteractionOwner(source);
+        var isRightButtonPressed = e.GetCurrentPoint(_inputRoot ?? _window).Properties.IsRightButtonPressed;
+        if (isRightButtonPressed)
+        {
+            _pendingContextMenuOwner = FindContextMenuOwner(source);
+            FlushPendingTextIfSwitchingTo(_pendingContextMenuOwner);
+            FlushPendingSliderIfSwitchingTo(_pendingContextMenuOwner);
+            FlushPendingSpinnerIfSwitchingTo(_pendingContextMenuOwner);
+            RegisterPointerInput(_pendingContextMenuOwner ?? control);
+            return;
+        }
+
+        DiscardPendingContextMenuOwnerIfSwitchingTo(source);
+        DiscardPendingTimePickerIfSwitchingTo(source);
+        DiscardPendingSingleSelectIfSwitchingTo(source);
+        DiscardPendingColorPickerIfSwitchingTo(source);
+        CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(source));
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
         RegisterPointerInput(control);
 
-        if (FindAncestorOrSelf<Button>(e.Source as Control) is null)
+        if (FindAncestorOrSelf<Button>(source) is null)
         {
-            TryRecordGridAction(e.Source as Control ?? control);
+            TryRecordGridAction(source ?? control);
         }
     }
 
@@ -1138,6 +1185,18 @@ internal sealed class RecorderSession :
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
+            if (e.Key == Key.Escape)
+            {
+                _pendingContextMenuOwner = null;
+            }
+            else if (e.Key == Key.Apps
+                     || (e.Key == Key.F10 && e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
+            {
+                _pendingContextMenuOwner = FindContextMenuOwner(focused);
+                RegisterKeyboardInput(_pendingContextMenuOwner ?? focused);
+                return;
+            }
+
             DiscardPendingTimePickerIfSwitchingTo(focused);
             DiscardPendingSingleSelectIfSwitchingTo(focused);
             DiscardPendingColorPickerIfSwitchingTo(focused);
@@ -1312,7 +1371,22 @@ internal sealed class RecorderSession :
         }
 
         _lastMenuItemClickEvent = e;
+        var contextMenuOwner = _pendingContextMenuOwner;
+        _pendingContextMenuOwner = null;
         FlushPendingState();
+        if (contextMenuOwner is not null)
+        {
+            var contextResult = _stepFactory.TryCreateContextMenuItemStep(
+                item,
+                contextMenuOwner,
+                out var belongsToOwner);
+            if (belongsToOwner)
+            {
+                AddStep(contextResult, item, "ContextMenuItemClick");
+                return;
+            }
+        }
+
         AddStep(_stepFactory.TryCreateMenuItemStep(item), item, "MenuItemClick");
     }
 
@@ -2468,6 +2542,7 @@ internal sealed class RecorderSession :
         DiscardPendingTimePicker();
         DiscardPendingSingleSelect();
         DiscardPendingColorPicker();
+        _pendingContextMenuOwner = null;
     }
 
     private bool TryHandleTimePickerButton(Control? source)
@@ -2860,6 +2935,24 @@ internal sealed class RecorderSession :
         }
 
         return control;
+    }
+
+    private static Control? FindContextMenuOwner(Control? control)
+    {
+        return EnumerateRelatedControls(control)
+            .FirstOrDefault(static candidate =>
+                candidate.ContextMenu is not null
+                || candidate.ContextFlyout is MenuFlyout);
+    }
+
+    private void DiscardPendingContextMenuOwnerIfSwitchingTo(Control? source)
+    {
+        var contextMenuItem = FindAncestorOrSelf<MenuItem>(source);
+        if (contextMenuItem is null
+            || !_stepFactory.BelongsToContextMenuOwner(contextMenuItem, _pendingContextMenuOwner))
+        {
+            _pendingContextMenuOwner = null;
+        }
     }
 
     private static Control? ResolveButtonActionOwner(Control? control)

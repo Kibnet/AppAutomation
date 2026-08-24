@@ -11,12 +11,22 @@ internal sealed class MenuCaptureFixture : IDisposable
         RecorderSession session,
         MenuItem parent,
         MenuItem nestedLeaf,
-        MenuItem directLeaf)
+        MenuItem directLeaf,
+        Button primaryOwner,
+        Button secondaryOwner,
+        MenuItem primaryContextLeaf,
+        MenuItem nestedContextLeaf,
+        MenuItem secondaryContextLeaf)
     {
         Session = session;
         Parent = parent;
         NestedLeaf = nestedLeaf;
         DirectLeaf = directLeaf;
+        PrimaryOwner = primaryOwner;
+        SecondaryOwner = secondaryOwner;
+        PrimaryContextLeaf = primaryContextLeaf;
+        NestedContextLeaf = nestedContextLeaf;
+        SecondaryContextLeaf = secondaryContextLeaf;
     }
 
     public RecorderSession Session { get; }
@@ -27,9 +37,21 @@ internal sealed class MenuCaptureFixture : IDisposable
 
     public MenuItem DirectLeaf { get; }
 
+    public Button PrimaryOwner { get; }
+
+    public Button SecondaryOwner { get; }
+
+    public MenuItem PrimaryContextLeaf { get; }
+
+    public MenuItem NestedContextLeaf { get; }
+
+    public MenuItem SecondaryContextLeaf { get; }
+
     public RecorderStepJournalEntry OnlyStep => Session.StepJournal.Single();
 
-    public static MenuCaptureFixture Create(bool duplicateNestedLeaf = false)
+    public static MenuCaptureFixture Create(
+        bool duplicateMenuLeaf = false,
+        bool duplicateContextLeaf = false)
     {
         var root = new StackPanel();
         var menu = new Menu();
@@ -37,20 +59,33 @@ internal sealed class MenuCaptureFixture : IDisposable
 
         var actions = new MenuItem { Header = "_Actions" };
         var export = new MenuItem { Header = "_Export" };
-        var snapshot = new MenuItem { Header = "Snapshot" };
+        var snapshot = new MenuItem { Header = new TextBlock { Text = "Snapshot" } };
         AutomationProperties.SetAutomationId(snapshot, "SnapshotMenuItem");
-        export.Items.Add(snapshot);
-        if (duplicateNestedLeaf)
-        {
-            export.Items.Add(new MenuItem { Header = "Snapshot" });
-        }
-
-        actions.Items.Add(export);
+        SetItems(
+            export,
+            duplicateMenuLeaf
+                ? new[] { snapshot, new MenuItem { Header = "Snapshot" } }
+                : new[] { snapshot });
+        SetItems(actions, export);
         var refresh = new MenuItem { Header = "Refresh" };
         AutomationProperties.SetAutomationId(refresh, "RefreshMenuItem");
-        menu.Items.Add(actions);
-        menu.Items.Add(refresh);
+        SetItems(menu, actions, refresh);
         root.Children.Add(menu);
+
+        var primaryContextLeaf = new MenuItem { Header = "Pin" };
+        var nestedContextLeaf = new MenuItem { Header = "Summary" };
+        var contextExport = new MenuItem { Header = "Export" };
+        SetItems(
+            contextExport,
+            duplicateContextLeaf
+                ? new[] { nestedContextLeaf, new MenuItem { Header = "Summary" } }
+                : new[] { nestedContextLeaf });
+
+        var primaryOwner = CreateOwner("ItemSurface", primaryContextLeaf, contextExport);
+        var secondaryContextLeaf = new MenuItem { Header = "Pin" };
+        var secondaryOwner = CreateOwner("SecondarySurface", secondaryContextLeaf);
+        root.Children.Add(primaryOwner);
+        root.Children.Add(secondaryOwner);
 
         var options = new AppAutomationRecorderOptions
         {
@@ -63,12 +98,21 @@ internal sealed class MenuCaptureFixture : IDisposable
             () => root,
             attachWindowHandlers: false);
         session.AttachInputHandlersForTesting();
-        return new MenuCaptureFixture(session, actions, snapshot, refresh);
+        return new MenuCaptureFixture(
+            session,
+            actions,
+            snapshot,
+            refresh,
+            primaryOwner,
+            secondaryOwner,
+            primaryContextLeaf,
+            nestedContextLeaf,
+            secondaryContextLeaf);
     }
 
     public void Start() => Session.Start();
 
-    public void Invoke(MenuItem item, bool keyboard = false)
+    public void InvokeMenuItem(MenuItem item, bool keyboard = false)
     {
         if (keyboard)
         {
@@ -82,5 +126,41 @@ internal sealed class MenuCaptureFixture : IDisposable
         item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, item));
     }
 
+    public void InvokeContextMenuItem(Button owner, MenuItem item, bool keyboard = false)
+    {
+        Session.RegisterContextMenuOwnerForTesting(owner, keyboard);
+        if (!keyboard)
+        {
+            Session.RegisterContextMenuItemPointerForTesting(item);
+        }
+
+        item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, item));
+    }
+
+    public void CancelContextMenu(Button owner)
+    {
+        Session.RegisterContextMenuOwnerForTesting(owner);
+        Session.CancelContextMenuForTesting();
+    }
+
     public void Dispose() => Session.Dispose();
+
+    private static Button CreateOwner(string automationId, params MenuItem[] items)
+    {
+        var owner = new Button { Content = automationId };
+        AutomationProperties.SetAutomationId(owner, automationId);
+        owner.ContextMenu = new ContextMenu();
+        SetItems(owner.ContextMenu, items);
+
+        return owner;
+    }
+
+    private static void SetItems(ItemsControl owner, params MenuItem[] items)
+    {
+        owner.ItemsSource = items;
+        foreach (var item in items)
+        {
+            ((ISetLogicalParent)item).SetParent(owner);
+        }
+    }
 }

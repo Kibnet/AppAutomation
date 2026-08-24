@@ -130,6 +130,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetColor => ValidateControlType(step, target, UiControlType.ColorPicker)
                 .Concat(RequireColor(step, target)),
             RecordedActionKind.InvokeMenuItem => ValidateMenuItemInvocation(step, target),
+            RecordedActionKind.InvokeContextMenuItem => ValidateContextMenuInvocation(step, target),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
@@ -439,6 +440,20 @@ internal sealed class RecorderCommandRuntimeValidator
                 target,
                 "payload-unexpected-menu-path",
                 "A directly addressable menu item must not include a menu path payload.");
+        }
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateContextMenuInvocation(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        var path = step.StringValues ?? [];
+        if (path.Count == 0 || path.Any(string.IsNullOrWhiteSpace))
+        {
+            yield return Invalid(
+                target,
+                "payload-invalid-context-menu-path",
+                "Context-menu invocation requires a non-empty exact root-to-leaf caption path.");
         }
     }
 

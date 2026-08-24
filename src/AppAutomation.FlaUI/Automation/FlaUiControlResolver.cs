@@ -666,7 +666,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private abstract class FlaUiControlBase<TControl> : IUiControlAvailability
+    private abstract class FlaUiControlBase<TControl> : IUiControlAvailability, IContextMenuOwnerControl
         where TControl : AutomationElement
     {
         protected FlaUiControlBase(TControl inner)
@@ -683,6 +683,11 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public bool IsEnabled => TryRead(() => Inner.IsEnabled);
 
         public bool IsAvailable => TryRead(() => Inner.IsAvailable && !Inner.IsOffscreen);
+
+        public void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs)
+        {
+            FlaUiContextMenuRuntime.Invoke(Inner, path, timeoutMs);
+        }
 
         protected static TResult? TryRead<TResult>(Func<TResult> accessor)
         {
@@ -2423,6 +2428,118 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
+    private static class FlaUiContextMenuRuntime
+    {
+        public static void Invoke(AutomationElement owner, IReadOnlyList<string> path, int timeoutMs)
+        {
+            var exactPath = MenuPathValue.Normalize(path);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "context-menu");
+            UiWait.Until(
+                () => FlaUiMenuControl.IsInteractable(owner),
+                static ready => ready,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Context-menu owner '{TryRead(() => owner.AutomationId)}' did not become visible and enabled.");
+
+            var visibleBefore = FindVisibleMenuItems(owner)
+                .Select(GetAutomationElementIdentity)
+                .ToHashSet(StringComparer.Ordinal);
+            owner.Focus();
+            owner.RightClick();
+
+            var popupItems = UiWait.Until(
+                () => FindVisibleMenuItems(owner)
+                    .Where(candidate => !visibleBefore.Contains(GetAutomationElementIdentity(candidate)))
+                    .ToArray(),
+                static candidates => candidates.Length > 0,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Control '{TryRead(() => owner.AutomationId)}' did not open an addressable context menu.");
+
+            var popupItemIdentities = popupItems
+                .Select(GetAutomationElementIdentity)
+                .ToHashSet(StringComparer.Ordinal);
+            var rootItems = popupItems
+                .Where(static candidate => !string.IsNullOrWhiteSpace(TryRead(() => candidate.Name)))
+                .Where(candidate => !HasCaptionedPopupAncestor(candidate, popupItemIdentities))
+                .Select(static candidate => candidate.AsMenuItem())
+                .ToArray();
+            var popupRoots = rootItems
+                .Select(static item => TryRead(() => item.Parent))
+                .Where(static parent => parent is not null)
+                .Select(static parent => GetAutomationElementIdentity(parent!))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (rootItems.Length == 0 || popupRoots.Length != 1)
+            {
+                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                throw new InvalidOperationException(
+                    $"Context-menu owner '{TryRead(() => owner.AutomationId)}' opened an ambiguous popup.");
+            }
+
+            try
+            {
+                FlaUiMenuControl.InvokePath(
+                    () => rootItems,
+                    exactPath,
+                    budget,
+                    rootIsPopup: true);
+            }
+            catch
+            {
+                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                throw;
+            }
+        }
+
+        private static AutomationElement[] FindVisibleMenuItems(AutomationElement owner)
+        {
+            var processId = TryRead(() => owner.FrameworkAutomationElement.ProcessId.ValueOrDefault);
+            var desktop = TryRead(() => owner.Automation.GetDesktop());
+            if (processId <= 0 || desktop is null)
+            {
+                return [];
+            }
+
+            var roots = TryRead(() => desktop.FindAllChildren(factory => factory.ByProcessId(processId))) ?? [];
+            return roots
+                .SelectMany(static root =>
+                    (TryRead(() => root.FindAllDescendants()) ?? []).Prepend(root))
+                .Where(static candidate => candidate.ControlType == ControlType.MenuItem)
+                .Where(static candidate =>
+                    TryRead(() => candidate.IsAvailable)
+                    && TryRead(() => candidate.BoundingRectangle) is { Width: > 0, Height: > 0 })
+                .DistinctBy(GetAutomationElementIdentity)
+                .ToArray();
+        }
+
+        private static bool HasCaptionedPopupAncestor(
+            AutomationElement candidate,
+            HashSet<string> popupItemIdentities)
+        {
+            for (var parent = TryRead(() => candidate.Parent);
+                 parent is not null
+                 && parent.ControlType == ControlType.MenuItem
+                 && popupItemIdentities.Contains(GetAutomationElementIdentity(parent));
+                 parent = TryRead(() => parent.Parent))
+            {
+                if (!string.IsNullOrWhiteSpace(TryRead(() => parent.Name)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     private sealed class FlaUiMenuControl : FlaUiControlBase<Menu>, IMenuControl
     {
         public FlaUiMenuControl(Menu inner) : base(inner)
@@ -2433,26 +2550,39 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
             var exactPath = MenuPathValue.Normalize(path);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            var stopwatch = Stopwatch.StartNew();
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu");
             UiWait.Until(
                 () => TryRead(() => Inner.IsEnabled),
                 static enabled => enabled,
                 new UiWaitOptions
                 {
-                    Timeout = Remaining(stopwatch, timeoutMs),
+                    Timeout = budget.Remaining,
                     PollInterval = TimeSpan.FromMilliseconds(50)
                 },
                 $"Menu '{AutomationId}' did not become enabled.");
-            Func<MenuItem[]> currentItems = () => Inner.Items.ToArray();
+            InvokePath(
+                () => Inner.Items.ToArray(),
+                exactPath,
+                budget,
+                rootIsPopup: false);
+        }
+
+        internal static void InvokePath(
+            Func<MenuItem[]> rootItems,
+            IReadOnlyList<string> exactPath,
+            UiOperationTimeoutBudget budget,
+            bool rootIsPopup)
+        {
+            Func<MenuItem[]> currentItems = rootItems;
             var openedItems = new List<MenuItem>();
             try
             {
                 for (var index = 0; index < exactPath.Count; index++)
                 {
-                    var item = FindUniqueItem(currentItems, exactPath[index], Remaining(stopwatch, timeoutMs));
+                    var item = FindUniqueItem(currentItems, exactPath[index], budget.Remaining);
                     if (index == exactPath.Count - 1)
                     {
-                        InvokeLeaf(item, Remaining(stopwatch, timeoutMs), index > 0);
+                        InvokeLeaf(item, budget.Remaining, rootIsPopup || index > 0);
                         return;
                     }
 
@@ -2461,7 +2591,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                         throw new InvalidOperationException($"Menu item '{exactPath[index]}' is disabled.");
                     }
 
-                    var childItems = ExpandAndReadChildItems(item, Remaining(stopwatch, timeoutMs));
+                    var childItems = ExpandAndReadChildItems(item, budget.Remaining);
                     openedItems.Add(item);
                     currentItems = () => childItems;
                 }
@@ -2499,7 +2629,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
             var matches = UiWait.Until(
                 () => itemSource()
-                    .Where(item => string.Equals(item.Text, caption, StringComparison.Ordinal))
+                    .Where(item => string.Equals(
+                        ReadVisibleCaption(item),
+                        caption,
+                        StringComparison.Ordinal))
                     .ToArray(),
                 static candidates => candidates.Length > 0,
                 new UiWaitOptions
@@ -2543,6 +2676,17 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             {
                 item.Click();
             }
+        }
+
+        private static string ReadVisibleCaption(MenuItem item)
+        {
+            var descendantCaption = (TryRead(() => item.FindAllDescendants()) ?? [])
+                .Where(static candidate => candidate.ControlType == ControlType.Text)
+                .Select(static candidate => TryRead(() => candidate.Name))
+                .FirstOrDefault(static text => !string.IsNullOrWhiteSpace(text));
+            return !string.IsNullOrWhiteSpace(descendantCaption)
+                ? descendantCaption.Trim()
+                : (TryRead(() => item.Text) ?? string.Empty).Trim();
         }
 
         internal static bool HasSubmenu(MenuItem item)
@@ -2609,19 +2753,20 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return IsVisible(item) && TryRead(() => item.IsEnabled);
         }
 
+        internal static bool IsInteractable(AutomationElement element)
+        {
+            return TryRead(() => element.IsAvailable)
+                && TryRead(() => element.IsEnabled)
+                && !TryRead(() => element.IsOffscreen)
+                && TryRead(() => element.BoundingRectangle) is { Width: > 0, Height: > 0 };
+        }
+
         internal static bool IsVisible(MenuItem item)
         {
             return TryRead(() => item.IsAvailable)
                 && TryRead(() => item.BoundingRectangle) is { Width: > 0, Height: > 0 };
         }
 
-        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
-        {
-            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
-            return remaining > TimeSpan.Zero
-                ? remaining
-                : throw new TimeoutException("The menu operation exceeded its timeout.");
-        }
     }
 
     private sealed class FlaUiMenuItemControl : IMenuItemControl
@@ -2650,13 +2795,13 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         public void Invoke(int timeoutMs)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            var stopwatch = Stopwatch.StartNew();
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu-item");
             var item = UiWait.Until(
                 FindVisibleMatches,
                 static matches => matches.Length > 0,
                 new UiWaitOptions
                 {
-                    Timeout = Remaining(stopwatch, timeoutMs),
+                    Timeout = budget.Remaining,
                     PollInterval = TimeSpan.FromMilliseconds(50)
                 },
                 $"Direct menu item with locator [{_definition.LocatorKind}:{_definition.LocatorValue}] " +
@@ -2678,7 +2823,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 throw new InvalidOperationException($"Menu item '{target.Text}' is not a leaf item.");
             }
 
-            FlaUiMenuControl.WaitUntilVisible(target, Remaining(stopwatch, timeoutMs));
+            FlaUiMenuControl.WaitUntilVisible(target, budget.Remaining);
             var waitForPopupClose = HasMenuItemAncestor(target);
             if (waitForPopupClose)
             {
@@ -2686,14 +2831,15 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
             else
             {
-                target.Focus();
-                Keyboard.Press(VirtualKeyShort.RETURN);
-                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                FocusContainingWindow(target);
+                TryFocus(target);
+                MoveMouseImmediatelyTo(target);
+                Mouse.LeftClick();
             }
 
             if (waitForPopupClose)
             {
-                FlaUiMenuControl.WaitForPopupClose(target, Remaining(stopwatch, timeoutMs));
+                FlaUiMenuControl.WaitForPopupClose(target, budget.Remaining);
             }
         }
 
@@ -2746,13 +2892,21 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return false;
         }
 
-        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
+        private static void FocusContainingWindow(AutomationElement item)
         {
-            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
-            return remaining > TimeSpan.Zero
-                ? remaining
-                : throw new TimeoutException("The menu-item operation exceeded its timeout.");
+            for (var current = TryRead(() => item.Parent); current is not null; current = TryRead(() => current.Parent))
+            {
+                if (current.ControlType != ControlType.Window)
+                {
+                    continue;
+                }
+
+                TryFocus(current);
+                Thread.Sleep(50);
+                return;
+            }
         }
+
     }
 
     private sealed class FlaUiSpinnerControl : FlaUiControlBase<Spinner>, ISpinnerControl

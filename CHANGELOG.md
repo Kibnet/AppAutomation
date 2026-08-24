@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add semantic Expander recording, expanded-state assertions, and idempotent Headless/FlaUI replay.
 - Add provider-neutral popup color recording, canonical ARGB assertions, and shared standalone/grid replay.
 - Add semantic menu-item recording with stable direct locators or exact nested paths and shared Headless/FlaUI invocation.
+- Add owner-scoped context-menu recording and exact-path Headless/FlaUI invocation without persisting popup primitives.
 
 ### Fixed
 

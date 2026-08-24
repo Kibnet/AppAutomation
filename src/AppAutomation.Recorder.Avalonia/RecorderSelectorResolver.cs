@@ -35,6 +35,19 @@ internal sealed class RecorderSelectorResolver
 
     public ResolvedControlResult Resolve(Control? source, UiControlType controlType)
     {
+        return Resolve(source, controlType, includeSingleSelectAlias: true);
+    }
+
+    internal ResolvedControlResult ResolvePrimitiveSelection(Control? source, UiControlType controlType)
+    {
+        return Resolve(source, controlType, includeSingleSelectAlias: false);
+    }
+
+    private ResolvedControlResult Resolve(
+        Control? source,
+        UiControlType controlType,
+        bool includeSingleSelectAlias)
+    {
         if (source is null)
         {
             return ResolvedControlResult.Unsupported("Event source control was not found.");
@@ -52,7 +65,13 @@ internal sealed class RecorderSelectorResolver
             var automationId = AutomationProperties.GetAutomationId(current);
             if (!string.IsNullOrWhiteSpace(automationId))
             {
-                return CreateResolvedControl(current, controlType, automationId.Trim(), UiLocatorKind.AutomationId, warning: null);
+                return CreateResolvedControl(
+                    current,
+                    controlType,
+                    automationId.Trim(),
+                    UiLocatorKind.AutomationId,
+                    warning: null,
+                    includeSingleSelectAlias);
             }
 
             if (nameFallback is null && _options.AllowNameLocators && TryGetNameLocator(current, out _))
@@ -68,7 +87,8 @@ internal sealed class RecorderSelectorResolver
                 controlType,
                 locatorName,
                 UiLocatorKind.Name,
-                warning: "Using Name locator; prefer AutomationId for long-term stability.");
+                warning: "Using Name locator; prefer AutomationId for long-term stability.",
+                includeSingleSelectAlias);
         }
 
         return ResolvedControlResult.Unsupported(
@@ -82,9 +102,10 @@ internal sealed class RecorderSelectorResolver
         UiControlType controlType,
         string locatorValue,
         UiLocatorKind locatorKind,
-        string? warning)
+        string? warning,
+        bool includeSingleSelectAlias = true)
     {
-        if (TryResolveLocatorAlias(locatorValue, locatorKind, out var alias))
+        if (TryResolveLocatorAlias(locatorValue, locatorKind, includeSingleSelectAlias, out var alias))
         {
             return CreateAliasedResolvedControl(control, locatorValue, locatorKind, warning, alias);
         }
@@ -344,12 +365,60 @@ internal sealed class RecorderSelectorResolver
         IEnumerable<Control> candidates = root.GetVisualDescendants().OfType<Control>().Prepend(root);
         if (includeLogicalDescendants)
         {
-            candidates = candidates.Concat(root.GetLogicalDescendants().OfType<Control>()).Distinct();
+            var attachedControls = candidates
+                .Concat(root.GetLogicalDescendants().OfType<Control>())
+                .Distinct()
+                .ToArray();
+            candidates = attachedControls
+                .Concat(EnumerateDetachedMenuItems(attachedControls))
+                .Distinct();
         }
 
         return candidates
             .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
             .ToArray();
+    }
+
+    private static IEnumerable<MenuItem> EnumerateDetachedMenuItems(IEnumerable<Control> controls)
+    {
+        foreach (var control in controls)
+        {
+            if (control is Menu menu)
+            {
+                foreach (var item in EnumerateMenuItems(menu.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+
+            if (control.ContextMenu is { } contextMenu)
+            {
+                foreach (var item in EnumerateMenuItems(contextMenu.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+
+            if (control.ContextFlyout is MenuFlyout menuFlyout)
+            {
+                foreach (var item in EnumerateMenuItems(menuFlyout.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<MenuItem> EnumerateMenuItems(IEnumerable<MenuItem> items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+            foreach (var descendant in EnumerateMenuItems(item.Items.OfType<MenuItem>()))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static bool MatchesLocator(Control candidate, string locatorValue, UiLocatorKind locatorKind)
@@ -369,6 +438,7 @@ internal sealed class RecorderSelectorResolver
     private bool TryResolveLocatorAlias(
         string locatorValue,
         UiLocatorKind locatorKind,
+        bool includeSingleSelectAlias,
         out RecorderLocatorAlias alias)
     {
         alias = _options.LocatorAliases.FirstOrDefault(candidate =>
@@ -396,19 +466,22 @@ internal sealed class RecorderSelectorResolver
             return true;
         }
 
-        var singleSelectHint = _options.SingleSelectHints.FirstOrDefault(candidate =>
-            candidate.Parts.LocatorKind == locatorKind
-            && string.Equals(candidate.Parts.ResultsLocator.Trim(), locatorValue, StringComparison.Ordinal));
-        if (singleSelectHint is not null)
+        if (includeSingleSelectAlias)
         {
-            alias = new RecorderLocatorAlias(
-                locatorValue,
-                singleSelectHint.LocatorValue,
-                UiControlType.ComboBox,
-                singleSelectHint.Parts.LocatorKind,
-                singleSelectHint.LocatorKind,
-                singleSelectHint.FallbackToName);
-            return true;
+            var singleSelectHint = _options.SingleSelectHints.FirstOrDefault(candidate =>
+                candidate.Parts.LocatorKind == locatorKind
+                && string.Equals(candidate.Parts.ResultsLocator.Trim(), locatorValue, StringComparison.Ordinal));
+            if (singleSelectHint is not null)
+            {
+                alias = new RecorderLocatorAlias(
+                    locatorValue,
+                    singleSelectHint.LocatorValue,
+                    UiControlType.ComboBox,
+                    singleSelectHint.Parts.LocatorKind,
+                    singleSelectHint.LocatorKind,
+                    singleSelectHint.FallbackToName);
+                return true;
+            }
         }
 
         var gridHint = _options.GridHints.FirstOrDefault(candidate =>
