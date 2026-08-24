@@ -441,6 +441,27 @@ public interface IToggleButtonControl : IUiControl
 }
 
 /// <summary>
+/// Represents a content container with an expanded or collapsed state.
+/// </summary>
+public interface IExpanderControl : IUiControl
+{
+    /// <summary>
+    /// Gets a value indicating whether the content is expanded.
+    /// </summary>
+    bool IsExpanded { get; }
+
+    /// <summary>
+    /// Expands the content container.
+    /// </summary>
+    void Expand();
+
+    /// <summary>
+    /// Collapses the content container.
+    /// </summary>
+    void Collapse();
+}
+
+/// <summary>
 /// Represents a slider control for selecting a value within a range.
 /// </summary>
 public interface ISliderControl : IUiControl

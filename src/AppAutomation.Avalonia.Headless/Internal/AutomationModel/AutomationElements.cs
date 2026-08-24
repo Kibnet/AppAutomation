@@ -104,6 +104,8 @@ internal class AutomationElement
 
     public TimePicker AsTimePicker() => this as TimePicker ?? new TimePicker(RequireControl<global::Avalonia.Controls.TimePicker>());
 
+    public Expander AsExpander() => this as Expander ?? new Expander(RequireControl<global::Avalonia.Controls.Expander>());
+
     public Spinner AsSpinner()
     {
         if (this is Spinner spinner)
@@ -199,6 +201,7 @@ internal class AutomationElement
             global::Avalonia.Controls.ProgressBar progressBar => new ProgressBar(progressBar),
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
             global::Avalonia.Controls.TimePicker timePicker => new TimePicker(timePicker),
+            global::Avalonia.Controls.Expander expander => new Expander(expander),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
             global::Avalonia.Controls.TabControl tabControl => new Tab(tabControl),
             global::Avalonia.Controls.TabItem tabItem => new TabItem(tabItem),
@@ -684,6 +687,35 @@ internal class TimePicker : AutomationElement
         set => Ui(() =>
         {
             Native.SelectedTime = value;
+            return true;
+        });
+    }
+}
+
+internal sealed class Expander : AutomationElement
+{
+    internal Expander(global::Avalonia.Controls.Expander expander) : base(expander)
+    {
+    }
+
+    private global::Avalonia.Controls.Expander Native => (global::Avalonia.Controls.Expander)Control;
+
+    public bool IsExpanded => Ui(() => Native.IsExpanded);
+
+    public void Expand()
+    {
+        Ui(() =>
+        {
+            Native.IsExpanded = true;
+            return true;
+        });
+    }
+
+    public void Collapse()
+    {
+        Ui(() =>
+        {
+            Native.IsExpanded = false;
             return true;
         });
     }

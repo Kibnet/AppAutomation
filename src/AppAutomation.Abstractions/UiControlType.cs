@@ -182,5 +182,10 @@ public enum UiControlType
     /// <summary>
     /// A time picker control. Maps to <see cref="ITimePickerControl"/>.
     /// </summary>
-    TimePicker = 34
+    TimePicker = 34,
+
+    /// <summary>
+    /// An expandable content container. Maps to <see cref="IExpanderControl"/>.
+    /// </summary>
+    Expander = 35
 }

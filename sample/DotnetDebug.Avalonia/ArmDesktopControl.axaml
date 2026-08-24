@@ -399,10 +399,12 @@
               <Label x:Name="ArmLoadingStatusLabel"
                      Content="Loading idle"
                      automation:AutomationProperties.AutomationId="ArmLoadingStatusLabel" />
-              <ToggleButton x:Name="ArmStatusExpanderToggle"
-                            Content="Status details"
-                            Click="OnArmStatusExpanderClick"
-                            automation:AutomationProperties.AutomationId="ArmStatusExpanderToggle" />
+              <Expander x:Name="ArmStatusExpander"
+                        Header="Status details"
+                        automation:AutomationProperties.AutomationId="ArmStatusExpander">
+                <TextBlock Text="Detailed status content"
+                           Margin="8,4,0,0" />
+              </Expander>
               <Label x:Name="ArmStatusLabel"
                      Content="Status expanded: False"
                      automation:AutomationProperties.AutomationId="ArmStatusLabel" />

@@ -206,6 +206,72 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Idempotently sets the expanded state of an expander.
+    /// </summary>
+    public static TSelf SetExpanded<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IExpanderControl>> selector,
+        bool isExpanded,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "expander");
+        var expander = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Expander '{expander.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={expander.IsEnabled}");
+
+        if (expander.IsExpanded != isExpanded)
+        {
+            if (isExpanded)
+            {
+                expander.Expand();
+            }
+            else
+            {
+                expander.Collapse();
+            }
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsExpanded == isExpanded,
+            budget.RemainingMilliseconds,
+            $"Expander '{expander.AutomationId}' did not reach the expected expanded state.",
+            expectedValue: $"IsExpanded={isExpanded}",
+            lastObservedValueFactory: () => $"IsExpanded={expander.IsExpanded}");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until an expander reaches the requested state.
+    /// </summary>
+    public static TSelf WaitUntilIsExpanded<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IExpanderControl>> selector,
+        bool isExpanded,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var expander = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsExpanded == isExpanded,
+            timeoutMs,
+            $"Expander '{expander.AutomationId}' did not reach the expected expanded state.",
+            expectedValue: $"IsExpanded={isExpanded}",
+            lastObservedValueFactory: () => $"IsExpanded={expander.IsExpanded}");
+        return page;
+    }
+
+    /// <summary>
     /// Selects an item in a combo box by its display text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>

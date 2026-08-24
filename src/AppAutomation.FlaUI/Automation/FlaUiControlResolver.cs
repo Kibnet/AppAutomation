@@ -74,6 +74,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             UiControlType.Calendar => new FlaUiCalendarControl(FindElement(definition).AsCalendar()),
             UiControlType.DateTimePicker => new FlaUiDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
             UiControlType.TimePicker => new FlaUiTimePickerControl(FindElement(definition)),
+            UiControlType.Expander => new FlaUiExpanderControl(FindElement(definition)),
             UiControlType.Spinner => new FlaUiSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new FlaUiTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new FlaUiTabItemControl(FindElement(definition).AsTabItem()),
@@ -2338,6 +2339,84 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             {
                 return null;
             }
+        }
+    }
+
+    private sealed class FlaUiExpanderControl : FlaUiControlBase<AutomationElement>, IExpanderControl
+    {
+        public FlaUiExpanderControl(AutomationElement inner) : base(inner)
+        {
+        }
+
+        public bool IsExpanded
+        {
+            get
+            {
+                var pattern = Inner.Patterns.ExpandCollapse.PatternOrDefault;
+                if (pattern is not null)
+                {
+                    return pattern.ExpandCollapseState.Value is
+                        ExpandCollapseState.Expanded or ExpandCollapseState.PartiallyExpanded;
+                }
+
+                var header = ResolveHeaderToggle();
+                return header.Patterns.Toggle.Pattern.ToggleState.Value == ToggleState.On;
+            }
+        }
+
+        public void Expand() => SetExpanded(true);
+
+        public void Collapse() => SetExpanded(false);
+
+        private void SetExpanded(bool expanded)
+        {
+            if (IsExpanded == expanded)
+            {
+                return;
+            }
+
+            var pattern = Inner.Patterns.ExpandCollapse.PatternOrDefault;
+            if (pattern is not null)
+            {
+                if (expanded)
+                {
+                    pattern.Expand();
+                }
+                else
+                {
+                    pattern.Collapse();
+                }
+
+                return;
+            }
+
+            ResolveHeaderToggle().Patterns.Toggle.Pattern.Toggle();
+        }
+
+        private AutomationElement ResolveHeaderToggle()
+        {
+            var level = Inner.FindAllChildren();
+            while (level.Length > 0)
+            {
+                var candidates = level
+                    .Where(static candidate => candidate.Patterns.Toggle.IsSupported)
+                    .ToArray();
+                if (candidates.Length == 1)
+                {
+                    return candidates[0];
+                }
+
+                if (candidates.Length > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Expander '{AutomationId}' has multiple accessible header toggle candidates at the same depth.");
+                }
+
+                level = level.SelectMany(static candidate => candidate.FindAllChildren()).ToArray();
+            }
+
+            throw new InvalidOperationException(
+                $"Expander '{AutomationId}' exposes neither ExpandCollapse pattern nor an accessible header toggle.");
         }
     }
 

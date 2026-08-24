@@ -300,6 +300,7 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - cardinality-neutral combo-box filter abstraction `IComboBoxFilterControl` with `WithComboBoxFilter(...)`;
 - logical spinner actions through `ISpinnerControl`; custom text-backed wrappers can use `WithSpinnerTextBoxProxy(...)`;
 - lossless time-of-day actions through `ITimePickerControl`; composite popup wrappers register stable parts with `WithTimePicker(...)`;
+- idempotent expanded-state actions through `IExpanderControl` and `SetExpanded(...)`;
 - ordinary single-selection editors keep `IComboBoxControl`/`SelectComboItem(...)`; composite wrappers register their input/results/commit parts with `WithSingleSelect(...)` and `RecorderSingleSelectHint`;
 - provider-neutral search abstraction `ISearchControl` with `WithSearchControl(...)` and optional history;
 - stable grid row selectors through `GridRowSelector` and `WithGridColumns(...)`;
@@ -718,6 +719,7 @@ dotnet test --solution MyApp.sln -c Debug
 - cardinality-neutral абстракция combo-box фильтра `IComboBoxFilterControl` с `WithComboBoxFilter(...)`;
 - логические действия Spinner через `ISpinnerControl`; для custom wrapper с текстовой частью есть `WithSpinnerTextBoxProxy(...)`;
 - точные действия со временем через `ITimePickerControl`; составной popup-wrapper регистрируется по stable parts через `WithTimePicker(...)`;
+- идемпотентные действия раскрытия через `IExpanderControl` и `SetExpanded(...)`;
 - обычные одиночные селекторы сохраняют `IComboBoxControl`/`SelectComboItem(...)`; составной wrapper регистрирует input/results/commit parts через `WithSingleSelect(...)` и `RecorderSingleSelectHint`;
 - provider-neutral абстракция поиска `ISearchControl` с `WithSearchControl(...)` и необязательной историей;
 - стабильные селекторы строк таблиц через `GridRowSelector` и `WithGridColumns(...)`;

@@ -125,6 +125,8 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetSpinnerValue => ValidateSpinnerAction(step, target),
             RecordedActionKind.SetTime => ValidateControlType(step, target, UiControlType.TimePicker)
                 .Concat(RequireTime(step, target)),
+            RecordedActionKind.SetExpanded => ValidateControlType(step, target, UiControlType.Expander)
+                .Concat(RequireBool(step, target)),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
@@ -134,6 +136,8 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.WaitUntilValueEquals => ValidateSpinnerValueAssertion(step, target),
             RecordedActionKind.WaitUntilTimeEquals => ValidateControlType(step, target, UiControlType.TimePicker)
                 .Concat(RequireTime(step, target)),
+            RecordedActionKind.WaitUntilIsExpanded => ValidateControlType(step, target, UiControlType.Expander)
+                .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsChecked => ValidateControlType(step, target, UiControlType.CheckBox)
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsToggled => ValidateControlType(step, target, UiControlType.ToggleButton)

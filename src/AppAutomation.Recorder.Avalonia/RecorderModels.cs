@@ -60,7 +60,9 @@ public enum RecordedActionKind
     WaitUntilValueEquals = 52,
     SetTime = 53,
     WaitUntilTimeEquals = 54,
-    EditGridCellTime = 55
+    EditGridCellTime = 55,
+    SetExpanded = 56,
+    WaitUntilIsExpanded = 57
 }
 
 public enum RecorderAssertionMode

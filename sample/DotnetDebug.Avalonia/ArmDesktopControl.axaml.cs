@@ -17,7 +17,7 @@ public partial class ArmDesktopControl : UserControl
     {
         InitializeComponent();
         DataContext = this;
-        ArmStatusExpanderToggle.PropertyChanged += OnArmStatusExpanderPropertyChanged;
+        ArmStatusExpander.PropertyChanged += OnArmStatusExpanderPropertyChanged;
         ArmMetadataToggle.PropertyChanged += OnArmMetadataTogglePropertyChanged;
         ArmApprovalToggle.PropertyChanged += OnArmApprovalTogglePropertyChanged;
         BuildArmRows(3);
@@ -284,11 +284,6 @@ public partial class ArmDesktopControl : UserControl
         ArmLoadingStatusLabel.Content = "Reloaded: 100%";
     }
 
-    private void OnArmStatusExpanderClick(object? sender, RoutedEventArgs e)
-    {
-        UpdateArmStatusExpanderLabel();
-    }
-
     private void OnArmMetadataToggleClick(object? sender, RoutedEventArgs e)
     {
         UpdateArmMetadataLabel();
@@ -363,7 +358,7 @@ public partial class ArmDesktopControl : UserControl
 
     private void OnArmStatusExpanderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property == ToggleButton.IsCheckedProperty)
+        if (e.Property == Expander.IsExpandedProperty)
         {
             UpdateArmStatusExpanderLabel();
         }
@@ -387,7 +382,7 @@ public partial class ArmDesktopControl : UserControl
 
     private void UpdateArmStatusExpanderLabel()
     {
-        ArmStatusLabel.Content = $"Status expanded: {ArmStatusExpanderToggle.IsChecked == true}";
+        ArmStatusLabel.Content = $"Status expanded: {ArmStatusExpander.IsExpanded}";
     }
 
     private void UpdateArmMetadataLabel()

@@ -61,6 +61,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             UiControlType.Calendar => new HeadlessCalendarControl(FindElement(definition).AsCalendar()),
             UiControlType.DateTimePicker => new HeadlessDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
             UiControlType.TimePicker => new HeadlessTimePickerControl(FindElement(definition).AsTimePicker()),
+            UiControlType.Expander => new HeadlessExpanderControl(FindElement(definition).AsExpander()),
             UiControlType.Spinner => new HeadlessSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new HeadlessTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new HeadlessTabItemControl(FindElement(definition).AsTabItem()),
@@ -1351,6 +1352,19 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             get => Inner.SelectedTime;
             set => Inner.SelectedTime = value;
         }
+    }
+
+    private sealed class HeadlessExpanderControl : HeadlessControlBase<Expander>, IExpanderControl
+    {
+        public HeadlessExpanderControl(Expander inner) : base(inner)
+        {
+        }
+
+        public bool IsExpanded => Inner.IsExpanded;
+
+        public void Expand() => Inner.Expand();
+
+        public void Collapse() => Inner.Collapse();
     }
 
     private sealed class HeadlessSpinnerControl : HeadlessControlBase<Spinner>, ISpinnerControl

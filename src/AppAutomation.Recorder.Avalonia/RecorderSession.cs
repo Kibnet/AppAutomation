@@ -632,6 +632,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (IsExpanderHeaderToggle(source))
+        {
+            return;
+        }
+
         if (TryHandleTimePickerButton(source))
         {
             return;
@@ -973,6 +978,9 @@ internal sealed class RecorderSession :
             case TimePicker timePicker:
                 timePicker.PropertyChanged += OnTimePickerPropertyChanged;
                 return () => timePicker.PropertyChanged -= OnTimePickerPropertyChanged;
+            case Expander expander:
+                expander.PropertyChanged += OnExpanderPropertyChanged;
+                return () => expander.PropertyChanged -= OnExpanderPropertyChanged;
             case DatePicker datePicker:
                 datePicker.PropertyChanged += OnDatePickerPropertyChanged;
                 return () => datePicker.PropertyChanged -= OnDatePickerPropertyChanged;
@@ -1001,6 +1009,7 @@ internal sealed class RecorderSession :
             or Slider
             or NumericUpDown
             or TimePicker
+            or Expander
             or DatePicker
             or Calendar;
     }
@@ -1169,6 +1178,11 @@ internal sealed class RecorderSession :
         DiscardPendingTimePickerIfSwitchingTo(eventSource);
         DiscardPendingSingleSelectIfSwitchingTo(eventSource);
         if (IsPickerTemplateButton(eventSource))
+        {
+            return;
+        }
+
+        if (IsExpanderHeaderToggle(eventSource))
         {
             return;
         }
@@ -1671,6 +1685,22 @@ internal sealed class RecorderSession :
 
         DiscardPendingTimePicker();
         AddStep(_stepFactory.TryCreateTimePickerStep(timePicker), timePicker, "TimePickerSelection");
+    }
+
+    private void OnExpanderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording
+            || sender is not Expander expander
+            || !WasRecentlyTriggeredByUser(expander)
+            || e.Property != Expander.IsExpandedProperty)
+        {
+            return;
+        }
+
+        FlushPendingTextIfSwitchingTo(expander);
+        FlushPendingSliderIfSwitchingTo(expander);
+        FlushPendingSpinnerIfSwitchingTo(expander);
+        AddStep(_stepFactory.TryCreateExpanderStep(expander), expander, "ExpanderState");
     }
 
     private void OnDatePickerPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -2544,6 +2574,12 @@ internal sealed class RecorderSession :
 
     private static Control? ResolveInteractionOwner(Control? control)
     {
+        var expander = ResolveHeaderExpander(control);
+        if (expander is not null)
+        {
+            return expander;
+        }
+
         var timePicker = FindAncestorOrSelf<TimePicker>(control);
         if (timePicker is not null)
         {
@@ -2623,6 +2659,24 @@ internal sealed class RecorderSession :
         }
 
         return false;
+    }
+
+    private static bool IsExpanderHeaderToggle(Control? control)
+    {
+        return ResolveHeaderExpander(control) is not null;
+    }
+
+    private static Expander? ResolveHeaderExpander(Control? control)
+    {
+        if (control is Expander expander)
+        {
+            return expander;
+        }
+
+        var toggle = FindAncestorOrSelf<ToggleButton>(control);
+        return toggle is StyledElement { TemplatedParent: Expander owner }
+            ? owner
+            : null;
     }
 
     private static bool IsKnownPickerTemplateButton(Button button)

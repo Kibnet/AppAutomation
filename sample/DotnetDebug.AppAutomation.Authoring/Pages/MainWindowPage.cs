@@ -126,7 +126,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmLoadingProgressBar", UiControlType.ProgressBar, "ArmLoadingProgressBar")]
 [UiControl("ArmReloadButton", UiControlType.Button, "ArmReloadButton")]
 [UiControl("ArmLoadingStatusLabel", UiControlType.Label, "ArmLoadingStatusLabel")]
-[UiControl("ArmStatusExpanderToggle", UiControlType.ToggleButton, "ArmStatusExpanderToggle")]
+[UiControl("ArmStatusExpander", UiControlType.Expander, "ArmStatusExpander")]
 [UiControl("ArmStatusLabel", UiControlType.Label, "ArmStatusLabel")]
 [UiControl("ArmMetadataToggle", UiControlType.ToggleButton, "ArmMetadataToggle")]
 [UiControl("ArmMetadataStatusLabel", UiControlType.Label, "ArmMetadataStatusLabel")]

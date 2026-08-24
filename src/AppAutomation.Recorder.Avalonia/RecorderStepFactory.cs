@@ -1200,6 +1200,29 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
+    public StepCreationResult TryCreateExpanderStep(Expander expander)
+    {
+        ArgumentNullException.ThrowIfNull(expander);
+
+        var locatorResult = _selectorResolver.Resolve(expander, UiControlType.Expander);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        return CreateStep(
+            expander,
+            new RecordedStep(
+                RecordedActionKind.SetExpanded,
+                locatorResult.Control,
+                BoolValue: expander.IsExpanded,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            locatorResult.Message);
+    }
+
     public StepCreationResult TryCreateTimePickerStep(
         TimePicker timePicker,
         RecorderTimePickerHint? configuredHint = null)
@@ -1708,6 +1731,7 @@ internal sealed class RecorderStepFactory
             ListBox => UiControlType.ListBox,
             Slider => UiControlType.Slider,
             TimePicker => UiControlType.TimePicker,
+            Expander => UiControlType.Expander,
             DatePicker => UiControlType.DateTimePicker,
             Calendar => UiControlType.Calendar,
             TabItem => UiControlType.TabItem,
@@ -3925,6 +3949,7 @@ internal sealed class RecorderStepFactory
             new ProgressAssertionExtractor(),
             new ListBoxAssertionExtractor(),
             new TimePickerAssertionExtractor(options),
+            new ExpanderAssertionExtractor(),
             new SpinnerAssertionExtractor(options),
             new TextAssertionExtractor(),
             new CheckedAssertionExtractor(),
@@ -3972,6 +3997,25 @@ internal sealed class RecorderStepFactory
                 UiControlType.Spinner,
                 RecordedActionKind.WaitUntilValueEquals,
                 DoubleValue: value);
+            return true;
+        }
+    }
+
+    private sealed class ExpanderAssertionExtractor : IRecorderAssertionExtractor
+    {
+        public bool TryCreate(Control control, RecorderAssertionMode mode, out RecorderAssertionCandidate? candidate)
+        {
+            candidate = null;
+            if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Checked)
+                || control is not Expander expander)
+            {
+                return false;
+            }
+
+            candidate = new RecorderAssertionCandidate(
+                UiControlType.Expander,
+                RecordedActionKind.WaitUntilIsExpanded,
+                BoolValue: expander.IsExpanded);
             return true;
         }
     }
