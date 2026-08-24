@@ -1630,8 +1630,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                         or GridCellEditorKind.Number
                         or GridCellEditorKind.Date
                         or GridCellEditorKind.Time
+                        or GridCellEditorKind.Color
                         or GridCellEditorKind.ComboBox:
-                    textBox.Text = request.Value;
+                    textBox.Text = request.EditorKind == GridCellEditorKind.Color
+                        ? ColorValue.Normalize(request.Value)
+                        : request.Value;
                     return true;
                 default:
                     return false;

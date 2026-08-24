@@ -213,6 +213,117 @@ internal sealed class RecorderStepFactory
             ExtractSelectionText(results.SelectedItem));
     }
 
+    public ColorPickerCaptureResult TryCreateColorPickerStep(ComboBox palette)
+    {
+        ArgumentNullException.ThrowIfNull(palette);
+        return TryCreateColorPickerStepCore(
+            palette,
+            ColorPaletteKind.ComboBox,
+            ExtractSelectionText(palette.SelectedItem));
+    }
+
+    public ColorPickerCaptureResult TryCreateColorPickerStep(ListBox palette)
+    {
+        ArgumentNullException.ThrowIfNull(palette);
+        return TryCreateColorPickerStepCore(
+            palette,
+            ColorPaletteKind.ListBox,
+            ExtractSelectionText(palette.SelectedItem));
+    }
+
+    public ColorPickerCaptureResult TryCreateColorPickerStep(Control source, string color)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var matchingHints = _options.ColorPickerHints
+            .Where(hint => IsColorPickerPart(source, hint))
+            .ToArray();
+        return CreateColorPickerCapture(source, matchingHints, color);
+    }
+
+    public bool IsColorPickerInput(TextBox input, RecorderColorPickerHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(hint);
+        return MatchesAnyLocator(
+            input,
+            hint.Parts.LocatorKind,
+            hint.Parts.CustomValueLocator,
+            hint.Parts.CurrentValueLocator);
+    }
+
+    public bool IsColorPickerPart(Control? source, RecorderColorPickerHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        return EnumerateRelatedControls(source).Any(current =>
+            MatchesLocator(current, hint.LocatorKind, hint.LocatorValue)
+            || MatchesAnyLocator(
+                current,
+                hint.Parts.LocatorKind,
+                hint.Parts.RootLocator,
+                hint.Parts.CurrentValueLocator,
+                hint.Parts.OpenButtonLocator,
+                hint.Parts.PopupRootLocator,
+                hint.Parts.PaletteLocator,
+                hint.Parts.CustomValueLocator,
+                hint.Parts.ConfirmButtonLocator,
+                hint.Parts.CancelButtonLocator));
+    }
+
+    public bool TryResolveColorPickerButton(
+        Control? source,
+        out RecorderColorPickerHint hint,
+        out bool isConfirm)
+    {
+        hint = null!;
+        isConfirm = false;
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            foreach (var candidate in _options.ColorPickerHints)
+            {
+                if (!string.IsNullOrWhiteSpace(candidate.Parts.ConfirmButtonLocator)
+                    && MatchesLocator(current, candidate.Parts.LocatorKind, candidate.Parts.ConfirmButtonLocator))
+                {
+                    hint = candidate;
+                    isConfirm = true;
+                    return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(candidate.Parts.CancelButtonLocator)
+                    && MatchesLocator(current, candidate.Parts.LocatorKind, candidate.Parts.CancelButtonLocator))
+                {
+                    hint = candidate;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public bool ShouldSuppressColorPickerButton(Control? source)
+    {
+        return EnumerateRelatedControls(source).Any(current => _options.ColorPickerHints.Any(hint =>
+            !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+            && MatchesLocator(current, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)));
+    }
+
+    public bool TryReadColorPickerValue(RecorderColorPickerHint hint, out string color)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        foreach (var locator in new[] { hint.Parts.CurrentValueLocator, hint.Parts.CustomValueLocator })
+        {
+            if (!string.IsNullOrWhiteSpace(locator)
+                && TryFindControl(locator, hint.Parts.LocatorKind, out var valueControl)
+                && ColorValue.TryNormalize(ExtractTextValue(valueControl), out color))
+            {
+                return true;
+            }
+        }
+
+        color = string.Empty;
+        return false;
+    }
+
     public bool IsSingleSelectPair(TextBox input, Control results)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -859,6 +970,7 @@ internal sealed class RecorderStepFactory
             GridCellEditorKind.Number => TryCreateGridEditNumberStep(source, descriptor, warning, hint),
             GridCellEditorKind.Date => TryCreateGridEditDateStep(source, descriptor, warning, hint),
             GridCellEditorKind.Time => TryCreateGridEditTimeStep(source, descriptor, warning, hint),
+            GridCellEditorKind.Color => TryCreateGridEditColorStep(source, descriptor, warning, hint),
             GridCellEditorKind.ComboBox => TryCreateGridEditComboStep(source, descriptor, warning, hint),
             GridCellEditorKind.SearchPicker => StepCreationResult.Unsupported(
                 "Grid search picker edit is recorded through RecorderGridSearchPickerHint."),
@@ -875,6 +987,7 @@ internal sealed class RecorderStepFactory
             || MatchesFolderExportPathPart(textBox)
             || MatchesTimePickerInputPart(textBox)
             || ShouldSuppressSingleSelectInput(textBox)
+            || _options.ColorPickerHints.Any(hint => IsColorPickerInput(textBox, hint))
             || MatchesGridEditValuePart(textBox);
     }
 
@@ -909,7 +1022,8 @@ internal sealed class RecorderStepFactory
         return MatchesSearchPickerTextPart(textBox)
             || MatchesGridSearchPickerTextPart(textBox)
             || MatchesTimePickerInputPart(textBox)
-            || _options.SingleSelectHints.Any(hint => IsSingleSelectInput(textBox, hint));
+            || _options.SingleSelectHints.Any(hint => IsSingleSelectInput(textBox, hint))
+            || _options.ColorPickerHints.Any(hint => IsColorPickerInput(textBox, hint));
     }
 
     public bool IsCompositeSelectionPair(TextBox searchInput, Control results)
@@ -1419,6 +1533,11 @@ internal sealed class RecorderStepFactory
             return notificationResult;
         }
 
+        if (TryCreateColorPickerAssertionStep(source, mode, out var colorResult))
+        {
+            return colorResult;
+        }
+
         foreach (var extractor in _assertionExtractors)
         {
             if (!extractor.TryCreate(source, mode, out var candidate) || candidate is null)
@@ -1451,6 +1570,56 @@ internal sealed class RecorderStepFactory
         }
 
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
+    }
+
+    private bool TryCreateColorPickerAssertionStep(
+        Control source,
+        RecorderAssertionMode mode,
+        out StepCreationResult result)
+    {
+        result = StepCreationResult.Unsupported("Control is not configured as a recorder color picker.");
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        {
+            return false;
+        }
+
+        var matchingHints = _options.ColorPickerHints
+            .Where(hint => IsColorPickerPart(source, hint))
+            .ToArray();
+        if (matchingHints.Length == 0)
+        {
+            return false;
+        }
+
+        if (matchingHints.Length > 1)
+        {
+            result = StepCreationResult.Unsupported(
+                $"Color picker source matches {matchingHints.Length} configured hints; locators must identify one editor.");
+            return true;
+        }
+
+        var hint = matchingHints[0];
+        if (!TryReadColorPickerValue(hint, out var color))
+        {
+            result = StepCreationResult.Unsupported(
+                "Configured color picker does not expose a valid current #RRGGBB or #AARRGGBB value.");
+            return true;
+        }
+
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.ColorPicker,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning: null);
+        result = CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.WaitUntilColorEquals,
+                descriptor,
+                StringValue: color));
+        return true;
     }
 
     private bool TryCreateGridAssertionStep(Control source, RecorderAssertionMode mode, out StepCreationResult result)
@@ -3188,6 +3357,87 @@ internal sealed class RecorderStepFactory
             result);
     }
 
+    private ColorPickerCaptureResult TryCreateColorPickerStepCore(
+        Control palette,
+        ColorPaletteKind paletteKind,
+        string? selectedColor)
+    {
+        var matchingHints = _options.ColorPickerHints
+            .Where(hint => hint.Parts.PaletteKind == paletteKind
+                && !string.IsNullOrWhiteSpace(hint.Parts.PaletteLocator)
+                && MatchesLocator(palette, hint.Parts.LocatorKind, hint.Parts.PaletteLocator))
+            .ToArray();
+        return CreateColorPickerCapture(palette, matchingHints, selectedColor);
+    }
+
+    private ColorPickerCaptureResult CreateColorPickerCapture(
+        Control source,
+        RecorderColorPickerHint[] matchingHints,
+        string? color)
+    {
+        if (matchingHints.Length == 0)
+        {
+            return new ColorPickerCaptureResult(
+                IsConfigured: false,
+                HasCandidateValue: false,
+                HasColor: false,
+                Hint: null,
+                StepCreationResult.Unsupported("Control is not configured as a recorder color picker."));
+        }
+
+        if (!ColorValue.TryNormalize(color, out var canonical))
+        {
+            return new ColorPickerCaptureResult(
+                IsConfigured: true,
+                HasCandidateValue: !string.IsNullOrWhiteSpace(color),
+                HasColor: false,
+                matchingHints.Length == 1 ? matchingHints[0] : null,
+                StepCreationResult.Unsupported(
+                    $"Color picker selection '{color}' is not a valid #RRGGBB or #AARRGGBB value."));
+        }
+
+        if (matchingHints.Length > 1)
+        {
+            return new ColorPickerCaptureResult(
+                IsConfigured: true,
+                HasCandidateValue: true,
+                HasColor: true,
+                Hint: null,
+                StepCreationResult.Unsupported(
+                    $"Color picker source matches {matchingHints.Length} configured hints; locators must identify one editor."));
+        }
+
+        var hint = matchingHints[0];
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.ColorPicker,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning: null);
+        var logicalValidation = _selectorResolver.ResolveExisting(descriptor);
+        if (!logicalValidation.CanPersist)
+        {
+            return new ColorPickerCaptureResult(
+                IsConfigured: true,
+                HasCandidateValue: true,
+                HasColor: true,
+                hint,
+                StepCreationResult.Unsupported(
+                    logicalValidation.ValidationMessage
+                    ?? $"Color-picker locator '{hint.LocatorKind}:{hint.LocatorValue}' is invalid."));
+        }
+
+        var result = CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SetColor,
+                descriptor,
+                StringValue: canonical),
+            message: null);
+        return new ColorPickerCaptureResult(true, true, true, hint, result);
+    }
+
     private StepCreationResult TryCreateGridEditTimeStep(
         Control source,
         RecordedControlDescriptor descriptor,
@@ -3210,6 +3460,37 @@ internal sealed class RecorderStepFactory
                 ColumnIndex: hint.ColumnIndex,
                 GridCellEditCommitMode: hint.CommitMode,
                 TimeValue: value),
+            warning,
+            hint.TargetGridLocatorValue,
+            hint.TargetGridLocatorKind,
+            hint.RowIndex,
+            hint.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
+    }
+
+    private StepCreationResult TryCreateGridEditColorStep(
+        Control source,
+        RecordedControlDescriptor descriptor,
+        string warning,
+        RecorderGridEditHint hint)
+    {
+        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+            || !ColorValue.TryNormalize(ExtractTextValue(valueControl), out var color))
+        {
+            return StepCreationResult.Unsupported(
+                "Grid color edit hint value locator does not expose a valid #RRGGBB or #AARRGGBB value.");
+        }
+
+        return CreateGridStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.EditGridCellColor,
+                descriptor,
+                StringValue: color,
+                Warning: warning,
+                RowIndex: hint.RowIndex,
+                ColumnIndex: hint.ColumnIndex,
+                GridCellEditCommitMode: hint.CommitMode),
             warning,
             hint.TargetGridLocatorValue,
             hint.TargetGridLocatorKind,

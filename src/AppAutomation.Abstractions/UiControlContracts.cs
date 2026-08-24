@@ -462,6 +462,17 @@ public interface IExpanderControl : IUiControl
 }
 
 /// <summary>
+/// Represents a control that selects a color without exposing a provider-specific color type.
+/// </summary>
+public interface IColorPickerControl : IUiControl
+{
+    /// <summary>
+    /// Gets or sets the selected color as canonical <c>#AARRGGBB</c> text.
+    /// </summary>
+    string Color { get; set; }
+}
+
+/// <summary>
 /// Represents a slider control for selecting a value within a range.
 /// </summary>
 public interface ISliderControl : IUiControl
@@ -1021,7 +1032,12 @@ public enum GridCellEditorKind
     /// <summary>
     /// A time-of-day picker editor.
     /// </summary>
-    Time = 5
+    Time = 5,
+
+    /// <summary>
+    /// A color picker editor.
+    /// </summary>
+    Color = 6
 }
 
 /// <summary>

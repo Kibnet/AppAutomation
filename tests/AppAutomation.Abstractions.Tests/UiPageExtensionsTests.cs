@@ -585,7 +585,8 @@ public sealed class UiPageExtensionsTests
             new MutableFakeGridCellControl("2026-01-01"),
             new MutableFakeGridCellControl("08:00:00"),
             new MutableFakeGridCellControl("OldCombo"),
-            new MutableFakeGridCellControl("OldSearch")
+            new MutableFakeGridCellControl("OldSearch"),
+            new MutableFakeGridCellControl("#FF000000")
         };
         var grid = new FakeEditableGridControl(
             "EremexDemoDataGridAutomationBridge",
@@ -598,12 +599,13 @@ public sealed class UiPageExtensionsTests
             .EditGridCellDate(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 2, new DateTime(2026, 4, 22))
             .EditGridCellTime(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 3, new TimeSpan(9, 45, 30))
             .SelectGridCellComboItem(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 4, "ComboValue")
-            .SearchAndSelectGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 5, "Combo", "SearchValue");
+            .SearchAndSelectGridCell(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 5, "Combo", "SearchValue")
+            .EditGridCellColor(static candidate => candidate.EremexDemoDataGridAutomationBridge, 0, 6, "#336699");
 
         using (Assert.Multiple())
         {
             await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
-            await Assert.That(grid.Requests.Count).IsEqualTo(6);
+            await Assert.That(grid.Requests.Count).IsEqualTo(7);
             await Assert.That(grid.Requests[0].EditorKind).IsEqualTo(GridCellEditorKind.Text);
             await Assert.That(grid.Requests[1].EditorKind).IsEqualTo(GridCellEditorKind.Number);
             await Assert.That(grid.Requests[1].Value).IsEqualTo("12.5");
@@ -615,6 +617,8 @@ public sealed class UiPageExtensionsTests
             await Assert.That(grid.Requests[5].EditorKind).IsEqualTo(GridCellEditorKind.SearchPicker);
             await Assert.That(grid.Requests[5].SearchText).IsEqualTo("Combo");
             await Assert.That(cells[5].Value).IsEqualTo("SearchValue");
+            await Assert.That(grid.Requests[6].EditorKind).IsEqualTo(GridCellEditorKind.Color);
+            await Assert.That(grid.Requests[6].Value).IsEqualTo("#FF336699");
         }
     }
 

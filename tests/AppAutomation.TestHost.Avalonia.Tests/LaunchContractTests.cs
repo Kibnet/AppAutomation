@@ -296,7 +296,12 @@ public sealed class LaunchContractTests
                 static candidate => candidate.TypedEditorsGrid,
                 0,
                 3,
-                new TimeSpan(13, 45, 30));
+                new TimeSpan(13, 45, 30))
+            .EditGridCellColor(
+                static candidate => candidate.TypedEditorsGrid,
+                0,
+                4,
+                "#336699");
 
         var cells = page.TypedEditorsGrid.GetRowByIndex(0)!.Cells;
         using (Assert.Multiple())
@@ -304,6 +309,7 @@ public sealed class LaunchContractTests
             await Assert.That(cells[1].Value).IsEqualTo("2026-04-22");
             await Assert.That(cells[2].Value).IsEqualTo("Ready");
             await Assert.That(cells[3].Value).IsEqualTo("13:45:30");
+            await Assert.That(cells[4].Value).IsEqualTo("#FF336699");
         }
     }
 
@@ -726,15 +732,18 @@ Console.WriteLine("Fake desktop");
             SelectedIndex = 0
         };
         var timeCell = new TimePicker { SelectedTime = new TimeSpan(8, 0, 0) };
+        var colorCell = new TextBox { Text = "#FF000000" };
         AutomationProperties.SetAutomationId(row, "TypedEditorsGrid_Row0");
         AutomationProperties.SetAutomationId(firstCell, "TypedEditorsGrid_Row0_Cell0");
         AutomationProperties.SetAutomationId(dateCell, "TypedEditorsGrid_Row0_Cell1");
         AutomationProperties.SetAutomationId(comboCell, "TypedEditorsGrid_Row0_Cell2");
         AutomationProperties.SetAutomationId(timeCell, "TypedEditorsGrid_Row0_Cell3");
+        AutomationProperties.SetAutomationId(colorCell, "TypedEditorsGrid_Row0_Cell4");
         row.Children.Add(firstCell);
         row.Children.Add(dateCell);
         row.Children.Add(comboCell);
         row.Children.Add(timeCell);
+        row.Children.Add(colorCell);
 
         var bridge = new StackPanel();
         AutomationProperties.SetAutomationId(bridge, "TypedEditorsGrid");

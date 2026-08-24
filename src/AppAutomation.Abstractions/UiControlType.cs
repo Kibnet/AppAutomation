@@ -187,5 +187,10 @@ public enum UiControlType
     /// <summary>
     /// An expandable content container. Maps to <see cref="IExpanderControl"/>.
     /// </summary>
-    Expander = 35
+    Expander = 35,
+
+    /// <summary>
+    /// A popup or inline color selection control. Maps to <see cref="IColorPickerControl"/>.
+    /// </summary>
+    ColorPicker = 36
 }

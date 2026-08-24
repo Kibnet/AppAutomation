@@ -207,7 +207,7 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task VisualGridOpenRow_DoubleClicksDesktopBridgeRow()
+    public async Task VisualGridActions_OpenRowAndEditColor()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
@@ -219,7 +219,9 @@ public sealed class FlaUiControlResolverTests
             .ClickButton(static candidate => candidate.ArmGridBuildButton)
             .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid rows: 3")
             .OpenGridRow(static candidate => candidate.ArmGridAutomationBridge, 0)
-            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01");
+            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01")
+            .EditGridCellColor(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#336699")
+            .WaitUntilGridCellEquals(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#FF336699");
 
         await Assert.That(page.ArmGridStatusLabel.Text).IsEqualTo("Grid opened: ARM-01");
     }

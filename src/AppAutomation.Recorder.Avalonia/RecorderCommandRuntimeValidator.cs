@@ -127,6 +127,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireTime(step, target)),
             RecordedActionKind.SetExpanded => ValidateControlType(step, target, UiControlType.Expander)
                 .Concat(RequireBool(step, target)),
+            RecordedActionKind.SetColor => ValidateControlType(step, target, UiControlType.ColorPicker)
+                .Concat(RequireColor(step, target)),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
@@ -138,6 +140,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireTime(step, target)),
             RecordedActionKind.WaitUntilIsExpanded => ValidateControlType(step, target, UiControlType.Expander)
                 .Concat(RequireBool(step, target)),
+            RecordedActionKind.WaitUntilColorEquals => ValidateControlType(step, target, UiControlType.ColorPicker)
+                .Concat(RequireColor(step, target)),
             RecordedActionKind.WaitUntilIsChecked => ValidateControlType(step, target, UiControlType.CheckBox)
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsToggled => ValidateControlType(step, target, UiControlType.ToggleButton)
@@ -199,6 +203,9 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.EditGridCellTime => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireTime(step, target)),
+            RecordedActionKind.EditGridCellColor => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireColor(step, target)),
             RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
@@ -465,6 +472,18 @@ internal sealed class RecorderCommandRuntimeValidator
         return step.TimeValue is { } time && time >= TimeSpan.Zero && time < TimeSpan.FromDays(1)
             ? []
             : [Invalid(target, "payload-missing-time", $"Recorded action '{step.ActionKind}' requires a time-of-day payload.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireColor(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return ColorValue.TryNormalize(step.StringValue, out _)
+            ? []
+            : [Invalid(
+                target,
+                "payload-invalid-color",
+                $"Recorded action '{step.ActionKind}' requires #RRGGBB or #AARRGGBB color text.")];
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireAtLeastOneDateBound(

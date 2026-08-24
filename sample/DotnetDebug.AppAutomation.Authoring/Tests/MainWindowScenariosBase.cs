@@ -485,6 +485,8 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Reports")
             .ActivateShellPane(p => p.ArmShellNavigation, "Customers")
             .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Customers")
+            .SetColor(p => p.ArmAccentColorPicker, "#7F224466")
+            .WaitUntilColorEquals(p => p.ArmAccentColorPicker, "#7F224466")
             .ClickButton(p => p.ArmReloadButton)
             .WaitUntilProgressAtLeast(p => p.ArmLoadingProgressBar, 100)
             .WaitUntilNameEquals(p => p.ArmLoadingStatusLabel, "Reloaded: 100%")

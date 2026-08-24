@@ -21,7 +21,7 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Primitives, wrappers and search"
                      FontWeight="SemiBold" />
-          <Grid ColumnDefinitions="*,*,*">
+          <Grid ColumnDefinitions="*,*,*,*">
             <StackPanel Grid.Column="0"
                         Margin="0,0,8,0"
                         Spacing="6">
@@ -68,6 +68,45 @@
               <Label Content="Search with history"
                      automation:AutomationProperties.AutomationId="ArmTableSearchStatusLabel" />
             </StackPanel>
+
+            <StackPanel x:Name="ArmAccentColorPicker"
+                        Grid.Column="3"
+                        Margin="8,0,0,0"
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmAccentColorPicker">
+              <TextBlock Text="Color picker" />
+              <TextBox x:Name="ArmAccentColorValue"
+                       Text="#FF336699"
+                       IsReadOnly="True"
+                       automation:AutomationProperties.AutomationId="ArmAccentColorValue" />
+              <Button x:Name="ArmAccentColorOpenButton"
+                      Content="Choose color"
+                      Click="OnArmAccentColorOpenClick"
+                      automation:AutomationProperties.AutomationId="ArmAccentColorOpenButton" />
+              <Border x:Name="ArmAccentColorPopup"
+                      IsVisible="False"
+                      BorderBrush="#D0D7DE"
+                      BorderThickness="1"
+                      Padding="6"
+                      automation:AutomationProperties.AutomationId="ArmAccentColorPopup">
+                <StackPanel Spacing="6">
+                  <TextBox x:Name="ArmAccentColorCustomValue"
+                           Watermark="#AARRGGBB"
+                           automation:AutomationProperties.AutomationId="ArmAccentColorCustomValue" />
+                  <StackPanel Orientation="Horizontal"
+                              Spacing="6">
+                    <Button x:Name="ArmAccentColorConfirmButton"
+                            Content="Apply"
+                            Click="OnArmAccentColorConfirmClick"
+                            automation:AutomationProperties.AutomationId="ArmAccentColorConfirmButton" />
+                    <Button x:Name="ArmAccentColorCancelButton"
+                            Content="Cancel"
+                            Click="OnArmAccentColorCancelClick"
+                            automation:AutomationProperties.AutomationId="ArmAccentColorCancelButton" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
           </Grid>
         </StackPanel>
       </Border>
@@ -97,18 +136,20 @@
                                    Header="Key" />
                   <mxdg:GridColumn FieldName="Value"
                                    Header="Value" />
+                  <mxdg:GridColumn FieldName="Color"
+                                   Header="Color" />
                   <mxdg:GridColumn FieldName="State"
                                    Header="State" />
                 </mxdg:DataGridControl.Columns>
               </mxdg:DataGridControl>
 
-              <ListBox x:Name="ArmGridAutomationBridge"
-                       Height="126"
-                       ItemsSource="{Binding ArmGridRows}"
-                       automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
-                <ListBox.ItemTemplate>
+              <ItemsControl x:Name="ArmGridAutomationBridge"
+                            Height="126"
+                            ItemsSource="{Binding ArmGridRows}"
+                            automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
+                <ItemsControl.ItemTemplate>
                   <DataTemplate>
-                    <Grid ColumnDefinitions="120,160,120"
+                    <Grid ColumnDefinitions="90,130,90,130"
                           Margin="0,1"
                           DoubleTapped="OnArmGridRowDoubleTapped"
                           automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
@@ -122,14 +163,20 @@
                                BorderThickness="0"
                                automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
                                automation:AutomationProperties.Name="{Binding Value}" />
-                      <TextBlock Grid.Column="2"
+                      <TextBox Grid.Column="2"
+                               Text="{Binding Color, Mode=TwoWay}"
+                               MinHeight="24"
+                               BorderThickness="0"
+                               automation:AutomationProperties.AutomationId="{Binding ColorCellAutomationId}"
+                               automation:AutomationProperties.Name="{Binding Color}" />
+                      <TextBlock Grid.Column="3"
                                  Text="{Binding State}"
                                  automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
                                  automation:AutomationProperties.Name="{Binding State}" />
                     </Grid>
                   </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
             </StackPanel>
 
             <StackPanel Grid.Column="1"

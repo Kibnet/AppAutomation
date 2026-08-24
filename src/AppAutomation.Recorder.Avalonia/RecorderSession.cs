@@ -61,6 +61,9 @@ internal sealed class RecorderSession :
     private StepCreationResult? _pendingSingleSelectStep;
     private RecorderSingleSelectHint? _pendingSingleSelectHint;
     private Control? _pendingSingleSelectSource;
+    private StepCreationResult? _pendingColorPickerStep;
+    private RecorderColorPickerHint? _pendingColorPickerHint;
+    private Control? _pendingColorPickerSource;
     private Control? _lastHoveredControl;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
@@ -167,6 +170,7 @@ internal sealed class RecorderSession :
         _spinnerDebounceTimer.Tick += (_, _) => FlushPendingSpinner();
 
         AttachSearchPickerSelectionSources();
+        AttachColorPickerSelectionSources();
 
         LatestStatus = hotkeySettingsLoadError is null
             ? "Recorder attached. Use configured hotkeys or overlay controls to start."
@@ -626,6 +630,7 @@ internal sealed class RecorderSession :
     {
         DiscardPendingTimePickerIfSwitchingTo(source);
         DiscardPendingSingleSelectIfSwitchingTo(source);
+        DiscardPendingColorPickerIfSwitchingTo(source);
 
         if (IsPickerTemplateButton(source))
         {
@@ -647,6 +652,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryHandleColorPickerButton(source))
+        {
+            return;
+        }
+
         if (TryRecordSearchHistoryAction(source))
         {
             return;
@@ -658,6 +668,11 @@ internal sealed class RecorderSession :
         }
 
         if (_stepFactory.ShouldSuppressSingleSelectButton(source))
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressColorPickerButton(source))
         {
             return;
         }
@@ -1023,6 +1038,7 @@ internal sealed class RecorderSession :
 
         DiscardPendingTimePickerIfSwitchingTo(e.Source as Control);
         DiscardPendingSingleSelectIfSwitchingTo(e.Source as Control);
+        DiscardPendingColorPickerIfSwitchingTo(e.Source as Control);
         CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(e.Source as Control));
         var control = ResolveInteractionOwner(e.Source as Control);
         FlushPendingTextIfSwitchingTo(control);
@@ -1084,6 +1100,7 @@ internal sealed class RecorderSession :
         {
             DiscardPendingTimePickerIfSwitchingTo(focused);
             DiscardPendingSingleSelectIfSwitchingTo(focused);
+            DiscardPendingColorPickerIfSwitchingTo(focused);
             if (e.Key is Key.Enter or Key.Space)
             {
                 CaptureComboBoxFilterClickSnapshot(ResolveButtonActionOwner(focused));
@@ -1177,6 +1194,7 @@ internal sealed class RecorderSession :
         var eventSource = e.Source as Control;
         DiscardPendingTimePickerIfSwitchingTo(eventSource);
         DiscardPendingSingleSelectIfSwitchingTo(eventSource);
+        DiscardPendingColorPickerIfSwitchingTo(eventSource);
         if (IsPickerTemplateButton(eventSource))
         {
             return;
@@ -1197,6 +1215,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryHandleColorPickerButton(eventSource))
+        {
+            return;
+        }
+
         if (TryRecordSearchHistoryAction(eventSource))
         {
             return;
@@ -1208,6 +1231,11 @@ internal sealed class RecorderSession :
         }
 
         if (_stepFactory.ShouldSuppressSingleSelectButton(eventSource))
+        {
+            return;
+        }
+
+        if (_stepFactory.ShouldSuppressColorPickerButton(eventSource))
         {
             return;
         }
@@ -1256,6 +1284,11 @@ internal sealed class RecorderSession :
         }
 
         if (TryRecordComboBoxFilterSelection(comboBox))
+        {
+            return;
+        }
+
+        if (TryRecordColorPickerSelection(comboBox))
         {
             return;
         }
@@ -1310,6 +1343,47 @@ internal sealed class RecorderSession :
     private bool TryRecordSingleSelectSelection(ListBox listBox)
     {
         return CompleteSingleSelectSelection(_stepFactory.TryCreateSingleSelectStep(listBox), listBox);
+    }
+
+    private bool TryRecordColorPickerSelection(ComboBox palette)
+    {
+        return CompleteColorPickerSelection(_stepFactory.TryCreateColorPickerStep(palette), palette);
+    }
+
+    private bool TryRecordColorPickerSelection(ListBox palette)
+    {
+        return CompleteColorPickerSelection(_stepFactory.TryCreateColorPickerStep(palette), palette);
+    }
+
+    private bool CompleteColorPickerSelection(ColorPickerCaptureResult capture, Control source)
+    {
+        if (!capture.IsConfigured)
+        {
+            return false;
+        }
+
+        if (!capture.HasCandidateValue)
+        {
+            return true;
+        }
+
+        if (capture.Hint is null || !capture.StepResult.Success)
+        {
+            LogSemanticCaptureFailure("ColorPickerSelection", source, capture.StepResult);
+            return false;
+        }
+
+        DiscardPendingColorPicker();
+        if (capture.Hint.Parts.CommitMode == ColorPickerCommitMode.Confirm)
+        {
+            _pendingColorPickerStep = capture.StepResult;
+            _pendingColorPickerHint = capture.Hint;
+            _pendingColorPickerSource = source;
+            return true;
+        }
+
+        AddStep(capture.StepResult, source, "ColorPickerSelection");
+        return true;
     }
 
     private bool CompleteSingleSelectSelection(SingleSelectCaptureResult capture, Control source)
@@ -1408,6 +1482,11 @@ internal sealed class RecorderSession :
         }
 
         if (TryRecordComboBoxFilterSelection(listBox))
+        {
+            return;
+        }
+
+        if (TryRecordColorPickerSelection(listBox))
         {
             return;
         }
@@ -1757,6 +1836,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (CapturePendingColorPickerInput(textBox))
+        {
+            return;
+        }
+
         if (ShouldSuppressTemplateTextEntry(textBox))
         {
             return;
@@ -1776,6 +1860,39 @@ internal sealed class RecorderSession :
         }
 
         RestartTextDebounceUnlessCompositeSelection(textBox);
+    }
+
+    private bool CapturePendingColorPickerInput(TextBox textBox)
+    {
+        var matchingHints = _options.ColorPickerHints
+            .Where(hint => _stepFactory.IsColorPickerInput(textBox, hint))
+            .ToArray();
+        if (matchingHints.Length == 0)
+        {
+            return false;
+        }
+
+        DiscardPendingColorPicker();
+        var capture = _stepFactory.TryCreateColorPickerStep(textBox, textBox.Text ?? string.Empty);
+        if (!capture.HasCandidateValue)
+        {
+            return true;
+        }
+
+        if (capture.Hint is null || !capture.StepResult.Success)
+        {
+            LogSemanticCaptureFailure("ColorPickerInput", textBox, capture.StepResult);
+            return false;
+        }
+
+        if (capture.HasColor)
+        {
+            _pendingColorPickerStep = capture.StepResult;
+            _pendingColorPickerHint = capture.Hint;
+            _pendingColorPickerSource = textBox;
+        }
+
+        return true;
     }
 
     private void OnTextBoxLostFocus(object? sender, RoutedEventArgs e)
@@ -2296,6 +2413,7 @@ internal sealed class RecorderSession :
         FlushPendingSpinner();
         DiscardPendingTimePicker();
         DiscardPendingSingleSelect();
+        DiscardPendingColorPicker();
     }
 
     private bool TryHandleTimePickerButton(Control? source)
@@ -2348,6 +2466,37 @@ internal sealed class RecorderSession :
         }
     }
 
+    private void AttachColorPickerSelectionSources()
+    {
+        foreach (var source in _options.ColorPickerSelectionSources
+                     .Distinct<IRecorderColorPickerSelectionSource>(ReferenceEqualityComparer.Instance))
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            source.SelectionConfirmed += OnColorPickerSelectionConfirmed;
+            _detachActions.Add(() => source.SelectionConfirmed -= OnColorPickerSelectionConfirmed);
+        }
+    }
+
+    private void OnColorPickerSelectionConfirmed(
+        object? sender,
+        RecorderColorPickerSelectionConfirmedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording)
+        {
+            return;
+        }
+
+        var capture = _stepFactory.TryCreateColorPickerStep(e.LogicalRoot, e.Color);
+        if (!capture.IsConfigured || capture.Hint is null || !capture.StepResult.Success)
+        {
+            AddStep(capture.StepResult, e.LogicalRoot, "ColorPickerSelectionSource");
+            return;
+        }
+
+        DiscardPendingColorPicker();
+        AddStep(capture.StepResult, e.LogicalRoot, "ColorPickerSelectionSource");
+    }
+
     private bool TryHandleSingleSelectButton(Control? source)
     {
         if (!_stepFactory.TryResolveSingleSelectButton(source, out var hint, out var isConfirm))
@@ -2396,6 +2545,46 @@ internal sealed class RecorderSession :
         {
             DiscardPendingText();
         }
+    }
+
+    private bool TryHandleColorPickerButton(Control? source)
+    {
+        if (!_stepFactory.TryResolveColorPickerButton(source, out var hint, out var isConfirm))
+        {
+            return false;
+        }
+
+        var pendingStep = _pendingColorPickerStep;
+        var pendingSource = _pendingColorPickerSource;
+        var hasPendingColor = pendingStep is not null
+            && pendingSource is not null
+            && Equals(_pendingColorPickerHint, hint);
+
+        DiscardPendingColorPicker();
+        if (isConfirm && hasPendingColor)
+        {
+            AddStep(pendingStep!, pendingSource!, "ColorPickerSelection");
+        }
+
+        return true;
+    }
+
+    private void DiscardPendingColorPicker()
+    {
+        _pendingColorPickerStep = null;
+        _pendingColorPickerHint = null;
+        _pendingColorPickerSource = null;
+    }
+
+    private void DiscardPendingColorPickerIfSwitchingTo(Control? source)
+    {
+        var hint = _pendingColorPickerHint;
+        if (hint is null || _stepFactory.IsColorPickerPart(source, hint))
+        {
+            return;
+        }
+
+        DiscardPendingColorPicker();
     }
 
     private void FlushPendingText()

@@ -78,6 +78,24 @@ public partial class ArmDesktopControl : UserControl
         }
     }
 
+    private void OnArmAccentColorOpenClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorCustomValue.Text = ArmAccentColorValue.Text;
+        ArmAccentColorPopup.IsVisible = true;
+    }
+
+    private void OnArmAccentColorConfirmClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorValue.Text = ArmAccentColorCustomValue.Text;
+        ArmAccentColorPopup.IsVisible = false;
+    }
+
+    private void OnArmAccentColorCancelClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorCustomValue.Text = ArmAccentColorValue.Text;
+        ArmAccentColorPopup.IsVisible = false;
+    }
+
     private void OnArmStatusFilterLoaded(object? sender, RoutedEventArgs e)
     {
         if (sender is PopupEditor popupEditor)
@@ -338,7 +356,8 @@ public partial class ArmDesktopControl : UserControl
     private static ArmDesktopGridRowViewModel CreateRow(int index)
     {
         var state = index % 2 == 0 ? "Open" : "Pending";
-        return new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state);
+        var color = index % 2 == 0 ? "#FF336699" : "#FF663399";
+        return new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state, color);
     }
 
     private void ActivatePane(string pane)

@@ -2787,6 +2787,12 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return;
             }
 
+            if (request.EditorKind == GridCellEditorKind.Color)
+            {
+                EditColorCell(cell, request);
+                return;
+            }
+
             if (_fallback is IEditableGridControl editableFallback)
             {
                 editableFallback.EditCell(request);
@@ -2890,6 +2896,21 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
 
             new FlaUiListBoxControl(results.AsListBox()).SelectItem(request.Value, RemainingTimeout());
+        }
+
+        private void EditColorCell(AutomationElement cell, GridCellEditRequest request)
+        {
+            var expected = ColorValue.Normalize(request.Value);
+            var editor = new[] { cell }
+                .Concat(FindAutomationDescendants(cell))
+                .FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Edit);
+            if (editor is null)
+            {
+                throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose an editable color-value surface.");
+            }
+
+            new FlaUiTextBoxControl(editor.AsTextBox()).Enter(expected);
         }
 
         private static TimeSpan ParseGridTime(string value)

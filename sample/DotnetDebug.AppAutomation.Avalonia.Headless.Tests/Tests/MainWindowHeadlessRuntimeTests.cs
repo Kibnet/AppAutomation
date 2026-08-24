@@ -38,12 +38,23 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                         resultsKind: SearchPickerResultsKind.ListBox,
                         opensOnSearch: true))
+                .WithColorPicker(
+                    "ArmAccentColorPicker",
+                    ColorPickerParts.ByAutomationIds(
+                        "ArmAccentColorPicker",
+                        "ArmAccentColorValue",
+                        openButtonAutomationId: "ArmAccentColorOpenButton",
+                        popupRootAutomationId: "ArmAccentColorPopup",
+                        customValueAutomationId: "ArmAccentColorCustomValue",
+                        confirmButtonAutomationId: "ArmAccentColorConfirmButton",
+                        cancelButtonAutomationId: "ArmAccentColorCancelButton",
+                        commitMode: ColorPickerCommitMode.Confirm))
                 .WithGridColumns(
                     "EremexDemoDataGridAutomationBridge",
                     ["EremexRow", "EremexValue", "EremexParity"])
                 .WithGridColumns(
                     "ArmGridAutomationBridge",
-                    ["Key", "Value", "State"])
+                    ["Key", "Value", "Color", "State"])
                 .WithGridColumns(
                     "SearchPickerGridAutomationBridge",
                     ["Key", "SelectedValue"])

@@ -8,12 +8,14 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
     private const string BridgeAutomationId = "ArmGridAutomationBridge";
     private string _value;
     private string _state;
+    private string _color;
 
-    public ArmDesktopGridRowViewModel(int index, string value, string state)
+    public ArmDesktopGridRowViewModel(int index, string value, string state, string color)
     {
         Index = index;
         _value = value;
         _state = state;
+        _color = color;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -34,13 +36,21 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
         set => SetProperty(ref _state, value);
     }
 
+    public string Color
+    {
+        get => _color;
+        set => SetProperty(ref _color, value);
+    }
+
     public string RowAutomationId => $"{BridgeAutomationId}_Row{Index}";
 
     public string KeyCellAutomationId => $"{RowAutomationId}_Cell0";
 
     public string ValueCellAutomationId => $"{RowAutomationId}_Cell1";
 
-    public string StateCellAutomationId => $"{RowAutomationId}_Cell2";
+    public string StateCellAutomationId => $"{RowAutomationId}_Cell3";
+
+    public string ColorCellAutomationId => $"{RowAutomationId}_Cell2";
 
     private void SetProperty(ref string field, string value, [CallerMemberName] string? propertyName = null)
     {

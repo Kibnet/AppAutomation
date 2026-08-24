@@ -79,6 +79,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmServerPickerClearButton", UiControlType.Button, "ArmServerPickerClearButton")]
 [UiControl("ArmServerPickerStatusLabel", UiControlType.Label, "ArmServerPickerStatusLabel")]
 [UiControl("ArmTableSearch", UiControlType.Search, "ArmTableSearch")]
+[UiControl("ArmAccentColorPicker", UiControlType.ColorPicker, "ArmAccentColorPicker")]
 [UiControl("ArmStatusFilter", UiControlType.ComboBoxFilter, "ArmStatusFilter")]
 [UiControl("ArmStatusFilterStatusLabel", UiControlType.Label, "ArmStatusFilterStatusLabel")]
 [UiControl("ArmEremexDataGridHost", UiControlType.AutomationElement, "ArmEremexDataGridHost")]

@@ -110,7 +110,7 @@ public partial class App : Application
         options.GridHints.Add(new RecorderGridHint(
             "ArmEremexDataGridControl",
             "ArmGridAutomationBridge",
-            ["Key", "Value", "State"])
+            ["Key", "Value", "Color", "State"])
         {
             RowIdentityColumnPropertyNames = ["Key"]
         });
@@ -181,6 +181,17 @@ public partial class App : Application
                 "ArmStatusFilter_Results",
                 "ArmStatusFilter_ApplyButton",
                 "ArmStatusFilter_CancelButton")));
+        options.ColorPickerHints.Add(new RecorderColorPickerHint(
+            "ArmAccentColorPicker",
+            ColorPickerParts.ByAutomationIds(
+                "ArmAccentColorPicker",
+                "ArmAccentColorValue",
+                openButtonAutomationId: "ArmAccentColorOpenButton",
+                popupRootAutomationId: "ArmAccentColorPopup",
+                customValueAutomationId: "ArmAccentColorCustomValue",
+                confirmButtonAutomationId: "ArmAccentColorConfirmButton",
+                cancelButtonAutomationId: "ArmAccentColorCancelButton",
+                commitMode: ColorPickerCommitMode.Confirm)));
         options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
             "SearchPickerGridEditor",
             "SearchPickerGridAutomationBridge",

@@ -34,6 +34,7 @@ namespace Sample.Pages;
 [UiControl("TableSearch", UiControlType.Search, "TableSearch")]
 [UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
 [UiControl("DetailsExpander", UiControlType.Expander, "DetailsExpander")]
+[UiControl("AccentColor", UiControlType.ColorPicker, "AccentColor")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -66,6 +67,7 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ISearchControl TableSearch => Resolve<global::AppAutomation.Abstractions.ISearchControl>(MainWindowPageDefinitions.TableSearch);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITimePickerControl StartTimePicker => Resolve<global::AppAutomation.Abstractions.ITimePickerControl>(MainWindowPageDefinitions.StartTimePicker);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IExpanderControl DetailsExpander => Resolve<global::AppAutomation.Abstractions.IExpanderControl>(MainWindowPageDefinitions.DetailsExpander);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IColorPickerControl AccentColor => Resolve<global::AppAutomation.Abstractions.IColorPickerControl>(MainWindowPageDefinitions.AccentColor);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");

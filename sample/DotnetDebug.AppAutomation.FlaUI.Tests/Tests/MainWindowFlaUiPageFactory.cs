@@ -35,6 +35,17 @@ internal static class MainWindowFlaUiPageFactory
                         expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
                         resultsKind: SearchPickerResultsKind.ListBox,
                         opensOnSearch: true))
+                .WithColorPicker(
+                    "ArmAccentColorPicker",
+                    ColorPickerParts.ByAutomationIds(
+                        "ArmAccentColorPicker",
+                        "ArmAccentColorValue",
+                        openButtonAutomationId: "ArmAccentColorOpenButton",
+                        popupRootAutomationId: "ArmAccentColorPopup",
+                        customValueAutomationId: "ArmAccentColorCustomValue",
+                        confirmButtonAutomationId: "ArmAccentColorConfirmButton",
+                        cancelButtonAutomationId: "ArmAccentColorCancelButton",
+                        commitMode: ColorPickerCommitMode.Confirm))
                 .WithSearchControl(
                     "ArmTableSearch",
                     SearchControlParts.ByAutomationIds(
@@ -47,7 +58,7 @@ internal static class MainWindowFlaUiPageFactory
                     ["EremexRow", "EremexValue", "EremexParity"])
                 .WithGridColumns(
                     "ArmGridAutomationBridge",
-                    ["Key", "Value", "State"])
+                    ["Key", "Value", "Color", "State"])
                 .WithGridColumns(
                     "SearchPickerGridAutomationBridge",
                     ["Key", "SelectedValue"])

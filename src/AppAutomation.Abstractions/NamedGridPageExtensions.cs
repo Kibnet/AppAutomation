@@ -222,6 +222,30 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Selects a color in a named grid cell.
+    /// </summary>
+    public static TSelf EditGridCellColor<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        string color,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowSelector,
+            columnName,
+            ColorValue.Normalize(color),
+            GridCellEditorKind.Color,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
     /// Selects a combo-box item in a named cell of the uniquely selected row.
     /// </summary>
     public static TSelf SelectGridCellComboItem<TSelf>(

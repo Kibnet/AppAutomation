@@ -63,6 +63,11 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderSingleSelectHint> SingleSelectHints { get; } = new List<RecorderSingleSelectHint>();
 
+    public IList<RecorderColorPickerHint> ColorPickerHints { get; } = new List<RecorderColorPickerHint>();
+
+    public IList<IRecorderColorPickerSelectionSource> ColorPickerSelectionSources { get; } =
+        new List<IRecorderColorPickerSelectionSource>();
+
     public IList<RecorderDateRangeFilterHint> DateRangeFilterHints { get; } = new List<RecorderDateRangeFilterHint>();
 
     public IList<RecorderNumericRangeFilterHint> NumericRangeFilterHints { get; } = new List<RecorderNumericRangeFilterHint>();
@@ -201,6 +206,12 @@ public sealed record RecorderTimePickerHint(
 public sealed record RecorderSingleSelectHint(
     string LocatorValue,
     SingleSelectParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderColorPickerHint(
+    string LocatorValue,
+    ColorPickerParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 

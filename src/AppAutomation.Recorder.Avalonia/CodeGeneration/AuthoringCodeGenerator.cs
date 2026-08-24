@@ -1076,11 +1076,13 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue)});",
             RecordedActionKind.SetTime => $"Page.SetTime(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.SetExpanded => $"Page.SetExpanded(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
+            RecordedActionKind.SetColor => $"Page.SetColor(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilTextEquals => $"Page.WaitUntilTextEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilTextContains => $"Page.WaitUntilTextContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilValueEquals => $"Page.WaitUntilValueEquals(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.WaitUntilTimeEquals => $"Page.WaitUntilTimeEquals(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.WaitUntilIsExpanded => $"Page.WaitUntilIsExpanded(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
+            RecordedActionKind.WaitUntilColorEquals => $"Page.WaitUntilColorEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilIsChecked => $"Page.WaitUntilIsChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1123,6 +1125,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.EditGridCellTime => HasNamedGridRow(step)
                 ? $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.EditGridCellColor => HasNamedGridRow(step)
+                ? $"Page.EditGridCellColor(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellColor(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.SelectGridCellComboItem => HasNamedGridRow(step)
                 ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",

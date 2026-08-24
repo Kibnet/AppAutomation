@@ -272,6 +272,73 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Sets a color picker to a canonical provider-neutral color value.
+    /// </summary>
+    public static TSelf SetColor<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IColorPickerControl>> selector,
+        string color,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var expected = ColorValue.Normalize(color);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "color-picker");
+        var picker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => picker.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Color picker '{picker.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={picker.IsEnabled}");
+
+        if (picker is IColorPickerOperationControl operationControl)
+        {
+            operationControl.SetColor(expected, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            picker.Color = expected;
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => ColorValue.TryNormalize(picker.Color, out var actual)
+                && string.Equals(actual, expected, StringComparison.Ordinal),
+            budget.RemainingMilliseconds,
+            $"Color picker '{picker.AutomationId}' did not reach the expected color.",
+            expectedValue: expected,
+            lastObservedValueFactory: () => picker.Color);
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a color picker exposes the expected canonical color.
+    /// </summary>
+    public static TSelf WaitUntilColorEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IColorPickerControl>> selector,
+        string expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var canonical = ColorValue.Normalize(expected);
+        var picker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => ColorValue.TryNormalize(picker.Color, out var actual)
+                && string.Equals(actual, canonical, StringComparison.Ordinal),
+            timeoutMs,
+            $"Color picker '{picker.AutomationId}' did not reach the expected color.",
+            expectedValue: canonical,
+            lastObservedValueFactory: () => picker.Color);
+        return page;
+    }
+
+    /// <summary>
     /// Selects an item in a combo box by its display text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -2033,6 +2100,30 @@ public static partial class UiPageExtensions
             columnIndex,
             value.ToString("c", CultureInfo.InvariantCulture),
             GridCellEditorKind.Time,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Selects a color in a grid-cell color editor addressed by zero-based indexes.
+    /// </summary>
+    public static TSelf EditGridCellColor<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string color,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            ColorValue.Normalize(color),
+            GridCellEditorKind.Color,
             commitMode,
             timeoutMs: timeoutMs);
     }

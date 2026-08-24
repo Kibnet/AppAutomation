@@ -62,7 +62,10 @@ public enum RecordedActionKind
     WaitUntilTimeEquals = 54,
     EditGridCellTime = 55,
     SetExpanded = 56,
-    WaitUntilIsExpanded = 57
+    WaitUntilIsExpanded = 57,
+    SetColor = 58,
+    WaitUntilColorEquals = 59,
+    EditGridCellColor = 60
 }
 
 public enum RecorderAssertionMode
@@ -169,6 +172,13 @@ internal sealed record SingleSelectCaptureResult(
     bool IsConfigured,
     bool HasSelection,
     RecorderSingleSelectHint? Hint,
+    StepCreationResult StepResult);
+
+internal sealed record ColorPickerCaptureResult(
+    bool IsConfigured,
+    bool HasCandidateValue,
+    bool HasColor,
+    RecorderColorPickerHint? Hint,
     StepCreationResult StepResult);
 
 internal sealed record ResolvedControlResult(
