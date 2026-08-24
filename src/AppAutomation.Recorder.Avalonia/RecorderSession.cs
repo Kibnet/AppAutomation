@@ -69,6 +69,7 @@ internal sealed class RecorderSession :
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
+    private RoutedEventArgs? _lastMenuItemClickEvent;
     private ComboBoxFilterClickSnapshot? _comboBoxFilterClickSnapshot;
     private string _lastFingerprint = string.Empty;
     private DateTimeOffset _lastRecordedAt;
@@ -939,6 +940,41 @@ internal sealed class RecorderSession :
                 CollectObservableControls(detachedRoot, controls, visited);
             }
         }
+
+        foreach (var menuItem in root.GetLogicalDescendants().OfType<MenuItem>())
+        {
+            if (visited.Add(menuItem))
+            {
+                controls.Add(menuItem);
+            }
+        }
+
+        var menus = root.GetVisualDescendants().OfType<Menu>();
+        if (root is Menu rootMenu)
+        {
+            menus = menus.Prepend(rootMenu);
+        }
+
+        foreach (var menu in menus)
+        {
+            CollectMenuItems(menu.Items.OfType<MenuItem>(), controls, visited);
+        }
+    }
+
+    private static void CollectMenuItems(
+        IEnumerable<MenuItem> items,
+        ISet<Control> controls,
+        ISet<Control> visited)
+    {
+        foreach (var item in items)
+        {
+            if (visited.Add(item))
+            {
+                controls.Add(item);
+            }
+
+            CollectMenuItems(item.Items.OfType<MenuItem>(), controls, visited);
+        }
     }
 
     private static IEnumerable<Control> EnumerateDetachedContentRoots(Control control)
@@ -996,6 +1032,9 @@ internal sealed class RecorderSession :
             case Expander expander:
                 expander.PropertyChanged += OnExpanderPropertyChanged;
                 return () => expander.PropertyChanged -= OnExpanderPropertyChanged;
+            case MenuItem menuItem:
+                menuItem.AddHandler(MenuItem.ClickEvent, OnMenuItemClick, RoutingStrategies.Bubble);
+                return () => menuItem.RemoveHandler(MenuItem.ClickEvent, OnMenuItemClick);
             case DatePicker datePicker:
                 datePicker.PropertyChanged += OnDatePickerPropertyChanged;
                 return () => datePicker.PropertyChanged -= OnDatePickerPropertyChanged;
@@ -1025,6 +1064,7 @@ internal sealed class RecorderSession :
             or NumericUpDown
             or TimePicker
             or Expander
+            or MenuItem
             or DatePicker
             or Calendar;
     }
@@ -1260,6 +1300,20 @@ internal sealed class RecorderSession :
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
         AddStep(_stepFactory.TryCreateButtonStep(control), control ?? eventSource, "ButtonClick");
+    }
+
+    private void OnMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording
+            || e.Source is not MenuItem { Items.Count: 0 } item
+            || ReferenceEquals(_lastMenuItemClickEvent, e))
+        {
+            return;
+        }
+
+        _lastMenuItemClickEvent = e;
+        FlushPendingState();
+        AddStep(_stepFactory.TryCreateMenuItemStep(item), item, "MenuItemClick");
     }
 
     private void OnComboBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)

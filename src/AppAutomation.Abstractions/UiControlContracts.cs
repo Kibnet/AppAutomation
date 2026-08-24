@@ -473,6 +473,28 @@ public interface IColorPickerControl : IUiControl
 }
 
 /// <summary>
+/// Represents a menu whose items are addressed by an exact root-to-leaf caption path.
+/// </summary>
+public interface IMenuControl : IUiControl
+{
+    /// <summary>
+    /// Opens the menu hierarchy and invokes one unambiguous leaf item.
+    /// </summary>
+    void InvokeItem(IReadOnlyList<string> path, int timeoutMs);
+}
+
+/// <summary>
+/// Represents a stable, directly addressable menu item.
+/// </summary>
+public interface IMenuItemControl : IUiControl
+{
+    /// <summary>
+    /// Invokes the item through the provider's native menu gesture.
+    /// </summary>
+    void Invoke(int timeoutMs);
+}
+
+/// <summary>
 /// Represents a slider control for selecting a value within a range.
 /// </summary>
 public interface ISliderControl : IUiControl

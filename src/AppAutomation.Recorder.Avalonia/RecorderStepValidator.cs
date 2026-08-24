@@ -35,6 +35,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.SetTime => source is TimePicker,
             RecordedActionKind.SetExpanded => source is Expander,
             RecordedActionKind.SetColor => source is Control,
+            RecordedActionKind.InvokeMenuItem => source is Menu or MenuItem,
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,

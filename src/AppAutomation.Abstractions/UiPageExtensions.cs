@@ -339,6 +339,38 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Invokes a stable, directly addressable menu item.
+    /// </summary>
+    public static TSelf InvokeMenuItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IMenuItemControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var item = Resolve(selector, page);
+        item.Invoke(timeoutMs);
+        return page;
+    }
+
+    /// <summary>
+    /// Invokes one leaf item through an exact root-to-leaf menu path.
+    /// </summary>
+    public static TSelf InvokeMenuItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IMenuControl>> selector,
+        IReadOnlyList<string> path,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var exactPath = MenuPathValue.Normalize(path);
+        var menu = Resolve(selector, page);
+        menu.InvokeItem(exactPath, timeoutMs);
+        return page;
+    }
+
+    /// <summary>
     /// Selects an item in a combo box by its display text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>

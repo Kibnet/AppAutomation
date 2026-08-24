@@ -99,6 +99,61 @@ internal sealed class RecorderStepFactory
         return CreateStep(control, step, locatorResult.Message);
     }
 
+    public StepCreationResult TryCreateMenuItemStep(MenuItem? item)
+    {
+        if (item is null)
+        {
+            return StepCreationResult.Unsupported("Recorder does not support this menu target.");
+        }
+
+        if (item.Items.Count > 0)
+        {
+            return StepCreationResult.Unsupported("Opening a parent menu item does not create a recorded action.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(AutomationProperties.GetAutomationId(item))
+            && IsDirectMenuItem(item))
+        {
+            var directLocator = _selectorResolver.Resolve(item, UiControlType.MenuItem);
+            if (!directLocator.Success || directLocator.Control is null)
+            {
+                return StepCreationResult.Unsupported(directLocator.Message);
+            }
+
+            return CreateStep(
+                item,
+                new RecordedStep(
+                    RecordedActionKind.InvokeMenuItem,
+                    directLocator.Control,
+                    Warning: directLocator.Control.Warning,
+                    ValidationStatus: directLocator.ValidationStatus,
+                    ValidationMessage: directLocator.ValidationMessage,
+                    CanPersist: directLocator.CanPersist));
+        }
+
+        if (!TryBuildMenuPath(item, out var menu, out var path, out var message))
+        {
+            return StepCreationResult.Unsupported(message);
+        }
+
+        var menuLocator = _selectorResolver.Resolve(menu, UiControlType.Menu);
+        if (!menuLocator.Success || menuLocator.Control is null)
+        {
+            return StepCreationResult.Unsupported(menuLocator.Message);
+        }
+
+        return CreateStep(
+            item,
+            new RecordedStep(
+                RecordedActionKind.InvokeMenuItem,
+                menuLocator.Control,
+                Warning: menuLocator.Control.Warning,
+                StringValues: path,
+                ValidationStatus: menuLocator.ValidationStatus,
+                ValidationMessage: menuLocator.ValidationMessage,
+                CanPersist: menuLocator.CanPersist));
+    }
+
     public StepCreationResult TryCreateTextEntryStep(TextBox textBox)
     {
         ArgumentNullException.ThrowIfNull(textBox);
@@ -4114,6 +4169,89 @@ internal sealed class RecorderStepFactory
                 queue.Enqueue(templatedParent);
             }
         }
+    }
+
+    private static bool TryBuildMenuPath(
+        MenuItem leaf,
+        out Menu menu,
+        out IReadOnlyList<string> path,
+        out string message)
+    {
+        var items = new List<MenuItem>();
+        Control? current = leaf;
+        menu = null!;
+        while (current is not null)
+        {
+            if (current is MenuItem item)
+            {
+                items.Add(item);
+            }
+            else if (current is Menu owner)
+            {
+                menu = owner;
+                break;
+            }
+
+            current = GetMenuParent(current);
+        }
+
+        if (menu is null || items.Count == 0)
+        {
+            path = [];
+            message = "Recorder could not find the owning menu for this menu item.";
+            return false;
+        }
+
+        items.Reverse();
+        var captions = new string[items.Count];
+        for (var index = 0; index < items.Count; index++)
+        {
+            var caption = ReadMenuCaption(items[index]);
+            if (string.IsNullOrWhiteSpace(caption))
+            {
+                path = [];
+                message = "A menu item in the selected path does not expose visible caption text.";
+                return false;
+            }
+
+            captions[index] = caption;
+            var siblings = index == 0
+                ? menu.Items.OfType<MenuItem>()
+                : items[index - 1].Items.OfType<MenuItem>();
+            var duplicateCount = siblings.Count(sibling =>
+                string.Equals(ReadMenuCaption(sibling), caption, StringComparison.Ordinal));
+            if (duplicateCount > 1)
+            {
+                path = [];
+                message = $"Menu item caption '{caption}' is ambiguous among siblings ({duplicateCount} matches).";
+                return false;
+            }
+        }
+
+        path = captions;
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool IsDirectMenuItem(MenuItem item)
+    {
+        return GetMenuParent(item) is Menu;
+    }
+
+    private static Control? GetMenuParent(Control control)
+    {
+        if (control is ILogical { LogicalParent: Control logicalParent })
+        {
+            return logicalParent;
+        }
+
+        return control.GetVisualParent() as Control;
+    }
+
+    private static string ReadMenuCaption(MenuItem item)
+    {
+        return MenuPathValue.TryGetVisibleCaption(item.Header, AutomationProperties.GetName(item))
+            ?? string.Empty;
     }
 
     private static string? ExtractTreeSelectionText(object? selectedItem)

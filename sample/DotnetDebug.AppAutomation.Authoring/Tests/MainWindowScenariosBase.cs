@@ -402,6 +402,34 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task MenuItems_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .InvokeMenuItem(p => p.RefreshMenuItem)
+            .WaitUntilNameEquals(p => p.MenuStatusLabel, "Menu: refreshed")
+            .InvokeMenuItem(p => p.MainMenu, ["Actions", "Export", "Snapshot"])
+            .WaitUntilNameEquals(p => p.MenuStatusLabel, "Menu: snapshot exported");
+
+        await UiAssert.TextEqualsAsync(
+            () => Page.MenuStatusLabel.Text,
+            "Menu: snapshot exported");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DisabledMenuItem_IsRejected()
+    {
+        Page.SelectTabItem(p => p.ArmDesktopTabItem);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            Page.InvokeMenuItem(p => p.MainMenu, ["Actions", "Disabled action"]));
+
+        await Assert.That(exception.Message).Contains("disabled");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_GridActionsAndEditableCells_Work()
     {
         var firstRow = GridRowSelector.ByCell("Key", "ARM-01");

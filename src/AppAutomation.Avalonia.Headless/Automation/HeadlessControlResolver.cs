@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Text;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
@@ -62,6 +63,8 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             UiControlType.DateTimePicker => new HeadlessDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
             UiControlType.TimePicker => new HeadlessTimePickerControl(FindElement(definition).AsTimePicker()),
             UiControlType.Expander => new HeadlessExpanderControl(FindElement(definition).AsExpander()),
+            UiControlType.Menu => new HeadlessMenuControl(FindElement(definition).AsMenu()),
+            UiControlType.MenuItem => new HeadlessMenuItemControl(FindElement(definition).AsMenuItem()),
             UiControlType.Spinner => new HeadlessSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new HeadlessTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new HeadlessTabItemControl(FindElement(definition).AsTabItem()),
@@ -1365,6 +1368,112 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public void Expand() => Inner.Expand();
 
         public void Collapse() => Inner.Collapse();
+    }
+
+    private sealed class HeadlessMenuControl : HeadlessControlBase<Menu>, IMenuControl
+    {
+        public HeadlessMenuControl(Menu inner) : base(inner)
+        {
+        }
+
+        public void InvokeItem(IReadOnlyList<string> path, int timeoutMs)
+        {
+            var exactPath = MenuPathValue.Normalize(path);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            UiWait.Until(
+                () => Inner.IsEnabled,
+                static enabled => enabled,
+                new UiWaitOptions
+                {
+                    Timeout = Remaining(stopwatch, timeoutMs),
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu '{AutomationId}' did not become enabled.");
+            Func<MenuItem[]> currentItems = () => Inner.Items;
+            var openedItems = new List<MenuItem>();
+            try
+            {
+                for (var index = 0; index < exactPath.Count; index++)
+                {
+                    var caption = exactPath[index];
+                    var item = FindUniqueItem(currentItems, caption, Remaining(stopwatch, timeoutMs));
+                    if (index == exactPath.Count - 1)
+                    {
+                        item.Invoke();
+                        return;
+                    }
+
+                    if (!item.IsEnabled)
+                    {
+                        throw new InvalidOperationException($"Menu item '{caption}' is disabled.");
+                    }
+
+                    item.Expand();
+                    UiWait.Until(
+                        () => item.IsExpanded,
+                        static expanded => expanded,
+                        new UiWaitOptions
+                        {
+                            Timeout = Remaining(stopwatch, timeoutMs),
+                            PollInterval = TimeSpan.FromMilliseconds(50)
+                        },
+                        $"Menu item '{caption}' did not open its submenu.");
+                    openedItems.Add(item);
+                    currentItems = () => item.Items;
+                }
+            }
+            finally
+            {
+                for (var index = openedItems.Count - 1; index >= 0; index--)
+                {
+                    openedItems[index].Collapse();
+                }
+            }
+        }
+
+        private static MenuItem FindUniqueItem(
+            Func<MenuItem[]> itemSource,
+            string caption,
+            TimeSpan timeout)
+        {
+            var matches = UiWait.Until(
+                () => itemSource()
+                    .Where(item => string.Equals(item.Name, caption, StringComparison.Ordinal))
+                    .ToArray(),
+                static candidates => candidates.Length > 0,
+                new UiWaitOptions
+                {
+                    Timeout = timeout,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{caption}' did not become available.");
+            return matches.Length == 1
+                ? matches[0]
+                : throw new InvalidOperationException(
+                    $"Menu item caption '{caption}' is ambiguous among siblings ({matches.Length} matches).");
+        }
+
+        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
+        {
+            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
+            return remaining > TimeSpan.Zero
+                ? remaining
+                : throw new TimeoutException("The menu operation exceeded its timeout.");
+        }
+    }
+
+    private sealed class HeadlessMenuItemControl : HeadlessControlBase<MenuItem>, IMenuItemControl
+    {
+        public HeadlessMenuItemControl(MenuItem inner) : base(inner)
+        {
+        }
+
+        public void Invoke(int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            Inner.Invoke();
+        }
     }
 
     private sealed class HeadlessSpinnerControl : HeadlessControlBase<Spinner>, ISpinnerControl

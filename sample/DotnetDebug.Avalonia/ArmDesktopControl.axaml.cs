@@ -96,6 +96,16 @@ public partial class ArmDesktopControl : UserControl
         ArmAccentColorPopup.IsVisible = false;
     }
 
+    private void OnNestedMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        MenuStatusLabel.Content = "Menu: snapshot exported";
+    }
+
+    private void OnRefreshMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        MenuStatusLabel.Content = "Menu: refreshed";
+    }
+
     private void OnArmStatusFilterLoaded(object? sender, RoutedEventArgs e)
     {
         if (sender is PopupEditor popupEditor)

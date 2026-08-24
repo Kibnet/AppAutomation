@@ -192,5 +192,15 @@ public enum UiControlType
     /// <summary>
     /// A popup or inline color selection control. Maps to <see cref="IColorPickerControl"/>.
     /// </summary>
-    ColorPicker = 36
+    ColorPicker = 36,
+
+    /// <summary>
+    /// A menu that owns one or more menu-item paths. Maps to <see cref="IMenuControl"/>.
+    /// </summary>
+    Menu = 37,
+
+    /// <summary>
+    /// A directly addressable menu item. Maps to <see cref="IMenuItemControl"/>.
+    /// </summary>
+    MenuItem = 38
 }

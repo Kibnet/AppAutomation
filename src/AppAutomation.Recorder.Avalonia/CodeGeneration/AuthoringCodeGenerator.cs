@@ -1083,6 +1083,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilTimeEquals => $"Page.WaitUntilTimeEquals(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.WaitUntilIsExpanded => $"Page.WaitUntilIsExpanded(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilColorEquals => $"Page.WaitUntilColorEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+            RecordedActionKind.InvokeMenuItem when step.Control.ControlType == UiControlType.Menu =>
+                $"Page.InvokeMenuItem(static page => page.{propertyName}, {FormatOrderedStringValues(step.StringValues)});",
+            RecordedActionKind.InvokeMenuItem => $"Page.InvokeMenuItem(static page => page.{propertyName});",
             RecordedActionKind.WaitUntilIsChecked => $"Page.WaitUntilIsChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsToggled => $"Page.WaitUntilIsToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilIsSelected => $"Page.WaitUntilIsSelected(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1290,6 +1293,16 @@ internal sealed class AuthoringCodeGenerator
         }
 
         return $"new[] {{ {string.Join(", ", renderedValues)} }}";
+    }
+
+    private static string FormatOrderedStringValues(IReadOnlyList<string>? values)
+    {
+        var renderedValues = values?
+            .Select(static value => $"\"{EscapeString(value ?? string.Empty)}\"")
+            .ToArray() ?? [];
+        return renderedValues.Length == 0
+            ? "global::System.Array.Empty<string>()"
+            : $"new[] {{ {string.Join(", ", renderedValues)} }}";
     }
 
     private static string FormatBoolean(bool? value)

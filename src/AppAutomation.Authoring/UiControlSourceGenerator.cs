@@ -521,6 +521,8 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             34 => "global::AppAutomation.Abstractions.ITimePickerControl",
             35 => "global::AppAutomation.Abstractions.IExpanderControl",
             36 => "global::AppAutomation.Abstractions.IColorPickerControl",
+            37 => "global::AppAutomation.Abstractions.IMenuControl",
+            38 => "global::AppAutomation.Abstractions.IMenuItemControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -565,6 +567,8 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             34 => "TimePicker",
             35 => "Expander",
             36 => "ColorPicker",
+            37 => "Menu",
+            38 => "MenuItem",
             _ => "AutomationElement"
         };
     }

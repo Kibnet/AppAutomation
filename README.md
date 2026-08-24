@@ -302,6 +302,7 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - lossless time-of-day actions through `ITimePickerControl`; composite popup wrappers register stable parts with `WithTimePicker(...)`;
 - idempotent expanded-state actions through `IExpanderControl` and `SetExpanded(...)`;
 - popup color selection through `IColorPickerControl`, `WithColorPicker(...)`, and canonical `SetColor(...)` values;
+- menu leaf invocation through `InvokeMenuItem(...)`, using either a stable direct item or an exact root-to-leaf path;
 - ordinary single-selection editors keep `IComboBoxControl`/`SelectComboItem(...)`; composite wrappers register their input/results/commit parts with `WithSingleSelect(...)` and `RecorderSingleSelectHint`;
 - provider-neutral search abstraction `ISearchControl` with `WithSearchControl(...)` and optional history;
 - stable grid row selectors through `GridRowSelector` and `WithGridColumns(...)`;
@@ -722,6 +723,7 @@ dotnet test --solution MyApp.sln -c Debug
 - точные действия со временем через `ITimePickerControl`; составной popup-wrapper регистрируется по stable parts через `WithTimePicker(...)`;
 - идемпотентные действия раскрытия через `IExpanderControl` и `SetExpanded(...)`;
 - выбор цвета в popup через `IColorPickerControl`, `WithColorPicker(...)` и канонические значения `SetColor(...)`;
+- вызов конечного пункта меню через `InvokeMenuItem(...)` по стабильному прямому элементу или точному пути от корня;
 - обычные одиночные селекторы сохраняют `IComboBoxControl`/`SelectComboItem(...)`; составной wrapper регистрирует input/results/commit parts через `WithSingleSelect(...)` и `RecorderSingleSelectHint`;
 - provider-neutral абстракция поиска `ISearchControl` с `WithSearchControl(...)` и необязательной историей;
 - стабильные селекторы строк таблиц через `GridRowSelector` и `WithGridColumns(...)`;

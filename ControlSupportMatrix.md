@@ -35,6 +35,7 @@ next to cover the widest possible set of `ControlType`.
 | ToggleButton | `MixAdvancedToggle` | `ToggleButton` | full | `SetToggled`, `WaitUntilIsToggled` |
 | Expander | `ArmStatusExpander` | `Expander` | full | `SetExpanded`, `WaitUntilIsExpanded`; Recorder suppresses the internal header toggle |
 | Popup color editor | `ArmAccentColorPicker` | `ColorPicker` | full through opt-in composite parts | `SetColor`, `WaitUntilColorEquals`, and `EditGridCellColor`; values use canonical `#AARRGGBB` |
+| Menu / MenuItem | `MainMenu` | `Menu`, `MenuItem` | full | Recorder emits one `InvokeMenuItem` for a leaf; Headless and FlaUI support stable direct items and exact nested paths |
 | Slider | `MixSpeedSlider` | `Slider` | full | `SetSliderValue`, `WaitUntilValueEquals` |
 | ProgressBar | `SeriesProgressBar` | `ProgressBar` | full | `WaitUntilProgressAtLeast` |
 | Tab | `MainTabs` | `Tab` | full | `SelectTabItem` (agnostic to provider idiosyncrasies) |
@@ -175,6 +176,7 @@ Not added: `CalendarDatePicker` sub-variants and native Eremex DataGrid row/cell
 | ToggleButton | `MixAdvancedToggle` | `ToggleButton` | полная | `SetToggled`, `WaitUntilIsToggled` |
 | Expander | `ArmStatusExpander` | `Expander` | полная | `SetExpanded`, `WaitUntilIsExpanded`; Recorder подавляет внутренний toggle заголовка |
 | Popup color editor | `ArmAccentColorPicker` | `ColorPicker` | полная через opt-in composite parts | `SetColor`, `WaitUntilColorEquals` и `EditGridCellColor`; значения имеют канонический вид `#AARRGGBB` |
+| Menu / MenuItem | `MainMenu` | `Menu`, `MenuItem` | полная | Recorder создаёт один `InvokeMenuItem` для конечного пункта; Headless и FlaUI поддерживают стабильный прямой элемент и точный вложенный путь |
 | Slider | `MixSpeedSlider` | `Slider` | полная | `SetSliderValue`, `WaitUntilValueEquals` |
 | ProgressBar | `SeriesProgressBar` | `ProgressBar` | полная | `WaitUntilProgressAtLeast` |
 | Tab | `MainTabs` | `Tab` | полная | `SelectTabItem` (агностичен к provider idiosyncrasies) |

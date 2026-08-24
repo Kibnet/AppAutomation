@@ -9,6 +9,7 @@ using FlaUI.Core.Definitions;
 using FlaUI.Core.Exceptions;
 using FlaUI.Core.Input;
 using FlaUI.Core.Patterns;
+using FlaUI.Core.WindowsAPI;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
 
@@ -75,6 +76,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             UiControlType.DateTimePicker => new FlaUiDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
             UiControlType.TimePicker => new FlaUiTimePickerControl(FindElement(definition)),
             UiControlType.Expander => new FlaUiExpanderControl(FindElement(definition)),
+            UiControlType.Menu => new FlaUiMenuControl(FindElement(definition).AsMenu()),
+            UiControlType.MenuItem => new FlaUiMenuItemControl(GetProcessSearchRoots, definition),
             UiControlType.Spinner => new FlaUiSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new FlaUiTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new FlaUiTabItemControl(FindElement(definition).AsTabItem()),
@@ -2417,6 +2420,338 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
 
             throw new InvalidOperationException(
                 $"Expander '{AutomationId}' exposes neither ExpandCollapse pattern nor an accessible header toggle.");
+        }
+    }
+
+    private sealed class FlaUiMenuControl : FlaUiControlBase<Menu>, IMenuControl
+    {
+        public FlaUiMenuControl(Menu inner) : base(inner)
+        {
+        }
+
+        public void InvokeItem(IReadOnlyList<string> path, int timeoutMs)
+        {
+            var exactPath = MenuPathValue.Normalize(path);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            UiWait.Until(
+                () => TryRead(() => Inner.IsEnabled),
+                static enabled => enabled,
+                new UiWaitOptions
+                {
+                    Timeout = Remaining(stopwatch, timeoutMs),
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu '{AutomationId}' did not become enabled.");
+            Func<MenuItem[]> currentItems = () => Inner.Items.ToArray();
+            var openedItems = new List<MenuItem>();
+            try
+            {
+                for (var index = 0; index < exactPath.Count; index++)
+                {
+                    var item = FindUniqueItem(currentItems, exactPath[index], Remaining(stopwatch, timeoutMs));
+                    if (index == exactPath.Count - 1)
+                    {
+                        InvokeLeaf(item, Remaining(stopwatch, timeoutMs), index > 0);
+                        return;
+                    }
+
+                    if (!item.IsEnabled)
+                    {
+                        throw new InvalidOperationException($"Menu item '{exactPath[index]}' is disabled.");
+                    }
+
+                    var childItems = ExpandAndReadChildItems(item, Remaining(stopwatch, timeoutMs));
+                    openedItems.Add(item);
+                    currentItems = () => childItems;
+                }
+            }
+            catch
+            {
+                CloseOpenedItems(openedItems);
+                throw;
+            }
+        }
+
+        private static void CloseOpenedItems(List<MenuItem> openedItems)
+        {
+            for (var index = openedItems.Count - 1; index >= 0; index--)
+            {
+                var pattern = TryRead(() => openedItems[index].Patterns.ExpandCollapse.PatternOrDefault);
+                if (pattern is not null)
+                {
+                    if (TryRead(() => pattern.ExpandCollapseState.Value) != ExpandCollapseState.Collapsed)
+                    {
+                        pattern.Collapse();
+                    }
+
+                    continue;
+                }
+
+                Keyboard.Press(VirtualKeyShort.ESCAPE);
+            }
+        }
+
+        private static MenuItem FindUniqueItem(
+            Func<MenuItem[]> itemSource,
+            string caption,
+            TimeSpan timeout)
+        {
+            var matches = UiWait.Until(
+                () => itemSource()
+                    .Where(item => string.Equals(item.Text, caption, StringComparison.Ordinal))
+                    .ToArray(),
+                static candidates => candidates.Length > 0,
+                new UiWaitOptions
+                {
+                    Timeout = timeout,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{caption}' did not become available.");
+            return matches.Length == 1
+                ? matches[0]
+                : throw new InvalidOperationException(
+                    $"Menu item caption '{caption}' is ambiguous among siblings ({matches.Length} matches).");
+        }
+
+        private static void InvokeLeaf(MenuItem item, TimeSpan timeout, bool waitForPopupClose)
+        {
+            if (!item.IsEnabled)
+            {
+                throw new InvalidOperationException($"Menu item '{item.Text}' is disabled.");
+            }
+
+            if (HasSubmenu(item))
+            {
+                throw new InvalidOperationException($"Menu item '{item.Text}' is not a leaf item.");
+            }
+
+            InvokeNativeItem(item);
+            if (waitForPopupClose)
+            {
+                WaitForPopupClose(item, timeout);
+            }
+        }
+
+        internal static void InvokeNativeItem(MenuItem item)
+        {
+            if (item.Patterns.Invoke.IsSupported)
+            {
+                item.Invoke();
+            }
+            else
+            {
+                item.Click();
+            }
+        }
+
+        internal static bool HasSubmenu(MenuItem item)
+        {
+            var pattern = item.Patterns.ExpandCollapse.PatternOrDefault;
+            return pattern is not null
+                && pattern.ExpandCollapseState.Value != ExpandCollapseState.LeafNode;
+        }
+
+        internal static MenuItem[] ExpandAndReadChildItems(MenuItem item, TimeSpan timeout)
+        {
+            var pattern = item.Patterns.ExpandCollapse.PatternOrDefault;
+            if (pattern is not null && pattern.ExpandCollapseState.Value == ExpandCollapseState.Collapsed)
+            {
+                pattern.Expand();
+            }
+            else if (pattern is null)
+            {
+                item.Focus();
+                Keyboard.Press(VirtualKeyShort.RETURN);
+            }
+
+            return UiWait.Until(
+                () => item.FindAllChildren(static condition => condition.ByControlType(ControlType.MenuItem))
+                    .Select(static child => child.AsMenuItem())
+                    .ToArray(),
+                static children => children.Length > 0,
+                new UiWaitOptions
+                {
+                    Timeout = timeout,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{item.Text}' did not expose its submenu items.");
+        }
+
+        internal static void WaitUntilVisible(MenuItem item, TimeSpan timeout)
+        {
+            UiWait.Until(
+                () => IsInteractable(item),
+                static ready => ready,
+                new UiWaitOptions
+                {
+                    Timeout = timeout,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{item.Text}' did not become visible and enabled.");
+        }
+
+        internal static void WaitForPopupClose(MenuItem item, TimeSpan timeout)
+        {
+            UiWait.Until(
+                () => !IsVisible(item),
+                static closed => closed,
+                new UiWaitOptions
+                {
+                    Timeout = timeout,
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Menu item '{item.Text}' was invoked, but its menu did not close.");
+        }
+
+        internal static bool IsInteractable(MenuItem item)
+        {
+            return IsVisible(item) && TryRead(() => item.IsEnabled);
+        }
+
+        internal static bool IsVisible(MenuItem item)
+        {
+            return TryRead(() => item.IsAvailable)
+                && TryRead(() => item.BoundingRectangle) is { Width: > 0, Height: > 0 };
+        }
+
+        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
+        {
+            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
+            return remaining > TimeSpan.Zero
+                ? remaining
+                : throw new TimeoutException("The menu operation exceeded its timeout.");
+        }
+    }
+
+    private sealed class FlaUiMenuItemControl : IMenuItemControl
+    {
+        private readonly Func<AutomationElement[]> _searchRoots;
+        private readonly UiControlDefinition _definition;
+
+        public FlaUiMenuItemControl(
+            Func<AutomationElement[]> searchRoots,
+            UiControlDefinition definition)
+        {
+            _searchRoots = searchRoots;
+            _definition = definition;
+        }
+
+        public string AutomationId => _definition.LocatorKind == UiLocatorKind.AutomationId
+            ? _definition.LocatorValue
+            : _definition.PropertyName;
+
+        public string Name => _definition.LocatorKind == UiLocatorKind.Name
+            ? _definition.LocatorValue
+            : _definition.PropertyName;
+
+        public bool IsEnabled => FindVisibleMatches().FirstOrDefault()?.IsEnabled ?? false;
+
+        public void Invoke(int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var item = UiWait.Until(
+                FindVisibleMatches,
+                static matches => matches.Length > 0,
+                new UiWaitOptions
+                {
+                    Timeout = Remaining(stopwatch, timeoutMs),
+                    PollInterval = TimeSpan.FromMilliseconds(50)
+                },
+                $"Direct menu item with locator [{_definition.LocatorKind}:{_definition.LocatorValue}] " +
+                "did not become addressable. Use the owning menu and an exact path for nested items.");
+            if (item.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Menu item locator '{_definition.LocatorValue}' is ambiguous ({item.Length} visible matches).");
+            }
+
+            var target = item[0];
+            if (!target.IsEnabled)
+            {
+                throw new InvalidOperationException($"Menu item '{target.Text}' is disabled.");
+            }
+
+            if (FlaUiMenuControl.HasSubmenu(target))
+            {
+                throw new InvalidOperationException($"Menu item '{target.Text}' is not a leaf item.");
+            }
+
+            FlaUiMenuControl.WaitUntilVisible(target, Remaining(stopwatch, timeoutMs));
+            var waitForPopupClose = HasMenuItemAncestor(target);
+            if (waitForPopupClose)
+            {
+                target.Click();
+            }
+            else
+            {
+                target.Focus();
+                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Press(VirtualKeyShort.ESCAPE);
+            }
+
+            if (waitForPopupClose)
+            {
+                FlaUiMenuControl.WaitForPopupClose(target, Remaining(stopwatch, timeoutMs));
+            }
+        }
+
+        private MenuItem[] FindVisibleMatches()
+        {
+            return _searchRoots()
+                .SelectMany(static root =>
+                    (TryRead(() => root.FindAllDescendants()) ?? []).Prepend(root))
+                .Where(static candidate => candidate.ControlType == ControlType.MenuItem)
+                .Where(static candidate => TryRead(() => candidate.IsAvailable))
+                .Select(static candidate => candidate.AsMenuItem())
+                .Where(FlaUiMenuControl.IsVisible)
+                .Where(MatchesDefinition)
+                .DistinctBy(GetVisibleIdentity)
+                .ToArray();
+        }
+
+        private static string GetVisibleIdentity(MenuItem item)
+        {
+            return string.Join(
+                '|',
+                TryRead(() => item.FrameworkAutomationElement.ProcessId.ValueOrDefault),
+                TryRead(() => item.AutomationId),
+                TryRead(() => item.Name),
+                TryRead(() => item.BoundingRectangle));
+        }
+
+        private bool MatchesDefinition(MenuItem item)
+        {
+            if (_definition.LocatorKind == UiLocatorKind.AutomationId
+                && string.Equals(TryRead(() => item.AutomationId), _definition.LocatorValue, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return (_definition.LocatorKind == UiLocatorKind.Name || _definition.FallbackToName)
+                && string.Equals(TryRead(() => item.Name), _definition.LocatorValue, StringComparison.Ordinal);
+        }
+
+        private static bool HasMenuItemAncestor(MenuItem item)
+        {
+            for (var current = TryRead(() => item.Parent); current is not null; current = TryRead(() => current.Parent))
+            {
+                if (current.ControlType == ControlType.MenuItem)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static TimeSpan Remaining(Stopwatch stopwatch, int timeoutMs)
+        {
+            var remaining = TimeSpan.FromMilliseconds(timeoutMs) - stopwatch.Elapsed;
+            return remaining > TimeSpan.Zero
+                ? remaining
+                : throw new TimeoutException("The menu-item operation exceeded its timeout.");
         }
     }
 

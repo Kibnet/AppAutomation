@@ -7,6 +7,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 
 namespace AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 
@@ -106,6 +107,10 @@ internal class AutomationElement
 
     public Expander AsExpander() => this as Expander ?? new Expander(RequireControl<global::Avalonia.Controls.Expander>());
 
+    public Menu AsMenu() => this as Menu ?? new Menu(RequireControl<global::Avalonia.Controls.Menu>());
+
+    public MenuItem AsMenuItem() => this as MenuItem ?? new MenuItem(RequireControl<global::Avalonia.Controls.MenuItem>());
+
     public Spinner AsSpinner()
     {
         if (this is Spinner spinner)
@@ -202,6 +207,8 @@ internal class AutomationElement
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
             global::Avalonia.Controls.TimePicker timePicker => new TimePicker(timePicker),
             global::Avalonia.Controls.Expander expander => new Expander(expander),
+            global::Avalonia.Controls.Menu menu => new Menu(menu),
+            global::Avalonia.Controls.MenuItem menuItem => new MenuItem(menuItem),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
             global::Avalonia.Controls.TabControl tabControl => new Tab(tabControl),
             global::Avalonia.Controls.TabItem tabItem => new TabItem(tabItem),
@@ -225,6 +232,10 @@ internal class AutomationElement
                 return tabItem.Header?.ToString() ?? string.Empty;
             case global::Avalonia.Controls.TreeViewItem treeViewItem:
                 return treeViewItem.Header?.ToString() ?? string.Empty;
+            case global::Avalonia.Controls.MenuItem menuItem:
+                return AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(
+                    menuItem.Header,
+                    AutomationProperties.GetName(menuItem)) ?? string.Empty;
         }
 
         var automationName = AutomationProperties.GetName(control);
@@ -259,6 +270,8 @@ internal class AutomationElement
             global::Avalonia.Controls.Label => ControlType.Text,
             global::Avalonia.Controls.ListBox => ControlType.List,
             global::Avalonia.Controls.ComboBox => ControlType.ComboBox,
+            global::Avalonia.Controls.Menu => ControlType.Menu,
+            global::Avalonia.Controls.MenuItem => ControlType.MenuItem,
             global::Avalonia.Controls.Slider => ControlType.Slider,
             global::Avalonia.Controls.ProgressBar => ControlType.ProgressBar,
             global::Avalonia.Controls.Calendar => ControlType.Calendar,
@@ -716,6 +729,101 @@ internal sealed class Expander : AutomationElement
         Ui(() =>
         {
             Native.IsExpanded = false;
+            return true;
+        });
+    }
+}
+
+internal sealed class Menu : AutomationElement
+{
+    internal Menu(global::Avalonia.Controls.Menu menu) : base(menu)
+    {
+    }
+
+    private global::Avalonia.Controls.Menu Native => (global::Avalonia.Controls.Menu)Control;
+
+    public MenuItem[] Items => Ui(() => Native.Items
+        .OfType<global::Avalonia.Controls.MenuItem>()
+        .Select(static item => new MenuItem(item))
+        .ToArray());
+
+}
+
+internal sealed class MenuItem : AutomationElement
+{
+    internal MenuItem(global::Avalonia.Controls.MenuItem menuItem) : base(menuItem)
+    {
+    }
+
+    private global::Avalonia.Controls.MenuItem Native => (global::Avalonia.Controls.MenuItem)Control;
+
+    public override string Name => Ui(() =>
+    {
+        return AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(
+            Native.Header,
+            AutomationProperties.GetName(Native)) ?? string.Empty;
+    });
+
+    public MenuItem[] Items => Ui(() => Native.Items
+        .OfType<global::Avalonia.Controls.MenuItem>()
+        .Select(static item => new MenuItem(item))
+        .ToArray());
+
+    public bool IsExpanded => Ui(() => Native.IsSubMenuOpen);
+
+    public void Expand()
+    {
+        Ui(() =>
+        {
+            Native.IsSubMenuOpen = true;
+            Native.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
+    public void Collapse()
+    {
+        Ui(() =>
+        {
+            Native.IsSubMenuOpen = false;
+            Native.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
+    public void Invoke()
+    {
+        if (!IsEnabled)
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' is disabled.");
+        }
+
+        if (Items.Length > 0)
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' is not a leaf item.");
+        }
+
+        var commandState = Ui(() => (Native.Command, Native.CommandParameter));
+        if (commandState.Command is not null
+            && !commandState.Command.CanExecute(commandState.CommandParameter))
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' command cannot execute.");
+        }
+
+        Ui(() =>
+        {
+            if (commandState.Command is { } command)
+            {
+                command.Execute(commandState.CommandParameter);
+            }
+
+            Native.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.MenuItem.ClickEvent));
+            foreach (var parent in Native.GetLogicalAncestors().OfType<global::Avalonia.Controls.MenuItem>())
+            {
+                parent.IsSubMenuOpen = false;
+            }
+
+            Native.Dispatcher.RunJobs();
             return true;
         });
     }

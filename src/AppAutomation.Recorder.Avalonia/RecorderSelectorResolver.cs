@@ -1,6 +1,7 @@
 using AppAutomation.Abstractions;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
@@ -107,7 +108,11 @@ internal sealed class RecorderSelectorResolver
             }
         }
 
-        var validation = ValidateSelector(control, locatorValue, locatorKind);
+        var validation = ValidateSelector(
+            control,
+            locatorValue,
+            locatorKind,
+            includeLogicalDescendants: effectiveControlType is UiControlType.Menu or UiControlType.MenuItem);
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
                 RecorderNaming.CreateControlPropertyName(locatorValue, effectiveControlType),
@@ -166,7 +171,10 @@ internal sealed class RecorderSelectorResolver
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
-        var validation = ValidateSelector(descriptor.LocatorValue, descriptor.LocatorKind);
+        var validation = ValidateSelector(
+            descriptor.LocatorValue,
+            descriptor.LocatorKind,
+            includeLogicalDescendants: descriptor.ControlType is UiControlType.Menu or UiControlType.MenuItem);
         return new ExistingControlResolutionResult(
             validation.MatchedControl is not null,
             validation.MatchedControl,
@@ -257,9 +265,13 @@ internal sealed class RecorderSelectorResolver
             interactiveValidation.CanPersist);
     }
 
-    private SelectorValidationResult ValidateSelector(Control expectedControl, string locatorValue, UiLocatorKind locatorKind)
+    private SelectorValidationResult ValidateSelector(
+        Control expectedControl,
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
     {
-        var validation = ValidateSelector(locatorValue, locatorKind);
+        var validation = ValidateSelector(locatorValue, locatorKind, includeLogicalDescendants);
         if (!validation.Success)
         {
             return validation;
@@ -277,7 +289,10 @@ internal sealed class RecorderSelectorResolver
         return validation;
     }
 
-    private SelectorValidationResult ValidateSelector(string locatorValue, UiLocatorKind locatorKind)
+    private SelectorValidationResult ValidateSelector(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
     {
         var baseStatus = locatorKind == UiLocatorKind.Name
             ? RecorderValidationStatus.Warning
@@ -292,7 +307,7 @@ internal sealed class RecorderSelectorResolver
             return new SelectorValidationResult(baseStatus, baseMessage, true, null);
         }
 
-        var matches = FindMatches(locatorValue, locatorKind);
+        var matches = FindMatches(locatorValue, locatorKind, includeLogicalDescendants);
 
         if (matches.Length == 0)
         {
@@ -315,17 +330,26 @@ internal sealed class RecorderSelectorResolver
         return new SelectorValidationResult(baseStatus, baseMessage, true, matches[0]);
     }
 
-    private Control[] FindMatches(string locatorValue, UiLocatorKind locatorKind)
+    private Control[] FindMatches(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
     {
         var root = _validationRootProvider?.Invoke();
-        return root is null
-            ? []
-            : root
-                .GetVisualDescendants()
-                .OfType<Control>()
-                .Prepend(root)
-                .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
-                .ToArray();
+        if (root is null)
+        {
+            return [];
+        }
+
+        IEnumerable<Control> candidates = root.GetVisualDescendants().OfType<Control>().Prepend(root);
+        if (includeLogicalDescendants)
+        {
+            candidates = candidates.Concat(root.GetLogicalDescendants().OfType<Control>()).Distinct();
+        }
+
+        return candidates
+            .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
+            .ToArray();
     }
 
     private static bool MatchesLocator(Control candidate, string locatorValue, UiLocatorKind locatorKind)

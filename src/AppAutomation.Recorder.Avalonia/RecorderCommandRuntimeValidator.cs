@@ -129,6 +129,7 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.SetColor => ValidateControlType(step, target, UiControlType.ColorPicker)
                 .Concat(RequireColor(step, target)),
+            RecordedActionKind.InvokeMenuItem => ValidateMenuItemInvocation(step, target),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
@@ -408,6 +409,37 @@ internal sealed class RecorderCommandRuntimeValidator
             target,
             "grid-user-action-adapter-required",
             "Grid user action requires a runtime grid action adapter; plain grid row/cell access is not enough.");
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateMenuItemInvocation(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(
+                     step,
+                     target,
+                     [UiControlType.Menu, UiControlType.MenuItem]))
+        {
+            yield return finding;
+        }
+
+        var path = step.StringValues ?? [];
+        if (step.Control.ControlType == UiControlType.Menu &&
+            (path.Count == 0 || path.Any(string.IsNullOrWhiteSpace)))
+        {
+            yield return Invalid(
+                target,
+                "payload-invalid-menu-path",
+                "Menu invocation requires a non-empty exact root-to-leaf caption path.");
+        }
+
+        if (step.Control.ControlType == UiControlType.MenuItem && path.Count > 0)
+        {
+            yield return Invalid(
+                target,
+                "payload-unexpected-menu-path",
+                "A directly addressable menu item must not include a menu path payload.");
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateControlType(

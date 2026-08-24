@@ -35,6 +35,8 @@ namespace Sample.Pages;
 [UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
 [UiControl("DetailsExpander", UiControlType.Expander, "DetailsExpander")]
 [UiControl("AccentColor", UiControlType.ColorPicker, "AccentColor")]
+[UiControl("MainMenu", UiControlType.Menu, "MainMenu")]
+[UiControl("RefreshMenuItem", UiControlType.MenuItem, "RefreshMenuItem")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -68,6 +70,8 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITimePickerControl StartTimePicker => Resolve<global::AppAutomation.Abstractions.ITimePickerControl>(MainWindowPageDefinitions.StartTimePicker);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IExpanderControl DetailsExpander => Resolve<global::AppAutomation.Abstractions.IExpanderControl>(MainWindowPageDefinitions.DetailsExpander);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IColorPickerControl AccentColor => Resolve<global::AppAutomation.Abstractions.IColorPickerControl>(MainWindowPageDefinitions.AccentColor);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuControl MainMenu => Resolve<global::AppAutomation.Abstractions.IMenuControl>(MainWindowPageDefinitions.MainMenu);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuItemControl RefreshMenuItem => Resolve<global::AppAutomation.Abstractions.IMenuItemControl>(MainWindowPageDefinitions.RefreshMenuItem);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");
