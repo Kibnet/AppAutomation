@@ -192,10 +192,18 @@ internal sealed class RecorderScenarioDestinationProject : IDisposable
         string? outputDirectory = null,
         string automationId = "SaveButton")
     {
+        return SaveAsync(context, [RecorderTestSteps.CreateButtonClick(automationId)], outputDirectory);
+    }
+
+    public Task<RecorderSaveResult> SaveAsync(
+        RecorderScenarioSaveContext context,
+        IReadOnlyList<RecordedStep> steps,
+        string? outputDirectory = null)
+    {
         return Generator.SaveAsync(
             RecorderTestWindow.CreateStub(),
             Options,
-            [RecorderTestSteps.CreateButtonClick(automationId)],
+            steps,
             outputDirectory,
             context);
     }
@@ -215,10 +223,17 @@ internal sealed class RecorderScenarioDestinationProject : IDisposable
 
     public Task<RecorderSaveResult> AutosaveAsync(RecorderScenarioSaveContext context)
     {
+        return AutosaveAsync(context, [RecorderTestSteps.CreateButtonClick("SaveButton")]);
+    }
+
+    public Task<RecorderSaveResult> AutosaveAsync(
+        RecorderScenarioSaveContext context,
+        IReadOnlyList<RecordedStep> steps)
+    {
         return Generator.AutosaveAsync(
             RecorderTestWindow.CreateStub(),
             Options,
-            [RecorderTestSteps.CreateButtonClick("SaveButton")],
+            steps,
             outputDirectoryOverride: null,
             context);
     }

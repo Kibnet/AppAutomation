@@ -21,10 +21,10 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => FindMatchingRowIndexes(grid, rowSelector).Count > 0,
+            () => GridRuntimeResolver.FindMatchingRowIndexes(grid, rowSelector).Count > 0,
             timeoutMs,
             $"Grid '{grid.AutomationId}' did not contain a row matching the stable selector.",
-            expectedValue: DescribeRowSelector(rowSelector),
+            expectedValue: GridRuntimeResolver.DescribeRowSelector(rowSelector),
             lastObservedValueFactory: () => DescribeRowMatches(grid, rowSelector));
         return page;
     }
@@ -46,11 +46,11 @@ public static partial class UiPageExtensions
         ArgumentNullException.ThrowIfNull(expectedValue);
 
         var grid = Resolve(selector, page);
-        var columnIndex = ResolveColumnIndex(grid, columnName);
+        var columnIndex = GridRuntimeResolver.ResolveColumnIndex(grid, columnName);
         WaitUntil(
             page,
             selector,
-            () => TryResolveUniqueRowIndex(grid, rowSelector, out var rowIndex)
+            () => GridRuntimeResolver.TryResolveUniqueRowIndex(grid, rowSelector, out var rowIndex)
                 && string.Equals(TryReadGridCellValue(grid, rowIndex, columnIndex), expectedValue, StringComparison.Ordinal),
             timeoutMs,
             $"Grid '{grid.AutomationId}' named cell '{columnName}' did not reach expected value.",
@@ -85,7 +85,7 @@ public static partial class UiPageExtensions
         where TSelf : UiPage
     {
         var grid = Resolve(selector, page);
-        var columnIndex = ResolveColumnIndex(grid, columnName);
+        var columnIndex = GridRuntimeResolver.ResolveColumnIndex(grid, columnName);
         var rowIndex = WaitForUniqueRowIndex(page, selector, rowSelector, timeoutMs, nameof(CopyGridCell));
         return CopyGridCell(page, selector, rowIndex, columnIndex, timeoutMs);
     }
@@ -107,7 +107,7 @@ public static partial class UiPageExtensions
     {
         ArgumentNullException.ThrowIfNull(value);
         var grid = Resolve(selector, page);
-        var columnIndex = ResolveColumnIndex(grid, columnName);
+        var columnIndex = GridRuntimeResolver.ResolveColumnIndex(grid, columnName);
         var rowIndex = WaitForUniqueRowIndex(page, selector, rowSelector, timeoutMs, nameof(EditGridCell));
         var request = new GridCellEditRequest(
             rowIndex,
@@ -304,81 +304,18 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => TryResolveUniqueRowIndex(grid, rowSelector, out rowIndex),
+            () => GridRuntimeResolver.TryResolveUniqueRowIndex(grid, rowSelector, out rowIndex),
             timeoutMs,
             $"Grid '{grid.AutomationId}' did not contain exactly one row matching the stable selector.",
-            expectedValue: DescribeRowSelector(rowSelector),
+            expectedValue: GridRuntimeResolver.DescribeRowSelector(rowSelector),
             lastObservedValueFactory: () => DescribeRowMatches(grid, rowSelector),
             operationName);
         return rowIndex;
     }
 
-    private static bool TryResolveUniqueRowIndex(IGridControl grid, GridRowSelector rowSelector, out int rowIndex)
-    {
-        var matches = FindMatchingRowIndexes(grid, rowSelector);
-        if (matches.Count > 1)
-        {
-            throw new InvalidOperationException(
-                $"Grid row selector '{DescribeRowSelector(rowSelector)}' matched {matches.Count} rows; expected exactly one.");
-        }
-
-        rowIndex = matches.Count == 1 ? matches[0] : -1;
-        return rowIndex >= 0;
-    }
-
-    private static List<int> FindMatchingRowIndexes(IGridControl grid, GridRowSelector rowSelector)
-    {
-        var metadata = RequireColumnMetadata(grid);
-        var conditions = rowSelector.Conditions
-            .Select(condition => (ColumnIndex: ResolveColumnIndex(metadata, condition.ColumnName), condition.Value))
-            .ToArray();
-        var matches = new List<int>();
-        var rows = grid.Rows;
-        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
-        {
-            var cells = rows[rowIndex].Cells;
-            if (conditions.All(condition => condition.ColumnIndex < cells.Count
-                    && string.Equals(cells[condition.ColumnIndex].Value, condition.Value, StringComparison.Ordinal)))
-            {
-                matches.Add(rowIndex);
-            }
-        }
-
-        return matches;
-    }
-
-    private static int ResolveColumnIndex(IGridControl grid, string columnName)
-    {
-        return ResolveColumnIndex(RequireColumnMetadata(grid), columnName);
-    }
-
-    private static int ResolveColumnIndex(IGridColumnMetadataControl metadata, string columnName)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
-        if (!metadata.TryGetColumnIndex(columnName, out var columnIndex))
-        {
-            throw new InvalidOperationException(
-                $"Grid column '{columnName}' is not configured. Available columns: {string.Join(", ", metadata.ColumnNames)}.");
-        }
-
-        return columnIndex;
-    }
-
-    private static IGridColumnMetadataControl RequireColumnMetadata(IGridControl grid)
-    {
-        return grid as IGridColumnMetadataControl
-            ?? throw new InvalidOperationException(
-                $"Grid '{grid.AutomationId}' does not expose column metadata. Register it with WithGridColumns.");
-    }
-
-    private static string DescribeRowSelector(GridRowSelector selector)
-    {
-        return string.Join(", ", selector.Conditions.Select(static condition => $"{condition.ColumnName}='{condition.Value}'"));
-    }
-
     private static string DescribeRowMatches(IGridControl grid, GridRowSelector selector)
     {
-        return $"matches={FindMatchingRowIndexes(grid, selector).Count}; rows={grid.Rows.Count}";
+        return $"matches={GridRuntimeResolver.FindMatchingRowIndexes(grid, selector).Count}; rows={grid.Rows.Count}";
     }
 
     private static string? TryReadNamedGridCellValue(
@@ -386,7 +323,7 @@ public static partial class UiPageExtensions
         GridRowSelector rowSelector,
         int columnIndex)
     {
-        var matches = FindMatchingRowIndexes(grid, rowSelector);
+        var matches = GridRuntimeResolver.FindMatchingRowIndexes(grid, rowSelector);
         return matches.Count switch
         {
             0 => $"<missing row; rows={grid.Rows.Count}>",

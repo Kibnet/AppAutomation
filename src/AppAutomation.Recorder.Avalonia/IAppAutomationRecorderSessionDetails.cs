@@ -40,6 +40,19 @@ internal interface IRecorderStepReorderSessionDetails
     bool MoveStep(Guid stepId, RecorderStepMoveDirection direction);
 }
 
+internal interface IRecorderCheckpointSessionDetails
+{
+    IReadOnlyList<RecorderCheckpointOption> Checkpoints { get; }
+
+    bool TryDescribeCurrentValue(out RecorderSemanticValueDescription? description, out string? error);
+
+    void CaptureCheckpoint(string? variableName = null);
+
+    void CaptureCheckpointAssertion(Guid checkpointId);
+
+    void CaptureLiteralAssertion(string expectedText, RecorderComparisonKind comparisonKind);
+}
+
 internal enum RecorderStepMoveDirection
 {
     Earlier = 0,

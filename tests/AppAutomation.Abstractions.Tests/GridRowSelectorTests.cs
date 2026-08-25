@@ -145,6 +145,33 @@ public sealed class GridRowSelectorTests
         }
     }
 
+    [Test]
+    public async Task GridValueReader_StableSelectorFollowsRowAfterReorder()
+    {
+        var fixture = new GridFixture(
+            Row("ITEM-1", "Draft", "10"),
+            Row("ITEM-2", "Ready", "20"));
+        var page = fixture.CreatePage();
+        var selector = GridRowSelector.ByCell("OrderId", "ITEM-2");
+
+        fixture.Rows.Insert(0, Row("ITEM-NEW", "New", "5"));
+        fixture.Rows.Reverse();
+
+        var value = GridValueReader.ReadCellText(page.Orders, selector, "Status");
+
+        await Assert.That(value).IsEqualTo("Ready");
+    }
+
+    [Test]
+    public async Task GridValueReader_IndexFallbackReadsConfiguredCell()
+    {
+        var fixture = new GridFixture(Row("ITEM-1", "Ready", "20"));
+
+        var value = GridValueReader.ReadCellText(fixture.CreatePage().Orders, rowIndex: 0, columnIndex: 2);
+
+        await Assert.That(value).IsEqualTo("20");
+    }
+
     private static MutableRow Row(string orderId, string status, string amount)
     {
         return new MutableRow(orderId, status, amount);

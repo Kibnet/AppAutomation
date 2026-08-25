@@ -205,18 +205,33 @@ public sealed class RecorderStableGridSelectorTests
     public async Task Recorder_KeepsIndexesWhenIdentityIsNotConfigured()
     {
         var fixture = new GridCaptureFixture(
-            [new OrderRow("ORD-42", "North", "Ready")],
+            [
+                new OrderRow("ORD-39", "West", "Draft"),
+                new OrderRow("ORD-40", "South", "Ready"),
+                new OrderRow("ORD-41", "East", "Draft"),
+                new OrderRow("ORD-42", "North", "Ready")
+            ],
             identityColumns: []);
 
-        var result = fixture.CaptureCell(rowIndex: 0, columnIndex: 2);
+        var assertion = fixture.CaptureCell(rowIndex: 3, columnIndex: 2);
+        var checkpoint = fixture.CaptureCheckpointCell(rowIndex: 3, columnIndex: 2);
+        var validatedCheckpoint = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions())
+            .Validate(checkpoint.Step!);
+        var preview = CreateGenerator().GeneratePreview([validatedCheckpoint]);
 
         using (Assert.Multiple())
         {
-            await Assert.That(result.Success).IsTrue();
-            await Assert.That(result.Step!.RowIndex).IsEqualTo(0);
-            await Assert.That(result.Step.ColumnIndex).IsEqualTo(2);
-            await Assert.That(result.Step.GridRowConditions).IsNull();
-            await Assert.That(result.Step.GridTargetColumnName).IsNull();
+            await Assert.That(assertion.Success).IsTrue();
+            await Assert.That(assertion.Step!.RowIndex).IsEqualTo(3);
+            await Assert.That(assertion.Step.ColumnIndex).IsEqualTo(2);
+            await Assert.That(checkpoint.Success).IsTrue();
+            await Assert.That(checkpoint.Step!.RowIndex).IsEqualTo(3);
+            await Assert.That(checkpoint.Step.ColumnIndex).IsEqualTo(2);
+            await Assert.That(checkpoint.Step.GridRowConditions).IsNull();
+            await Assert.That(checkpoint.Step.GridTargetColumnName).IsNull();
+            await Assert.That(validatedCheckpoint.CanPersist).IsTrue();
+            await Assert.That(preview).Contains(
+                "var cellValue = global::AppAutomation.Abstractions.GridValueReader.ReadCellText(Page.OrdersGrid, 3, 2);");
         }
     }
 
@@ -299,13 +314,22 @@ public sealed class RecorderStableGridSelectorTests
 
         public StepCreationResult CaptureCell(int rowIndex, int columnIndex)
         {
-            var cell = _grid.Children
+            return _factory.TryCreateAssertionStep(FindCell(rowIndex, columnIndex), RecorderAssertionMode.Text);
+        }
+
+        public StepCreationResult CaptureCheckpointCell(int rowIndex, int columnIndex)
+        {
+            return _factory.TryCreateCheckpointStep(FindCell(rowIndex, columnIndex), "cellValue");
+        }
+
+        private TextBlock FindCell(int rowIndex, int columnIndex)
+        {
+            return _grid.Children
                 .OfType<TextBlock>()
                 .Single(candidate => string.Equals(
                     AutomationProperties.GetAutomationId(candidate),
                     $"OrdersGridVisual_Row{rowIndex}_Cell{columnIndex}",
                     StringComparison.Ordinal));
-            return _factory.TryCreateAssertionStep(cell, RecorderAssertionMode.Text);
         }
 
         public StepCreationResult CaptureRow(int rowIndex)

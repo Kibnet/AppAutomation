@@ -49,6 +49,28 @@ internal static class RecorderNaming
         }
     }
 
+    public static string CreateCheckpointVariableName(string? proposedName, ISet<string> reservedNames)
+    {
+        ArgumentNullException.ThrowIfNull(reservedNames);
+
+        var identifier = SanitizeIdentifier(proposedName, "CheckpointValue");
+        identifier = char.ToLowerInvariant(identifier[0]) + identifier[1..];
+        if (IsKeyword(identifier))
+        {
+            identifier = $"checkpoint{char.ToUpperInvariant(identifier[0])}{identifier[1..]}";
+        }
+
+        return EnsureUniqueName(identifier, reservedNames);
+    }
+
+    private static bool IsKeyword(string identifier)
+    {
+        return Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(identifier)
+                != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+            || Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetContextualKeywordKind(identifier)
+                != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None;
+    }
+
     public static string SanitizeIdentifier(string? rawValue, string fallbackPrefix)
     {
         var value = rawValue?.Trim() ?? string.Empty;

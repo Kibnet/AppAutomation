@@ -1686,6 +1686,716 @@ internal sealed class RecorderStepFactory
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
     }
 
+    internal bool TryDescribeSemanticValue(
+        Control? source,
+        out RecorderSemanticValueDescription? description,
+        out string? error)
+    {
+        description = null;
+        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out error))
+        {
+            return false;
+        }
+
+        description = new RecorderSemanticValueDescription(
+            candidate.ValueKind,
+            $"{candidate.Control.ProposedPropertyName}Checkpoint",
+            FormatLiteralText(candidate));
+        return true;
+    }
+
+    internal StepCreationResult TryCreateCheckpointStep(Control? source, string? variableName = null)
+    {
+        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out var error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.CaptureCheckpoint,
+            candidate,
+            checkpointId: Guid.NewGuid(),
+            checkpointVariableName: string.IsNullOrWhiteSpace(variableName)
+                ? $"{candidate.Control.ProposedPropertyName}Checkpoint"
+                : variableName.Trim());
+        return candidate.GridContext is { } grid
+            ? CreateGridStep(
+                source!,
+                step,
+                warning: string.Empty,
+                candidate.Control.LocatorValue,
+                candidate.Control.LocatorKind,
+                grid.RowIndex,
+                grid.ColumnIndex,
+                excludeTargetColumnFromIdentity: true)
+            : CreateStep(source!, step, "Remembered semantic value for replay-time checkpoint.");
+    }
+
+    internal StepCreationResult TryCreateCheckpointAssertionStep(
+        Control? source,
+        RecorderCheckpointOption checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out var error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        if (candidate.ValueKind != checkpoint.ValueKind)
+        {
+            return StepCreationResult.Unsupported(
+                $"Selected value is {candidate.ValueKind}, but checkpoint '{checkpoint.VariableName}' is {checkpoint.ValueKind}.");
+        }
+
+        var comparison = candidate.ValueKind == RecorderValueKind.StringSet
+            ? RecorderComparisonKind.Equivalent
+            : RecorderComparisonKind.Equal;
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: comparison,
+            expectedCheckpointId: checkpoint.CheckpointId);
+        return candidate.GridContext is { } grid
+            ? CreateGridStep(
+                source!,
+                step,
+                warning: string.Empty,
+                candidate.Control.LocatorValue,
+                candidate.Control.LocatorKind,
+                grid.RowIndex,
+                grid.ColumnIndex,
+                excludeTargetColumnFromIdentity: true)
+            : CreateStep(source!, step, $"Added assertion against checkpoint '{checkpoint.VariableName}'.");
+    }
+
+    internal StepCreationResult TryCreateLiteralAssertionStep(
+        Control? source,
+        string expectedText,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
+    {
+        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out var error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        if (!TryApplyLiteralText(candidate, expectedText, out candidate, out error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        if (candidate.ValueKind == RecorderValueKind.StringSet
+            && comparisonKind == RecorderComparisonKind.Equal)
+        {
+            comparisonKind = RecorderComparisonKind.Equivalent;
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: comparisonKind,
+            hasExpectedLiteral: true);
+        return candidate.GridContext is { } grid
+            ? CreateGridStep(
+                source!,
+                step,
+                warning: string.Empty,
+                candidate.Control.LocatorValue,
+                candidate.Control.LocatorKind,
+                grid.RowIndex,
+                grid.ColumnIndex,
+                excludeTargetColumnFromIdentity: true)
+            : CreateStep(source!, step, "Added literal value assertion.");
+    }
+
+    private RecordedStep CreateSemanticValueStep(
+        RecordedActionKind actionKind,
+        SemanticValueCandidate candidate,
+        Guid? checkpointId = null,
+        string? checkpointVariableName = null,
+        RecorderComparisonKind? comparisonKind = null,
+        Guid? expectedCheckpointId = null,
+        bool hasExpectedLiteral = false)
+    {
+        return new RecordedStep(
+            actionKind,
+            candidate.Control,
+            StringValue: candidate.StringValue,
+            BoolValue: candidate.BoolValue,
+            DoubleValue: candidate.DoubleValue,
+            DateValue: candidate.DateValue,
+            RowIndex: candidate.GridContext?.RowIndex,
+            ColumnIndex: candidate.GridContext?.ColumnIndex,
+            StringValues: candidate.StringValues,
+            TimeValue: candidate.TimeValue,
+            ValueKind: candidate.ValueKind,
+            ValueAccessorKind: candidate.ValueAccessorKind,
+            ComparisonKind: comparisonKind,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: checkpointVariableName,
+            ExpectedCheckpointId: expectedCheckpointId,
+            HasExpectedLiteral: hasExpectedLiteral)
+        {
+            GridRowConditions = candidate.GridContext?.RowConditions,
+            GridTargetColumnName = candidate.GridContext?.TargetColumnName
+        };
+    }
+
+    private bool TryResolveSemanticValue(
+        Control? source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        if (source is null)
+        {
+            error = "No control is available for value capture.";
+            return false;
+        }
+
+        if (TryResolveGridSemanticValue(source, requireLiteral, out candidate, out error))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
+        var filterHints = _options.ComboBoxFilterHints
+            .Where(hint => IsMultiSelectPart(source, hint.LocatorValue, hint.LocatorKind, ToMultiSelectParts(hint.Parts)))
+            .ToArray();
+        if (filterHints.Length > 0)
+        {
+            return TryCreateMultiSelectSemanticValue(
+                source,
+                filterHints.Select(hint => (
+                    hint.LocatorValue,
+                    hint.LocatorKind,
+                    hint.FallbackToName,
+                    ToMultiSelectParts(hint.Parts),
+                    UiControlType.ComboBoxFilter)).ToArray(),
+                requireLiteral,
+                out candidate,
+                out error);
+        }
+
+        var multiSelectHints = _options.MultiSelectHints
+            .Where(hint => IsMultiSelectPart(source, hint.LocatorValue, hint.LocatorKind, hint.Parts))
+            .ToArray();
+        if (multiSelectHints.Length > 0)
+        {
+            return TryCreateMultiSelectSemanticValue(
+                source,
+                multiSelectHints.Select(hint => (
+                    hint.LocatorValue,
+                    hint.LocatorKind,
+                    hint.FallbackToName,
+                    hint.Parts,
+                    UiControlType.MultiSelect)).ToArray(),
+                requireLiteral,
+                out candidate,
+                out error);
+        }
+
+        var searchControlHints = _options.SearchControlHints
+            .Where(hint => IsSearchControlPart(source, hint))
+            .ToArray();
+        if (searchControlHints.Length > 0)
+        {
+            if (searchControlHints.Length != 1)
+            {
+                error = $"Value source matches {searchControlHints.Length} SearchControl hints; configure unique part locators.";
+                return false;
+            }
+
+            var hint = searchControlHints[0];
+            var text = TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var input)
+                ? ExtractTextValue(input)
+                : null;
+            if (requireLiteral && text is null)
+            {
+                error = "SearchControl does not expose its current search text.";
+                return false;
+            }
+
+            candidate = new SemanticValueCandidate(
+                CreateCompositeDescriptor(hint.LocatorValue, UiControlType.Search, hint.LocatorKind, hint.FallbackToName, source, null),
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text,
+                StringValue: text);
+            error = string.Empty;
+            return true;
+        }
+
+        var searchPickerHints = _options.SearchPickerHints
+            .Where(hint => IsSearchPickerPart(source, hint))
+            .ToArray();
+        if (searchPickerHints.Length > 0)
+        {
+            if (searchPickerHints.Length != 1)
+            {
+                error = $"Value source matches {searchPickerHints.Length} SearchPicker hints; configure unique part locators.";
+                return false;
+            }
+
+            var hint = searchPickerHints[0];
+            var selectedText = TryFindControl(hint.Parts.ResultsLocator, hint.Parts.LocatorKind, out var results)
+                ? results switch
+                {
+                    ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
+                    ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
+                    _ => null
+                }
+                : null;
+            if (requireLiteral && selectedText is null)
+            {
+                error = "SearchPicker does not expose a committed selected value for a literal assertion.";
+                return false;
+            }
+
+            candidate = new SemanticValueCandidate(
+                CreateCompositeDescriptor(hint.LocatorValue, UiControlType.SearchPicker, hint.LocatorKind, hint.FallbackToName, source, null),
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText,
+                StringValue: selectedText);
+            error = string.Empty;
+            return true;
+        }
+
+        var singleSelectHints = _options.SingleSelectHints
+            .Where(hint => IsSingleSelectPart(source, hint))
+            .ToArray();
+        if (singleSelectHints.Length > 0)
+        {
+            if (singleSelectHints.Length != 1)
+            {
+                error = $"Value source matches {singleSelectHints.Length} single-select hints; configure unique part locators.";
+                return false;
+            }
+
+            var hint = singleSelectHints[0];
+            var selectedText = TryReadSingleSelectCommittedText(hint);
+            if (requireLiteral && selectedText is null)
+            {
+                error = "Single-select editor does not expose a committed selected value for a literal assertion.";
+                return false;
+            }
+
+            candidate = new SemanticValueCandidate(
+                CreateCompositeDescriptor(hint.LocatorValue, UiControlType.ComboBox, hint.LocatorKind, hint.FallbackToName, source, null),
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText,
+                StringValue: selectedText);
+            error = string.Empty;
+            return true;
+        }
+
+        var colorHints = _options.ColorPickerHints.Where(hint => IsColorPickerPart(source, hint)).ToArray();
+        if (colorHints.Length > 0)
+        {
+            if (colorHints.Length != 1)
+            {
+                error = $"Value source matches {colorHints.Length} color-picker hints; configure unique part locators.";
+                return false;
+            }
+
+            var hint = colorHints[0];
+            var hasColor = TryReadColorPickerValue(hint, out var color);
+            if (requireLiteral && !hasColor)
+            {
+                error = "Color picker does not expose a committed canonical color.";
+                return false;
+            }
+
+            candidate = new SemanticValueCandidate(
+                CreateCompositeDescriptor(hint.LocatorValue, UiControlType.ColorPicker, hint.LocatorKind, hint.FallbackToName, source, null),
+                RecorderValueKind.Color,
+                RecorderValueAccessorKind.Color,
+                StringValue: hasColor ? color : null);
+            error = string.Empty;
+            return true;
+        }
+
+        var timeHints = _options.TimePickerHints.Where(hint => IsTimePickerPart(source, hint)).ToArray();
+        if (timeHints.Length > 0)
+        {
+            if (timeHints.Length != 1)
+            {
+                error = $"Value source matches {timeHints.Length} time-picker hints; configure unique part locators.";
+                return false;
+            }
+
+            var hint = timeHints[0];
+            var timeValue = TryFindControl(hint.Parts.TimePickerLocator, hint.Parts.LocatorKind, out var timeControl)
+                && timeControl is TimePicker timePicker
+                    ? timePicker.SelectedTime
+                    : null;
+            if (requireLiteral && timeValue is null)
+            {
+                error = "Time picker does not expose a selected time.";
+                return false;
+            }
+
+            candidate = new SemanticValueCandidate(
+                CreateCompositeDescriptor(hint.LocatorValue, UiControlType.TimePicker, hint.LocatorKind, hint.FallbackToName, source, null),
+                RecorderValueKind.Time,
+                RecorderValueAccessorKind.SelectedTime,
+                TimeValue: timeValue);
+            error = string.Empty;
+            return true;
+        }
+
+        return TryResolvePrimitiveSemanticValue(source, requireLiteral, out candidate, out error);
+    }
+
+    private bool TryResolvePrimitiveSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        var controlType = ClassifyControlType(source);
+        var locator = _selectorResolver.Resolve(source, controlType);
+        if (!locator.Success || locator.Control is null)
+        {
+            error = locator.Message;
+            return false;
+        }
+
+        candidate = source switch
+        {
+            NumericUpDown spinner => new SemanticValueCandidate(
+                locator.Control with { ControlType = UiControlType.Spinner },
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericValue,
+                DoubleValue: spinner.Value is { } value ? decimal.ToDouble(value) : null),
+            TextBox textBox when RecorderSpinnerProxyConfiguration.IsInteractivePart(_options, textBox) =>
+                new SemanticValueCandidate(
+                    locator.Control with { ControlType = UiControlType.Spinner },
+                    RecorderValueKind.Number,
+                    RecorderValueAccessorKind.NumericValue,
+                    DoubleValue: double.TryParse(
+                        textBox.Text,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var spinnerProxyValue)
+                            ? spinnerProxyValue
+                            : null),
+            Slider slider => new SemanticValueCandidate(locator.Control, RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue, DoubleValue: slider.Value),
+            ProgressBar progress => new SemanticValueCandidate(locator.Control, RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue, DoubleValue: progress.Value),
+            DatePicker datePicker => new SemanticValueCandidate(
+                locator.Control,
+                RecorderValueKind.Date,
+                RecorderValueAccessorKind.SelectedDate,
+                DateValue: datePicker.SelectedDate?.DateTime.Date),
+            TimePicker timePicker => new SemanticValueCandidate(locator.Control, RecorderValueKind.Time, RecorderValueAccessorKind.SelectedTime, TimeValue: timePicker.SelectedTime),
+            ComboBox comboBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText, StringValue: ExtractSelectionText(comboBox.SelectedItem)),
+            ListBox listBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText, StringValue: ExtractSelectionText(listBox.SelectedItem)),
+            CheckBox checkBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsChecked, BoolValue: checkBox.IsChecked == true),
+            RadioButton radioButton => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsSelected, BoolValue: radioButton.IsChecked == true),
+            ToggleButton toggleButton => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsToggled, BoolValue: toggleButton.IsChecked == true),
+            TabItem tabItem => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsSelected, BoolValue: tabItem.IsSelected),
+            Expander expander => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsExpanded, BoolValue: expander.IsExpanded),
+            TextBox or TextBlock or Label => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.Text, StringValue: ExtractTextValue(source)),
+            _ => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsEnabled, BoolValue: source.IsEnabled)
+        };
+
+        if (candidate is null)
+        {
+            error = $"Control '{source.GetType().Name}' does not expose a supported semantic value.";
+            return false;
+        }
+
+        if (requireLiteral && !HasLiteral(candidate))
+        {
+            error = $"Control '{source.GetType().Name}' does not expose a current value for a literal assertion.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private bool TryResolveGridSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        error = string.Empty;
+        if (!TryResolveGridHint(source, out var hint, out var gridSource))
+        {
+            return false;
+        }
+
+        var locator = _selectorResolver.Resolve(gridSource, UiControlType.Grid);
+        if (!locator.Success || locator.Control is null)
+        {
+            error = locator.Message;
+            return false;
+        }
+
+        if (!TryReadItemsSource(gridSource, out var items)
+            || !TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var columnIndex, out var cellValue))
+        {
+            error = "Select a concrete grid cell before capturing its value.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            locator.Control,
+            RecorderValueKind.GridCellText,
+            RecorderValueAccessorKind.GridCellText,
+            StringValue: cellValue,
+            GridContext: new GridValueContext(rowIndex, columnIndex, null, null));
+        return true;
+    }
+
+    private bool TryCreateMultiSelectSemanticValue(
+        Control source,
+        IReadOnlyList<(string LocatorValue, UiLocatorKind LocatorKind, bool FallbackToName, MultiSelectParts Parts, UiControlType ControlType)> hints,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        if (hints.Count != 1)
+        {
+            error = $"Value source matches {hints.Count} multi-select hints; configure unique part locators.";
+            return false;
+        }
+
+        var hint = hints[0];
+        if (TryFindControl(hint.Parts.ItemsContainerLocator, hint.Parts.LocatorKind, out var itemsContainer)
+            && itemsContainer.IsVisible)
+        {
+            error = "Apply or cancel the open multi-select popup before remembering or asserting its committed value.";
+            return false;
+        }
+
+        if (requireLiteral)
+        {
+            error = "Use a checkpoint comparison for multi-select values; direct collection literals are not captured from a closed popup.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.LocatorValue,
+                hint.ControlType,
+                hint.LocatorKind,
+                hint.FallbackToName,
+                source,
+                warning: null),
+            RecorderValueKind.StringSet,
+            RecorderValueAccessorKind.SelectedItems);
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsMultiSelectPart(
+        Control source,
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        MultiSelectParts parts)
+    {
+        return EnumerateRelatedControls(source).Any(current =>
+            MatchesLocator(current, locatorKind, locatorValue)
+            || MatchesAnyLocator(
+                current,
+                parts.LocatorKind,
+                parts.RootLocator,
+                parts.OpenButtonLocator,
+                parts.ItemsContainerLocator,
+                parts.ApplyButtonLocator,
+                parts.CancelButtonLocator));
+    }
+
+    private static bool IsSearchPickerPart(Control source, RecorderSearchPickerHint hint)
+    {
+        return EnumerateRelatedControls(source).Any(current =>
+            MatchesLocator(current, hint.LocatorKind, hint.LocatorValue)
+            || MatchesAnyLocator(
+                current,
+                hint.Parts.LocatorKind,
+                hint.Parts.SearchInputLocator,
+                hint.Parts.ResultsLocator,
+                hint.Parts.ApplyButtonLocator,
+                hint.Parts.ExpandButtonLocator));
+    }
+
+    private static bool IsSearchControlPart(Control source, RecorderSearchControlHint hint)
+    {
+        return EnumerateRelatedControls(source).Any(current =>
+            MatchesLocator(current, hint.LocatorKind, hint.LocatorValue)
+            || MatchesAnyLocator(
+                current,
+                hint.Parts.LocatorKind,
+                hint.Parts.SearchInputLocator,
+                hint.Parts.HistoryResultsLocator,
+                hint.Parts.SearchButtonLocator,
+                hint.Parts.HistoryOpenButtonLocator,
+                hint.Parts.HistoryRootLocator));
+    }
+
+    private string? TryReadSingleSelectCommittedText(RecorderSingleSelectHint hint)
+    {
+        foreach (var locator in new[] { hint.Parts.SelectedValueLocator, hint.Parts.RootLocator, hint.Parts.ResultsLocator })
+        {
+            if (string.IsNullOrWhiteSpace(locator)
+                || !TryFindControl(locator, hint.Parts.LocatorKind, out var control))
+            {
+                continue;
+            }
+
+            var value = control switch
+            {
+                ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
+                ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
+                _ => ExtractTextValue(control)
+            };
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HasLiteral(SemanticValueCandidate candidate)
+    {
+        return candidate.ValueKind switch
+        {
+            RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText => candidate.StringValue is not null,
+            RecorderValueKind.Number => candidate.DoubleValue.HasValue,
+            RecorderValueKind.Boolean => candidate.BoolValue.HasValue,
+            RecorderValueKind.Date => true,
+            RecorderValueKind.Time => true,
+            RecorderValueKind.StringSet => candidate.StringValues is not null,
+            _ => false
+        };
+    }
+
+    private static string FormatLiteralText(SemanticValueCandidate candidate)
+    {
+        return candidate.ValueKind switch
+        {
+            RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText => candidate.StringValue ?? string.Empty,
+            RecorderValueKind.Number => candidate.DoubleValue?.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            RecorderValueKind.Boolean => candidate.BoolValue == true ? "true" : "false",
+            RecorderValueKind.Date => candidate.DateValue?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
+            RecorderValueKind.Time => candidate.TimeValue?.ToString("c", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
+            RecorderValueKind.StringSet => string.Join(", ", candidate.StringValues ?? []),
+            _ => string.Empty
+        };
+    }
+
+    private static bool TryApplyLiteralText(
+        SemanticValueCandidate candidate,
+        string text,
+        out SemanticValueCandidate updated,
+        out string error)
+    {
+        updated = candidate;
+        error = string.Empty;
+        switch (candidate.ValueKind)
+        {
+            case RecorderValueKind.Text:
+            case RecorderValueKind.GridCellText:
+                updated = candidate with { StringValue = text };
+                return true;
+            case RecorderValueKind.Color:
+                if (ColorValue.TryNormalize(text, out var color))
+                {
+                    updated = candidate with { StringValue = color };
+                    return true;
+                }
+
+                error = "Expected color must use #RRGGBB or #AARRGGBB.";
+                return false;
+            case RecorderValueKind.Number:
+                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number))
+                {
+                    updated = candidate with { DoubleValue = number };
+                    return true;
+                }
+
+                error = "Expected number must use invariant numeric format.";
+                return false;
+            case RecorderValueKind.Boolean:
+                if (bool.TryParse(text, out var boolean))
+                {
+                    updated = candidate with { BoolValue = boolean };
+                    return true;
+                }
+
+                error = "Expected boolean must be true or false.";
+                return false;
+            case RecorderValueKind.Date:
+                if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
+                {
+                    updated = candidate with { DateValue = null };
+                    return true;
+                }
+
+                if (DateTime.TryParseExact(text.Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date))
+                {
+                    updated = candidate with { DateValue = date.Date };
+                    return true;
+                }
+
+                error = "Expected date must use yyyy-MM-dd or null.";
+                return false;
+            case RecorderValueKind.Time:
+                if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
+                {
+                    updated = candidate with { TimeValue = null };
+                    return true;
+                }
+
+                if (TimeSpan.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var time))
+                {
+                    updated = candidate with { TimeValue = time };
+                    return true;
+                }
+
+                error = "Expected time must use a TimeSpan format or null.";
+                return false;
+            case RecorderValueKind.StringSet:
+                updated = candidate with
+                {
+                    StringValues = text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                };
+                return true;
+            default:
+                error = $"Literal kind '{candidate.ValueKind}' is not supported.";
+                return false;
+        }
+    }
+
+    private sealed record SemanticValueCandidate(
+        RecordedControlDescriptor Control,
+        RecorderValueKind ValueKind,
+        RecorderValueAccessorKind ValueAccessorKind,
+        string? StringValue = null,
+        bool? BoolValue = null,
+        double? DoubleValue = null,
+        DateTime? DateValue = null,
+        TimeSpan? TimeValue = null,
+        IReadOnlyList<string>? StringValues = null,
+        GridValueContext? GridContext = null);
+
+    private sealed record GridValueContext(
+        int RowIndex,
+        int ColumnIndex,
+        IReadOnlyList<RecordedGridRowCondition>? RowConditions,
+        string? TargetColumnName);
+
     private bool TryCreateColorPickerAssertionStep(
         Control source,
         RecorderAssertionMode mode,

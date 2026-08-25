@@ -13,6 +13,21 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 {
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task Checkpoint_ReadsTheSameLogicalValueWithoutRequiredIntermediateActions()
+    {
+        Page.EnterText(static page => page.NumbersInput, "checkpoint value");
+        var valueAtCheckpoint = Page.NumbersInput.Text;
+
+        await Assert.That(Page.NumbersInput.Text).IsEqualTo(valueAtCheckpoint);
+
+        Page.SearchAndSelect(static page => page.HistoryOperationPicker, "GCD", "GCD");
+        var selectedItemAtCheckpoint = Page.HistoryOperationPicker.SelectedItemText;
+
+        await Assert.That(Page.HistoryOperationPicker.SelectedItemText).IsEqualTo(selectedItemAtCheckpoint);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmSearch_EntersClearsAndAppliesHistory()
     {
         Page

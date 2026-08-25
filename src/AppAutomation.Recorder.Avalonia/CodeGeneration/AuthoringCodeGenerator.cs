@@ -108,8 +108,16 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var diagnostics = new List<string>();
-        var persistableSteps = steps.Where(static step => step.CanPersist).ToArray();
-        var skippedSteps = steps.Where(static step => !step.CanPersist).ToArray();
+        var activeSteps = steps.Where(static step => !step.IsIgnored).ToArray();
+        var activeGraphValidation = RecorderScenarioGraphValidator.Validate(activeSteps);
+        if (!activeGraphValidation.Success)
+        {
+            return RecorderSaveResult.Failed(
+                $"Recorder checkpoint graph is invalid: {activeGraphValidation.Error}");
+        }
+
+        var persistableSteps = activeSteps.Where(static step => step.CanPersist).ToArray();
+        var skippedSteps = activeSteps.Where(static step => !step.CanPersist).ToArray();
         foreach (var skippedStep in skippedSteps)
         {
             diagnostics.Add(
@@ -122,6 +130,24 @@ internal sealed class AuthoringCodeGenerator
         {
             return RecorderSaveResult.Failed(
                 "Recorder has no valid steps to save.",
+                diagnostics.ToArray());
+        }
+
+        var invalidSemanticStep = skippedSteps.FirstOrDefault(static step =>
+            step.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue);
+        if (invalidSemanticStep is not null)
+        {
+            return RecorderSaveResult.Failed(
+                invalidSemanticStep.ValidationMessage
+                ?? $"Recorder checkpoint step '{invalidSemanticStep.ActionKind}' is invalid and must be fixed or removed before save.",
+                diagnostics.ToArray());
+        }
+
+        var graphValidation = RecorderScenarioGraphValidator.Validate(persistableSteps);
+        if (!graphValidation.Success)
+        {
+            return RecorderSaveResult.Failed(
+                $"Recorder checkpoint graph is invalid: {graphValidation.Error}",
                 diagnostics.ToArray());
         }
 
@@ -216,8 +242,14 @@ internal sealed class AuthoringCodeGenerator
                 diagnostics.Add(step.Warning);
             }
 
-            renderedStatements.Add(GenerateStepStatement(step, controlInfo.PropertyName));
+            renderedStatements.Add(GenerateStepStatement(
+                step,
+                controlInfo!.PropertyName,
+                graphValidation.CheckpointVariables));
         }
+
+        var containsAssertions = persistableSteps.Any(
+            static step => step.ActionKind == RecordedActionKind.AssertValue);
 
         Directory.CreateDirectory(target.OutputDirectory);
         var fileSafeScenarioName = RecorderNaming.CreateFileSafeName(target.ScenarioName, "scenario");
@@ -262,6 +294,7 @@ internal sealed class AuthoringCodeGenerator
                 snapshot.ScenarioClass!,
                 saveTarget.MethodName,
                 renderedStatements,
+                containsAssertions,
                 isAutosave: saveKind == AuthoringSaveKind.Autosave,
                 autosaveDestinationId: autosaveDestinationId);
         }
@@ -271,6 +304,7 @@ internal sealed class AuthoringCodeGenerator
                      snapshot.ScenarioClass!,
                      saveTarget.MethodName,
                      renderedStatements,
+                     containsAssertions,
                      cancellationToken,
                      out var mergedScenarioSource,
                      out var scenarioMergeError))
@@ -361,15 +395,25 @@ internal sealed class AuthoringCodeGenerator
 
     public string GeneratePreview(IReadOnlyList<RecordedStep> steps)
     {
+        ArgumentNullException.ThrowIfNull(steps);
         if (steps.Count == 0)
         {
             return string.Empty;
         }
 
+        var graphValidation = RecorderScenarioGraphValidator.Validate(steps);
+        if (!graphValidation.Success)
+        {
+            return $"// AppAutomation recorder checkpoint error: {SanitizeCommentText(graphValidation.Error ?? "Unknown checkpoint graph error.")}";
+        }
+
         var builder = new StringBuilder();
         foreach (var step in steps)
         {
-            builder.AppendLine(GenerateStepStatement(step, step.Control.ProposedPropertyName));
+            builder.AppendLine(GenerateStepStatement(
+                step,
+                step.Control.ProposedPropertyName,
+                graphValidation.CheckpointVariables));
         }
 
         return builder.ToString().TrimEnd();
@@ -378,7 +422,38 @@ internal sealed class AuthoringCodeGenerator
     public string GeneratePreview(RecordedStep step)
     {
         ArgumentNullException.ThrowIfNull(step);
-        return GenerateStepStatement(step, step.Control.ProposedPropertyName);
+        return GeneratePreview([step]);
+    }
+
+    internal string GeneratePreviewForStep(
+        RecordedStep step,
+        IReadOnlyList<RecordedStep> scenarioSteps)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        ArgumentNullException.ThrowIfNull(scenarioSteps);
+        var graphValidation = RecorderScenarioGraphValidator.Validate(scenarioSteps);
+        if (graphValidation.StepErrors.TryGetValue(step.StepId, out var error))
+        {
+            return $"// AppAutomation recorder checkpoint error: {SanitizeCommentText(error)}";
+        }
+
+        var checkpointVariables = graphValidation.CheckpointVariables;
+        if (step.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && step.CheckpointId is { } checkpointId
+            && !checkpointVariables.ContainsKey(checkpointId))
+        {
+            var variables = new Dictionary<Guid, string>(checkpointVariables);
+            var reservedNames = variables.Values.ToHashSet(StringComparer.Ordinal);
+            variables[checkpointId] = RecorderNaming.CreateCheckpointVariableName(
+                step.CheckpointVariableName,
+                reservedNames);
+            checkpointVariables = variables;
+        }
+
+        return GenerateStepStatement(
+            step,
+            step.Control.ProposedPropertyName,
+            checkpointVariables);
     }
 
     private static string? ValidateSnapshot(AuthoringTargetConfiguration target, AuthoringProjectSnapshot snapshot)
@@ -883,6 +958,7 @@ internal sealed class AuthoringCodeGenerator
         ScannedClassInfo scenarioClass,
         string methodName,
         IReadOnlyList<string> renderedStatements,
+        bool containsAssertions,
         CancellationToken cancellationToken,
         out string? mergedSource,
         out string? error)
@@ -951,6 +1027,7 @@ internal sealed class AuthoringCodeGenerator
             scenarioClass,
             methodName,
             renderedStatements,
+            containsAssertions,
             isAutosave: false,
             autosaveDestinationId: null);
         var generatedMethod = CSharpSyntaxTree.ParseText(generatedSource)
@@ -972,6 +1049,7 @@ internal sealed class AuthoringCodeGenerator
         ScannedClassInfo scenarioClass,
         string methodName,
         IReadOnlyList<string> renderedStatements,
+        bool containsAssertions,
         bool isAutosave,
         string? autosaveDestinationId)
     {
@@ -998,7 +1076,17 @@ internal sealed class AuthoringCodeGenerator
         builder.AppendLine("{");
         builder.AppendLine("    [Test]");
         builder.AppendLine("    [NotInParallel(DesktopUiConstraint)]");
-        builder.Append("    public void ").Append(methodName).AppendLine("()");
+        builder.Append("    public ");
+        if (containsAssertions)
+        {
+            builder.Append("async global::System.Threading.Tasks.Task ");
+        }
+        else
+        {
+            builder.Append("void ");
+        }
+
+        builder.Append(methodName).AppendLine("()");
         builder.AppendLine("    {");
         foreach (var statement in renderedStatements)
         {
@@ -1060,10 +1148,21 @@ internal sealed class AuthoringCodeGenerator
         return builder.ToString();
     }
 
-    private static string GenerateStepStatement(RecordedStep step, string propertyName)
+    private static string GenerateStepStatement(
+        RecordedStep step,
+        string propertyName,
+        IReadOnlyDictionary<Guid, string> checkpointVariables)
     {
         var statement = step.ActionKind switch
         {
+            RecordedActionKind.CaptureCheckpoint => GenerateCheckpointStatement(
+                step,
+                propertyName,
+                checkpointVariables),
+            RecordedActionKind.AssertValue => GenerateAssertionStatement(
+                step,
+                propertyName,
+                checkpointVariables),
             RecordedActionKind.EnterText => $"Page.EnterText(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ClickButton => $"Page.ClickButton(static page => page.{propertyName});",
             RecordedActionKind.SetChecked => $"Page.SetChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1174,6 +1273,111 @@ internal sealed class AuthoringCodeGenerator
         return runtimeCommentLines.Count == 0
             ? statement
             : string.Join(Environment.NewLine, runtimeCommentLines.Concat([statement]));
+    }
+
+    private static string GenerateCheckpointStatement(
+        RecordedStep step,
+        string propertyName,
+        IReadOnlyDictionary<Guid, string> checkpointVariables)
+    {
+        var checkpointId = step.CheckpointId
+            ?? throw new InvalidOperationException("Checkpoint step does not contain an id.");
+        if (!checkpointVariables.TryGetValue(checkpointId, out var variableName))
+        {
+            throw new InvalidOperationException($"Checkpoint '{checkpointId}' was not validated.");
+        }
+
+        var expression = GenerateValueExpression(step, propertyName);
+        if (step.ValueKind == RecorderValueKind.StringSet)
+        {
+            expression = $"global::System.Linq.Enumerable.ToArray({expression})";
+        }
+
+        return $"var {variableName} = {expression};";
+    }
+
+    private static string GenerateAssertionStatement(
+        RecordedStep step,
+        string propertyName,
+        IReadOnlyDictionary<Guid, string> checkpointVariables)
+    {
+        var actual = GenerateValueExpression(step, propertyName);
+        string expected;
+        if (step.ExpectedCheckpointId is { } checkpointId)
+        {
+            if (!checkpointVariables.TryGetValue(checkpointId, out expected!))
+            {
+                throw new InvalidOperationException($"Assertion references unvalidated checkpoint '{checkpointId}'.");
+            }
+        }
+        else
+        {
+            expected = FormatExpectedLiteral(step);
+        }
+
+        var assertion = step.ComparisonKind switch
+        {
+            RecorderComparisonKind.Equal =>
+                $"global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+            RecorderComparisonKind.Contains =>
+                $"global::TUnit.Assertions.Extensions.StringContainsAssertionExtensions.Contains(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+            RecorderComparisonKind.Equivalent =>
+                $"global::TUnit.Assertions.Extensions.IsEquivalentToAssertionExtensions.IsEquivalentTo(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+            _ => throw new InvalidOperationException("Assertion step does not contain a supported comparison.")
+        };
+
+        return $"await {assertion};";
+    }
+
+    private static string GenerateValueExpression(RecordedStep step, string propertyName)
+    {
+        var control = $"Page.{propertyName}";
+        return step.ValueAccessorKind switch
+        {
+            RecorderValueAccessorKind.Text => $"{control}.Text",
+            RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.SearchPicker =>
+                $"{control}.SelectedItemText",
+            RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.ListBox =>
+                $"((global::AppAutomation.Abstractions.ISelectableListBoxControl){control}).SelectedItemText",
+            RecorderValueAccessorKind.SelectedItemText => $"{control}.SelectedItem?.Text",
+            RecorderValueAccessorKind.SelectedItems => $"{control}.SelectedItems",
+            RecorderValueAccessorKind.NumericValue => $"{control}.Value",
+            RecorderValueAccessorKind.SelectedDate => $"{control}.SelectedDate",
+            RecorderValueAccessorKind.SelectedTime => $"{control}.SelectedTime",
+            RecorderValueAccessorKind.Color => $"{control}.Color",
+            RecorderValueAccessorKind.IsChecked => $"{control}.IsChecked",
+            RecorderValueAccessorKind.IsToggled => $"{control}.IsToggled",
+            RecorderValueAccessorKind.IsSelected when step.Control.ControlType == UiControlType.RadioButton =>
+                $"{control}.IsChecked",
+            RecorderValueAccessorKind.IsSelected => $"{control}.IsSelected",
+            RecorderValueAccessorKind.IsExpanded => $"{control}.IsExpanded",
+            RecorderValueAccessorKind.IsEnabled => $"{control}.IsEnabled",
+            RecorderValueAccessorKind.GridCellText => GenerateGridCellExpression(step, control),
+            _ => throw new InvalidOperationException(
+                $"Value accessor '{step.ValueAccessorKind}' is not supported for {step.Control.ControlType}.")
+        };
+    }
+
+    private static string GenerateGridCellExpression(RecordedStep step, string control)
+    {
+        return HasNamedGridRow(step)
+            ? $"global::AppAutomation.Abstractions.GridValueReader.ReadCellText({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})"
+            : $"global::AppAutomation.Abstractions.GridValueReader.ReadCellText({control}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)})";
+    }
+
+    private static string FormatExpectedLiteral(RecordedStep step)
+    {
+        return step.ValueKind switch
+        {
+            RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText =>
+                $"\"{EscapeString(step.StringValue ?? string.Empty)}\"",
+            RecorderValueKind.Number => FormatDouble(step.DoubleValue),
+            RecorderValueKind.Boolean => FormatBoolean(step.BoolValue),
+            RecorderValueKind.Date => FormatNullableDate(step.DateValue),
+            RecorderValueKind.Time => FormatNullableTimeSpan(step.TimeValue),
+            RecorderValueKind.StringSet => FormatStringValues(step.StringValues),
+            _ => throw new InvalidOperationException($"Literal value kind '{step.ValueKind}' is not supported.")
+        };
     }
 
     private static void AppendIndentedBlock(StringBuilder builder, string block, string indent)
@@ -1341,6 +1545,13 @@ internal sealed class AuthoringCodeGenerator
         return value.HasValue
             ? $"new global::System.TimeSpan({value.Value.Ticks}L)"
             : "default";
+    }
+
+    private static string FormatNullableTimeSpan(TimeSpan? value)
+    {
+        return value.HasValue
+            ? FormatTimeSpan(value)
+            : "null";
     }
 
     private static string FormatNullableDate(DateTime? value)

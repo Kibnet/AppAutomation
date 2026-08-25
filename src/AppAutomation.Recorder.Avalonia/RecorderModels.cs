@@ -67,7 +67,9 @@ public enum RecordedActionKind
     WaitUntilColorEquals = 59,
     EditGridCellColor = 60,
     InvokeMenuItem = 61,
-    InvokeContextMenuItem = 62
+    InvokeContextMenuItem = 62,
+    CaptureCheckpoint = 63,
+    AssertValue = 64
 }
 
 public enum RecorderAssertionMode
@@ -85,6 +87,53 @@ public enum RecorderValidationStatus
     Warning = 1,
     Invalid = 2
 }
+
+internal enum RecorderValueKind
+{
+    Text = 0,
+    Number = 1,
+    Boolean = 2,
+    Date = 3,
+    Time = 4,
+    Color = 5,
+    StringSet = 6,
+    GridCellText = 7
+}
+
+internal enum RecorderValueAccessorKind
+{
+    Text = 0,
+    SelectedItemText = 1,
+    SelectedItems = 2,
+    NumericValue = 3,
+    SelectedDate = 4,
+    SelectedTime = 5,
+    Color = 6,
+    IsChecked = 7,
+    IsToggled = 8,
+    IsSelected = 9,
+    IsExpanded = 10,
+    IsEnabled = 11,
+    GridCellText = 12
+}
+
+internal enum RecorderComparisonKind
+{
+    Equal = 0,
+    Contains = 1,
+    Equivalent = 2
+}
+
+internal sealed record RecorderSemanticValueDescription(
+    RecorderValueKind ValueKind,
+    string SuggestedCheckpointName,
+    string CurrentValueText);
+
+internal sealed record RecorderCheckpointOption(
+    Guid CheckpointId,
+    string VariableName,
+    RecorderValueKind ValueKind,
+    string ControlName);
 
 internal sealed record RecordedControlDescriptor(
     string ProposedPropertyName,
@@ -122,14 +171,30 @@ internal sealed record RecordedStep(
     GridCellEditCommitMode? GridCellEditCommitMode = null,
     IReadOnlyList<RecorderRuntimeValidationFinding>? RuntimeValidationFindings = null,
     IReadOnlyList<string>? StringValues = null,
-    TimeSpan? TimeValue = null)
+    TimeSpan? TimeValue = null,
+    RecorderValueKind? ValueKind = null,
+    RecorderValueAccessorKind? ValueAccessorKind = null,
+    RecorderComparisonKind? ComparisonKind = null,
+    Guid? CheckpointId = null,
+    string? CheckpointVariableName = null,
+    Guid? ExpectedCheckpointId = null,
+    bool HasExpectedLiteral = false)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 
     public string? GridTargetColumnName { get; init; }
+
+    public RecorderStepValidationState? ValidationBeforeGraphError { get; init; }
 }
 
 internal sealed record RecordedGridRowCondition(string ColumnName, string Value);
+
+internal sealed record RecorderStepValidationState(
+    RecorderValidationStatus ValidationStatus,
+    string? ValidationMessage,
+    bool CanPersist,
+    RecorderStepReviewState ReviewState,
+    string? FailureCode);
 
 internal enum RecorderRuntimeValidationTarget
 {

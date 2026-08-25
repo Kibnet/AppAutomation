@@ -110,6 +110,8 @@ internal sealed class RecorderCommandRuntimeValidator
     {
         return step.ActionKind switch
         {
+            RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue =>
+                ValidateSemanticValue(step, target),
             RecordedActionKind.EnterText => ValidateTextAction(step, target),
             RecordedActionKind.ClickButton => ValidateControlType(step, target, UiControlType.Button),
             RecordedActionKind.SetChecked => ValidateControlType(step, target, [UiControlType.CheckBox, UiControlType.RadioButton])
@@ -223,6 +225,124 @@ internal sealed class RecorderCommandRuntimeValidator
                 or RecordedActionKind.ActivateShellPane => ValidateControlType(step, target, UiControlType.ShellNavigation)
                     .Concat(RequireString(step, target, allowEmpty: false, "shell pane name")),
             _ => [Invalid(target, "action-unsupported", $"Recorded action '{step.ActionKind}' is not supported by {target}.")]
+        };
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSemanticValue(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        if (step.ValueKind is null || step.ValueAccessorKind is null)
+        {
+            yield return Invalid(
+                target,
+                "semantic-value-missing",
+                $"Recorded action '{step.ActionKind}' does not define a semantic value accessor.");
+            yield break;
+        }
+
+        if (!SupportsSemanticAccessor(step.Control.ControlType, step.ValueKind.Value, step.ValueAccessorKind.Value))
+        {
+            yield return Invalid(
+                target,
+                "semantic-value-incompatible",
+                $"UiControlType.{step.Control.ControlType} does not expose {step.ValueAccessorKind} as {step.ValueKind}.");
+        }
+
+        if (step.ValueAccessorKind == RecorderValueAccessorKind.GridCellText)
+        {
+            foreach (var finding in RequireGridCoordinates(step, target, requireTargetColumn: true))
+            {
+                yield return finding;
+            }
+        }
+
+        if (step.ActionKind != RecordedActionKind.AssertValue || !step.HasExpectedLiteral)
+        {
+            yield break;
+        }
+
+        foreach (var finding in ValidateLiteralPayload(step, target))
+        {
+            yield return finding;
+        }
+    }
+
+    private static bool SupportsSemanticAccessor(
+        UiControlType controlType,
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind)
+    {
+        return (controlType, valueKind, accessorKind) switch
+        {
+            (UiControlType.TextBox or UiControlType.Label or UiControlType.Search,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text) => true,
+            (UiControlType.SearchPicker or UiControlType.ComboBox or UiControlType.ListBox,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText) => true,
+            (UiControlType.MultiSelect or UiControlType.ComboBoxFilter,
+                RecorderValueKind.StringSet,
+                RecorderValueAccessorKind.SelectedItems) => true,
+            (UiControlType.Spinner or UiControlType.Slider or UiControlType.ProgressBar,
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericValue) => true,
+            (UiControlType.DateTimePicker,
+                RecorderValueKind.Date,
+                RecorderValueAccessorKind.SelectedDate) => true,
+            (UiControlType.TimePicker,
+                RecorderValueKind.Time,
+                RecorderValueAccessorKind.SelectedTime) => true,
+            (UiControlType.ColorPicker,
+                RecorderValueKind.Color,
+                RecorderValueAccessorKind.Color) => true,
+            (UiControlType.CheckBox,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsChecked) => true,
+            (UiControlType.RadioButton,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected) => true,
+            (UiControlType.ToggleButton,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsToggled) => true,
+            (UiControlType.TabItem,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected) => true,
+            (UiControlType.Expander,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsExpanded) => true,
+            (_, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsEnabled) => true,
+            (UiControlType.Grid or UiControlType.DataGridView,
+                RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellText) => true,
+            _ => false
+        };
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateLiteralPayload(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.ValueKind switch
+        {
+            RecorderValueKind.Text or RecorderValueKind.GridCellText =>
+                step.StringValue is null
+                    ? [Invalid(target, "literal-missing-string", "Text assertion requires an expected string, including an explicit empty string when intended.")]
+                    : [],
+            RecorderValueKind.Color => ColorValue.TryNormalize(step.StringValue, out _)
+                ? []
+                : [Invalid(target, "literal-invalid-color", "Color assertion requires #RRGGBB or #AARRGGBB expected text.")],
+            RecorderValueKind.Number => step.DoubleValue.HasValue
+                ? []
+                : [Invalid(target, "literal-missing-number", "Numeric assertion requires an expected number.")],
+            RecorderValueKind.Boolean => step.BoolValue.HasValue
+                ? []
+                : [Invalid(target, "literal-missing-boolean", "Boolean assertion requires an expected value.")],
+            RecorderValueKind.Date or RecorderValueKind.Time => [],
+            RecorderValueKind.StringSet => step.StringValues is null
+                ? [Invalid(target, "literal-missing-string-set", "Collection assertion requires an expected string set.")]
+                : [],
+            _ => [Invalid(target, "literal-kind-unsupported", $"Literal kind '{step.ValueKind}' is not supported.")]
         };
     }
 

@@ -292,6 +292,10 @@ public sealed class RecorderHotkeys
 
     public string? CaptureAssertExists { get; init; } = "Ctrl+Shift+F";
 
+    public string? CaptureCheckpoint { get; init; } = "Ctrl+Shift+M";
+
+    public string? CaptureCheckpointAssertion { get; init; } = "Ctrl+Shift+V";
+
     public string? ToggleOverlayMinimize { get; init; } = "Ctrl+Shift+M";
 }
 

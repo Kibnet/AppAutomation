@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -21,6 +22,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _saveButton;
     private Button? _exportButton;
     private Button? _settingsButton;
+    private Button? _checkButton;
     private Button? _copyDiagnosticLogPathButton;
     private CheckBox? _diagnosticLogCheckBox;
     private TextBlock? _stepCounter;
@@ -43,6 +45,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
     private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
+    private IRecorderCheckpointSessionDetails? _checkpointDetails;
     private int _renderedJournalEntryCount;
     private bool _isRefreshingScenarioSelection;
 
@@ -68,6 +71,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _scenarioPathDetails = session as IRecorderScenarioPathDetails;
         _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
         _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
+        _checkpointDetails = session as IRecorderCheckpointSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -137,6 +141,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _saveButton = this.FindControl<Button>("SaveButton");
         _exportButton = this.FindControl<Button>("ExportButton");
         _settingsButton = this.FindControl<Button>("SettingsButton");
+        _checkButton = this.FindControl<Button>("CheckButton");
         _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
         _diagnosticLogCheckBox = this.FindControl<CheckBox>("DiagnosticLogCheckBox");
         _stepCounter = this.FindControl<TextBlock>("StepCounter");
@@ -180,6 +185,11 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_settingsButton is not null)
         {
             _settingsButton.Click += OnSettingsClick;
+        }
+
+        if (_checkButton is not null)
+        {
+            _checkButton.Click += OnCheckClick;
         }
 
         if (_diagnosticLogCheckBox is not null)
@@ -309,6 +319,214 @@ internal sealed partial class RecorderOverlay : UserControl
         Refresh();
     }
 
+    private void OnCheckClick(object? sender, RoutedEventArgs e)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        var menu = new MenuFlyout();
+        var hasReadableValue = _checkpointDetails.TryDescribeCurrentValue(
+            out var currentValue,
+            out var descriptionError);
+        var remember = new MenuItem
+        {
+            Header = "Remember value…",
+            IsEnabled = hasReadableValue
+        };
+        AutomationProperties.SetAutomationId(remember, "RecorderRememberValueMenuItem");
+        remember.Click += (_, _) => ShowRememberValueEditor(currentValue);
+        menu.Items.Add(remember);
+
+        var compare = new MenuItem { Header = "Compare with checkpoint" };
+        AutomationProperties.SetAutomationId(compare, "RecorderCompareCheckpointMenuItem");
+        var checkpoints = _checkpointDetails.Checkpoints
+            .Where(checkpoint => checkpoint.ValueKind == currentValue?.ValueKind)
+            .ToArray();
+        compare.IsEnabled = checkpoints.Length > 0;
+        foreach (var checkpoint in checkpoints)
+        {
+            var checkpointItem = new MenuItem
+            {
+                Header = $"{checkpoint.VariableName} ({checkpoint.ControlName})",
+                Tag = checkpoint.CheckpointId
+            };
+            checkpointItem.Click += OnCompareCheckpointClick;
+            compare.Items.Add(checkpointItem);
+        }
+
+        menu.Items.Add(compare);
+
+        var assertExpected = new MenuItem
+        {
+            Header = "Assert expected value…",
+            IsEnabled = hasReadableValue
+        };
+        AutomationProperties.SetAutomationId(assertExpected, "RecorderAssertExpectedValueMenuItem");
+        assertExpected.Click += (_, _) => ShowLiteralAssertionEditor();
+        menu.Items.Add(assertExpected);
+        if (!hasReadableValue && !string.IsNullOrWhiteSpace(descriptionError))
+        {
+            menu.Items.Add(new MenuItem
+            {
+                Header = descriptionError,
+                IsEnabled = false
+            });
+        }
+
+        menu.ShowAt(_checkButton);
+    }
+
+    private void ShowRememberValueEditor(RecorderSemanticValueDescription? description)
+    {
+        if (_checkButton is null || _checkpointDetails is null || description is null)
+        {
+            return;
+        }
+
+        var name = new TextBox
+        {
+            Text = description.SuggestedCheckpointName,
+            MinWidth = 220,
+            PlaceholderText = "Checkpoint name"
+        };
+        var add = new Button { Content = "Remember", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        AutomationProperties.SetAutomationId(name, "RecorderCheckpointName");
+        AutomationProperties.SetAutomationId(add, "RecorderRememberValueButton");
+        var flyout = new Flyout
+        {
+            Content = new StackPanel
+            {
+                Width = 260,
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Remember runtime value",
+                        FontWeight = FontWeight.SemiBold
+                    },
+                    name,
+                    new TextBlock
+                    {
+                        Text = $"Current preview: {description.CurrentValueText}",
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = GetBrush("RecorderMuted")
+                    },
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 6,
+                        Children = { add, cancel }
+                    }
+                }
+            }
+        };
+        add.Click += (_, _) =>
+        {
+            _checkpointDetails.CaptureCheckpoint(name.Text);
+            flyout.Hide();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        flyout.ShowAt(_checkButton);
+        name.Focus();
+        name.SelectAll();
+    }
+
+    private void OnCompareCheckpointClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: Guid checkpointId })
+        {
+            _checkpointDetails?.CaptureCheckpointAssertion(checkpointId);
+        }
+    }
+
+    private void ShowLiteralAssertionEditor()
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        if (!_checkpointDetails.TryDescribeCurrentValue(out var description, out var error)
+            || description is null)
+        {
+            ShowSettingsError(error ?? "The selected control does not expose a readable value.");
+            return;
+        }
+
+        var comparisons = description.ValueKind switch
+        {
+            RecorderValueKind.StringSet => new[] { RecorderComparisonKind.Equivalent },
+            RecorderValueKind.Text or RecorderValueKind.GridCellText =>
+                new[] { RecorderComparisonKind.Equal, RecorderComparisonKind.Contains },
+            _ => new[] { RecorderComparisonKind.Equal }
+        };
+        var comparison = new ComboBox
+        {
+            ItemsSource = comparisons.Select(DescribeComparison).ToArray(),
+            SelectedIndex = 0,
+            MinWidth = 120
+        };
+        var expected = new TextBox
+        {
+            Text = description.CurrentValueText,
+            MinWidth = 220,
+            PlaceholderText = "Expected value"
+        };
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        AutomationProperties.SetAutomationId(comparison, "RecorderAssertionComparison");
+        AutomationProperties.SetAutomationId(expected, "RecorderExpectedValue");
+        AutomationProperties.SetAutomationId(add, "RecorderAddAssertionButton");
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { add, cancel }
+        };
+        var content = new StackPanel
+        {
+            Width = 260,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Assert {description.SuggestedCheckpointName}",
+                    FontWeight = FontWeight.SemiBold
+                },
+                expected,
+                comparison,
+                actions
+            }
+        };
+        var flyout = new Flyout { Content = content };
+        add.Click += (_, _) =>
+        {
+            var selectedIndex = Math.Clamp(comparison.SelectedIndex, 0, comparisons.Length - 1);
+            _checkpointDetails.CaptureLiteralAssertion(
+                expected.Text ?? string.Empty,
+                comparisons[selectedIndex]);
+            flyout.Hide();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        flyout.ShowAt(_checkButton);
+        expected.Focus();
+        expected.SelectAll();
+    }
+
+    private static string DescribeComparison(RecorderComparisonKind comparisonKind) =>
+        comparisonKind switch
+        {
+            RecorderComparisonKind.Equal => "Equals",
+            RecorderComparisonKind.Contains => "Contains",
+            RecorderComparisonKind.Equivalent => "Same items",
+            _ => comparisonKind.ToString()
+        };
+
     private void OnDiagnosticLogToggleClick(object? sender, RoutedEventArgs e)
     {
         if (_sessionDetails is null || _diagnosticLogCheckBox is null)
@@ -372,6 +590,25 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             _exportButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
             _exportButton.Content = isBusy ? "Busy..." : "Export...";
+        }
+
+        if (_checkButton is not null)
+        {
+            _checkButton.IsEnabled = !isBusy
+                && _session.State == RecorderSessionState.Recording
+                && _checkpointDetails is not null;
+            var hotkeyMap = _session is RecorderSession recorderSession
+                ? recorderSession.HotkeyMap
+                : _options is null
+                    ? null
+                    : RecorderHotkeyMap.Create(_options.Hotkeys);
+            if (hotkeyMap is not null)
+            {
+                ToolTip.SetTip(
+                    _checkButton,
+                    $"Remember: {hotkeyMap.GetDisplayText(RecorderCommandKind.CaptureCheckpoint)}; "
+                    + $"compare: {hotkeyMap.GetDisplayText(RecorderCommandKind.CaptureCheckpointAssertion)}");
+            }
         }
 
         if (_stepCounter is not null)

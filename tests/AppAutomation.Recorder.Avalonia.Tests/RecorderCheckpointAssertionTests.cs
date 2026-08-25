@@ -1,0 +1,704 @@
+using AppAutomation.Abstractions;
+using AppAutomation.Recorder.Avalonia.CodeGeneration;
+using AppAutomation.Recorder.Avalonia.SourceScanning;
+using AppAutomation.Recorder.Avalonia.UI;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.LogicalTree;
+using TUnit.Assertions;
+using TUnit.Core;
+
+namespace AppAutomation.Recorder.Avalonia.Tests;
+
+[NotInParallel]
+public sealed class RecorderCheckpointAssertionTests
+{
+    [Test]
+    public async Task Session_RemembersRuntimeValueAndComparesItWithoutRequiredIntermediateActions()
+    {
+        var root = new StackPanel();
+        var customerName = new TextBox { Text = "Customer 42" };
+        AutomationProperties.SetAutomationId(customerName, "CustomerName");
+        root.Children.Add(customerName);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(customerName);
+
+        session.CaptureCheckpoint("customerBeforeAction");
+        var checkpoint = session.Checkpoints.Single();
+        session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepCount).IsEqualTo(2);
+            await Assert.That(session.ExportPreview()).IsEqualTo(
+                "var customerBeforeAction = Page.CustomerName.Text;" + Environment.NewLine
+                + "await global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That(Page.CustomerName.Text), customerBeforeAction);");
+            await Assert.That(session.StepJournal.All(static entry => entry.CanPersist)).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Session_IgnoredCheckpointInvalidatesAndRestoreRepairsDependentAssertion()
+    {
+        var root = new StackPanel();
+        var value = new TextBox { Text = "Value" };
+        AutomationProperties.SetAutomationId(value, "ObservedValue");
+        root.Children.Add(value);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(value);
+        session.CaptureCheckpoint("valueBeforeAction");
+        var checkpoint = session.Checkpoints.Single();
+        session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
+        var checkpointStepId = session.StepJournal[0].StepId;
+
+        session.SetStepIgnored(checkpointStepId, isIgnored: true);
+        var invalidAssertion = session.StepJournal[1];
+        session.SetStepIgnored(checkpointStepId, isIgnored: false);
+        var restoredAssertion = session.StepJournal[1];
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(invalidAssertion.CanPersist).IsFalse();
+            await Assert.That(invalidAssertion.FailureCode).IsEqualTo("checkpoint-graph-invalid");
+            await Assert.That(invalidAssertion.StatusMessage).Contains("missing or later checkpoint");
+            await Assert.That(restoredAssertion.CanPersist).IsTrue();
+            await Assert.That(restoredAssertion.FailureCode).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task Session_MovingAssertionBeforeCheckpointInvalidatesOnlyTheDependency()
+    {
+        var root = new StackPanel();
+        var value = new TextBox { Text = "Value" };
+        AutomationProperties.SetAutomationId(value, "ObservedValue");
+        root.Children.Add(value);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(value);
+        session.CaptureCheckpoint("valueBeforeAction");
+        session.CaptureCheckpointAssertion(session.Checkpoints.Single().CheckpointId);
+        var assertionStepId = session.StepJournal[1].StepId;
+
+        session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepJournal[0].CanPersist).IsFalse();
+            await Assert.That(session.StepJournal[0].StatusMessage).Contains("missing or later checkpoint");
+            await Assert.That(session.StepJournal[1].CanPersist).IsTrue();
+            await Assert.That(session.LatestValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(session.LatestStatus).Contains("missing or later checkpoint");
+        }
+    }
+
+    [Test]
+    public async Task Session_RestoresUnderlyingWarningAfterCheckpointGraphIsRepaired()
+    {
+        var checkpointId = Guid.NewGuid();
+        using var session = CreateSession(new StackPanel());
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("SourceValue", UiControlType.TextBox),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "sourceValue"));
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.AssertValue,
+            Descriptor("ObservedValue", UiControlType.TextBox),
+            ValidationStatus: RecorderValidationStatus.Warning,
+            ValidationMessage: "Name locator requires review.",
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            ComparisonKind: RecorderComparisonKind.Equal,
+            ExpectedCheckpointId: checkpointId));
+        var assertionStepId = session.StepJournal[1].StepId;
+
+        session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
+        session.MoveStep(assertionStepId, RecorderStepMoveDirection.Later);
+        var restoredAssertion = session.StepJournal[1];
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(restoredAssertion.ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
+            await Assert.That(restoredAssertion.StatusMessage).IsEqualTo("Name locator requires review.");
+            await Assert.That(restoredAssertion.FailureCode).IsEqualTo("validation-warning");
+            await Assert.That(restoredAssertion.CanPersist).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task Session_AllowsCompatibleCheckpointComparisonAcrossDifferentControls()
+    {
+        var root = new StackPanel();
+        var sourceValue = new TextBox { Text = "Value" };
+        var comparisonValue = new TextBox { Text = "Value" };
+        AutomationProperties.SetAutomationId(sourceValue, "SourceValue");
+        AutomationProperties.SetAutomationId(comparisonValue, "ComparisonValue");
+        root.Children.Add(sourceValue);
+        root.Children.Add(comparisonValue);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(sourceValue);
+        session.CaptureCheckpoint("valueBeforeAction");
+        session.SetLastHoveredControlForTesting(comparisonValue);
+        session.CaptureCheckpointAssertion(session.Checkpoints.Single().CheckpointId);
+
+        await Assert.That(session.ExportPreview()).IsEqualTo(
+            "var valueBeforeAction = Page.SourceValue.Text;" + Environment.NewLine
+            + "await global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That(Page.ComparisonValue.Text), valueBeforeAction);");
+    }
+
+    [Test]
+    public async Task Session_RemovingCheckpointInvalidatesDependentAssertion()
+    {
+        var root = new StackPanel();
+        var value = new TextBox { Text = "Value" };
+        AutomationProperties.SetAutomationId(value, "ObservedValue");
+        root.Children.Add(value);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(value);
+        session.CaptureCheckpoint("valueBeforeAction");
+        session.CaptureCheckpointAssertion(session.Checkpoints.Single().CheckpointId);
+
+        session.RemoveStep(session.StepJournal[0].StepId);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepCount).IsEqualTo(1);
+            await Assert.That(session.StepJournal[0].CanPersist).IsFalse();
+            await Assert.That(session.StepJournal[0].FailureCode).IsEqualTo("checkpoint-graph-invalid");
+            await Assert.That(session.StepJournal[0].StatusMessage).Contains("missing or later checkpoint");
+            await Assert.That(session.LatestValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(session.LatestStatus).Contains("missing or later checkpoint");
+        }
+    }
+
+    [Test]
+    public async Task Factory_SearchPickerUsesLogicalSelectedValueInsteadOfInnerInput()
+    {
+        var root = new StackPanel();
+        var logicalRoot = new Border();
+        var input = new TextBox { Text = "search text" };
+        var results = new ComboBox
+        {
+            ItemsSource = new[] { "Item 42" },
+            SelectedIndex = 0
+        };
+        AutomationProperties.SetAutomationId(logicalRoot, "CustomerPicker");
+        AutomationProperties.SetAutomationId(input, "CustomerPickerInput");
+        AutomationProperties.SetAutomationId(results, "CustomerPickerResults");
+        root.Children.Add(logicalRoot);
+        root.Children.Add(input);
+        root.Children.Add(results);
+        var options = new AppAutomationRecorderOptions();
+        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+            "CustomerPicker",
+            SearchPickerParts.ByAutomationIds("CustomerPickerInput", "CustomerPickerResults")));
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var checkpoint = factory.TryCreateCheckpointStep(input, "selectedCustomer");
+        var literalAssertion = factory.TryCreateLiteralAssertionStep(results, "Item 42");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(checkpoint.Success).IsTrue();
+            await Assert.That(checkpoint.Step!.Control.LocatorValue).IsEqualTo("CustomerPicker");
+            await Assert.That(checkpoint.Step.Control.ControlType).IsEqualTo(UiControlType.SearchPicker);
+            await Assert.That(checkpoint.Step.ValueAccessorKind).IsEqualTo(RecorderValueAccessorKind.SelectedItemText);
+            await Assert.That(literalAssertion.Success).IsTrue();
+            await Assert.That(literalAssertion.Step!.StringValue).IsEqualTo("Item 42");
+        }
+    }
+
+    [Test]
+    public async Task Factory_OpenMultiSelectPopupDoesNotCapturePendingSelection()
+    {
+        var root = new StackPanel();
+        var editor = new Border();
+        var openButton = new Button();
+        var items = new ListBox { IsVisible = true };
+        var applyButton = new Button();
+        AutomationProperties.SetAutomationId(editor, "StatusFilter");
+        AutomationProperties.SetAutomationId(openButton, "StatusFilterOpen");
+        AutomationProperties.SetAutomationId(items, "StatusFilterItems");
+        AutomationProperties.SetAutomationId(applyButton, "StatusFilterApply");
+        root.Children.Add(editor);
+        root.Children.Add(openButton);
+        root.Children.Add(items);
+        root.Children.Add(applyButton);
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "StatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "StatusFilter",
+                "StatusFilterOpen",
+                "StatusFilterItems",
+                "StatusFilterApply")));
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var result = factory.TryCreateCheckpointStep(items);
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(result.Message).Contains("Apply or cancel");
+    }
+
+    [Test]
+    public async Task Preview_ReadsCheckpointAtReplayAndUsesItInTUnitAssertion()
+    {
+        var checkpointId = Guid.NewGuid();
+        var generator = CreateGenerator();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("CustomerPicker", UiControlType.SearchPicker),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.SelectedItemText,
+                CheckpointId: checkpointId,
+                CheckpointVariableName: "customerBeforeSave"),
+            new RecordedStep(
+                RecordedActionKind.ClickButton,
+                Descriptor("SaveButton", UiControlType.Button)),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("CustomerPicker", UiControlType.SearchPicker),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.SelectedItemText,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                ExpectedCheckpointId: checkpointId)
+        };
+
+        var preview = generator.GeneratePreview(steps);
+
+        await Assert.That(preview).IsEqualTo(
+            "var customerBeforeSave = Page.CustomerPicker.SelectedItemText;" + Environment.NewLine
+            + "Page.ClickButton(static page => page.SaveButton);" + Environment.NewLine
+            + "await global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That(Page.CustomerPicker.SelectedItemText), customerBeforeSave);");
+    }
+
+    [Test]
+    public async Task Preview_MaterializesStringSetCheckpointBeforeComparison()
+    {
+        var checkpointId = Guid.NewGuid();
+        var generator = CreateGenerator();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                ValueKind: RecorderValueKind.StringSet,
+                ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                CheckpointId: checkpointId,
+                CheckpointVariableName: "statusesBeforeSave"),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                ValueKind: RecorderValueKind.StringSet,
+                ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                ComparisonKind: RecorderComparisonKind.Equivalent,
+                ExpectedCheckpointId: checkpointId)
+        };
+
+        var preview = generator.GeneratePreview(steps);
+
+        await Assert.That(preview).IsEqualTo(
+            "var statusesBeforeSave = global::System.Linq.Enumerable.ToArray(Page.StatusFilter.SelectedItems);" + Environment.NewLine
+            + "await global::TUnit.Assertions.Extensions.IsEquivalentToAssertionExtensions.IsEquivalentTo(global::TUnit.Assertions.Assert.That(Page.StatusFilter.SelectedItems), statusesBeforeSave);");
+    }
+
+    [Test]
+    public async Task Preview_RendersLiteralAssertionWithoutWaitCommand()
+    {
+        var step = new RecordedStep(
+            RecordedActionKind.AssertValue,
+            Descriptor("StatusLabel", UiControlType.Label),
+            StringValue: "Saved",
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            ComparisonKind: RecorderComparisonKind.Equal,
+            HasExpectedLiteral: true);
+
+        var preview = CreateGenerator().GeneratePreview([step]);
+
+        await Assert.That(preview)
+            .IsEqualTo("await global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That(Page.StatusLabel.Text), \"Saved\");");
+        await Assert.That(preview).DoesNotContain("WaitUntil");
+    }
+
+    [Test]
+    public async Task Save_MergesAsyncCheckpointScenariosAndRemovesAutosave()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage,
+            RecorderScenarioDestinationSources.CompilableScenario);
+        var context = project.CreateSaveContext("Checkpoint flow", "checkpoint-draft");
+        var checkpointId = Guid.NewGuid();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: checkpointId,
+                CheckpointVariableName: "valueBeforeAction"),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                ExpectedCheckpointId: checkpointId)
+        };
+
+        var autosave = await project.AutosaveAsync(context, steps);
+        var first = await project.SaveAsync(context, steps);
+        var second = await project.SaveAsync(
+            context with { ScenarioName = "Literal flow", DraftIdentity = "literal-draft" },
+            [
+                new RecordedStep(
+                    RecordedActionKind.AssertValue,
+                    Descriptor("ObservedValue", UiControlType.TextBox),
+                    StringValue: "Expected value",
+                    ValueKind: RecorderValueKind.Text,
+                    ValueAccessorKind: RecorderValueAccessorKind.Text,
+                    ComparisonKind: RecorderComparisonKind.Contains,
+                    HasExpectedLiteral: true),
+                LiteralAssertion(
+                    Descriptor("EmptyValue", UiControlType.TextBox),
+                    RecorderValueKind.Text,
+                    RecorderValueAccessorKind.Text,
+                    stringValue: string.Empty),
+                LiteralAssertion(
+                    Descriptor("AmountValue", UiControlType.Spinner),
+                    RecorderValueKind.Number,
+                    RecorderValueAccessorKind.NumericValue,
+                    doubleValue: 42.5),
+                LiteralAssertion(
+                    Descriptor("EnabledCheck", UiControlType.CheckBox),
+                    RecorderValueKind.Boolean,
+                    RecorderValueAccessorKind.IsChecked,
+                    boolValue: true),
+                LiteralAssertion(
+                    Descriptor("SelectedDate", UiControlType.DateTimePicker),
+                    RecorderValueKind.Date,
+                    RecorderValueAccessorKind.SelectedDate,
+                    dateValue: new DateTime(2026, 8, 25)),
+                LiteralAssertion(
+                    Descriptor("OptionalDate", UiControlType.DateTimePicker),
+                    RecorderValueKind.Date,
+                    RecorderValueAccessorKind.SelectedDate),
+                LiteralAssertion(
+                    Descriptor("SelectedTime", UiControlType.TimePicker),
+                    RecorderValueKind.Time,
+                    RecorderValueAccessorKind.SelectedTime,
+                    timeValue: new TimeSpan(9, 30, 0)),
+                LiteralAssertion(
+                    Descriptor("AccentColor", UiControlType.ColorPicker),
+                    RecorderValueKind.Color,
+                    RecorderValueAccessorKind.Color,
+                    stringValue: "#FF336699"),
+                new RecordedStep(
+                    RecordedActionKind.CaptureCheckpoint,
+                    Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                    ValueKind: RecorderValueKind.StringSet,
+                    ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                    CheckpointId: checkpointId,
+                    CheckpointVariableName: "statusesBeforeAction"),
+                new RecordedStep(
+                    RecordedActionKind.AssertValue,
+                    Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                    ValueKind: RecorderValueKind.StringSet,
+                    ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                    ComparisonKind: RecorderComparisonKind.Equivalent,
+                    ExpectedCheckpointId: checkpointId)
+            ]);
+        var scenarioSource = await File.ReadAllTextAsync(second.ScenarioFilePath!);
+        var controlsSource = await File.ReadAllTextAsync(first.PageFilePath!);
+        var compileErrors = RecorderGeneratedSourceCompiler.Compile(project.RootPath);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(first.Success).IsTrue();
+            await Assert.That(second.Success).IsTrue();
+            await Assert.That(File.Exists(autosave.ScenarioFilePath!)).IsFalse();
+            await Assert.That(File.Exists(autosave.PageFilePath!)).IsFalse();
+            await Assert.That(scenarioSource).Contains("async global::System.Threading.Tasks.Task");
+            await Assert.That(scenarioSource).Contains("TUnit.Assertions.Assert.That");
+            await Assert.That(scenarioSource).Contains("StringContainsAssertionExtensions.Contains");
+            await Assert.That(scenarioSource).Contains("IsEquivalentToAssertionExtensions.IsEquivalentTo");
+            await Assert.That(scenarioSource).DoesNotContain("WaitUntilTextEquals");
+            await Assert.That(CountOccurrences(controlsSource, "ObservedValue")).IsEqualTo(2);
+            await Assert.That(compileErrors).IsEmpty();
+        }
+    }
+
+    [Test]
+    public async Task Save_RejectsForwardCheckpointReferenceBeforeWritingFiles()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage,
+            RecorderScenarioDestinationSources.CompilableScenario);
+        var context = project.CreateSaveContext("Invalid checkpoint flow", "invalid-draft");
+        var checkpointId = Guid.NewGuid();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                ExpectedCheckpointId: checkpointId),
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: checkpointId,
+                CheckpointVariableName: "laterValue")
+        };
+
+        var result = await project.SaveAsync(context, steps);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsFalse();
+            await Assert.That(result.Message).Contains("missing or later checkpoint");
+            await Assert.That(result.ScenarioFilePath).IsNull();
+            await Assert.That(result.PageFilePath).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task GraphValidator_RejectsIncompatibleKindsAndOperators()
+    {
+        var checkpointId = Guid.NewGuid();
+        var incompatibleKinds = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("AmountValue", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                CheckpointId: checkpointId,
+                StepId: Guid.NewGuid()),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                ExpectedCheckpointId: checkpointId,
+                StepId: Guid.NewGuid())
+        ]);
+        var invalidOperator = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                StringValues: ["Ready"],
+                ValueKind: RecorderValueKind.StringSet,
+                ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true,
+                StepId: Guid.NewGuid())
+        ]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(incompatibleKinds.Success).IsFalse();
+            await Assert.That(incompatibleKinds.Error).Contains("incompatible checkpoint kind");
+            await Assert.That(invalidOperator.Success).IsFalse();
+            await Assert.That(invalidOperator.Error).Contains("cannot use Equal with StringSet");
+        }
+    }
+
+    [Test]
+    public async Task GraphValidator_RequiresExactlyOneExpectedValueSource()
+    {
+        var checkpointId = Guid.NewGuid();
+        var withoutExpectation = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                StepId: Guid.NewGuid())
+        ]);
+        var withConflictingExpectations = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                StringValue: "Expected value",
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                ExpectedCheckpointId: checkpointId,
+                HasExpectedLiteral: true,
+                StepId: Guid.NewGuid())
+        ]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(withoutExpectation.Success).IsFalse();
+            await Assert.That(withoutExpectation.Error).Contains("exactly one expected value source");
+            await Assert.That(withConflictingExpectations.Success).IsFalse();
+            await Assert.That(withConflictingExpectations.Error).Contains("exactly one expected value source");
+        }
+    }
+
+    [Test]
+    public async Task Preview_SanitizesKeywordAndCollisionCheckpointNamesDeterministically()
+    {
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        var contextualKeywordId = Guid.NewGuid();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("FirstValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: firstId,
+                CheckpointVariableName: "class"),
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("SecondValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: secondId,
+                CheckpointVariableName: "class"),
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("ThirdValue", UiControlType.TextBox),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: contextualKeywordId,
+                CheckpointVariableName: "await")
+        };
+
+        var preview = CreateGenerator().GeneratePreview(steps);
+
+        await Assert.That(preview).Contains("var checkpointClass = Page.FirstValue.Text;");
+        await Assert.That(preview).Contains("var checkpointClass2 = Page.SecondValue.Text;");
+        await Assert.That(preview).Contains("var checkpointAwait = Page.ThirdValue.Text;");
+    }
+
+    [Test]
+    public async Task CheckpointHotkeys_AreAdditiveAndDoNotExpandShortcutLegend()
+    {
+        var map = RecorderHotkeyMap.Create(new RecorderHotkeys());
+
+        var rememberResolved = map.TryGetCommand(
+            Key.M,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var rememberCommand);
+        var compareResolved = map.TryGetCommand(
+            Key.V,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var compareCommand);
+        var legend = map.BuildLegend();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(rememberResolved).IsTrue();
+            await Assert.That(rememberCommand).IsEqualTo(RecorderCommandKind.CaptureCheckpoint);
+            await Assert.That(compareResolved).IsTrue();
+            await Assert.That(compareCommand).IsEqualTo(RecorderCommandKind.CaptureCheckpointAssertion);
+            await Assert.That(legend).DoesNotContain("Remember Value");
+            await Assert.That(legend).DoesNotContain("Compare Checkpoint");
+        }
+    }
+
+    [Test]
+    public async Task Overlay_ExposesOneCompactCheckButtonWithShortcutTooltip()
+    {
+        var root = new StackPanel();
+        var value = new TextBox { Text = "Value" };
+        AutomationProperties.SetAutomationId(value, "ObservedValue");
+        root.Children.Add(value);
+        using var session = CreateSession(root);
+        session.SetLastHoveredControlForTesting(value);
+        session.Start();
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.RefreshForTesting();
+
+        var checkButton = overlay.FindControl<Button>("CheckButton");
+        var buttons = overlay.GetLogicalDescendants()
+            .OfType<Button>()
+            .Where(button => string.Equals(button.Content?.ToString(), "Check", StringComparison.Ordinal))
+            .ToArray();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(checkButton).IsNotNull();
+            await Assert.That(checkButton!.IsEnabled).IsTrue();
+            await Assert.That(buttons.Length).IsEqualTo(1);
+            await Assert.That(ToolTip.GetTip(checkButton)?.ToString()).Contains("Ctrl+Shift+M");
+            await Assert.That(ToolTip.GetTip(checkButton)?.ToString()).Contains("Ctrl+Shift+V");
+        }
+    }
+
+    private static int CountOccurrences(string source, string value) =>
+        source.Split(value, StringSplitOptions.None).Length - 1;
+
+    private static RecordedStep LiteralAssertion(
+        RecordedControlDescriptor descriptor,
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind,
+        string? stringValue = null,
+        bool? boolValue = null,
+        double? doubleValue = null,
+        DateTime? dateValue = null,
+        TimeSpan? timeValue = null) =>
+        new(
+            RecordedActionKind.AssertValue,
+            descriptor,
+            StringValue: stringValue,
+            BoolValue: boolValue,
+            DoubleValue: doubleValue,
+            DateValue: dateValue,
+            TimeValue: timeValue,
+            ValueKind: valueKind,
+            ValueAccessorKind: accessorKind,
+            ComparisonKind: RecorderComparisonKind.Equal,
+            HasExpectedLiteral: true);
+
+    private static AuthoringCodeGenerator CreateGenerator() =>
+        new(new AuthoringProjectScanner(), logger: null);
+
+    private static RecorderSession CreateSession(Control root)
+    {
+        var options = new AppAutomationRecorderOptions
+        {
+            Validation = new RecorderValidationOptions
+            {
+                ValidateSelectors = true,
+                ValidateRuntimeTargets = true,
+                CaptureInvalidSteps = true
+            }
+        };
+        return new RecorderSession(
+            RecorderTestWindow.CreateStub(),
+            options,
+            validationRootProvider: () => root,
+            attachWindowHandlers: false);
+    }
+
+    private static RecordedControlDescriptor Descriptor(string propertyName, UiControlType controlType) =>
+        new(
+            propertyName,
+            controlType,
+            propertyName,
+            UiLocatorKind.AutomationId,
+            FallbackToName: false,
+            AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
+            Warning: null);
+}

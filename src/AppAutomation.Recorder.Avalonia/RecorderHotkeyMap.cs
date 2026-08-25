@@ -15,7 +15,9 @@ internal enum RecorderCommandKind
     CaptureAssertChecked = 7,
     CaptureAssertExists = 8,
     // Kept so existing hotkey settings files with this key still deserialize.
-    ToggleOverlayMinimize = 9
+    ToggleOverlayMinimize = 9,
+    CaptureCheckpoint = 10,
+    CaptureCheckpointAssertion = 11
 }
 
 internal sealed class RecorderHotkeyMap
@@ -66,7 +68,9 @@ internal sealed class RecorderHotkeyMap
             [RecorderCommandKind.CaptureAssertText] = hotkeys.CaptureAssertText,
             [RecorderCommandKind.CaptureAssertEnabled] = hotkeys.CaptureAssertEnabled,
             [RecorderCommandKind.CaptureAssertChecked] = hotkeys.CaptureAssertChecked,
-            [RecorderCommandKind.CaptureAssertExists] = hotkeys.CaptureAssertExists
+            [RecorderCommandKind.CaptureAssertExists] = hotkeys.CaptureAssertExists,
+            [RecorderCommandKind.CaptureCheckpoint] = hotkeys.CaptureCheckpoint,
+            [RecorderCommandKind.CaptureCheckpointAssertion] = hotkeys.CaptureCheckpointAssertion
         };
     }
 
@@ -107,6 +111,8 @@ internal sealed class RecorderHotkeyMap
             "  |  ",
             _shortcuts
                 .OrderBy(static entry => entry.Key)
+                .Where(static entry => entry.Key is not RecorderCommandKind.CaptureCheckpoint
+                    and not RecorderCommandKind.CaptureCheckpointAssertion)
                 .Select(static entry => $"{entry.Value.DisplayText}: {Describe(entry.Key)}"));
     }
 
@@ -142,6 +148,8 @@ internal sealed class RecorderHotkeyMap
             RecorderCommandKind.CaptureAssertChecked => "Assert Checked",
             RecorderCommandKind.CaptureAssertExists => "Assert Exists",
             RecorderCommandKind.ToggleOverlayMinimize => "Overlay",
+            RecorderCommandKind.CaptureCheckpoint => "Remember Value",
+            RecorderCommandKind.CaptureCheckpointAssertion => "Compare Checkpoint",
             _ => command.ToString()
         };
     }

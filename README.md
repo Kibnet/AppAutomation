@@ -188,6 +188,7 @@ If you want to reduce the first manual authoring pass, attach `AppAutomation.Rec
 - The overlay keeps a step journal with `Remove`, `Ignore`, `Retry`, and `Copy` actions, so you can clean up a recording session without restarting it.
 - Save and export are single-flight operations: while a save/export is running, the overlay shows a busy summary and blocks duplicate save/export clicks.
 - The recorder UI is hosted in a separate opaque window, so it no longer follows or overlays the AUT window.
+- `Check` records either a literal TUnit assertion or a replay-time checkpoint comparison; `WaitUntil...` remains synchronization and is not treated as a data check.
 - Hotkeys, overlay behavior, selector validation, and custom assertion capture are configurable through `AppAutomationRecorderOptions`.
 
 To choose an existing scenario class at runtime, opt in to project discovery:
@@ -610,6 +611,7 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - Overlay держит step journal с действиями `Remove`, `Ignore`, `Retry` и `Copy`, так что плохой шаг можно выкинуть или отложить без полного перезапуска записи.
 - `Save` и `Export...` теперь single-flight: пока идёт запись файлов, overlay показывает busy summary и не даёт запустить второй save/export поверх первого.
 - Recorder UI теперь живёт в отдельном непрозрачном окне и больше не привязан к позиции или состоянию окна AUT.
+- `Check` записывает либо обычный TUnit assert с expected-значением, либо сравнение с checkpoint, считанным во время replay; `WaitUntil...` по-прежнему отвечает только за ожидание.
 - Hotkeys, поведение overlay, selector validation и кастомный assertion capture настраиваются через `AppAutomationRecorderOptions`.
 
 Чтобы выбирать существующий класс сценариев при запуске, включите сканирование authoring-проекта:

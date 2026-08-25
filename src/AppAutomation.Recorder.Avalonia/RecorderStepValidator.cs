@@ -28,6 +28,7 @@ internal sealed class RecorderStepValidator
     {
         return actionKind switch
         {
+            RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue => true,
             RecordedActionKind.EnterText
                 or RecordedActionKind.EnterSearch
                 or RecordedActionKind.ClearSearch => source is TextBox,

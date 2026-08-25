@@ -31,7 +31,13 @@ public sealed class RecorderFullCaptureCoverageTests
 
             using (Assert.Multiple())
             {
-                await Assert.That(preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)).IsEqualTo(true);
+                var rendersExpectedShape = step.ActionKind switch
+                {
+                    RecordedActionKind.CaptureCheckpoint => preview.Contains("var ", StringComparison.Ordinal),
+                    RecordedActionKind.AssertValue => preview.Contains("TUnit.Assertions.Assert.That", StringComparison.Ordinal),
+                    _ => preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)
+                };
+                await Assert.That(rendersExpectedShape).IsEqualTo(true);
                 await Assert.That(preview.Contains("Unsupported recorded action", StringComparison.Ordinal)).IsEqualTo(false);
                 await Assert.That(validated.CanPersist).IsEqualTo(true);
                 await Assert.That(validated.ValidationStatus == RecorderValidationStatus.Invalid).IsEqualTo(false);
@@ -401,7 +407,22 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.CancelFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: []),
             new RecordedStep(RecordedActionKind.EnterSearch, Descriptor("TableSearch", UiControlType.Search), StringValue: "orders"),
             new RecordedStep(RecordedActionKind.ClearSearch, Descriptor("TableSearch", UiControlType.Search)),
-            new RecordedStep(RecordedActionKind.ApplySearchFromHistory, Descriptor("TableSearch", UiControlType.Search), StringValue: "customers")
+            new RecordedStep(RecordedActionKind.ApplySearchFromHistory, Descriptor("TableSearch", UiControlType.Search), StringValue: "customers"),
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("ValueLabel", UiControlType.Label),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: Guid.NewGuid(),
+                CheckpointVariableName: "valueBeforeAction"),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ValueLabel", UiControlType.Label),
+                StringValue: "Expected value",
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true)
         ];
     }
 

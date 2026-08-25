@@ -20,6 +20,7 @@ internal sealed class RecorderSession :
     IAppAutomationRecorderSession,
     IAppAutomationRecorderSessionDetails,
     IRecorderStepReorderSessionDetails,
+    IRecorderCheckpointSessionDetails,
     IRecorderScenarioPathDetails,
     IRecorderScenarioSelectionDetails
 {
@@ -228,6 +229,8 @@ internal sealed class RecorderSession :
     public int StepCount => _steps.Count;
 
     public int PersistableStepCount => _steps.Count(static step => step.CanPersist && !step.IsIgnored);
+
+    public IReadOnlyList<RecorderCheckpointOption> Checkpoints => CreateCheckpointOptions();
 
     public string LatestPreview { get; private set; } = string.Empty;
 
@@ -484,8 +487,12 @@ internal sealed class RecorderSession :
         }
 
         _steps.RemoveAt(index);
+        var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
-        SetStatus("Recorded step removed.", RecorderValidationStatus.Valid);
+        SetStatusAfterGraphValidation(
+            graphValidation,
+            "Recorded step removed.",
+            RecorderValidationStatus.Valid);
         RequestAutosaveIfRecording();
     }
 
@@ -505,10 +512,12 @@ internal sealed class RecorderSession :
             FailureCode = ResolveFailureCode(step with { IsIgnored = isIgnored })
         };
         _steps[index] = updatedStep;
+        var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
-        SetStatus(
+        SetStatusAfterGraphValidation(
+            graphValidation,
             isIgnored ? "Recorded step ignored." : "Recorded step restored.",
-            isIgnored ? RecorderValidationStatus.Warning : updatedStep.ValidationStatus);
+            isIgnored ? RecorderValidationStatus.Warning : _steps[index].ValidationStatus);
         RequestAutosaveIfRecording();
     }
 
@@ -520,11 +529,15 @@ internal sealed class RecorderSession :
             return false;
         }
 
-        var revalidatedStep = RevalidateStep(_steps[index]);
+        _steps[index] = RevalidateStep(_steps[index]);
+        var graphValidation = ApplyScenarioGraphValidation();
+        UpdateLatestPreviewFromSteps();
+        var revalidatedStep = _steps[index];
         LogRecordedStepDiagnostics("RetryStepValidation", null, revalidatedStep);
-        _steps[index] = revalidatedStep;
-        LatestPreview = _codeGenerator.GeneratePreview(revalidatedStep);
-        SetStatus(ResolveJournalStatusMessage(revalidatedStep), revalidatedStep.ValidationStatus);
+        SetStatusAfterGraphValidation(
+            graphValidation,
+            ResolveJournalStatusMessage(revalidatedStep),
+            revalidatedStep.ValidationStatus);
         RequestAutosaveIfRecording();
         return true;
     }
@@ -557,12 +570,14 @@ internal sealed class RecorderSession :
             ? index - 1
             : index + 1;
         (_steps[index], _steps[targetIndex]) = (_steps[targetIndex], _steps[index]);
+        var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
-        SetStatus(
+        SetStatusAfterGraphValidation(
+            graphValidation,
             direction == RecorderStepMoveDirection.Earlier
                 ? "Recorded step moved earlier."
                 : "Recorded step moved later.",
-            RecorderValidationStatus.Valid);
+            _steps[targetIndex].ValidationStatus);
         RequestAutosaveIfRecording();
         return true;
     }
@@ -1263,6 +1278,32 @@ internal sealed class RecorderSession :
                 break;
             case RecorderCommandKind.CaptureAssertExists:
                 CaptureAssertion(RecorderAssertionMode.Exists);
+                break;
+            case RecorderCommandKind.CaptureCheckpoint:
+                CaptureCheckpoint();
+                break;
+            case RecorderCommandKind.CaptureCheckpointAssertion:
+                if (!TryDescribeCurrentValue(out var currentValue, out var valueError)
+                    || currentValue is null)
+                {
+                    SetStatus(
+                        valueError ?? "The selected control does not expose a readable value.",
+                        RecorderValidationStatus.Invalid);
+                    break;
+                }
+
+                var checkpoint = CreateCheckpointOptions()
+                    .LastOrDefault(candidate => candidate.ValueKind == currentValue.ValueKind);
+                if (checkpoint is null)
+                {
+                    SetStatus(
+                        $"No active {currentValue.ValueKind} checkpoint is available to compare.",
+                        RecorderValidationStatus.Invalid);
+                }
+                else
+                {
+                    CaptureCheckpointAssertion(checkpoint.CheckpointId);
+                }
                 break;
         }
     }
@@ -2219,6 +2260,60 @@ internal sealed class RecorderSession :
         AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
     }
 
+    public bool TryDescribeCurrentValue(
+        out RecorderSemanticValueDescription? description,
+        out string? error)
+    {
+        var control = _lastHoveredControl ?? GetFocusedWindowControl();
+        return _stepFactory.TryDescribeSemanticValue(control, out description, out error);
+    }
+
+    public void CaptureCheckpoint(string? variableName = null)
+    {
+        var control = PrepareSemanticCaptureTarget();
+        AddStep(
+            _stepFactory.TryCreateCheckpointStep(control, variableName),
+            control,
+            "Checkpoint:Remember");
+    }
+
+    public void CaptureCheckpointAssertion(Guid checkpointId)
+    {
+        var checkpoint = CreateCheckpointOptions()
+            .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId);
+        if (checkpoint is null)
+        {
+            SetStatus("Selected checkpoint is missing or ignored.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var control = PrepareSemanticCaptureTarget();
+        AddStep(
+            _stepFactory.TryCreateCheckpointAssertionStep(control, checkpoint),
+            control,
+            "Checkpoint:Compare");
+    }
+
+    public void CaptureLiteralAssertion(
+        string expectedText,
+        RecorderComparisonKind comparisonKind)
+    {
+        var control = PrepareSemanticCaptureTarget();
+        AddStep(
+            _stepFactory.TryCreateLiteralAssertionStep(control, expectedText, comparisonKind),
+            control,
+            "Assertion:Literal");
+    }
+
+    private Control? PrepareSemanticCaptureTarget()
+    {
+        var control = _lastHoveredControl ?? GetFocusedWindowControl();
+        FlushPendingTextIfSwitchingTo(control);
+        FlushPendingSliderIfSwitchingTo(control);
+        FlushPendingSpinnerIfSwitchingTo(control);
+        return control;
+    }
+
     private void AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
     {
         if (!result.Success || result.Step is null)
@@ -2234,7 +2329,11 @@ internal sealed class RecorderSession :
 
         var recordedStep = RevalidateStep(result.Step);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
-        var preview = _codeGenerator.GeneratePreview(recordedStep);
+        var tentativeSteps = _steps
+            .Where(static step => !step.IsIgnored)
+            .Append(recordedStep)
+            .ToArray();
+        var preview = _codeGenerator.GeneratePreviewForStep(recordedStep, tentativeSteps);
         if (!recordedStep.CanPersist && !_options.Validation.CaptureInvalidSteps)
         {
             LatestPreview = preview;
@@ -2255,10 +2354,17 @@ internal sealed class RecorderSession :
         }
 
         _steps.Add(recordedStep);
+        var graphValidation = ApplyScenarioGraphValidation();
         _lastFingerprint = fingerprint;
         _lastRecordedAt = now;
-        LatestPreview = preview;
-        SetStatus(ResolveStepStatusMessage(recordedStep, result.Message), recordedStep.ValidationStatus);
+        var effectiveStep = _steps[^1];
+        LatestPreview = _codeGenerator.GeneratePreviewForStep(
+            effectiveStep,
+            _steps.Where(static step => !step.IsIgnored).ToArray());
+        SetStatusAfterGraphValidation(
+            graphValidation,
+            ResolveStepStatusMessage(effectiveStep, result.Message),
+            effectiveStep.ValidationStatus);
         RequestAutosaveIfRecording();
     }
 
@@ -2511,6 +2617,13 @@ internal sealed class RecorderSession :
             step.FolderExportCommitMode?.ToString() ?? string.Empty,
             step.GridCellEditCommitMode?.ToString() ?? string.Empty,
             step.TimeValue?.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.ValueKind?.ToString() ?? string.Empty,
+            step.ValueAccessorKind?.ToString() ?? string.Empty,
+            step.ComparisonKind?.ToString() ?? string.Empty,
+            step.CheckpointId?.ToString("N") ?? string.Empty,
+            step.ExpectedCheckpointId?.ToString("N") ?? string.Empty,
+            step.CheckpointVariableName ?? string.Empty,
+            step.HasExpectedLiteral,
             step.CanPersist);
     }
 
@@ -3266,6 +3379,7 @@ internal sealed class RecorderSession :
 
     private RecordedStep RevalidateStep(RecordedStep step)
     {
+        step = RestoreValidationBeforeGraphError(step);
         if (!_options.Validation.ValidateSelectors)
         {
             var selectorValidationDisabledStep = _runtimeValidator.Validate(step with
@@ -3309,7 +3423,9 @@ internal sealed class RecorderSession :
     {
         return new RecorderStepJournalEntry(
             step.StepId,
-            _codeGenerator.GeneratePreview(step),
+            _codeGenerator.GeneratePreviewForStep(
+                step,
+                _steps.Where(static candidate => !candidate.IsIgnored).ToArray()),
             ResolveJournalStatusMessage(step),
             step.ValidationStatus,
             step.CanPersist,
@@ -3346,7 +3462,7 @@ internal sealed class RecorderSession :
         };
     }
 
-    private static string ResolveJournalStatusMessage(RecordedStep step)
+    private string ResolveJournalStatusMessage(RecordedStep step)
     {
         if (step.IsIgnored)
         {
@@ -3358,6 +3474,31 @@ internal sealed class RecorderSession :
             return step.ValidationMessage!;
         }
 
+        if (step.ActionKind == RecordedActionKind.CaptureCheckpoint)
+        {
+            var checkpoint = step.CheckpointId is { } checkpointId
+                ? CreateCheckpointOptions().FirstOrDefault(candidate => candidate.CheckpointId == checkpointId)
+                : null;
+            return $"Remember {step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)} as "
+                + (checkpoint?.VariableName ?? step.CheckpointVariableName ?? "checkpointValue");
+        }
+
+        if (step.ActionKind == RecordedActionKind.AssertValue)
+        {
+            var comparison = step.ComparisonKind switch
+            {
+                RecorderComparisonKind.Contains => "contains",
+                RecorderComparisonKind.Equivalent => "has the same items as",
+                _ => "equals"
+            };
+            var expected = step.ExpectedCheckpointId is { } checkpointId
+                ? "checkpoint " + (CreateCheckpointOptions()
+                    .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId)?.VariableName
+                    ?? checkpointId.ToString("N"))
+                : "expected literal";
+            return $"Assert {step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)} {comparison} {expected}";
+        }
+
         return step.ValidationStatus switch
         {
             RecorderValidationStatus.Warning => "Recorded with warning.",
@@ -3365,6 +3506,24 @@ internal sealed class RecorderSession :
             _ => "Ready to persist."
         };
     }
+
+    private static string DescribeValueAccessor(RecorderValueAccessorKind? accessorKind) =>
+        accessorKind switch
+        {
+            RecorderValueAccessorKind.SelectedItemText => "SelectedItemText",
+            RecorderValueAccessorKind.SelectedItems => "SelectedItems",
+            RecorderValueAccessorKind.NumericValue => "Value",
+            RecorderValueAccessorKind.SelectedDate => "SelectedDate",
+            RecorderValueAccessorKind.SelectedTime => "SelectedTime",
+            RecorderValueAccessorKind.Color => "Color",
+            RecorderValueAccessorKind.IsChecked => "IsChecked",
+            RecorderValueAccessorKind.IsToggled => "IsToggled",
+            RecorderValueAccessorKind.IsSelected => "IsSelected",
+            RecorderValueAccessorKind.IsExpanded => "IsExpanded",
+            RecorderValueAccessorKind.IsEnabled => "IsEnabled",
+            RecorderValueAccessorKind.GridCellText => "CellText",
+            _ => "Text"
+        };
 
     private async Task DiscoverScenarioDestinationsAsync()
     {
@@ -3493,8 +3652,110 @@ internal sealed class RecorderSession :
         var latestStep = _steps.LastOrDefault(static step => !step.IsIgnored);
         LatestPreview = latestStep is null
             ? string.Empty
-            : _codeGenerator.GeneratePreview(latestStep);
+            : _codeGenerator.GeneratePreviewForStep(
+                latestStep,
+                _steps.Where(static step => !step.IsIgnored).ToArray());
         NotifySessionChanged();
+    }
+
+    private IReadOnlyList<RecorderCheckpointOption> CreateCheckpointOptions()
+    {
+        var reservedNames = new HashSet<string>(StringComparer.Ordinal);
+        return _steps
+            .Where(static step => !step.IsIgnored
+                && step.CanPersist
+                && step.ActionKind == RecordedActionKind.CaptureCheckpoint
+                && step.CheckpointId is not null
+                && step.ValueKind is not null)
+            .Select(step => new RecorderCheckpointOption(
+                step.CheckpointId!.Value,
+                RecorderNaming.CreateCheckpointVariableName(step.CheckpointVariableName, reservedNames),
+                step.ValueKind!.Value,
+                step.Control.ProposedPropertyName))
+            .ToArray();
+    }
+
+    private RecorderScenarioGraphValidationResult ApplyScenarioGraphValidation()
+    {
+        for (var index = 0; index < _steps.Count; index++)
+        {
+            var step = _steps[index];
+            if (step.IsIgnored
+                || !string.Equals(step.FailureCode, "checkpoint-graph-invalid", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            _steps[index] = RestoreValidationBeforeGraphError(step);
+        }
+
+        var graphSteps = _steps
+            .Where(static step => !step.IsIgnored && step.CanPersist)
+            .ToArray();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
+        if (graphValidation.Success)
+        {
+            return graphValidation;
+        }
+
+        foreach (var entry in graphValidation.StepErrors)
+        {
+            var index = _steps.FindIndex(step => step.StepId == entry.Key);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            var step = _steps[index];
+            var validationBeforeGraphError = step.ValidationBeforeGraphError
+                ?? new RecorderStepValidationState(
+                    step.ValidationStatus,
+                    step.ValidationMessage,
+                    step.CanPersist,
+                    step.ReviewState,
+                    step.FailureCode);
+            _steps[index] = step with
+            {
+                ValidationStatus = RecorderValidationStatus.Invalid,
+                ValidationMessage = entry.Value,
+                CanPersist = false,
+                ReviewState = RecorderStepReviewState.NeedsReview,
+                FailureCode = "checkpoint-graph-invalid",
+                ValidationBeforeGraphError = validationBeforeGraphError
+            };
+        }
+
+        return graphValidation;
+    }
+
+    private static RecordedStep RestoreValidationBeforeGraphError(RecordedStep step)
+    {
+        if (step.ValidationBeforeGraphError is not { } validation)
+        {
+            return step;
+        }
+
+        return step with
+        {
+            ValidationStatus = validation.ValidationStatus,
+            ValidationMessage = validation.ValidationMessage,
+            CanPersist = validation.CanPersist,
+            ReviewState = validation.ReviewState,
+            FailureCode = validation.FailureCode,
+            ValidationBeforeGraphError = null
+        };
+    }
+
+    private void SetStatusAfterGraphValidation(
+        RecorderScenarioGraphValidationResult graphValidation,
+        string successMessage,
+        RecorderValidationStatus successStatus)
+    {
+        SetStatus(
+            graphValidation.Success
+                ? successMessage
+                : graphValidation.Error ?? "Checkpoint dependency graph is invalid.",
+            graphValidation.Success ? successStatus : RecorderValidationStatus.Invalid);
     }
 
     private void SetStatus(string message, RecorderValidationStatus validationStatus)

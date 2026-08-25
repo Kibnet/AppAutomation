@@ -269,7 +269,7 @@ internal sealed class RecorderSelectorResolver
                 timeValidation.CanPersist);
         }
 
-        if (!RequiresSpinnerProxyValidation(step.ActionKind)
+        if (!RequiresSpinnerProxyValidation(step)
             || !TryResolveSpinnerProxyAlias(step.Control, out var proxyAlias))
         {
             return logicalResolution;
@@ -526,12 +526,13 @@ internal sealed class RecorderSelectorResolver
                 out alias);
     }
 
-    private static bool RequiresSpinnerProxyValidation(RecordedActionKind actionKind)
+    private static bool RequiresSpinnerProxyValidation(RecordedStep step)
     {
-        return actionKind is RecordedActionKind.SetSpinnerValue
+        return step.ActionKind is RecordedActionKind.SetSpinnerValue
             or RecordedActionKind.WaitUntilValueEquals
             or RecordedActionKind.WaitUntilTextEquals
-            or RecordedActionKind.WaitUntilTextContains;
+            or RecordedActionKind.WaitUntilTextContains
+            || step.ValueAccessorKind == RecorderValueAccessorKind.NumericValue;
     }
 
     private bool TryResolveTimePickerPart(
