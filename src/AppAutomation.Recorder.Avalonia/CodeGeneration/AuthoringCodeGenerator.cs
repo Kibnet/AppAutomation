@@ -250,6 +250,7 @@ internal sealed class AuthoringCodeGenerator
 
         var containsAssertions = persistableSteps.Any(
             static step => step.ActionKind == RecordedActionKind.AssertValue);
+        var containsRelativeDates = persistableSteps.Any(HasRelativeDateExpression);
 
         Directory.CreateDirectory(target.OutputDirectory);
         var fileSafeScenarioName = RecorderNaming.CreateFileSafeName(target.ScenarioName, "scenario");
@@ -295,6 +296,7 @@ internal sealed class AuthoringCodeGenerator
                 saveTarget.MethodName,
                 renderedStatements,
                 containsAssertions,
+                containsRelativeDates,
                 isAutosave: saveKind == AuthoringSaveKind.Autosave,
                 autosaveDestinationId: autosaveDestinationId);
         }
@@ -305,6 +307,7 @@ internal sealed class AuthoringCodeGenerator
                      saveTarget.MethodName,
                      renderedStatements,
                      containsAssertions,
+                     containsRelativeDates,
                      cancellationToken,
                      out var mergedScenarioSource,
                      out var scenarioMergeError))
@@ -959,6 +962,7 @@ internal sealed class AuthoringCodeGenerator
         string methodName,
         IReadOnlyList<string> renderedStatements,
         bool containsAssertions,
+        bool containsRelativeDates,
         CancellationToken cancellationToken,
         out string? mergedSource,
         out string? error)
@@ -1028,6 +1032,7 @@ internal sealed class AuthoringCodeGenerator
             methodName,
             renderedStatements,
             containsAssertions,
+            containsRelativeDates,
             isAutosave: false,
             autosaveDestinationId: null);
         var generatedMethod = CSharpSyntaxTree.ParseText(generatedSource)
@@ -1037,6 +1042,12 @@ internal sealed class AuthoringCodeGenerator
             .Single();
         var updatedClass = existingClass.AddMembers(generatedMethod);
         var updatedRoot = root.ReplaceNode(existingClass, updatedClass);
+        if (containsRelativeDates && !HasUsingDirective(updatedRoot, "System"))
+        {
+            updatedRoot = updatedRoot.AddUsings(
+                SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System")));
+        }
+
         mergedSource = updatedRoot
             .NormalizeWhitespace(indentation: "    ", eol: Environment.NewLine)
             .ToFullString() + Environment.NewLine;
@@ -1050,6 +1061,7 @@ internal sealed class AuthoringCodeGenerator
         string methodName,
         IReadOnlyList<string> renderedStatements,
         bool containsAssertions,
+        bool containsRelativeDates,
         bool isAutosave,
         string? autosaveDestinationId)
     {
@@ -1057,6 +1069,11 @@ internal sealed class AuthoringCodeGenerator
         builder.AppendLine(RecorderGeneratedMarker);
         AppendAutosaveDestinationMarker(builder, autosaveDestinationId);
         builder.AppendLine("using AppAutomation.Abstractions;");
+        if (containsRelativeDates)
+        {
+            builder.AppendLine("using System;");
+        }
+
         builder.AppendLine("using TUnit.Core;");
         builder.AppendLine();
         builder.Append("namespace ").Append(target.ScenarioNamespace).AppendLine(";");
@@ -1096,6 +1113,14 @@ internal sealed class AuthoringCodeGenerator
         builder.AppendLine("    }");
         builder.AppendLine("}");
         return builder.ToString();
+    }
+
+    private static bool HasUsingDirective(CompilationUnitSyntax root, string namespaceName)
+    {
+        return root.Usings.Any(usingDirective =>
+            usingDirective.Alias is null
+            && usingDirective.StaticKeyword.IsKind(SyntaxKind.None)
+            && string.Equals(usingDirective.Name?.ToString(), namespaceName, StringComparison.Ordinal));
     }
 
     private static void AppendAutosaveDestinationMarker(StringBuilder builder, string? autosaveDestinationId)
@@ -1173,7 +1198,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SetSpinnerValue => $"Page.SetSpinnerValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SelectTabItem => $"Page.SelectTabItem(static page => page.{propertyName});",
             RecordedActionKind.SelectTreeItem => $"Page.SelectTreeItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
-            RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue)});",
+            RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue, step.DateExpression)});",
             RecordedActionKind.SetTime => $"Page.SetTime(static page => page.{propertyName}, {FormatTimeSpan(step.TimeValue)});",
             RecordedActionKind.SetExpanded => $"Page.SetExpanded(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SetColor => $"Page.SetColor(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
@@ -1215,7 +1240,7 @@ internal sealed class AuthoringCodeGenerator
                 ? $"Page.CopyGridCell(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)});"
                 : $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
             RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
-            RecordedActionKind.SetDateRangeFilter => $"Page.SetDateRangeFilter(static page => page.{propertyName}, {FormatNullableDate(step.DateValue)}, {FormatNullableDate(step.SecondDateValue)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
+            RecordedActionKind.SetDateRangeFilter => $"Page.SetDateRangeFilter(static page => page.{propertyName}, {FormatNullableDate(step.DateValue, step.DateExpression)}, {FormatNullableDate(step.SecondDateValue, step.SecondDateExpression)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SetNumericRangeFilter => $"Page.SetNumericRangeFilter(static page => page.{propertyName}, {FormatNullableDouble(step.DoubleValue)}, {FormatNullableDouble(step.SecondDoubleValue)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SelectExportFolder => $"Page.SelectExportFolder(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalFolderExportCommitMode(step.FolderExportCommitMode)});",
             RecordedActionKind.EditGridCellText => HasNamedGridRow(step)
@@ -1225,8 +1250,8 @@ internal sealed class AuthoringCodeGenerator
                 ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellDate => HasNamedGridRow(step)
-                ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
-                : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+                ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellTime => HasNamedGridRow(step)
                 ? $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
@@ -1373,7 +1398,7 @@ internal sealed class AuthoringCodeGenerator
                 $"\"{EscapeString(step.StringValue ?? string.Empty)}\"",
             RecorderValueKind.Number => FormatDouble(step.DoubleValue),
             RecorderValueKind.Boolean => FormatBoolean(step.BoolValue),
-            RecorderValueKind.Date => FormatNullableDate(step.DateValue),
+            RecorderValueKind.Date => FormatNullableDate(step.DateValue, step.DateExpression),
             RecorderValueKind.Time => FormatNullableTimeSpan(step.TimeValue),
             RecorderValueKind.StringSet => FormatStringValues(step.StringValues),
             _ => throw new InvalidOperationException($"Literal value kind '{step.ValueKind}' is not supported.")
@@ -1534,8 +1559,27 @@ internal sealed class AuthoringCodeGenerator
         return (value ?? 0).ToString(CultureInfo.InvariantCulture);
     }
 
-    private static string FormatDate(DateTime? value)
+    private static bool HasRelativeDateExpression(RecordedStep step)
     {
+        return step.DateExpression?.ReferenceKind == RecorderDateReferenceKind.RelativeToToday
+            || step.SecondDateExpression?.ReferenceKind == RecorderDateReferenceKind.RelativeToToday;
+    }
+
+    private static string FormatDate(DateTime? value, RecorderDateExpression? expression = null)
+    {
+        if (expression?.ReferenceKind == RecorderDateReferenceKind.RelativeToToday)
+        {
+            return expression.DayOffset == 0
+                ? "DateTime.Today"
+                : $"DateTime.Today.AddDays({expression.DayOffset.ToString(CultureInfo.InvariantCulture)})";
+        }
+
+        if (expression is not null && expression.ReferenceKind != RecorderDateReferenceKind.Exact)
+        {
+            throw new InvalidOperationException(
+                $"Date reference kind '{expression.ReferenceKind}' is not supported.");
+        }
+
         var date = (value ?? DateTime.Today).Date;
         return $"new global::System.DateTime({date.Year}, {date.Month}, {date.Day})";
     }
@@ -1554,10 +1598,12 @@ internal sealed class AuthoringCodeGenerator
             : "null";
     }
 
-    private static string FormatNullableDate(DateTime? value)
+    private static string FormatNullableDate(
+        DateTime? value,
+        RecorderDateExpression? expression = null)
     {
         return value.HasValue
-            ? FormatDate(value)
+            ? FormatDate(value, expression)
             : "null";
     }
 }

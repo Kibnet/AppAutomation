@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add semantic menu-item recording with stable direct locators or exact nested paths and shared Headless/FlaUI invocation.
 - Add owner-scoped context-menu recording and exact-path Headless/FlaUI invocation without persisting popup primitives.
 - Add Recorder `Check` actions for literal TUnit assertions and replay-time semantic checkpoints, including composite selections, materialized multi-select values, and stable grid cells.
+- Add explicit per-step relative dates in Recorder output through readable `DateTime.Today[.AddDays(...)]` expressions, including ranges, grid edits, and literal assertions.
 
 ### Fixed
 

@@ -21,6 +21,7 @@ internal sealed class RecorderSession :
     IAppAutomationRecorderSessionDetails,
     IRecorderStepReorderSessionDetails,
     IRecorderCheckpointSessionDetails,
+    IRecorderRelativeDateSessionDetails,
     IRecorderScenarioPathDetails,
     IRecorderScenarioSelectionDetails
 {
@@ -580,6 +581,130 @@ internal sealed class RecorderSession :
             _steps[targetIndex].ValidationStatus);
         RequestAutosaveIfRecording();
         return true;
+    }
+
+    public bool TryGetDateConfiguration(
+        Guid stepId,
+        out RecorderStepDateConfiguration? configuration)
+    {
+        var step = _steps.FirstOrDefault(candidate => candidate.StepId == stepId);
+        if (step is null || !SupportsRelativeDate(step))
+        {
+            configuration = null;
+            return false;
+        }
+
+        configuration = new RecorderStepDateConfiguration(
+            step.StepId,
+            CreateDateOperandConfiguration(step.DateValue, step.DateExpression),
+            step.ActionKind == RecordedActionKind.SetDateRangeFilter
+                ? CreateDateOperandConfiguration(step.SecondDateValue, step.SecondDateExpression)
+                : null);
+        return true;
+    }
+
+    public bool SetStepDateExpressions(
+        Guid stepId,
+        RecorderDateExpression? primary,
+        RecorderDateExpression? secondary)
+    {
+        var index = _steps.FindIndex(step => step.StepId == stepId);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var step = _steps[index];
+        if (!SupportsRelativeDate(step) || step.IsIgnored || IsBusy)
+        {
+            return false;
+        }
+
+        var normalizedPrimary = NormalizeDateExpression(primary);
+        var normalizedSecondary = NormalizeDateExpression(secondary);
+        if (!IsValidDateExpression(step.DateValue, normalizedPrimary)
+            || (step.ActionKind == RecordedActionKind.SetDateRangeFilter
+                ? !IsValidDateExpression(step.SecondDateValue, normalizedSecondary)
+                : normalizedSecondary is not null))
+        {
+            return false;
+        }
+
+        if (Equals(step.DateExpression, normalizedPrimary)
+            && Equals(step.SecondDateExpression, normalizedSecondary))
+        {
+            return true;
+        }
+
+        _steps[index] = step with
+        {
+            DateExpression = normalizedPrimary,
+            SecondDateExpression = normalizedSecondary
+        };
+        UpdateLatestPreviewFromSteps();
+        SetStatus("Recorded date expression updated.", step.ValidationStatus);
+        RequestAutosaveIfRecording();
+        return true;
+    }
+
+    private static bool SupportsRelativeDate(RecordedStep step)
+    {
+        return step.ActionKind is RecordedActionKind.SetDate
+            or RecordedActionKind.SetDateRangeFilter
+            or RecordedActionKind.EditGridCellDate
+            || step.ActionKind == RecordedActionKind.AssertValue
+                && step.ValueKind == RecorderValueKind.Date
+                && step.HasExpectedLiteral;
+    }
+
+    private static RecorderDateOperandConfiguration CreateDateOperandConfiguration(
+        DateTime? exactDate,
+        RecorderDateExpression? expression)
+    {
+        return new RecorderDateOperandConfiguration(
+            exactDate,
+            expression?.ReferenceKind ?? RecorderDateReferenceKind.Exact,
+            expression?.DayOffset ?? CalculateSuggestedDayOffset(exactDate));
+    }
+
+    private static int CalculateSuggestedDayOffset(DateTime? exactDate)
+    {
+        return exactDate.HasValue
+            ? (exactDate.Value.Date - DateTime.Today).Days
+            : 0;
+    }
+
+    private static RecorderDateExpression? NormalizeDateExpression(RecorderDateExpression? expression)
+    {
+        return expression?.ReferenceKind == RecorderDateReferenceKind.Exact
+            ? null
+            : expression;
+    }
+
+    private static bool IsValidDateExpression(
+        DateTime? exactDate,
+        RecorderDateExpression? expression)
+    {
+        if (expression is null)
+        {
+            return true;
+        }
+
+        if (!exactDate.HasValue
+            || expression.ReferenceKind != RecorderDateReferenceKind.RelativeToToday)
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = DateTime.Today.AddDays(expression.DayOffset);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     internal Task<RecorderSaveResult> ExportWithDirectoryPickerAsync(
@@ -2608,8 +2733,12 @@ internal sealed class RecorderSession :
             step.BoolValue?.ToString() ?? string.Empty,
             step.DoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.DateValue?.ToString("O") ?? string.Empty,
+            step.DateExpression?.ReferenceKind.ToString() ?? string.Empty,
+            step.DateExpression?.DayOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.SecondDoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.SecondDateValue?.ToString("O") ?? string.Empty,
+            step.SecondDateExpression?.ReferenceKind.ToString() ?? string.Empty,
+            step.SecondDateExpression?.DayOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.RowIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.ColumnIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.IntValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,

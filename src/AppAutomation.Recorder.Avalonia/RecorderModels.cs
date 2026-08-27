@@ -144,6 +144,26 @@ internal sealed record RecordedControlDescriptor(
     string AvaloniaTypeName,
     string? Warning);
 
+internal enum RecorderDateReferenceKind
+{
+    Exact = 0,
+    RelativeToToday = 1
+}
+
+internal sealed record RecorderDateExpression(
+    RecorderDateReferenceKind ReferenceKind,
+    int DayOffset);
+
+internal sealed record RecorderDateOperandConfiguration(
+    DateTime? ExactDate,
+    RecorderDateReferenceKind ReferenceKind,
+    int DayOffset);
+
+internal sealed record RecorderStepDateConfiguration(
+    Guid StepId,
+    RecorderDateOperandConfiguration Primary,
+    RecorderDateOperandConfiguration? Secondary);
+
 internal sealed record RecordedStep(
     RecordedActionKind ActionKind,
     RecordedControlDescriptor Control,
@@ -178,7 +198,9 @@ internal sealed record RecordedStep(
     Guid? CheckpointId = null,
     string? CheckpointVariableName = null,
     Guid? ExpectedCheckpointId = null,
-    bool HasExpectedLiteral = false)
+    bool HasExpectedLiteral = false,
+    RecorderDateExpression? DateExpression = null,
+    RecorderDateExpression? SecondDateExpression = null)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 

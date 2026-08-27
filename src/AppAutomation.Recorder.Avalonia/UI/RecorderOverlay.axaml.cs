@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using System.Globalization;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -46,6 +47,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
     private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
     private IRecorderCheckpointSessionDetails? _checkpointDetails;
+    private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
     private int _renderedJournalEntryCount;
     private bool _isRefreshingScenarioSelection;
 
@@ -72,6 +74,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
         _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
         _checkpointDetails = session as IRecorderCheckpointSessionDetails;
+        _relativeDateDetails = session as IRecorderRelativeDateSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -858,6 +861,16 @@ internal sealed partial class RecorderOverlay : UserControl
         };
 
         var canReorder = _stepReorderDetails is not null && !(_sessionDetails?.IsBusy ?? false);
+        if (_relativeDateDetails?.TryGetDateConfiguration(entry.StepId, out var dateConfiguration) == true)
+        {
+            actions.Children.Add(CreateActionButton(
+                DescribeDateConfiguration(dateConfiguration!),
+                entry.StepId,
+                OnEditDateExpressionClick,
+                isEnabled: !(_sessionDetails?.IsBusy ?? false) && !entry.IsIgnored,
+                toolTip: "Choose an exact or relative date"));
+        }
+
         actions.Children.Add(CreateActionButton(
             "↑",
             entry.StepId,
@@ -880,6 +893,153 @@ internal sealed partial class RecorderOverlay : UserControl
         container.Children.Add(actions);
         border.Child = container;
         return border;
+    }
+
+    private static string DescribeDateConfiguration(RecorderStepDateConfiguration configuration)
+    {
+        var prefix = configuration.Secondary is null ? "Date" : "Dates";
+        var primary = DescribeDateOperand(configuration.Primary);
+        return configuration.Secondary is null
+            ? $"{prefix}: {primary}"
+            : $"{prefix}: {primary} / {DescribeDateOperand(configuration.Secondary)}";
+    }
+
+    private static string DescribeDateOperand(RecorderDateOperandConfiguration operand)
+    {
+        if (operand.ReferenceKind == RecorderDateReferenceKind.Exact)
+        {
+            return "Exact";
+        }
+
+        return operand.DayOffset switch
+        {
+            0 => "Today",
+            > 0 => $"Today +{operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d",
+            _ => $"Today {operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d"
+        };
+    }
+
+    private void OnEditDateExpressionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid stepId } button
+            || _relativeDateDetails?.TryGetDateConfiguration(stepId, out var configuration) != true)
+        {
+            return;
+        }
+
+        ShowDateExpressionEditor(button, configuration!);
+    }
+
+    private void ShowDateExpressionEditor(
+        Button anchor,
+        RecorderStepDateConfiguration configuration)
+    {
+        if (_relativeDateDetails is null)
+        {
+            return;
+        }
+
+        var primary = new RelativeDateOperandEditor(
+            configuration.Secondary is null ? "Date" : "From",
+            configuration.Primary,
+            GetBrush("RecorderMuted"));
+        var secondary = configuration.Secondary is null
+            ? null
+            : new RelativeDateOperandEditor(
+                "To",
+                configuration.Secondary,
+                GetBrush("RecorderMuted"));
+        var validation = new TextBlock
+        {
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var apply = new Button { Content = "Apply", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        var content = new StackPanel
+        {
+            Width = configuration.Secondary is null ? 300 : 340,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Date value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                primary.Content
+            }
+        };
+        if (secondary is not null)
+        {
+            content.Children.Add(secondary.Content);
+        }
+
+        content.Children.Add(validation);
+        content.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { apply, cancel }
+        });
+
+        var flyout = new Flyout { Content = content };
+        void RefreshValidation()
+        {
+            var primaryValid = primary.TryGetExpression(out _, out var primaryError);
+            var secondaryValid = true;
+            string? secondaryError = null;
+            if (secondary is not null)
+            {
+                secondaryValid = secondary.TryGetExpression(out _, out secondaryError);
+            }
+
+            var error = primaryValid ? secondaryError : primaryError;
+            apply.IsEnabled = primaryValid && secondaryValid;
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        }
+
+        primary.Changed += (_, _) => RefreshValidation();
+        if (secondary is not null)
+        {
+            secondary.Changed += (_, _) => RefreshValidation();
+        }
+
+        apply.Click += (_, _) =>
+        {
+            if (!primary.TryGetExpression(out var primaryExpression, out var primaryError))
+            {
+                validation.Text = primaryError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            RecorderDateExpression? secondaryExpression = null;
+            if (secondary is not null
+                && !secondary.TryGetExpression(out secondaryExpression, out var secondaryError))
+            {
+                validation.Text = secondaryError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            if (!_relativeDateDetails.SetStepDateExpressions(
+                    configuration.StepId,
+                    primaryExpression,
+                    secondaryExpression))
+            {
+                validation.Text = "The date expression could not be applied.";
+                validation.IsVisible = true;
+                return;
+            }
+
+            flyout.Hide();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        RefreshValidation();
+        flyout.ShowAt(anchor);
     }
 
     private void ScrollStepJournalToEnd()
@@ -1075,6 +1235,118 @@ internal sealed partial class RecorderOverlay : UserControl
         return this.TryFindResource(key, out var value) && value is IBrush brush
             ? brush
             : Brushes.Gray;
+    }
+
+    private sealed class RelativeDateOperandEditor
+    {
+        private readonly DateTime? _exactDate;
+        private readonly ComboBox _mode;
+        private readonly TextBox _dayOffset;
+
+        public RelativeDateOperandEditor(
+            string label,
+            RecorderDateOperandConfiguration configuration,
+            IBrush mutedBrush)
+        {
+            _exactDate = configuration.ExactDate;
+            _mode = new ComboBox
+            {
+                ItemsSource = new[] { "Exact date", "Today ± days" },
+                SelectedIndex = configuration.ReferenceKind == RecorderDateReferenceKind.RelativeToToday ? 1 : 0,
+                MinWidth = 145,
+                IsEnabled = configuration.ExactDate.HasValue
+            };
+            _dayOffset = new TextBox
+            {
+                Text = configuration.DayOffset.ToString(CultureInfo.InvariantCulture),
+                Width = 74,
+                HorizontalContentAlignment = HorizontalAlignment.Right
+            };
+            var row = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 6
+            };
+            row.Children.Add(_mode);
+            Grid.SetColumn(_dayOffset, 1);
+            row.Children.Add(_dayOffset);
+            Content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    new TextBlock { Text = label, FontWeight = FontWeight.SemiBold },
+                    row,
+                    new TextBlock
+                    {
+                        Text = configuration.ExactDate.HasValue
+                            ? $"Recorded: {configuration.ExactDate.Value:yyyy-MM-dd}"
+                            : "Recorded boundary is empty",
+                        Foreground = mutedBrush
+                    }
+                }
+            };
+
+            _mode.SelectionChanged += (_, _) =>
+            {
+                RefreshOffsetState();
+                Changed?.Invoke(this, EventArgs.Empty);
+            };
+            _dayOffset.TextChanged += (_, _) => Changed?.Invoke(this, EventArgs.Empty);
+            RefreshOffsetState();
+        }
+
+        public event EventHandler? Changed;
+
+        public Control Content { get; }
+
+        public bool TryGetExpression(
+            out RecorderDateExpression? expression,
+            out string? error)
+        {
+            expression = null;
+            error = null;
+            if (_mode.SelectedIndex != 1)
+            {
+                return true;
+            }
+
+            if (!_exactDate.HasValue)
+            {
+                error = "A relative expression cannot be used for an empty boundary.";
+                return false;
+            }
+
+            if (!int.TryParse(
+                    _dayOffset.Text,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var dayOffset))
+            {
+                error = "Enter a whole number of days.";
+                return false;
+            }
+
+            try
+            {
+                _ = DateTime.Today.AddDays(dayOffset);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                error = "The relative date is outside the supported range.";
+                return false;
+            }
+
+            expression = new RecorderDateExpression(
+                RecorderDateReferenceKind.RelativeToToday,
+                dayOffset);
+            return true;
+        }
+
+        private void RefreshOffsetState()
+        {
+            _dayOffset.IsEnabled = _exactDate.HasValue && _mode.SelectedIndex == 1;
+        }
     }
 
     internal readonly record struct RecorderOverlayPalette(

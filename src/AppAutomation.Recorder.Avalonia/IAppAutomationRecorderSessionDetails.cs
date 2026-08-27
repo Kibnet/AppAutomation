@@ -53,6 +53,18 @@ internal interface IRecorderCheckpointSessionDetails
     void CaptureLiteralAssertion(string expectedText, RecorderComparisonKind comparisonKind);
 }
 
+internal interface IRecorderRelativeDateSessionDetails
+{
+    bool TryGetDateConfiguration(
+        Guid stepId,
+        out RecorderStepDateConfiguration? configuration);
+
+    bool SetStepDateExpressions(
+        Guid stepId,
+        RecorderDateExpression? primary,
+        RecorderDateExpression? secondary);
+}
+
 internal enum RecorderStepMoveDirection
 {
     Earlier = 0,
