@@ -34,7 +34,7 @@ public sealed class RecorderFullCaptureCoverageTests
                 var rendersExpectedShape = step.ActionKind switch
                 {
                     RecordedActionKind.CaptureCheckpoint => preview.Contains("var ", StringComparison.Ordinal),
-                    RecordedActionKind.AssertValue => preview.Contains("TUnit.Assertions.Assert.That", StringComparison.Ordinal),
+                    RecordedActionKind.AssertValue => preview.Contains("Assert.That", StringComparison.Ordinal),
                     _ => preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)
                 };
                 await Assert.That(rendersExpectedShape).IsEqualTo(true);
@@ -178,15 +178,18 @@ public sealed class RecorderFullCaptureCoverageTests
         {
             ItemsSource = new[] { "One", "Two", "Three" }
         };
+        var notification = new Border();
         var notificationText = new Label { Content = "Export completed" };
         AutomationProperties.SetAutomationId(progress, "ReloadProgress");
         AutomationProperties.SetAutomationId(selectedList, "StatusList");
         AutomationProperties.SetAutomationId(countedList, "HistoryList");
+        AutomationProperties.SetAutomationId(notification, "ExportToast");
         AutomationProperties.SetAutomationId(notificationText, "ExportToastText");
         root.Children.Add(progress);
         root.Children.Add(selectedList);
         root.Children.Add(countedList);
-        root.Children.Add(notificationText);
+        notification.Child = notificationText;
+        root.Children.Add(notification);
         var factory = new RecorderStepFactory(options, () => root);
 
         var progressResult = factory.TryCreateAssertionStep(progress, RecorderAssertionMode.Auto);

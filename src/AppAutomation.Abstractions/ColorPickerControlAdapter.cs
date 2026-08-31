@@ -256,8 +256,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
         private void WaitForRoot(TimeSpan timeout)
         {
             UiWait.Until(
-                () => TryResolveAvailabilityAnchor() is { IsEnabled: true } anchor
-                    && (anchor as IUiControlAvailability)?.IsAvailable != false,
+                () => TryResolveAvailabilityAnchor() is not null,
                 static ready => ready,
                 new UiWaitOptions { Timeout = timeout, PollInterval = TimeSpan.FromMilliseconds(50) },
                 $"Color picker '{_parts.RootLocator}' did not become available.");
@@ -334,21 +333,19 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
 
         private IUiControl? TryResolveAvailabilityAnchor()
         {
-            var root = TryResolveRoot();
-            if (root is not null)
-            {
-                return root;
-            }
-
             var currentValue = TryResolveTextBox(_parts.CurrentValueLocator, "CurrentValue");
             if (currentValue is not null)
             {
                 return currentValue;
             }
 
-            return !string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
-                ? TryResolveButton(_parts.OpenButtonLocator, "Open")
-                : null;
+            if (!string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)
+                && TryResolveButton(_parts.OpenButtonLocator, "Open") is { } openButton)
+            {
+                return openButton;
+            }
+
+            return TryResolveRoot();
         }
 
         private ITextBoxControl? TryResolveTextBox(string locator, string purpose)

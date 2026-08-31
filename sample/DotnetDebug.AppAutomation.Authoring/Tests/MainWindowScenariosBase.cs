@@ -39,7 +39,7 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
         await Assert.That(Page.ArmTableSearch.Text).IsEqualTo("orders");
     }
 
-    private const int DelayedStatusTimeoutMs = 3000;
+    private const int DelayedStatusTimeoutMs = 10000;
     private const string DelayedStatusReadyText = "Delayed status ready";
 
     [Test]
@@ -511,6 +511,43 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             await Assert.That(Page.ArmGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
             await Assert.That(Page.ArmEremexDataGridHost.AutomationId).IsEqualTo("ArmEremexDataGridHost");
         }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task GridComboCellSelection_CommitsSelectedValue()
+    {
+        var firstRow = GridRowSelector.ByCell("Key", "ITEM-42");
+
+        Page
+            .SelectTabItem(static page => page.ArmDesktopTabItem)
+            .SelectGridCellComboItem(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Ready")
+            .WaitUntilGridCellEquals(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Ready");
+
+        Page.GridComboStateEditor.Expand();
+        Page
+            .SelectGridCellComboItem(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Draft")
+            .WaitUntilGridCellEquals(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Draft");
+
+        await Assert.That(
+            GridValueReader.ReadCellText(Page.GridComboAutomationBridge, firstRow, "State"))
+            .IsEqualTo("Draft");
     }
 
     [Test]

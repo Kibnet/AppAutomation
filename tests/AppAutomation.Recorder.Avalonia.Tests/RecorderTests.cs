@@ -22,7 +22,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel]
+[NotInParallel("RecorderOverlay")]
 public sealed class RecorderTests
 {
     [Test]
@@ -596,6 +596,45 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task ConfigureTextBoxProxy_RecordsValidatedLogicalTextEntry()
+    {
+        var options = new AppAutomationRecorderOptions
+        {
+            ShowOverlay = false,
+            Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+        };
+        options.ConfigureTextBoxProxy("CustomerEditor", "CustomerEditor_Input");
+        var root = new StackPanel();
+        var logicalEditor = new Border();
+        var input = new TextBox();
+        AutomationProperties.SetAutomationId(logicalEditor, "CustomerEditor");
+        AutomationProperties.SetAutomationId(input, "CustomerEditor_Input");
+        logicalEditor.Child = input;
+        root.Children.Add(logicalEditor);
+        using var session = new RecorderSession(
+            CreateWindowStub(),
+            options,
+            () => root,
+            attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.RegisterKeyboardInputForTesting(input);
+        input.Text = "Customer 42";
+        session.FlushPendingStateForTesting();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(details.StepJournal[0].Preview)
+                .Contains("Page.EnterText(static page => page.CustomerEditor, \"Customer 42\");");
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(details.StepJournal[0].CanPersist).IsTrue();
+        }
+    }
+
+    [Test]
     public async Task NumericUpDown_CapturesLogicalSpinnerValue()
     {
         var spinner = new NumericUpDown { Value = 10.5m };
@@ -1064,9 +1103,10 @@ public sealed class RecorderTests
             await Assert.That(details.StepJournal.Count).IsEqualTo(1);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);");
             await Assert.That(details.StepJournal[0].Preview.Contains("Page.ClickButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
+            await Assert.That(details.StepJournal[0].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
             await Assert.That(details.StepJournal[0].CanPersist).IsEqualTo(true);
-            await Assert.That(details.StepJournal[0].Preview).Contains("grid-user-action-adapter-required");
+            await Assert.That(details.StepJournal[0].Preview).DoesNotContain("grid-user-action-adapter-required");
+            await Assert.That(details.StepJournal[0].StatusMessage).DoesNotContain("grid-user-action-adapter-required");
         }
     }
 
@@ -2814,6 +2854,26 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task RecorderSession_SuppressesLateGridSearchPickerPopupEvents_AfterCompositeSelection()
+    {
+        using var fixture = new GridSearchPickerSessionFixture();
+
+        fixture.RecordCompositeSelection();
+        fixture.ClosePopupAndRaiseLatePrimitiveEvents();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fixture.Details.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(fixture.Details.StepJournal[0].Preview)
+                .Contains("Page.SearchAndSelectGridCell(");
+            await Assert.That(fixture.Details.StepJournal[0].Preview).DoesNotContain("EnterText");
+            await Assert.That(fixture.Details.StepJournal[0].Preview).DoesNotContain("SelectListBoxItem");
+            await Assert.That(fixture.Details.StepJournal[0].ValidationStatus)
+                .IsEqualTo(RecorderValidationStatus.Valid);
+        }
+    }
+
+    [Test]
     public async Task RecorderSession_CapturesNumericUpDown_AsOneSpinnerStep()
     {
         var root = new StackPanel();
@@ -3694,7 +3754,7 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task SaveAsync_EmitsRuntimeWarningComment_ForPersistableTargetGap()
+    public async Task SaveAsync_DoesNotEmitRuntimeWarningComments_ForPersistableStep()
     {
         using var directory = new TemporaryDirectory();
         CreateAuthoringProject(
@@ -3759,13 +3819,15 @@ public sealed class RecorderTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(scenarioSource.Contains("// AppAutomation recorder warning: Headless target warning (headless-grid-user-action-adapter-required): Grid user action requires a runtime grid action adapter.", StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("AppAutomation recorder warning", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("headless-grid-user-action-adapter-required", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("Headless validation warning", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("Page.ExportGrid(static page => page.EremexDemoDataGridAutomationBridge);", StringComparison.Ordinal)).IsTrue();
         }
     }
 
     [Test]
-    public async Task SaveAsync_EmitsUnsupportedRuntimeComment_AndPersistsWhenAnotherTargetWorks()
+    public async Task SaveAsync_DoesNotEmitRuntimeComments_WhenAnotherTargetWorks()
     {
         using var directory = new TemporaryDirectory();
         CreateAuthoringProject(
@@ -3836,9 +3898,11 @@ public sealed class RecorderTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(scenarioSource.Contains("// AppAutomation recorder warning: Headless target unsupported (headless-action-unsupported): Recorded action is not supported by Headless.", StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("Page.ClickButton(static page => page.RunButton);", StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("flaui-target-supported", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(scenarioSource.Contains("AppAutomation recorder warning", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("headless-action-unsupported", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("Headless validation failed", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("Page.ClickButton(static page => page.RunButton);", StringComparison.Ordinal)).IsTrue();
+            await Assert.That(scenarioSource.Contains("flaui-target-supported", StringComparison.Ordinal)).IsFalse();
         }
     }
 
@@ -4449,6 +4513,101 @@ public sealed class RecorderTests
         {
             SessionChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private sealed class GridSearchPickerSessionFixture : IDisposable
+    {
+        private readonly NeutralGridHost _sourceGrid;
+        private readonly StackPanel _editor;
+        private readonly TextBox _searchInput;
+        private readonly ListBox _results;
+        private readonly RecorderSession _session;
+
+        public GridSearchPickerSessionFixture()
+        {
+            var options = new AppAutomationRecorderOptions
+            {
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+            options.GridHints.Add(new RecorderGridHint(
+                "ItemsGridVisual",
+                "ItemsGrid",
+                ["ItemCode", "Selection", "State"]));
+            options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
+                "ItemPicker",
+                "ItemsGrid",
+                SearchPickerParts.ByAutomationIds(
+                    "ItemPicker_Input",
+                    "ItemPicker_Results",
+                    resultsKind: SearchPickerResultsKind.ListBox),
+                ColumnName: "Selection"));
+            var root = new StackPanel();
+            var rows = new[]
+            {
+                new NeutralGridRow("Row 1", "Item 41", "Ready"),
+                new NeutralGridRow("Row 2", "Item 42", "Ready")
+            };
+            _sourceGrid = new NeutralGridHost { ItemsSource = rows };
+            _editor = new StackPanel { DataContext = rows[1] };
+            _searchInput = new TextBox { DataContext = rows[1] };
+            _results = new ListBox
+            {
+                ItemsSource = new[] { "Item 41", "Item 42" },
+                DataContext = rows[1]
+            };
+            var bridge = new Border();
+
+            AutomationProperties.SetAutomationId(_sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(_editor, "ItemPicker");
+            AutomationProperties.SetAutomationId(_searchInput, "ItemPicker_Input");
+            AutomationProperties.SetAutomationId(_results, "ItemPicker_Results");
+            AutomationProperties.SetAutomationId(bridge, "ItemsGrid");
+
+            _editor.Children.Add(_searchInput);
+            _editor.Children.Add(_results);
+            _sourceGrid.Children.Add(_editor);
+            root.Children.Add(_sourceGrid);
+            root.Children.Add(bridge);
+
+            _session = new RecorderSession(
+                CreateWindowStub(),
+                options,
+                () => root,
+                attachWindowHandlers: false);
+            Details = (IAppAutomationRecorderSessionDetails)_session;
+            _session.Start();
+            _session.RefreshObservedControlsForTesting();
+        }
+
+        public IAppAutomationRecorderSessionDetails Details { get; }
+
+        public void RecordCompositeSelection()
+        {
+            _session.RegisterKeyboardInputForTesting(_searchInput);
+            _searchInput.Text = "prod";
+            _session.RegisterPointerInputFromSourceForTesting(_results);
+            _results.SelectedItem = "Item 42";
+        }
+
+        public void ClosePopupAndRaiseLatePrimitiveEvents()
+        {
+            _sourceGrid.Children.Remove(_editor);
+            _session.CaptureListBoxSelectionForTesting(_results);
+            _searchInput.Text = "Item 42";
+            _session.FlushPendingStateForTesting();
+        }
+
+        public void Dispose()
+        {
+            _session.Dispose();
+        }
+    }
+
+    private sealed record NeutralGridRow(string ItemCode, string Selection, string State);
+
+    private sealed class NeutralGridHost : StackPanel
+    {
+        public IEnumerable<NeutralGridRow>? ItemsSource { get; init; }
     }
 
     private sealed class TemporaryDirectory : IDisposable

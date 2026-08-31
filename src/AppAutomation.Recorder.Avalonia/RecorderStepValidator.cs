@@ -1,10 +1,22 @@
+using AppAutomation.Abstractions;
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.LogicalTree;
+using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
 
 internal sealed class RecorderStepValidator
 {
+    private readonly AppAutomationRecorderOptions _options;
+
+    public RecorderStepValidator(AppAutomationRecorderOptions options)
+    {
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
     public RecordedStep Validate(RecordedStep step, Control? source)
     {
         if (!step.CanPersist || step.ValidationStatus == RecorderValidationStatus.Invalid)
@@ -17,16 +29,16 @@ internal sealed class RecorderStepValidator
             return MarkInvalid(step, "Recorder lost the source control before validation.");
         }
 
-        return SupportsAction(step.ActionKind, source)
+        return SupportsAction(step, source)
             ? step
             : MarkInvalid(
                 step,
                 BuildUnsupportedActionMessage(step.ActionKind, source));
     }
 
-    private static bool SupportsAction(RecordedActionKind actionKind, Control source)
+    private bool SupportsAction(RecordedStep step, Control source)
     {
-        return actionKind switch
+        return step.ActionKind switch
         {
             RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue => true,
             RecordedActionKind.EnterText
@@ -47,7 +59,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.SetSliderValue => source is Slider,
             RecordedActionKind.SelectTabItem => source is TabItem,
             RecordedActionKind.SelectTreeItem => source is TreeView or TreeViewItem,
-            RecordedActionKind.SetDate => source is DatePicker or Calendar,
+            RecordedActionKind.SetDate => SupportsDateAction(step, source),
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains =>
                 source is TextBox or TextBlock or Label or Button,
             RecordedActionKind.WaitUntilValueEquals => source is TextBox or NumericUpDown,
@@ -95,6 +107,21 @@ internal sealed class RecorderStepValidator
         };
     }
 
+    private bool SupportsDateAction(RecordedStep step, Control source)
+    {
+        return step.Control.ControlType switch
+        {
+            UiControlType.DateTimePicker =>
+                source is DatePicker
+                || RecorderDatePickerHintMatcher.IsConfiguredPart(
+                    step.Control,
+                    source,
+                    _options.DatePickerHints),
+            UiControlType.Calendar => source is Calendar,
+            _ => false
+        };
+    }
+
     private static string BuildUnsupportedActionMessage(RecordedActionKind actionKind, Control source)
     {
         return $"Recorded action '{actionKind}' is not compatible with control '{source.GetType().Name}'."
@@ -125,5 +152,107 @@ internal sealed class RecorderStepValidator
         }
 
         return $"{existing} {message}";
+    }
+}
+
+internal static class RecorderDatePickerHintMatcher
+{
+    public static bool IsConfiguredPart(
+        RecordedControlDescriptor descriptor,
+        Control source,
+        IEnumerable<RecorderDatePickerHint> hints)
+    {
+        if (descriptor.ControlType != UiControlType.DateTimePicker)
+        {
+            return false;
+        }
+
+        var matchingHints = hints
+            .Where(hint =>
+                hint.LocatorKind == descriptor.LocatorKind
+                && string.Equals(
+                    hint.LocatorValue.Trim(),
+                    descriptor.LocatorValue.Trim(),
+                    StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        return matchingHints.Length == 1 && IsPart(source, matchingHints[0]);
+    }
+
+    public static bool IsPart(Control? source, RecorderDatePickerHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+
+        return EnumerateRelatedControls(source).Any(current =>
+            HasLocator(current, hint.LocatorKind, hint.LocatorValue)
+            || HasAnyLocator(
+                current,
+                hint.Parts.LocatorKind,
+                hint.Parts.RootLocator,
+                hint.Parts.ValueLocator,
+                hint.Parts.OpenButtonLocator,
+                hint.Parts.CalendarLocator,
+                hint.Parts.PopupRootLocator));
+    }
+
+    private static bool HasAnyLocator(Control source, UiLocatorKind locatorKind, params string?[] locatorValues)
+    {
+        return locatorValues.Any(locatorValue =>
+            !string.IsNullOrWhiteSpace(locatorValue)
+            && HasLocator(source, locatorKind, locatorValue!));
+    }
+
+    private static bool HasLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
+    {
+        if (string.IsNullOrWhiteSpace(locatorValue))
+        {
+            return false;
+        }
+
+        var actualLocator = locatorKind switch
+        {
+            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(source),
+            UiLocatorKind.Name => AutomationProperties.GetName(source) ?? source.Name,
+            _ => null
+        };
+        return string.Equals(actualLocator?.Trim(), locatorValue.Trim(), StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
+    {
+        if (control is null)
+        {
+            yield break;
+        }
+
+        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<Control>();
+        queue.Enqueue(control);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!seen.Add(current))
+            {
+                continue;
+            }
+
+            yield return current;
+
+            if (current.GetVisualParent() is Control visualParent)
+            {
+                queue.Enqueue(visualParent);
+            }
+
+            if (current is ILogical { LogicalParent: Control logicalParent })
+            {
+                queue.Enqueue(logicalParent);
+            }
+
+            if (current is StyledElement { TemplatedParent: Control templatedParent })
+            {
+                queue.Enqueue(templatedParent);
+            }
+        }
     }
 }

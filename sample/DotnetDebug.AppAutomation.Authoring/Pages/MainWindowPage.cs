@@ -90,6 +90,8 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmEremexDataGridHost", UiControlType.AutomationElement, "ArmEremexDataGridHost")]
 [UiControl("ArmEremexDataGridControl", UiControlType.AutomationElement, "ArmEremexDataGridControl")]
 [UiControl("ArmGridAutomationBridge", UiControlType.Grid, "ArmGridAutomationBridge")]
+[UiControl("GridComboAutomationBridge", UiControlType.Grid, "GridComboAutomationBridge")]
+[UiControl("GridComboStateEditor", UiControlType.ComboBox, "GridComboStateEditor")]
 [UiControl("ArmGridRow0ValueEditor", UiControlType.TextBox, "ArmGridAutomationBridge_Row0_Cell1")]
 [UiControl("ArmGridBuildButton", UiControlType.Button, "ArmGridBuildButton")]
 [UiControl("ArmGridOpenButton", UiControlType.Button, "ArmGridOpenButton")]

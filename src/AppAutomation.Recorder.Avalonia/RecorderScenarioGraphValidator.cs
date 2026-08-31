@@ -117,6 +117,14 @@ internal static class RecorderScenarioGraphValidator
                 $"Assertion step {index + 1} cannot use {comparisonKind} with {valueKind}.");
         }
 
+        if (comparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
+        {
+            return step.ExpectedCheckpointId.HasValue || step.HasExpectedLiteral
+                ? RecorderGraphStepValidationResult.Invalid(
+                    $"Assertion step {index + 1} cannot define an expected value for {comparisonKind}.")
+                : RecorderGraphStepValidationResult.Valid;
+        }
+
         var expectationSourceCount = (step.ExpectedCheckpointId.HasValue ? 1 : 0)
             + (step.HasExpectedLiteral ? 1 : 0);
         if (expectationSourceCount != 1)
@@ -160,8 +168,13 @@ internal static class RecorderScenarioGraphValidator
         return comparisonKind switch
         {
             RecorderComparisonKind.Equal => valueKind != RecorderValueKind.StringSet,
+            RecorderComparisonKind.NotEqual => valueKind != RecorderValueKind.StringSet,
             RecorderComparisonKind.Contains => valueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText,
             RecorderComparisonKind.Equivalent => valueKind == RecorderValueKind.StringSet,
+            RecorderComparisonKind.HasValue =>
+                RecorderValueAssertions.TryGetHasValueAssertionKind(valueKind, out _),
+            RecorderComparisonKind.IsEmpty =>
+                RecorderValueAssertions.TryGetPresenceAssertionKind(valueKind, expectEmpty: true, out _),
             _ => false
         };
     }

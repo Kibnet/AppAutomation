@@ -188,7 +188,7 @@ If you want to reduce the first manual authoring pass, attach `AppAutomation.Rec
 - The overlay keeps a step journal with `Remove`, `Ignore`, `Retry`, and `Copy` actions, so you can clean up a recording session without restarting it.
 - Save and export are single-flight operations: while a save/export is running, the overlay shows a busy summary and blocks duplicate save/export clicks.
 - The recorder UI is hosted in a separate opaque window, so it no longer follows or overlays the AUT window.
-- `Check` records either a literal TUnit assertion or a replay-time checkpoint comparison; `WaitUntil...` remains synchronization and is not treated as a data check.
+- `Check` records typed TUnit assertions for equality/inequality and empty/non-empty values, or compares with a replay-time checkpoint; configured composite and grid parts resolve to their logical control.
 - Date steps can remain exact or be changed in the journal to `DateTime.Today ± days`; range boundaries are configured independently.
 - Hotkeys, overlay behavior, selector validation, and custom assertion capture are configurable through `AppAutomationRecorderOptions`.
 
@@ -612,7 +612,7 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - Overlay держит step journal с действиями `Remove`, `Ignore`, `Retry` и `Copy`, так что плохой шаг можно выкинуть или отложить без полного перезапуска записи.
 - `Save` и `Export...` теперь single-flight: пока идёт запись файлов, overlay показывает busy summary и не даёт запустить второй save/export поверх первого.
 - Recorder UI теперь живёт в отдельном непрозрачном окне и больше не привязан к позиции или состоянию окна AUT.
-- `Check` записывает либо обычный TUnit assert с expected-значением, либо сравнение с checkpoint, считанным во время replay; `WaitUntil...` по-прежнему отвечает только за ожидание.
+- `Check` записывает типизированные TUnit-проверки равенства/неравенства и пустого/непустого значения либо сравнение с checkpoint; части составных контролов и таблиц разрешаются в логический элемент.
 - Шаг с датой можно оставить фиксированным либо переключить в journal на `DateTime.Today ± days`; границы диапазона настраиваются независимо.
 - Hotkeys, поведение overlay, selector validation и кастомный assertion capture настраиваются через `AppAutomationRecorderOptions`.
 

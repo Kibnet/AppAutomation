@@ -5,16 +5,26 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DotnetDebug;
 using Eremex.AvaloniaUI.Controls.Editors;
+using Eremex.AvaloniaUI.Controls.Utils;
 
 namespace DotnetDebug.Avalonia;
 
 public partial class MainWindow : Window
 {
+    private static readonly TimeSpan DelayedStatusDelay = TimeSpan.FromSeconds(5);
+
+    private const string FlaUiCalendarFallbackFixtureEnvironmentVariable =
+        "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
+
     private readonly MainWindowViewModel _viewModel = new();
+    private bool _flaUiCalendarFallbackInitialized;
 
     private enum ComputeMode
     {
@@ -47,6 +57,91 @@ public partial class MainWindow : Window
         MixModeCombo.SelectedIndex = 0;
         _viewModel.SelectedMultiSelectItems.CollectionChanged += (_, _) => UpdateMultiSelectStatus();
         UpdateMultiSelectStatus();
+        InitializeFlaUiCalendarFallbackFixture();
+    }
+
+    private void InitializeFlaUiCalendarFallbackFixture()
+    {
+        FlaUiCalendarFallbackFixtureHost.IsVisible = string.Equals(
+            Environment.GetEnvironmentVariable(FlaUiCalendarFallbackFixtureEnvironmentVariable),
+            "1",
+            StringComparison.Ordinal);
+    }
+
+    private void OnFlaUiCalendarFallbackFixtureLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (_flaUiCalendarFallbackInitialized || sender is not DateEditor dateEditor)
+        {
+            return;
+        }
+
+        _flaUiCalendarFallbackInitialized = true;
+
+        ApplyTemplatesRecursively(dateEditor);
+        if (dateEditor.PopupContent is Control popupContent)
+        {
+            ApplyTemplatesRecursively(popupContent);
+        }
+
+        if (dateEditor.RealEditor is Control valueControl)
+        {
+            AutomationProperties.SetAutomationId(valueControl, "FlaUiCalendarFallbackValue");
+        }
+
+        var openButton = EnumerateControls(dateEditor)
+            .OfType<Button>()
+            .FirstOrDefault(static button => string.Equals(
+                button.Name,
+                "PART_PopupOpenButton",
+                StringComparison.Ordinal));
+        if (openButton is not null)
+        {
+            AutomationProperties.SetAutomationId(openButton, "FlaUiCalendarFallbackOpen");
+        }
+
+        if (dateEditor.PopupContent is CalendarControl calendar)
+        {
+            AutomationProperties.SetAutomationId(calendar, "FlaUiCalendarFallbackCalendar");
+            calendar.SelectedDatesChanged += (_, _) => ApplyFlaUiCalendarFallbackDate(dateEditor, calendar);
+        }
+    }
+
+    private static void ApplyFlaUiCalendarFallbackDate(DateEditor dateEditor, CalendarControl calendar)
+    {
+        if (calendar.SelectedDate is not { } selectedDate)
+        {
+            return;
+        }
+
+        dateEditor.EditorValue = selectedDate;
+        if (dateEditor.ClosePopupCommand.CanExecute(PopupCloseMode.Apply))
+        {
+            dateEditor.ClosePopupCommand.Execute(PopupCloseMode.Apply);
+        }
+    }
+
+    private static void ApplyTemplatesRecursively(Control root)
+    {
+        root.ApplyTemplate();
+        foreach (var control in root.GetVisualDescendants().OfType<Control>())
+        {
+            control.ApplyTemplate();
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateControls(Control root)
+    {
+        yield return root;
+
+        foreach (var control in root.GetVisualDescendants().OfType<Control>())
+        {
+            yield return control;
+        }
+
+        foreach (var control in root.GetLogicalDescendants().OfType<Control>())
+        {
+            yield return control;
+        }
     }
 
     private void OnCalculateClick(object? sender, RoutedEventArgs e)
@@ -127,7 +222,7 @@ public partial class MainWindow : Window
         var requestVersion = ++_delayedStatusRequestVersion;
         DelayedStatusHost.Children.Clear();
 
-        await Task.Delay(1000).ConfigureAwait(false);
+        await Task.Delay(DelayedStatusDelay).ConfigureAwait(false);
         await Dispatcher.InvokeAsync(() => AddDelayedStatusLabel(requestVersion));
     }
 

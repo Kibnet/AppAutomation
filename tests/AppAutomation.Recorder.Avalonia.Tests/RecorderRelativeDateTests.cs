@@ -2,7 +2,9 @@ using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using AppAutomation.Recorder.Avalonia.UI;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -39,7 +41,7 @@ public sealed class RecorderRelativeDateTests
     }
 
     [Test]
-    public async Task Generator_RendersRangeAndNamedGridDateExpressionsIndependently()
+    public async Task Generator_RendersRangeAndNamedAndIndexedGridDateExpressionsIndependently()
     {
         var generator = CreateGenerator();
         var gridStep = new RecordedStep(
@@ -53,6 +55,15 @@ public sealed class RecorderRelativeDateTests
             GridTargetColumnName = "RequiredDate"
         };
 
+        var indexedGridStep = new RecordedStep(
+            RecordedActionKind.EditGridCellDate,
+            Descriptor("ItemsGrid", UiControlType.Grid),
+            RowIndex: 2,
+            ColumnIndex: 3,
+            DateValue: new DateTime(2026, 9, 4),
+            GridCellEditCommitMode: GridCellEditCommitMode.Commit,
+            DateExpression: Relative(-2));
+
         var preview = generator.GeneratePreview(
         [
             new RecordedStep(
@@ -62,7 +73,8 @@ public sealed class RecorderRelativeDateTests
                 SecondDateValue: new DateTime(2026, 9, 6),
                 DateExpression: Relative(-30),
                 SecondDateExpression: Relative(0)),
-            gridStep
+            gridStep,
+            indexedGridStep
         ]);
 
         using (Assert.Multiple())
@@ -71,27 +83,126 @@ public sealed class RecorderRelativeDateTests
                 "Page.SetDateRangeFilter(static page => page.DateFilter, DateTime.Today.AddDays(-30), DateTime.Today);");
             await Assert.That(preview).Contains(
                 "Page.EditGridCellDate(static page => page.ItemsGrid, GridRowSelector.ByCell(\"ItemNumber\", \"10\"), \"RequiredDate\", DateTime.Today.AddDays(7));");
+            await Assert.That(preview).Contains(
+                "Page.EditGridCellDate(static page => page.ItemsGrid, 2, 3, DateTime.Today.AddDays(-2));");
         }
     }
 
     [Test]
-    public async Task Generator_RendersRelativeLiteralDateAssertion()
+    public async Task PopupDateProxy_RecordsLogicalDateAndCheckKeepsTypedRelativeDate()
     {
-        var generator = CreateGenerator();
-        var assertion = new RecordedStep(
-            RecordedActionKind.AssertValue,
-            Descriptor("RequiredDate", UiControlType.DateTimePicker),
-            DateValue: new DateTime(2026, 9, 11),
-            ValueKind: RecorderValueKind.Date,
-            ValueAccessorKind: RecorderValueAccessorKind.SelectedDate,
-            ComparisonKind: RecorderComparisonKind.Equal,
-            HasExpectedLiteral: true,
-            DateExpression: Relative(5));
+        var selectedDate = DateTime.Today.AddDays(7);
+        var requiredDateRoot = new StackPanel();
+        var requiredDateValue = new TextBox
+        {
+            Text = selectedDate.ToString("d", System.Globalization.CultureInfo.CurrentCulture)
+        };
+        var requiredDateOpen = new Button();
+        var popupCalendar = new Calendar();
+        SetAutomationId(requiredDateRoot, "RequiredDate");
+        SetAutomationId(requiredDateValue, "RequiredDateValue");
+        SetAutomationId(requiredDateOpen, "RequiredDateOpen");
+        SetAutomationId(popupCalendar, "RequiredDateCalendar");
+        requiredDateRoot.Children.Add(requiredDateValue);
+        requiredDateRoot.Children.Add(requiredDateOpen);
 
-        var preview = generator.GeneratePreview(assertion);
+        var createdDateRoot = new StackPanel();
+        var createdDateValue = new TextBox
+        {
+            Text = DateTime.Today.ToString("d", System.Globalization.CultureInfo.CurrentCulture),
+            IsEnabled = false
+        };
+        SetAutomationId(createdDateRoot, "CreatedDate");
+        SetAutomationId(createdDateValue, "CreatedDateValue");
+        createdDateRoot.Children.Add(createdDateValue);
 
-        await Assert.That(preview).Contains("DateTime.Today.AddDays(5)");
-        await Assert.That(preview).DoesNotContain("global::System.DateTime.Today");
+        var root = new StackPanel();
+        root.Children.Add(requiredDateRoot);
+        root.Children.Add(createdDateRoot);
+        root.Children.Add(popupCalendar);
+
+        var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+        options.ConfigureDateTimePickerProxy(
+            "RequiredDate",
+            DatePickerParts.ByAutomationIds(
+                "RequiredDate",
+                "RequiredDateValue",
+                "RequiredDateOpen",
+                "RequiredDateCalendar"));
+        options.ConfigureDateTimePickerProxy(
+            "CreatedDate",
+            DatePickerParts.ByAutomationIds("CreatedDate", "CreatedDateValue"));
+        var factory = new RecorderStepFactory(options, () => root);
+
+        root.Children.Remove(popupCalendar);
+        var selection = factory.TryCreateCalendarStep(popupCalendar, selectedDate);
+
+        using var session = new RecorderSession(
+            RecorderTestWindow.CreateStub(),
+            options,
+            validationRootProvider: () => root,
+            attachWindowHandlers: false);
+        session.AddRecordedStepForTesting(selection.Step!);
+        var selectionRevalidated = session.RetryStepValidation(selection.Step!.StepId);
+        var revalidatedSelection = session.StepJournal.Single();
+        session.Clear();
+        RecorderCheckTargetSelection? checkSelection = null;
+        session.CheckTargetSelected += (_, eventArgs) => checkSelection = eventArgs.Selection;
+        session.Start();
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(createdDateValue);
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, options);
+        var assertionEditor = overlay.CreateLiteralAssertionEditorForTesting(
+            checkSelection
+            ?? throw new InvalidOperationException("Check did not select the configured date value."));
+        var dateMode = assertionEditor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderLiteralDateMode");
+        var dayOffset = assertionEditor.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(control => control.Name == "RecorderLiteralDateOffset");
+        var addAssertion = assertionEditor.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(button => string.Equals(button.Content?.ToString(), "Add", StringComparison.Ordinal));
+        var initialDayOffset = dayOffset.Text;
+        dateMode.SelectedIndex = 1;
+        dayOffset.Text = "5";
+        addAssertion.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        var selectedStep = selection.Step! with { DateExpression = Relative(7) };
+        var assertionEntry = session.StepJournal.Single();
+        var describedAssertion = ((IRecorderRelativeDateSessionDetails)session)
+            .TryGetDateConfiguration(assertionEntry.StepId, out var assertionDate);
+        var preview = CreateGenerator().GeneratePreview(selectedStep) + Environment.NewLine + assertionEntry.Preview;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selection.Success).IsTrue();
+            await Assert.That(selection.Step!.ActionKind).IsEqualTo(RecordedActionKind.SetDate);
+            await Assert.That(selection.Step.Control.LocatorValue).IsEqualTo("RequiredDate");
+            await Assert.That(selection.Step.Control.ControlType).IsEqualTo(UiControlType.DateTimePicker);
+            await Assert.That(selection.Step.CanPersist).IsTrue();
+            await Assert.That(selectionRevalidated).IsTrue();
+            await Assert.That(revalidatedSelection.CanPersist).IsTrue();
+            await Assert.That(revalidatedSelection.StatusMessage ?? string.Empty)
+                .DoesNotContain("not compatible");
+            await Assert.That(checkSelection).IsNotNull();
+            await Assert.That(string.IsNullOrEmpty(checkSelection!.ValueDescriptionError)).IsTrue();
+            await Assert.That(checkSelection.ValueDescription!.ValueKind).IsEqualTo(RecorderValueKind.Date);
+            await Assert.That(initialDayOffset).IsEqualTo("0");
+            await Assert.That(describedAssertion).IsTrue();
+            await Assert.That(assertionDate!.Primary.ReferenceKind).IsEqualTo(RecorderDateReferenceKind.RelativeToToday);
+            await Assert.That(assertionDate.Primary.DayOffset).IsEqualTo(5);
+            await Assert.That(preview).Contains(
+                "Page.SetDate(static page => page.RequiredDate, DateTime.Today.AddDays(7));");
+            await Assert.That(preview).Contains(
+                "await Assert.That(Page.CreatedDate.SelectedDate).IsEqualTo(DateTime.Today.AddDays(5));");
+            await Assert.That(preview).DoesNotContain("RequiredDateCalendar");
+            await Assert.That(preview).DoesNotContain("RequiredDateValue");
+            await Assert.That(preview).DoesNotContain("EnterText");
+            await Assert.That(preview).DoesNotContain("SetToggled");
+        }
     }
 
     [Test]
@@ -136,14 +247,25 @@ public sealed class RecorderRelativeDateTests
     }
 
     [Test]
-    public async Task Overlay_OffersDateModeOnlyForDateBearingJournalSteps()
+    public async Task Overlay_DateJournalEditorValidatesAppliesAndCancelsWithoutSpuriousAutosave()
     {
         var root = new StackPanel();
+        var autosaveCallCount = 0;
         using var session = new RecorderSession(
             RecorderTestWindow.CreateStub(),
             new AppAutomationRecorderOptions { ShowOverlay = false },
             validationRootProvider: () => root,
-            attachWindowHandlers: false);
+            attachWindowHandlers: false,
+            autosaveOperation: (steps, _, _) =>
+            {
+                Interlocked.Increment(ref autosaveCallCount);
+                return Task.FromResult(RecorderSaveResult.Completed(
+                    "Autosaved.",
+                    pageFilePath: "MainWindowPage.Recorded.autosave.cs",
+                    scenarioFilePath: "MainWindowScenariosBase.Recorded.autosave.cs",
+                    persistedStepCount: steps.Count,
+                    skippedStepCount: 0));
+            });
         var dateStepId = Guid.NewGuid();
         session.AddRecordedStepForTesting(DateStep(
             "RequiredDate",
@@ -153,19 +275,77 @@ public sealed class RecorderRelativeDateTests
             Descriptor("SaveButton", UiControlType.Button)));
         var overlay = new RecorderOverlay();
         overlay.Attach(session, new AppAutomationRecorderOptions());
+        session.Start();
 
         var exactDateButtons = FindDateModeButtons(overlay);
-        ((IRecorderRelativeDateSessionDetails)session).SetStepDateExpressions(
-            dateStepId,
-            Relative(10),
-            secondary: null);
+        var editDate = overlay.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(button => string.Equals(button.Content?.ToString(), "Date: Exact", StringComparison.Ordinal));
+        editDate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var editor = overlay.LastDateExpressionEditorForTesting
+            ?? throw new InvalidOperationException("Date journal editor was not opened.");
+        var mode = editor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderJournalDateMode");
+        var offset = editor.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(control => control.Name == "RecorderJournalDateOffset");
+        var apply = editor.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(button => string.Equals(button.Content?.ToString(), "Apply", StringComparison.Ordinal));
+        var cancel = editor.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(button => string.Equals(button.Content?.ToString(), "Cancel", StringComparison.Ordinal));
+        mode.SelectedIndex = 1;
+        offset.Text = "invalid";
+        offset.RaiseEvent(new TextChangedEventArgs(TextBox.TextChangedEvent));
+        var validation = editor.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .Single(control => control.Name == "RecorderJournalDateValidation");
+
+        var invalidApplyEnabled = apply.IsEnabled;
+        var invalidMessageVisible = validation.IsVisible;
+        var invalidMessage = validation.Text;
+        offset.Text = "10";
+        offset.RaiseEvent(new TextChangedEventArgs(TextBox.TextChangedEvent));
+        cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var details = (IRecorderRelativeDateSessionDetails)session;
+        details.TryGetDateConfiguration(dateStepId, out var afterCancel);
+        var autosaveAfterCancel = Volatile.Read(ref autosaveCallCount);
+
+        editDate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        editor = overlay.LastDateExpressionEditorForTesting
+            ?? throw new InvalidOperationException("Date journal editor was not reopened.");
+        mode = editor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderJournalDateMode");
+        offset = editor.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(control => control.Name == "RecorderJournalDateOffset");
+        apply = editor.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(button => string.Equals(button.Content?.ToString(), "Apply", StringComparison.Ordinal));
+        mode.SelectedIndex = 1;
+        offset.Text = "10";
+        offset.RaiseEvent(new TextChangedEventArgs(TextBox.TextChangedEvent));
+        apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitUntilAsync(() => Volatile.Read(ref autosaveCallCount) == 1);
         overlay.RefreshForTesting();
         var relativeDateButtons = FindDateModeButtons(overlay);
+        details.TryGetDateConfiguration(dateStepId, out var afterApply);
 
         using (Assert.Multiple())
         {
             await Assert.That(exactDateButtons).IsEquivalentTo(["Date: Exact"]);
+            await Assert.That(invalidApplyEnabled).IsFalse();
+            await Assert.That(invalidMessageVisible).IsTrue();
+            await Assert.That(invalidMessage).IsEqualTo("Enter a whole number of days.");
+            await Assert.That(afterCancel!.Primary.ReferenceKind).IsEqualTo(RecorderDateReferenceKind.Exact);
+            await Assert.That(autosaveAfterCancel).IsEqualTo(0);
             await Assert.That(relativeDateButtons).IsEquivalentTo(["Date: Today +10d"]);
+            await Assert.That(afterApply!.Primary.ReferenceKind).IsEqualTo(RecorderDateReferenceKind.RelativeToToday);
+            await Assert.That(afterApply.Primary.DayOffset).IsEqualTo(10);
+            await Assert.That(autosaveCallCount).IsEqualTo(1);
         }
     }
 
@@ -269,6 +449,9 @@ public sealed class RecorderRelativeDateTests
 
     private static int CountOccurrences(string source, string value) =>
         source.Split(value, StringSplitOptions.None).Length - 1;
+
+    private static void SetAutomationId(Control control, string automationId) =>
+        AutomationProperties.SetAutomationId(control, automationId);
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {

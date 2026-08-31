@@ -113,7 +113,6 @@
                                Grid.Column="6"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
-                               automation:AutomationProperties.AutomationId="RecorderStepCounter"
                                Foreground="{DynamicResource RecorderAccent}"
                                FontWeight="SemiBold"
                                Text="0 steps" />

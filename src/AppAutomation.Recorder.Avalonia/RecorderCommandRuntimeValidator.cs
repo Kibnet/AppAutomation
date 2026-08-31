@@ -210,7 +210,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.EditGridCellColor => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireColor(step, target)),
-            RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
+            RecordedActionKind.SelectGridCellComboItem => ValidateControlType(step, target, UiControlType.Grid)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
             RecordedActionKind.SelectMultiItems
@@ -228,7 +228,7 @@ internal sealed class RecorderCommandRuntimeValidator
         };
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSemanticValue(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSemanticValue(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -435,7 +435,7 @@ internal sealed class RecorderCommandRuntimeValidator
         return ValidateControlType(step, target, [UiControlType.Grid, UiControlType.DataGridView]);
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiSelectAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiSelectAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -446,7 +446,8 @@ internal sealed class RecorderCommandRuntimeValidator
             "payload-invalid-multi-select-values",
             "Multi-select action requires distinct non-empty item texts.",
             "multi-select-adapter-required",
-            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.");
+            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.",
+            includeAdapterWarning: !IsConfiguredMultiSelect(step));
     }
 
     private IEnumerable<RecorderRuntimeValidationFinding> ValidateComboBoxFilterAction(
@@ -517,7 +518,17 @@ internal sealed class RecorderCommandRuntimeValidator
                 StringComparison.Ordinal));
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(
+    private bool IsConfiguredMultiSelect(RecordedStep step)
+    {
+        return _recorderOptions.MultiSelectHints.Any(hint =>
+            hint.LocatorKind == step.Control.LocatorKind
+            && string.Equals(
+                hint.LocatorValue.Trim(),
+                step.Control.LocatorValue.Trim(),
+                StringComparison.Ordinal));
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -526,10 +537,23 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return finding;
         }
 
-        yield return Warning(
-            target,
-            "grid-user-action-adapter-required",
-            "Grid user action requires a runtime grid action adapter; plain grid row/cell access is not enough.");
+        if (!IsConfiguredGridAction(step))
+        {
+            yield return Warning(
+                target,
+                "grid-user-action-adapter-required",
+                "Grid user action requires a runtime grid action adapter; plain grid row/cell access is not enough.");
+        }
+    }
+
+    private bool IsConfiguredGridAction(RecordedStep step)
+    {
+        return _recorderOptions.GridActionHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
+            || _recorderOptions.GridSearchPickerHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
+            || _recorderOptions.GridEditHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind));
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateMenuItemInvocation(
@@ -671,14 +695,14 @@ internal sealed class RecorderCommandRuntimeValidator
             : [Invalid(target, "payload-missing-double", $"Recorded action '{step.ActionKind}' requires at least one numeric bound.")];
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> RequireGridCellEditIndexes(
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCellEditIndexes(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
         return RequireGridCoordinates(step, target, requireTargetColumn: true);
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(
         RecordedStep step,
         RecorderRuntimeValidationTarget target,
         bool requireTargetColumn)
@@ -711,15 +735,18 @@ internal sealed class RecorderCommandRuntimeValidator
             findings.Add(Invalid(target, "payload-missing-grid-target-column", "Named grid cell action requires a target column name."));
         }
 
-        findings.Add(Warning(
-            target,
-            "grid-column-metadata-adapter-required",
-            "Named grid action requires stable runtime column metadata registered with WithGridColumns or supplied by the grid control."));
+        if (!IsConfiguredGridMetadata(step))
+        {
+            findings.Add(Warning(
+                target,
+                "grid-column-metadata-adapter-required",
+                "Named grid action requires stable runtime column metadata registered with WithGridColumns or supplied by the grid control."));
+        }
 
         return findings;
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> RequireNamedGridRow(
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireNamedGridRow(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -735,6 +762,25 @@ internal sealed class RecorderCommandRuntimeValidator
         }
 
         return RequireGridCoordinates(step, target, requireTargetColumn: false);
+    }
+
+    private bool IsConfiguredGridMetadata(RecordedStep step)
+    {
+        return _recorderOptions.GridHints.Any(hint =>
+            hint.ColumnPropertyNames.Count > 0
+            && MatchesGridTarget(step.Control, hint.TargetLocatorValue, hint.TargetLocatorKind));
+    }
+
+    private static bool MatchesGridTarget(
+        RecordedControlDescriptor descriptor,
+        string locatorValue,
+        UiLocatorKind locatorKind)
+    {
+        return descriptor.LocatorKind == locatorKind
+            && string.Equals(
+                descriptor.LocatorValue.Trim(),
+                locatorValue.Trim(),
+                StringComparison.Ordinal);
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireString(

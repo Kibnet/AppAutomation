@@ -88,7 +88,7 @@ public enum RecorderValidationStatus
     Invalid = 2
 }
 
-internal enum RecorderValueKind
+public enum RecorderValueKind
 {
     Text = 0,
     Number = 1,
@@ -100,7 +100,7 @@ internal enum RecorderValueKind
     GridCellText = 7
 }
 
-internal enum RecorderValueAccessorKind
+public enum RecorderValueAccessorKind
 {
     Text = 0,
     SelectedItemText = 1,
@@ -121,13 +121,213 @@ internal enum RecorderComparisonKind
 {
     Equal = 0,
     Contains = 1,
-    Equivalent = 2
+    Equivalent = 2,
+    HasValue = 3,
+    IsEmpty = 4,
+    NotEqual = 5
+}
+
+internal enum RecorderHasValueAssertionKind
+{
+    NotEmpty = 0,
+    NotNull = 1,
+    Empty = 2,
+    Null = 3
+}
+
+internal static class RecorderValueAssertions
+{
+    public static bool TryGetHasValueAssertionKind(
+        RecorderValueKind valueKind,
+        out RecorderHasValueAssertionKind assertionKind)
+    {
+        switch (valueKind)
+        {
+            case RecorderValueKind.Text:
+            case RecorderValueKind.Color:
+            case RecorderValueKind.StringSet:
+            case RecorderValueKind.GridCellText:
+                assertionKind = RecorderHasValueAssertionKind.NotEmpty;
+                return true;
+            case RecorderValueKind.Date:
+            case RecorderValueKind.Time:
+                assertionKind = RecorderHasValueAssertionKind.NotNull;
+                return true;
+            default:
+                assertionKind = default;
+                return false;
+        }
+    }
+
+    public static bool TryGetPresenceAssertionKind(
+        RecorderValueKind valueKind,
+        bool expectEmpty,
+        out RecorderHasValueAssertionKind assertionKind)
+    {
+        if (!TryGetHasValueAssertionKind(valueKind, out var positiveKind))
+        {
+            assertionKind = default;
+            return false;
+        }
+
+        assertionKind = (positiveKind, expectEmpty) switch
+        {
+            (RecorderHasValueAssertionKind.NotEmpty, false) => RecorderHasValueAssertionKind.NotEmpty,
+            (RecorderHasValueAssertionKind.NotEmpty, true) => RecorderHasValueAssertionKind.Empty,
+            (RecorderHasValueAssertionKind.NotNull, false) => RecorderHasValueAssertionKind.NotNull,
+            (RecorderHasValueAssertionKind.NotNull, true) => RecorderHasValueAssertionKind.Null,
+            _ => throw new InvalidOperationException($"Unsupported presence assertion kind '{positiveKind}'.")
+        };
+        return true;
+    }
+}
+
+internal sealed record RecorderAssertionCapability(
+    UiControlType ControlType,
+    IReadOnlySet<RecorderValueKind> ValueKinds,
+    IReadOnlySet<RecorderValueAccessorKind> AccessorKinds,
+    bool RequiresConcreteTarget = false)
+{
+    public bool SupportsSemanticValue => ValueKinds.Count > 0;
+}
+
+internal static class RecorderAssertionCapabilities
+{
+    private static readonly IReadOnlySet<RecorderValueKind> NoValueKinds =
+        new HashSet<RecorderValueKind>();
+    private static readonly IReadOnlySet<RecorderValueAccessorKind> NoAccessors =
+        new HashSet<RecorderValueAccessorKind>();
+
+    public static RecorderAssertionCapability Get(UiControlType controlType)
+    {
+        return controlType switch
+        {
+            UiControlType.TextBox => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
+            UiControlType.Label => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
+            UiControlType.ListBox => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText),
+            UiControlType.CheckBox => Value(
+                controlType,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsChecked),
+            UiControlType.ComboBox => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText),
+            UiControlType.RadioButton => Value(
+                controlType,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected),
+            UiControlType.ToggleButton => Value(
+                controlType,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsToggled),
+            UiControlType.Slider or UiControlType.ProgressBar or UiControlType.Spinner => Value(
+                controlType,
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericValue),
+            UiControlType.Calendar or UiControlType.DateTimePicker => Value(
+                controlType,
+                RecorderValueKind.Date,
+                RecorderValueAccessorKind.SelectedDate),
+            UiControlType.TabItem or UiControlType.TreeItem => Value(
+                controlType,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected),
+            UiControlType.GridCell or UiControlType.DataGridViewCell => Value(
+                controlType,
+                RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellText,
+                requiresConcreteTarget: true),
+            UiControlType.Grid or UiControlType.DataGridView => Contextual(
+                controlType,
+                RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellText),
+            UiControlType.SearchPicker => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText),
+            UiControlType.Notification => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
+            UiControlType.MultiSelect or UiControlType.ComboBoxFilter => Value(
+                controlType,
+                RecorderValueKind.StringSet,
+                RecorderValueAccessorKind.SelectedItems),
+            UiControlType.Search => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
+            UiControlType.TimePicker => Value(
+                controlType,
+                RecorderValueKind.Time,
+                RecorderValueAccessorKind.SelectedTime),
+            UiControlType.Expander => Value(
+                controlType,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsExpanded),
+            UiControlType.ColorPicker => Value(
+                controlType,
+                RecorderValueKind.Color,
+                RecorderValueAccessorKind.Color),
+            UiControlType.AutomationElement
+                or UiControlType.Button
+                or UiControlType.Tab
+                or UiControlType.Tree
+                or UiControlType.DataGridViewRow
+                or UiControlType.GridRow
+                or UiControlType.DateRangeFilter
+                or UiControlType.NumericRangeFilter
+                or UiControlType.Dialog
+                or UiControlType.FolderExport
+                or UiControlType.ShellNavigation
+                or UiControlType.Menu
+                or UiControlType.MenuItem => StateOnly(controlType),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(controlType),
+                controlType,
+                "UiControlType does not have an assertion capability classification.")
+        };
+    }
+
+    private static RecorderAssertionCapability StateOnly(UiControlType controlType) =>
+        new(controlType, NoValueKinds, NoAccessors);
+
+    private static RecorderAssertionCapability Value(
+        UiControlType controlType,
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind,
+        bool requiresConcreteTarget = false) =>
+        new(
+            controlType,
+            new HashSet<RecorderValueKind> { valueKind },
+            new HashSet<RecorderValueAccessorKind> { accessorKind },
+            requiresConcreteTarget);
+
+    private static RecorderAssertionCapability Contextual(
+        UiControlType controlType,
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind) =>
+        Value(controlType, valueKind, accessorKind, requiresConcreteTarget: true);
 }
 
 internal sealed record RecorderSemanticValueDescription(
     RecorderValueKind ValueKind,
     string SuggestedCheckpointName,
     string CurrentValueText);
+
+internal sealed record RecorderSemanticValueSnapshot(
+    RecordedStep Prototype,
+    RecorderSemanticValueDescription Description);
 
 internal sealed record RecorderCheckpointOption(
     Guid CheckpointId,
@@ -268,6 +468,24 @@ internal sealed record ColorPickerCaptureResult(
     bool HasCandidateValue,
     bool HasColor,
     RecorderColorPickerHint? Hint,
+    StepCreationResult StepResult);
+
+internal sealed record GridComboSelectionContext(
+    Control SelectionSource,
+    Control GridSource,
+    RecorderGridHint GridHint,
+    int RowIndex,
+    int ColumnIndex);
+
+internal sealed record GridComboSelectionContextResolution(
+    bool IsConfigured,
+    GridComboSelectionContext? Context,
+    string? Error);
+
+internal sealed record GridComboSelectionCaptureResult(
+    bool IsConfigured,
+    bool HasSelection,
+    GridComboSelectionContext? Context,
     StepCreationResult StepResult);
 
 internal sealed record ResolvedControlResult(

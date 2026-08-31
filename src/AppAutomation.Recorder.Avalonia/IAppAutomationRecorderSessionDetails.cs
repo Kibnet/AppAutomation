@@ -1,3 +1,5 @@
+using Avalonia.Controls;
+
 namespace AppAutomation.Recorder.Avalonia;
 
 public interface IAppAutomationRecorderSessionDetails
@@ -42,15 +44,32 @@ internal interface IRecorderStepReorderSessionDetails
 
 internal interface IRecorderCheckpointSessionDetails
 {
+    event EventHandler<RecorderCheckTargetSelectedEventArgs>? CheckTargetSelected;
+
     IReadOnlyList<RecorderCheckpointOption> Checkpoints { get; }
 
-    bool TryDescribeCurrentValue(out RecorderSemanticValueDescription? description, out string? error);
+    bool IsCheckTargetSelectionActive { get; }
 
-    void CaptureCheckpoint(string? variableName = null);
+    void BeginCheckTargetSelection();
 
-    void CaptureCheckpointAssertion(Guid checkpointId);
+    void CancelCheckTargetSelection();
 
-    void CaptureLiteralAssertion(string expectedText, RecorderComparisonKind comparisonKind);
+    void CaptureCheckpoint(RecorderCheckTargetSelection selection, string? variableName = null);
+
+    void CaptureCheckpointAssertion(
+        RecorderCheckTargetSelection selection,
+        Guid checkpointId,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal);
+
+    void CapturePresenceAssertion(RecorderCheckTargetSelection selection, bool expectEmpty);
+
+    void CaptureEnabledAssertion(RecorderCheckTargetSelection selection, bool expectedEnabled);
+
+    void CaptureLiteralAssertion(
+        RecorderCheckTargetSelection selection,
+        string expectedText,
+        RecorderComparisonKind comparisonKind,
+        RecorderDateExpression? dateExpression = null);
 }
 
 internal interface IRecorderRelativeDateSessionDetails
@@ -63,6 +82,20 @@ internal interface IRecorderRelativeDateSessionDetails
         Guid stepId,
         RecorderDateExpression? primary,
         RecorderDateExpression? secondary);
+}
+
+internal sealed record RecorderCheckTargetSelection(
+    Control Target,
+    RecorderSemanticValueSnapshot? ValueSnapshot,
+    string? ValueDescriptionError,
+    bool IsEnabled)
+{
+    public RecorderSemanticValueDescription? ValueDescription => ValueSnapshot?.Description;
+}
+
+internal sealed class RecorderCheckTargetSelectedEventArgs(RecorderCheckTargetSelection selection) : EventArgs
+{
+    public RecorderCheckTargetSelection Selection { get; } = selection;
 }
 
 internal enum RecorderStepMoveDirection

@@ -1,6 +1,8 @@
 using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
+using AppAutomation.Session.Contracts;
+using AppAutomation.TestHost.Avalonia;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
@@ -12,6 +14,9 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
+    private const string CalendarFallbackFixtureEnvironmentVariable =
+        "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
+
     private static readonly UiWaitOptions DesktopControlWaitOptions = new()
     {
         Timeout = TimeSpan.FromSeconds(10),
@@ -161,6 +166,36 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task CompositeDatePicker_SelectsDateByVisibleCalendarCell_WhenNativeSelectionIsUnsupported()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(CreateCalendarFallbackLaunchOptions());
+        var calendarTab = session.MainWindow
+            .FindFirstDescendant(session.ConditionFactory.ByAutomationId("CalendarTabItem"))
+            ?.AsTabItem()
+            ?? throw new InvalidOperationException("Calendar tab was not found.");
+        calendarTab.Select();
+        var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+            .WithDateTimePickerProxy(
+                "DatePicker",
+                DatePickerParts.ByAutomationIds(
+                    "FlaUiCalendarFallbackFixture",
+                    "FlaUiCalendarFallbackValue",
+                    "FlaUiCalendarFallbackOpen",
+                    "FlaUiCalendarFallbackCalendar"));
+        var page = new CalendarFallbackPage(resolver);
+        var targetDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1)
+            .AddMonths(1)
+            .AddDays(2);
+
+        page.SetDate(static candidate => candidate.DatePicker, targetDate);
+
+        await Assert.That(page.DatePicker.SelectedDate?.Date).IsEqualTo(targetDate.Date);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -266,6 +301,27 @@ public sealed class FlaUiControlResolverTests
         return texts.Any(text => text.Contains(expected, StringComparison.Ordinal));
     }
 
+    private static DesktopAppLaunchOptions CreateCalendarFallbackLaunchOptions()
+    {
+        var baseOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildConfiguration: "Debug");
+        var environmentVariables = new Dictionary<string, string?>(baseOptions.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            [CalendarFallbackFixtureEnvironmentVariable] = "1"
+        };
+
+        return new DesktopAppLaunchOptions
+        {
+            ExecutablePath = baseOptions.ExecutablePath,
+            WorkingDirectory = baseOptions.WorkingDirectory,
+            Arguments = baseOptions.Arguments,
+            EnvironmentVariables = environmentVariables,
+            DisposeCallback = baseOptions.DisposeCallback,
+            MainWindowTimeout = baseOptions.MainWindowTimeout,
+            PollInterval = baseOptions.PollInterval,
+            WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
     private static bool IsVisible(AutomationElement? element)
     {
         return element is not null
@@ -288,4 +344,19 @@ public sealed class FlaUiControlResolverTests
         AutomationElement Results,
         AutomationElement ApplyButton,
         AutomationElement CancelButton);
+
+    private sealed class CalendarFallbackPage : UiPage
+    {
+        private static readonly UiControlDefinition DatePickerDefinition = new(
+            "DatePicker",
+            UiControlType.DateTimePicker,
+            "FlaUiCalendarFallbackFixture");
+
+        public CalendarFallbackPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDateTimePickerControl DatePicker => Resolve<IDateTimePickerControl>(DatePickerDefinition);
+    }
 }

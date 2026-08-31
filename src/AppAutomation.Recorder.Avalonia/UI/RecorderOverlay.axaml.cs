@@ -1,10 +1,11 @@
 using Avalonia;
-using Avalonia.Automation;
 using Avalonia.Controls;
 using System.Globalization;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -61,6 +62,8 @@ internal sealed partial class RecorderOverlay : UserControl
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
 
+    internal Control? LastDateExpressionEditorForTesting { get; private set; }
+
     internal void RefreshForTesting()
     {
         Refresh();
@@ -111,6 +114,11 @@ internal sealed partial class RecorderOverlay : UserControl
             };
             _timer.Tick += (_, _) => Refresh();
             _timer.Start();
+        }
+
+        if (_checkpointDetails is not null)
+        {
+            _checkpointDetails.CheckTargetSelected += OnCheckTargetSelected;
         }
 
         Refresh();
@@ -215,6 +223,22 @@ internal sealed partial class RecorderOverlay : UserControl
             _scenarioNameTextBox.TextChanged += OnScenarioNameTextChanged;
         }
 
+        AddHandler(
+            InputElement.KeyDownEvent,
+            OnOverlayKeyDown,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+    }
+
+    private void OnOverlayKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || _checkpointDetails?.IsCheckTargetSelectionActive != true)
+        {
+            return;
+        }
+
+        _checkpointDetails.CancelCheckTargetSelection();
+        e.Handled = true;
     }
 
     private void OnScenarioDestinationSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -324,26 +348,50 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private void OnCheckClick(object? sender, RoutedEventArgs e)
     {
+        _checkpointDetails?.BeginCheckTargetSelection();
+    }
+
+    private void OnCheckTargetSelected(object? sender, RecorderCheckTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() => ShowCheckMenu(e.Selection));
+    }
+
+    private void ShowCheckMenu(RecorderCheckTargetSelection selection)
+    {
         if (_checkButton is null || _checkpointDetails is null)
         {
             return;
         }
 
+        var menu = CreateCheckMenu(selection);
+        menu.ShowAt(_checkButton);
+    }
+
+    internal MenuFlyout CreateCheckMenuForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateCheckMenu(selection);
+    }
+
+    private MenuFlyout CreateCheckMenu(RecorderCheckTargetSelection selection)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
         var menu = new MenuFlyout();
-        var hasReadableValue = _checkpointDetails.TryDescribeCurrentValue(
-            out var currentValue,
-            out var descriptionError);
+        var currentValue = selection.ValueDescription;
+        var hasReadableValue = currentValue is not null;
         var remember = new MenuItem
         {
             Header = "Remember value…",
             IsEnabled = hasReadableValue
         };
-        AutomationProperties.SetAutomationId(remember, "RecorderRememberValueMenuItem");
-        remember.Click += (_, _) => ShowRememberValueEditor(currentValue);
+        remember.Click += (_, _) => ShowRememberValueEditor(selection);
         menu.Items.Add(remember);
 
         var compare = new MenuItem { Header = "Compare with checkpoint" };
-        AutomationProperties.SetAutomationId(compare, "RecorderCompareCheckpointMenuItem");
         var checkpoints = _checkpointDetails.Checkpoints
             .Where(checkpoint => checkpoint.ValueKind == currentValue?.ValueKind)
             .ToArray();
@@ -355,34 +403,177 @@ internal sealed partial class RecorderOverlay : UserControl
                 Header = $"{checkpoint.VariableName} ({checkpoint.ControlName})",
                 Tag = checkpoint.CheckpointId
             };
-            checkpointItem.Click += OnCompareCheckpointClick;
+            if (checkpoint.ValueKind == RecorderValueKind.StringSet)
+            {
+                checkpointItem.Click += (_, _) =>
+                    _checkpointDetails.CaptureCheckpointAssertion(
+                        selection,
+                        checkpoint.CheckpointId,
+                        RecorderComparisonKind.Equivalent);
+            }
+            else
+            {
+                foreach (var comparisonKind in new[]
+                         {
+                             RecorderComparisonKind.Equal,
+                             RecorderComparisonKind.NotEqual
+                         })
+                {
+                    var comparisonItem = new MenuItem
+                    {
+                        Header = DescribeComparison(comparisonKind)
+                    };
+                    comparisonItem.Click += (_, _) =>
+                        _checkpointDetails.CaptureCheckpointAssertion(
+                            selection,
+                            checkpoint.CheckpointId,
+                            comparisonKind);
+                    checkpointItem.Items.Add(comparisonItem);
+                }
+            }
+
             compare.Items.Add(checkpointItem);
         }
 
         menu.Items.Add(compare);
+
+        if (currentValue is not null
+            && RecorderValueAssertions.TryGetHasValueAssertionKind(currentValue.ValueKind, out _))
+        {
+            menu.Items.Add(CreatePresenceAssertionMenu(selection, currentValue.ValueKind));
+        }
 
         var assertExpected = new MenuItem
         {
             Header = "Assert expected value…",
             IsEnabled = hasReadableValue
         };
-        AutomationProperties.SetAutomationId(assertExpected, "RecorderAssertExpectedValueMenuItem");
-        assertExpected.Click += (_, _) => ShowLiteralAssertionEditor();
+        assertExpected.Click += (_, _) => ShowLiteralAssertionEditor(selection);
         menu.Items.Add(assertExpected);
-        if (!hasReadableValue && !string.IsNullOrWhiteSpace(descriptionError))
+
+        var assertEnabled = new MenuItem
+        {
+            Header = "Enable…"
+        };
+        assertEnabled.Click += (_, _) => ShowEnabledAssertionEditor(selection);
+        menu.Items.Add(assertEnabled);
+
+        if (!hasReadableValue && !string.IsNullOrWhiteSpace(selection.ValueDescriptionError))
         {
             menu.Items.Add(new MenuItem
             {
-                Header = descriptionError,
+                Header = selection.ValueDescriptionError,
                 IsEnabled = false
             });
         }
 
-        menu.ShowAt(_checkButton);
+        return menu;
     }
 
-    private void ShowRememberValueEditor(RecorderSemanticValueDescription? description)
+    private MenuItem CreatePresenceAssertionMenu(
+        RecorderCheckTargetSelection selection,
+        RecorderValueKind valueKind)
     {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        if (!RecorderValueAssertions.TryGetHasValueAssertionKind(valueKind, out var assertionKind))
+        {
+            throw new InvalidOperationException(
+                $"A presence assertion is not meaningful for {valueKind} values.");
+        }
+
+        var assertPresence = new MenuItem { Header = "Has Value" };
+        var hasValue = new MenuItem
+        {
+            Header = assertionKind == RecorderHasValueAssertionKind.NotNull
+                ? "IsNotNull"
+                : "IsNotEmpty"
+        };
+        var empty = new MenuItem
+        {
+            Header = assertionKind == RecorderHasValueAssertionKind.NotNull
+                ? "IsNull"
+                : "IsEmpty"
+        };
+        hasValue.Click += (_, _) =>
+            _checkpointDetails.CapturePresenceAssertion(selection, expectEmpty: false);
+        empty.Click += (_, _) =>
+            _checkpointDetails.CapturePresenceAssertion(selection, expectEmpty: true);
+        assertPresence.ItemsSource = new[] { hasValue, empty };
+        return assertPresence;
+    }
+
+    private void ShowEnabledAssertionEditor(RecorderCheckTargetSelection selection)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        var flyout = new Flyout();
+        flyout.Content = CreateEnabledAssertionEditor(selection, flyout.Hide);
+        flyout.ShowAt(_checkButton);
+    }
+
+    internal Control CreateEnabledAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateEnabledAssertionEditor(selection, static () => { });
+    }
+
+    private StackPanel CreateEnabledAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        Action close)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        var expected = new ComboBox
+        {
+            Name = "RecorderExpectedEnabled",
+            ItemsSource = new[] { "true", "false" },
+            SelectedIndex = selection.IsEnabled ? 0 : 1,
+            MinWidth = 120
+        };
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        add.Click += (_, _) =>
+        {
+            _checkpointDetails.CaptureEnabledAssertion(selection, expected.SelectedIndex == 0);
+            close();
+        };
+        cancel.Click += (_, _) => close();
+
+        return new StackPanel
+        {
+            Width = 220,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Enable",
+                    FontWeight = FontWeight.SemiBold
+                },
+                expected,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
+    }
+
+    private void ShowRememberValueEditor(RecorderCheckTargetSelection selection)
+    {
+        var description = selection.ValueDescription;
         if (_checkButton is null || _checkpointDetails is null || description is null)
         {
             return;
@@ -396,8 +587,6 @@ internal sealed partial class RecorderOverlay : UserControl
         };
         var add = new Button { Content = "Remember", Padding = new Thickness(10, 4) };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
-        AutomationProperties.SetAutomationId(name, "RecorderCheckpointName");
-        AutomationProperties.SetAutomationId(add, "RecorderRememberValueButton");
         var flyout = new Flyout
         {
             Content = new StackPanel
@@ -429,7 +618,7 @@ internal sealed partial class RecorderOverlay : UserControl
         };
         add.Click += (_, _) =>
         {
-            _checkpointDetails.CaptureCheckpoint(name.Text);
+            _checkpointDetails.CaptureCheckpoint(selection, name.Text);
             flyout.Hide();
         };
         cancel.Click += (_, _) => flyout.Hide();
@@ -438,52 +627,94 @@ internal sealed partial class RecorderOverlay : UserControl
         name.SelectAll();
     }
 
-    private void OnCompareCheckpointClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is MenuItem { Tag: Guid checkpointId })
-        {
-            _checkpointDetails?.CaptureCheckpointAssertion(checkpointId);
-        }
-    }
-
-    private void ShowLiteralAssertionEditor()
+    private void ShowLiteralAssertionEditor(RecorderCheckTargetSelection selection)
     {
         if (_checkButton is null || _checkpointDetails is null)
         {
             return;
         }
 
-        if (!_checkpointDetails.TryDescribeCurrentValue(out var description, out var error)
-            || description is null)
+        if (selection.ValueDescription is not { } description)
         {
-            ShowSettingsError(error ?? "The selected control does not expose a readable value.");
+            ShowSettingsError(
+                selection.ValueDescriptionError
+                ?? "The selected control does not expose a readable value.");
             return;
+        }
+
+        var flyout = new Flyout();
+        var content = CreateLiteralAssertionEditor(selection, flyout.Hide);
+        flyout.Content = content;
+        flyout.ShowAt(_checkButton);
+        var expected = content.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .FirstOrDefault(textBox => textBox.Name == "RecorderExpectedValue");
+        expected?.Focus();
+        expected?.SelectAll();
+    }
+
+    internal Control CreateLiteralAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateLiteralAssertionEditor(selection, static () => { });
+    }
+
+    private StackPanel CreateLiteralAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        Action close)
+    {
+        if (_checkpointDetails is null || selection.ValueDescription is not { } description)
+        {
+            throw new InvalidOperationException(
+                selection.ValueDescriptionError
+                ?? "The selected control does not expose a readable value.");
         }
 
         var comparisons = description.ValueKind switch
         {
             RecorderValueKind.StringSet => new[] { RecorderComparisonKind.Equivalent },
             RecorderValueKind.Text or RecorderValueKind.GridCellText =>
-                new[] { RecorderComparisonKind.Equal, RecorderComparisonKind.Contains },
-            _ => new[] { RecorderComparisonKind.Equal }
+                new[]
+                {
+                    RecorderComparisonKind.Equal,
+                    RecorderComparisonKind.NotEqual,
+                    RecorderComparisonKind.Contains
+                },
+            _ => new[] { RecorderComparisonKind.Equal, RecorderComparisonKind.NotEqual }
         };
         var comparison = new ComboBox
         {
+            Name = "RecorderExpectedComparison",
             ItemsSource = comparisons.Select(DescribeComparison).ToArray(),
             SelectedIndex = 0,
             MinWidth = 120
         };
         var expected = new TextBox
         {
+            Name = "RecorderExpectedValue",
             Text = description.CurrentValueText,
             MinWidth = 220,
             PlaceholderText = "Expected value"
         };
+        var dateEditor = description.ValueKind == RecorderValueKind.Date
+            ? new RelativeDateOperandEditor(
+                "Date mode",
+                new RecorderDateOperandConfiguration(
+                    selection.ValueSnapshot?.Prototype.DateValue,
+                    RecorderDateReferenceKind.Exact,
+                    DayOffset: 0),
+                GetBrush("RecorderMuted"),
+                showRecordedValue: false,
+                controlNamePrefix: "RecorderLiteralDate")
+            : null;
+        var validation = new TextBlock
+        {
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
         var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
-        AutomationProperties.SetAutomationId(comparison, "RecorderAssertionComparison");
-        AutomationProperties.SetAutomationId(expected, "RecorderExpectedValue");
-        AutomationProperties.SetAutomationId(add, "RecorderAddAssertionButton");
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -502,29 +733,66 @@ internal sealed partial class RecorderOverlay : UserControl
                     FontWeight = FontWeight.SemiBold
                 },
                 expected,
-                comparison,
-                actions
             }
         };
-        var flyout = new Flyout { Content = content };
+        if (dateEditor is not null)
+        {
+            content.Children.Add(dateEditor.Content);
+        }
+
+        content.Children.Add(comparison);
+        content.Children.Add(validation);
+        content.Children.Add(actions);
+
+        void RefreshDateState()
+        {
+            expected.IsEnabled = dateEditor?.IsRelative != true;
+            if (dateEditor is null)
+            {
+                add.IsEnabled = true;
+                validation.IsVisible = false;
+                return;
+            }
+
+            add.IsEnabled = dateEditor.TryGetExpression(out _, out var error);
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        }
+
+        if (dateEditor is not null)
+        {
+            dateEditor.Changed += (_, _) => RefreshDateState();
+        }
+
         add.Click += (_, _) =>
         {
             var selectedIndex = Math.Clamp(comparison.SelectedIndex, 0, comparisons.Length - 1);
+            RecorderDateExpression? dateExpression = null;
+            if (dateEditor is not null
+                && !dateEditor.TryGetExpression(out dateExpression, out var error))
+            {
+                validation.Text = error;
+                validation.IsVisible = true;
+                return;
+            }
+
             _checkpointDetails.CaptureLiteralAssertion(
-                expected.Text ?? string.Empty,
-                comparisons[selectedIndex]);
-            flyout.Hide();
+                selection,
+                dateExpression is null ? expected.Text ?? string.Empty : description.CurrentValueText,
+                comparisons[selectedIndex],
+                dateExpression);
+            close();
         };
-        cancel.Click += (_, _) => flyout.Hide();
-        flyout.ShowAt(_checkButton);
-        expected.Focus();
-        expected.SelectAll();
+        cancel.Click += (_, _) => close();
+        RefreshDateState();
+        return content;
     }
 
     private static string DescribeComparison(RecorderComparisonKind comparisonKind) =>
         comparisonKind switch
         {
             RecorderComparisonKind.Equal => "Equals",
+            RecorderComparisonKind.NotEqual => "Not equals",
             RecorderComparisonKind.Contains => "Contains",
             RecorderComparisonKind.Equivalent => "Same items",
             _ => comparisonKind.ToString()
@@ -942,15 +1210,18 @@ internal sealed partial class RecorderOverlay : UserControl
         var primary = new RelativeDateOperandEditor(
             configuration.Secondary is null ? "Date" : "From",
             configuration.Primary,
-            GetBrush("RecorderMuted"));
+            GetBrush("RecorderMuted"),
+            controlNamePrefix: "RecorderJournalDate");
         var secondary = configuration.Secondary is null
             ? null
             : new RelativeDateOperandEditor(
                 "To",
                 configuration.Secondary,
-                GetBrush("RecorderMuted"));
+                GetBrush("RecorderMuted"),
+                controlNamePrefix: "RecorderJournalDateSecondary");
         var validation = new TextBlock
         {
+            Name = "RecorderJournalDateValidation",
             Foreground = GetBrush("RecorderDanger"),
             TextWrapping = TextWrapping.Wrap,
             IsVisible = false
@@ -983,6 +1254,7 @@ internal sealed partial class RecorderOverlay : UserControl
             Spacing = 6,
             Children = { apply, cancel }
         });
+        LastDateExpressionEditorForTesting = content;
 
         var flyout = new Flyout { Content = content };
         void RefreshValidation()
@@ -1246,11 +1518,14 @@ internal sealed partial class RecorderOverlay : UserControl
         public RelativeDateOperandEditor(
             string label,
             RecorderDateOperandConfiguration configuration,
-            IBrush mutedBrush)
+            IBrush mutedBrush,
+            bool showRecordedValue = true,
+            string? controlNamePrefix = null)
         {
             _exactDate = configuration.ExactDate;
             _mode = new ComboBox
             {
+                Name = controlNamePrefix is null ? null : $"{controlNamePrefix}Mode",
                 ItemsSource = new[] { "Exact date", "Today ± days" },
                 SelectedIndex = configuration.ReferenceKind == RecorderDateReferenceKind.RelativeToToday ? 1 : 0,
                 MinWidth = 145,
@@ -1258,6 +1533,7 @@ internal sealed partial class RecorderOverlay : UserControl
             };
             _dayOffset = new TextBox
             {
+                Name = controlNamePrefix is null ? null : $"{controlNamePrefix}Offset",
                 Text = configuration.DayOffset.ToString(CultureInfo.InvariantCulture),
                 Width = 74,
                 HorizontalContentAlignment = HorizontalAlignment.Right
@@ -1270,22 +1546,27 @@ internal sealed partial class RecorderOverlay : UserControl
             row.Children.Add(_mode);
             Grid.SetColumn(_dayOffset, 1);
             row.Children.Add(_dayOffset);
-            Content = new StackPanel
+            var content = new StackPanel
             {
                 Spacing = 4,
                 Children =
                 {
                     new TextBlock { Text = label, FontWeight = FontWeight.SemiBold },
-                    row,
-                    new TextBlock
-                    {
-                        Text = configuration.ExactDate.HasValue
-                            ? $"Recorded: {configuration.ExactDate.Value:yyyy-MM-dd}"
-                            : "Recorded boundary is empty",
-                        Foreground = mutedBrush
-                    }
+                    row
                 }
             };
+            if (showRecordedValue)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = configuration.ExactDate.HasValue
+                        ? $"Recorded: {configuration.ExactDate.Value:yyyy-MM-dd}"
+                        : "Recorded boundary is empty",
+                    Foreground = mutedBrush
+                });
+            }
+
+            Content = content;
 
             _mode.SelectionChanged += (_, _) =>
             {
@@ -1299,6 +1580,8 @@ internal sealed partial class RecorderOverlay : UserControl
         public event EventHandler? Changed;
 
         public Control Content { get; }
+
+        public bool IsRelative => _mode.SelectedIndex == 1;
 
         public bool TryGetExpression(
             out RecorderDateExpression? expression,

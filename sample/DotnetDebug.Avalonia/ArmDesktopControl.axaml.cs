@@ -32,6 +32,8 @@ public partial class ArmDesktopControl : UserControl
 
     public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = new();
 
+    public GridComboRowViewModel GridComboRow { get; } = new();
+
     public ObservableCollection<MultiSelectItemViewModel> ArmStatusFilterItems { get; } =
     [
         new("Open"),

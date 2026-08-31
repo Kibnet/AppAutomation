@@ -777,6 +777,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 && (value.EndsWith("OpenButton", StringComparison.OrdinalIgnoreCase)
                     || value.Contains("PopupOpenButton", StringComparison.OrdinalIgnoreCase));
         }
+
     }
 
     private sealed class FlaUiLabelControl : FlaUiControlBase<Label>, ILabelControl
@@ -1895,6 +1896,53 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
         }
 
+        internal void SelectItem(string itemText, TimeSpan timeout)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+            if (timeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout), "Combo-box selection timeout must be positive.");
+            }
+
+            var normalizedTarget = NormalizeLookupText(itemText);
+            var stopwatch = Stopwatch.StartNew();
+            string[] observedItems = [];
+
+            Expand();
+            do
+            {
+                var items = GetSelectableItems();
+                observedItems = items
+                    .Select(ReadAutomationElementText)
+                    .Where(static text => !string.IsNullOrWhiteSpace(text))
+                    .Select(static text => text!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var index = items.FindIndex(candidate =>
+                    string.Equals(
+                        NormalizeLookupText(ReadAutomationElementText(candidate)),
+                        normalizedTarget,
+                        StringComparison.OrdinalIgnoreCase));
+                if (index >= 0)
+                {
+                    Select(index);
+                    if (SelectionMatches(normalizedTarget))
+                    {
+                        return;
+                    }
+                }
+
+                Thread.Sleep(50);
+            }
+            while (stopwatch.Elapsed < timeout);
+
+            var observed = observedItems.Length == 0
+                ? "<none>"
+                : string.Join(", ", observedItems.Select(static value => $"'{value}'"));
+            throw new InvalidOperationException(
+                $"Combo-box item '{itemText}' was not found or selected within {timeout.TotalMilliseconds:0} ms. Observed items: {observed}.");
+        }
+
         private List<AutomationElement> GetSelectableItems()
         {
             var items = new List<AutomationElement>();
@@ -2119,11 +2167,12 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
         }
 
-        public IReadOnlyList<DateTime> SelectedDates => Inner.SelectedDates ?? Array.Empty<DateTime>();
+        public IReadOnlyList<DateTime> SelectedDates =>
+            TryRead(() => Inner.SelectedDates) ?? Array.Empty<DateTime>();
 
         public void SelectDate(DateTime selectedDate)
         {
-            Inner.SelectDate(selectedDate);
+            FlaUiCalendarSelection.SelectDate(Inner, selectedDate);
         }
     }
 
@@ -3282,6 +3331,12 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return;
             }
 
+            if (request.EditorKind == GridCellEditorKind.ComboBox)
+            {
+                EditComboBoxCell(cell, request);
+                return;
+            }
+
             if (_fallback is IEditableGridControl editableFallback)
             {
                 editableFallback.EditCell(request);
@@ -3400,6 +3455,24 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             }
 
             new FlaUiTextBoxControl(editor.AsTextBox()).Enter(expected);
+        }
+
+        private void EditComboBoxCell(AutomationElement cell, GridCellEditRequest request)
+        {
+            var editor = new[] { cell }
+                .Concat(FindAutomationDescendants(cell))
+                .FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.ComboBox);
+            if (editor is null)
+            {
+                throw new InvalidOperationException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a ComboBox editor.");
+            }
+
+            TryScrollIntoView(editor);
+            TryFocus(editor);
+            new FlaUiComboBoxControl(editor.AsComboBox()).SelectItem(
+                request.Value,
+                TimeSpan.FromMilliseconds(request.TimeoutMs));
         }
 
         private static TimeSpan ParseGridTime(string value)

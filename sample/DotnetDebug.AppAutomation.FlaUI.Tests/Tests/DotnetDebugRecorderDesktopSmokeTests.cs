@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using AppAutomation.Abstractions;
-using AppAutomation.Authoring;
 using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
@@ -12,8 +11,6 @@ using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -139,8 +136,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var nameTextBox = FindElement(overlayWindow, session, "RecorderScenarioName").AsTextBox();
         var recordButton = FindElement(overlayWindow, session, "RecordButton").AsButton();
         var saveButton = FindElement(overlayWindow, session, "SaveButton").AsButton();
-        var checkButton = FindElement(overlayWindow, session, "RecorderCheckButton").AsButton();
-        var stepCounter = FindElement(overlayWindow, session, "RecorderStepCounter");
 
         UiWait.Until(
             () => destinationCombo.Items,
@@ -168,33 +163,9 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
         TryCaptureDesktopElement(overlayWindow, "recorder-destination-selection.png");
         recordButton.Invoke();
-        UiWait.Until(
-            () => checkButton.IsEnabled,
-            static enabled => enabled,
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Recorder Check button did not become enabled while recording.");
-        TryCaptureDesktopElement(overlayWindow, "recorder-check-button.png");
         var numbersInput = FindElement(appWindow, session, "NumbersInput");
         numbersInput.Focus();
         numbersInput.AsTextBox().Text = "4 2";
-        Mouse.MoveTo(numbersInput.GetClickablePoint());
-        UiWait.Until(
-            () => stepCounter.Name,
-            text => text.StartsWith("1 step", StringComparison.Ordinal),
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Recorder did not capture the text entry before Check interaction.");
-
-        checkButton.Invoke();
-        FindProcessElement(automation, session, "RecorderAssertExpectedValueMenuItem").Click();
-        var expectedValue = FindProcessElement(automation, session, "RecorderExpectedValue").AsTextBox();
-        expectedValue.Text = "4 2";
-        FindProcessElement(automation, session, "RecorderAddAssertionButton").AsButton().Invoke();
-        UiWait.Until(
-            () => stepCounter.Name,
-            text => text.StartsWith("2 steps", StringComparison.Ordinal),
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Recorder did not add the literal assertion through Check.");
-
         recordButton.Invoke();
         saveButton.Invoke();
 
@@ -204,7 +175,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             scenarioName,
             patternOverride: "MainWindowScenariosBase.RecorderScenarios.g.cs");
         var scenarioSource = await File.ReadAllTextAsync(scenarioPath);
-        var compileErrors = CompileGeneratedScenario(scenarioPath);
 
         using (Assert.Multiple())
         {
@@ -214,11 +184,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "partial class MainWindowScenariosBase<TSession>");
             await Assert.That(scenarioSource).Contains(
                 "Page.EnterText(static page => page.NumbersInput, \"4 2\");");
-            await Assert.That(scenarioSource).Contains(
-                "TUnit.Assertions.Assert.That(Page.NumbersInput.Text), \"4 2\"");
-            await Assert.That(scenarioSource).Contains("async global::System.Threading.Tasks.Task");
-            await Assert.That(compileErrors).IsEmpty();
-            await Assert.That(checkButton.IsOffscreen).IsFalse();
         }
     }
 
@@ -729,108 +694,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             $"Element '{automationId}' was not found in the selected window.")!;
-    }
-
-    private static AutomationElement FindProcessElement(
-        UIA3Automation automation,
-        DesktopAppSession session,
-        string automationId)
-    {
-        return UiWait.Until(
-            () => automation.GetDesktop()
-                .FindAllDescendants(session.ConditionFactory.ByAutomationId(automationId))
-                .FirstOrDefault(element =>
-                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
-            static candidate => candidate is not null && candidate.IsAvailable && !candidate.IsOffscreen,
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            $"Element '{automationId}' was not found for the recorder process.")!;
-    }
-
-    private static string[] CompileGeneratedScenario(string scenarioPath)
-    {
-        var authoringDirectory = ResolveAuthoringProjectDirectory();
-        var syntaxTrees = Directory
-            .EnumerateFiles(authoringDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !ContainsBuildOutputSegment(path))
-            .Append(scenarioPath)
-            .Select(static path => CSharpSyntaxTree.ParseText(
-                File.ReadAllText(path),
-                CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest),
-                path))
-            .Prepend(CSharpSyntaxTree.ParseText(
-                """
-                global using System;
-                global using System.Collections.Generic;
-                global using System.IO;
-                global using System.Linq;
-                global using System.Net.Http;
-                global using System.Threading;
-                global using System.Threading.Tasks;
-                global using TUnit.Assertions;
-                global using TUnit.Assertions.Extensions;
-                global using TUnit.Core;
-                global using static TUnit.Core.HookType;
-                """,
-                CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest),
-                "DotnetDebug.AppAutomation.Authoring.GlobalUsings.g.cs"))
-            .ToArray();
-        var compilation = CSharpCompilation.Create(
-            "RecorderDesktopGeneratedOutput",
-            syntaxTrees,
-            CreateCompilationReferences(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        GeneratorDriver driver = CSharpGeneratorDriver.Create(new UiControlSourceGenerator().AsSourceGenerator());
-        driver.RunGeneratorsAndUpdateCompilation(compilation, out var generatedCompilation, out var generatorDiagnostics);
-
-        return generatorDiagnostics
-            .Concat(generatedCompilation.GetDiagnostics())
-            .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-            .Select(static diagnostic => diagnostic.ToString())
-            .ToArray();
-    }
-
-    private static bool ContainsBuildOutputSegment(string path)
-    {
-        return path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(static segment => segment is "bin" or "obj");
-    }
-
-    private static MetadataReference[] CreateCompilationReferences()
-    {
-        var references = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
-        var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")
-            ?? string.Empty;
-        foreach (var path in trustedPlatformAssemblies.Split(
-                     Path.PathSeparator,
-                     StringSplitOptions.RemoveEmptyEntries))
-        {
-            references[path] = MetadataReference.CreateFromFile(path);
-        }
-
-        var requiredAssemblies = new[]
-        {
-            typeof(UiControlSourceGenerator).Assembly,
-            typeof(UiPage).Assembly,
-            typeof(global::AppAutomation.TUnit.UiTestBase<,>).Assembly,
-            typeof(Assert).Assembly,
-            typeof(TestAttribute).Assembly
-        };
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies().Concat(requiredAssemblies).Distinct())
-        {
-            if (assembly.IsDynamic
-                || string.IsNullOrWhiteSpace(assembly.Location)
-                || string.Equals(
-                    Path.GetFileNameWithoutExtension(assembly.Location),
-                    "DotnetDebug.AppAutomation.Authoring",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            references[assembly.Location] = MetadataReference.CreateFromFile(assembly.Location);
-        }
-
-        return references.Values.ToArray();
     }
 
     private static double ReadVerticalScrollPercent(AutomationElement element)

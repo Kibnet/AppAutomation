@@ -643,6 +643,24 @@
                            automation:AutomationProperties.AutomationId="CalendarErrorText"
                            Foreground="#C62828"
                            FontWeight="SemiBold" />
+
+                <Border Grid.Row="0"
+                        Grid.RowSpan="5"
+                        IsVisible="False"
+                        Background="#111416"
+                        Padding="16"
+                        x:Name="FlaUiCalendarFallbackFixtureHost"
+                        ZIndex="100">
+                    <StackPanel Spacing="8" HorizontalAlignment="Left">
+                        <TextBlock Text="FlaUI calendar fallback fixture" FontWeight="SemiBold" />
+                        <editors:DateEditor x:Name="FlaUiCalendarFallbackFixture"
+                                            automation:AutomationProperties.AutomationId="FlaUiCalendarFallbackFixture"
+                                            automation:AutomationProperties.AccessibilityView="Control"
+                                            Width="220"
+                                            Watermark="Select date"
+                                            Loaded="OnFlaUiCalendarFallbackFixtureLoaded" />
+                    </StackPanel>
+                </Border>
             </Grid>
         </TabItem>
 

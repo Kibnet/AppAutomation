@@ -1042,12 +1042,29 @@ internal sealed class AuthoringCodeGenerator
             .Single();
         var updatedClass = existingClass.AddMembers(generatedMethod);
         var updatedRoot = root.ReplaceNode(existingClass, updatedClass);
+        if (containsAssertions && !HasUsingDirective(updatedRoot, "System.Threading.Tasks"))
+        {
+            updatedRoot = updatedRoot.AddUsings(
+                SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Threading.Tasks")));
+        }
+
+        if (containsAssertions && !HasUsingDirective(updatedRoot, "TUnit.Assertions"))
+        {
+            updatedRoot = updatedRoot.AddUsings(
+                SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("TUnit.Assertions")));
+        }
+
+        if (containsAssertions && !HasUsingDirective(updatedRoot, "TUnit.Assertions.Extensions"))
+        {
+            updatedRoot = updatedRoot.AddUsings(
+                SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("TUnit.Assertions.Extensions")));
+        }
+
         if (containsRelativeDates && !HasUsingDirective(updatedRoot, "System"))
         {
             updatedRoot = updatedRoot.AddUsings(
                 SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System")));
         }
-
         mergedSource = updatedRoot
             .NormalizeWhitespace(indentation: "    ", eol: Environment.NewLine)
             .ToFullString() + Environment.NewLine;
@@ -1074,6 +1091,13 @@ internal sealed class AuthoringCodeGenerator
             builder.AppendLine("using System;");
         }
 
+        if (containsAssertions)
+        {
+            builder.AppendLine("using System.Threading.Tasks;");
+            builder.AppendLine("using TUnit.Assertions;");
+            builder.AppendLine("using TUnit.Assertions.Extensions;");
+        }
+
         builder.AppendLine("using TUnit.Core;");
         builder.AppendLine();
         builder.Append("namespace ").Append(target.ScenarioNamespace).AppendLine(";");
@@ -1096,7 +1120,7 @@ internal sealed class AuthoringCodeGenerator
         builder.Append("    public ");
         if (containsAssertions)
         {
-            builder.Append("async global::System.Threading.Tasks.Task ");
+            builder.Append("async Task ");
         }
         else
         {
@@ -1283,21 +1307,12 @@ internal sealed class AuthoringCodeGenerator
             commentParts.Add(step.Warning!);
         }
 
-        if (!string.IsNullOrWhiteSpace(step.ValidationMessage)
-            && !commentParts.Contains(step.ValidationMessage!, StringComparer.Ordinal))
-        {
-            commentParts.Add(step.ValidationMessage!);
-        }
-
         if (commentParts.Count > 0)
         {
             statement = $"{statement} // {string.Join(" | ", commentParts.Select(SanitizeCommentText))}";
         }
 
-        var runtimeCommentLines = CreateRuntimeCommentLines(step);
-        return runtimeCommentLines.Count == 0
-            ? statement
-            : string.Join(Environment.NewLine, runtimeCommentLines.Concat([statement]));
+        return statement;
     }
 
     private static string GenerateCheckpointStatement(
@@ -1327,6 +1342,29 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyDictionary<Guid, string> checkpointVariables)
     {
         var actual = GenerateValueExpression(step, propertyName);
+        if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
+        {
+            if (step.ValueKind is not { } valueKind
+                || !RecorderValueAssertions.TryGetPresenceAssertionKind(
+                    valueKind,
+                    step.ComparisonKind == RecorderComparisonKind.IsEmpty,
+                    out var assertionKind))
+            {
+                throw new InvalidOperationException(
+                    $"A presence assertion is not supported for value kind '{step.ValueKind}'.");
+            }
+
+            return assertionKind switch
+            {
+                RecorderHasValueAssertionKind.NotEmpty => $"await Assert.That({actual}).IsNotEmpty();",
+                RecorderHasValueAssertionKind.NotNull => $"await Assert.That({actual}).IsNotNull();",
+                RecorderHasValueAssertionKind.Empty => $"await Assert.That({actual}).IsEmpty();",
+                RecorderHasValueAssertionKind.Null => $"await Assert.That({actual}).IsNull();",
+                _ => throw new InvalidOperationException(
+                    $"Presence assertion kind '{assertionKind}' is not supported.")
+            };
+        }
+
         string expected;
         if (step.ExpectedCheckpointId is { } checkpointId)
         {
@@ -1343,11 +1381,13 @@ internal sealed class AuthoringCodeGenerator
         var assertion = step.ComparisonKind switch
         {
             RecorderComparisonKind.Equal =>
-                $"global::TUnit.Assertions.Extensions.EqualsAssertionExtensions.IsEqualTo(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+                $"Assert.That({actual}).IsEqualTo({expected})",
+            RecorderComparisonKind.NotEqual =>
+                $"Assert.That({actual}).IsNotEqualTo({expected})",
             RecorderComparisonKind.Contains =>
-                $"global::TUnit.Assertions.Extensions.StringContainsAssertionExtensions.Contains(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+                $"Assert.That({actual}).Contains({expected})",
             RecorderComparisonKind.Equivalent =>
-                $"global::TUnit.Assertions.Extensions.IsEquivalentToAssertionExtensions.IsEquivalentTo(global::TUnit.Assertions.Assert.That({actual}), {expected})",
+                $"Assert.That({actual}).IsEquivalentTo({expected})",
             _ => throw new InvalidOperationException("Assertion step does not contain a supported comparison.")
         };
 
@@ -1386,8 +1426,8 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateGridCellExpression(RecordedStep step, string control)
     {
         return HasNamedGridRow(step)
-            ? $"global::AppAutomation.Abstractions.GridValueReader.ReadCellText({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})"
-            : $"global::AppAutomation.Abstractions.GridValueReader.ReadCellText({control}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)})";
+            ? $"GridValueReader.ReadCellText({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})"
+            : $"GridValueReader.ReadCellText({control}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)})";
     }
 
     private static string FormatExpectedLiteral(RecordedStep step)
@@ -1412,20 +1452,6 @@ internal sealed class AuthoringCodeGenerator
         {
             builder.Append(indent).AppendLine(line);
         }
-    }
-
-    private static IReadOnlyList<string> CreateRuntimeCommentLines(RecordedStep step)
-    {
-        var findings = step.RuntimeValidationFindings ?? Array.Empty<RecorderRuntimeValidationFinding>();
-        return findings
-            .Where(static finding => finding.ShouldSurface)
-            .Select(static finding =>
-            {
-                var targetState = finding.BlocksTarget ? "unsupported" : "warning";
-                return $"// AppAutomation recorder warning: {finding.Target} target {targetState} ({finding.Code}): {SanitizeCommentText(finding.Message)}";
-            })
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
     }
 
     private static string SanitizeCommentText(string value)

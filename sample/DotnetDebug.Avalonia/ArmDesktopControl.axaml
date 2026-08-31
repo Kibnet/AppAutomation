@@ -194,40 +194,69 @@
                 </mxdg:DataGridControl.Columns>
               </mxdg:DataGridControl>
 
-              <ItemsControl x:Name="ArmGridAutomationBridge"
-                            Height="126"
-                            ItemsSource="{Binding ArmGridRows}"
-                            automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <Grid ColumnDefinitions="90,130,90,130"
-                          Margin="0,1"
-                          DoubleTapped="OnArmGridRowDoubleTapped"
-                          automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
-                      <TextBlock Grid.Column="0"
-                                 Text="{Binding Key}"
-                                 automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding Key}" />
-                      <TextBox Grid.Column="1"
-                               Text="{Binding Value, Mode=TwoWay}"
-                               MinHeight="24"
-                               BorderThickness="0"
-                               automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
-                               automation:AutomationProperties.Name="{Binding Value}" />
-                      <TextBox Grid.Column="2"
-                               Text="{Binding Color, Mode=TwoWay}"
-                               MinHeight="24"
-                               BorderThickness="0"
-                               automation:AutomationProperties.AutomationId="{Binding ColorCellAutomationId}"
-                               automation:AutomationProperties.Name="{Binding Color}" />
-                      <TextBlock Grid.Column="3"
-                                 Text="{Binding State}"
-                                 automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding State}" />
-                    </Grid>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+              <Grid Height="126">
+                <ItemsControl x:Name="ArmGridAutomationBridge"
+                              Height="126"
+                              ItemsSource="{Binding ArmGridRows}"
+                              automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnDefinitions="90,130,90,130"
+                            Margin="0,1"
+                            DoubleTapped="OnArmGridRowDoubleTapped"
+                            automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding Key}"
+                                   automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
+                                   automation:AutomationProperties.Name="{Binding Key}" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Value, Mode=TwoWay}"
+                                 MinHeight="24"
+                                 BorderThickness="0"
+                                 automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding Value}" />
+                        <TextBox Grid.Column="2"
+                                 Text="{Binding Color, Mode=TwoWay}"
+                                 MinHeight="24"
+                                 BorderThickness="0"
+                                 automation:AutomationProperties.AutomationId="{Binding ColorCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding Color}" />
+                        <TextBlock Grid.Column="3"
+                                   Text="{Binding State}"
+                                   automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
+                                   automation:AutomationProperties.Name="{Binding State}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Border Width="230"
+                        Padding="4"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom"
+                        BorderBrush="#666666"
+                        BorderThickness="1"
+                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge"
+                        automation:AutomationProperties.IsControlElementOverride="True">
+                  <Grid ColumnDefinitions="90,130"
+                        DataContext="{Binding GridComboRow}"
+                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Key}"
+                               automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell0"
+                               automation:AutomationProperties.Name="{Binding Key}" />
+                    <Border Grid.Column="1"
+                            automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell1"
+                            automation:AutomationProperties.IsControlElementOverride="True"
+                            automation:AutomationProperties.Name="{Binding State}">
+                      <ComboBox ItemsSource="{Binding StateOptions}"
+                                automation:AutomationProperties.AutomationId="GridComboStateEditor"
+                                SelectedItem="{Binding State, Mode=TwoWay}"
+                                MinHeight="24" />
+                    </Border>
+                  </Grid>
+                </Border>
+              </Grid>
             </StackPanel>
 
             <StackPanel Grid.Column="1"

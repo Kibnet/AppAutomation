@@ -68,10 +68,15 @@ internal sealed class RecorderSession :
     private Control? _pendingColorPickerSource;
     private Control? _pendingContextMenuOwner;
     private Control? _lastHoveredControl;
+    private Control? _pendingCheckTargetControl;
+    private IReadOnlyList<Control> _pendingCheckTargetCandidates = Array.Empty<Control>();
+    private bool _isCheckTargetSelectionActive;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
+    private GridComboSelectionContextResolution? _pendingGridComboSelectionContext;
+    private CompletedCompositeSelection? _completedCompositeSelection;
     private RoutedEventArgs? _lastMenuItemClickEvent;
     private ComboBoxFilterClickSnapshot? _comboBoxFilterClickSnapshot;
     private string _lastFingerprint = string.Empty;
@@ -122,7 +127,7 @@ internal sealed class RecorderSession :
         _hotkeyMap = _hotkeySettings.ToMap();
         _stepFactory = new RecorderStepFactory(options, _validationRootProvider);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
-        _stepValidator = new RecorderStepValidator();
+        _stepValidator = new RecorderStepValidator(options);
         _runtimeValidator = new RecorderCommandRuntimeValidator(options);
         _authoringProjectScanner = new AuthoringProjectScanner();
         _codeGenerator = new AuthoringCodeGenerator(_authoringProjectScanner, _logger);
@@ -221,6 +226,8 @@ internal sealed class RecorderSession :
 
     public event EventHandler? SessionChanged;
 
+    public event EventHandler<RecorderCheckTargetSelectedEventArgs>? CheckTargetSelected;
+
     internal event EventHandler? ExportRequested;
 
     internal event EventHandler? HotkeysChanged;
@@ -232,6 +239,8 @@ internal sealed class RecorderSession :
     public int PersistableStepCount => _steps.Count(static step => step.CanPersist && !step.IsIgnored);
 
     public IReadOnlyList<RecorderCheckpointOption> Checkpoints => CreateCheckpointOptions();
+
+    public bool IsCheckTargetSelectionActive => _isCheckTargetSelectionActive;
 
     public string LatestPreview { get; private set; } = string.Empty;
 
@@ -328,12 +337,17 @@ internal sealed class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        _pendingGridComboSelectionContext = null;
+        _completedCompositeSelection = null;
         SetStatus("Recording.", RecorderValidationStatus.Valid);
     }
 
     public void Stop()
     {
+        CancelCheckTargetSelectionCore();
         FlushPendingState();
+        _pendingGridComboSelectionContext = null;
+        _completedCompositeSelection = null;
         _state = RecorderSessionState.Off;
         SetStatus("Recording stopped.", RecorderValidationStatus.Valid);
     }
@@ -348,7 +362,10 @@ internal sealed class RecorderSession :
             return;
         }
 
+        CancelCheckTargetSelectionCore();
         FlushPendingState();
+        _pendingGridComboSelectionContext = null;
+        _completedCompositeSelection = null;
         _steps.Clear();
         LatestPreview = string.Empty;
         _lastScenarioFilePath = null;
@@ -458,6 +475,7 @@ internal sealed class RecorderSession :
 
     public void Dispose()
     {
+        CancelCheckTargetSelectionCore();
         _observationTimer?.Stop();
         _textDebounceTimer.Stop();
         _sliderDebounceTimer.Stop();
@@ -837,6 +855,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_stepFactory.ShouldSuppressGridComboSelectionButton(source))
+        {
+            return;
+        }
+
         if (_stepFactory.ShouldSuppressColorPickerButton(source))
         {
             return;
@@ -992,6 +1015,11 @@ internal sealed class RecorderSession :
         DetachInputHandlers();
         _inputRoot = inputRoot;
         _inputRoot.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
+        _inputRoot.AddHandler(
+            InputElement.PointerReleasedEvent,
+            OnPointerReleased,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         _inputRoot.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
         _inputRoot.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
         _inputRoot.AddHandler(
@@ -1010,6 +1038,7 @@ internal sealed class RecorderSession :
         }
 
         _inputRoot.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+        _inputRoot.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
         _inputRoot.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
         _inputRoot.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
         _inputRoot.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
@@ -1251,6 +1280,20 @@ internal sealed class RecorderSession :
         }
 
         var source = e.Source as Control;
+        if (_isCheckTargetSelectionActive)
+        {
+            var eventTarget = ResolveInteractionOwner(source) ?? source;
+            var positionRoot = _inputRoot ?? _window;
+            _pendingCheckTargetCandidates = ResolveCheckTargetCandidates(
+                eventTarget,
+                positionRoot,
+                e.GetPosition(positionRoot));
+            _pendingCheckTargetControl = eventTarget
+                ?? (_pendingCheckTargetCandidates.Count > 0 ? _pendingCheckTargetCandidates[0] : null);
+            e.Handled = true;
+            return;
+        }
+
         var control = ResolveInteractionOwner(source);
         var isRightButtonPressed = e.GetCurrentPoint(_inputRoot ?? _window).Properties.IsRightButtonPressed;
         if (isRightButtonPressed)
@@ -1277,6 +1320,19 @@ internal sealed class RecorderSession :
         {
             TryRecordGridAction(source ?? control);
         }
+    }
+
+    private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_isCheckTargetSelectionActive || _pendingCheckTargetControl is null)
+        {
+            return;
+        }
+
+        var target = _pendingCheckTargetControl;
+        var candidates = _pendingCheckTargetCandidates;
+        e.Handled = true;
+        CompleteCheckTargetSelection(target, candidates);
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -1310,6 +1366,13 @@ internal sealed class RecorderSession :
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (_isCheckTargetSelectionActive && e.Key == Key.Escape)
+        {
+            CancelCheckTargetSelectionCore();
+            e.Handled = true;
+            return;
+        }
+
         if (_hotkeyMap.TryGetCommand(e.Key, e.PhysicalKey, e.KeyModifiers, out var command))
         {
             HandleRecorderCommand(command);
@@ -1500,6 +1563,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_stepFactory.ShouldSuppressGridComboSelectionButton(eventSource))
+        {
+            return;
+        }
+
         if (_stepFactory.ShouldSuppressColorPickerButton(eventSource))
         {
             return;
@@ -1566,13 +1634,17 @@ internal sealed class RecorderSession :
 
     private void RecordComboBoxSelection(ComboBox comboBox)
     {
-        if (_state != RecorderSessionState.Recording
-            || (!WasRecentlyTriggeredByUser(comboBox) && !HasPendingCompositeSelection(comboBox)))
+        if (_state != RecorderSessionState.Recording)
         {
             return;
         }
 
-        if (_stepFactory.ShouldSuppressCompositeSelection(comboBox))
+        if (ShouldSuppressCompletedCompositeEvent(comboBox))
+        {
+            return;
+        }
+
+        if (!WasRecentlyTriggeredByUser(comboBox) && !HasPendingCompositeSelection(comboBox))
         {
             return;
         }
@@ -1587,12 +1659,22 @@ internal sealed class RecorderSession :
             return;
         }
 
-        if (TryRecordSingleSelectSelection(comboBox))
+        if (TryRecordSearchPickerSelection(comboBox))
         {
             return;
         }
 
-        if (TryRecordSearchPickerSelection(comboBox))
+        if (_stepFactory.ShouldSuppressCompositeSelection(comboBox))
+        {
+            return;
+        }
+
+        if (TryRecordGridComboSelection(comboBox))
+        {
+            return;
+        }
+
+        if (TryRecordSingleSelectSelection(comboBox))
         {
             return;
         }
@@ -1637,6 +1719,50 @@ internal sealed class RecorderSession :
     private bool TryRecordSingleSelectSelection(ListBox listBox)
     {
         return CompleteSingleSelectSelection(_stepFactory.TryCreateSingleSelectStep(listBox), listBox);
+    }
+
+    private bool TryRecordGridComboSelection(ComboBox comboBox)
+    {
+        return CompleteGridComboSelection(
+            _stepFactory.TryCreateGridComboSelectionStep(comboBox, _pendingGridComboSelectionContext),
+            comboBox);
+    }
+
+    private bool TryRecordGridComboSelection(ListBox listBox)
+    {
+        return CompleteGridComboSelection(
+            _stepFactory.TryCreateGridComboSelectionStep(listBox, _pendingGridComboSelectionContext),
+            listBox);
+    }
+
+    private bool CompleteGridComboSelection(GridComboSelectionCaptureResult capture, Control source)
+    {
+        if (!capture.IsConfigured)
+        {
+            return false;
+        }
+
+        if (!capture.HasSelection)
+        {
+            _pendingGridComboSelectionContext = null;
+            return true;
+        }
+
+        FlushPendingTextIfSwitchingTo(source);
+        FlushPendingSliderIfSwitchingTo(source);
+        FlushPendingSpinnerIfSwitchingTo(source);
+        var previousStepCount = _steps.Count;
+        AddStep(capture.StepResult, source, "GridComboSelection");
+        if (capture.StepResult.Success
+            && _steps.Count > previousStepCount
+            && _steps[^1].ActionKind == RecordedActionKind.SelectGridCellComboItem
+            && _steps[^1].CanPersist)
+        {
+            _completedCompositeSelection = new CompletedCompositeSelection([source]);
+        }
+
+        _pendingGridComboSelectionContext = null;
+        return true;
     }
 
     private bool TryRecordColorPickerSelection(ComboBox palette)
@@ -1756,7 +1882,16 @@ internal sealed class RecorderSession :
 
         FlushPendingSliderIfSwitchingTo(results);
         FlushPendingSpinnerIfSwitchingTo(results);
+        var previousStepCount = _steps.Count;
         AddStep(result, results, "SearchPickerSelection");
+        if (searchInput is not null
+            && result.Step?.ActionKind == RecordedActionKind.SearchAndSelectGridCell
+            && _steps.Count > previousStepCount
+            && _steps[^1].ActionKind == RecordedActionKind.SearchAndSelectGridCell
+            && _steps[^1].CanPersist)
+        {
+            _completedCompositeSelection = new CompletedCompositeSelection([searchInput, results]);
+        }
     }
 
     private void OnListBoxSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1769,8 +1904,17 @@ internal sealed class RecorderSession :
 
     private void RecordListBoxSelection(ListBox listBox)
     {
-        if (_state != RecorderSessionState.Recording
-            || (!WasRecentlyTriggeredByUser(listBox) && !HasPendingCompositeSelection(listBox)))
+        if (_state != RecorderSessionState.Recording)
+        {
+            return;
+        }
+
+        if (ShouldSuppressCompletedCompositeEvent(listBox))
+        {
+            return;
+        }
+
+        if (!WasRecentlyTriggeredByUser(listBox) && !HasPendingCompositeSelection(listBox))
         {
             return;
         }
@@ -1785,7 +1929,7 @@ internal sealed class RecorderSession :
             return;
         }
 
-        if (TryRecordSingleSelectSelection(listBox))
+        if (TryRecordSearchPickerSelection(listBox))
         {
             return;
         }
@@ -1795,7 +1939,12 @@ internal sealed class RecorderSession :
             return;
         }
 
-        if (TryRecordSearchPickerSelection(listBox))
+        if (TryRecordGridComboSelection(listBox))
+        {
+            return;
+        }
+
+        if (TryRecordSingleSelectSelection(listBox))
         {
             return;
         }
@@ -2109,7 +2258,11 @@ internal sealed class RecorderSession :
             FlushPendingTextIfSwitchingTo(calendar);
             FlushPendingSliderIfSwitchingTo(calendar);
             FlushPendingSpinnerIfSwitchingTo(calendar);
-            AddStep(_stepFactory.TryCreateCalendarStep(calendar), calendar, "CalendarSelection");
+            var selectedDate = e.GetNewValue<DateTime?>();
+            var result = selectedDate is { } value
+                ? _stepFactory.TryCreateCalendarStep(calendar, value)
+                : StepCreationResult.Unsupported("Calendar does not have a selected date.");
+            AddStep(result, calendar, "CalendarSelection");
         }
     }
 
@@ -2121,6 +2274,11 @@ internal sealed class RecorderSession :
         }
 
         if (!string.Equals(e.Property.Name, nameof(TextBox.Text), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (ShouldSuppressCompletedCompositeEvent(textBox))
         {
             return;
         }
@@ -2385,7 +2543,7 @@ internal sealed class RecorderSession :
         AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
     }
 
-    public bool TryDescribeCurrentValue(
+    private bool TryDescribeCurrentValue(
         out RecorderSemanticValueDescription? description,
         out string? error)
     {
@@ -2393,9 +2551,70 @@ internal sealed class RecorderSession :
         return _stepFactory.TryDescribeSemanticValue(control, out description, out error);
     }
 
+    public void BeginCheckTargetSelection()
+    {
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        _pendingCheckTargetControl = null;
+        _pendingCheckTargetCandidates = Array.Empty<Control>();
+        _isCheckTargetSelectionActive = true;
+    }
+
+    public void CancelCheckTargetSelection()
+    {
+        CancelCheckTargetSelectionCore();
+    }
+
+    internal bool SelectCheckTargetForTesting(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_isCheckTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteCheckTargetSelection(ResolveInteractionOwner(source) ?? source);
+        return true;
+    }
+
+    internal bool SelectCheckTargetForTesting(
+        Control eventSource,
+        IReadOnlyList<Control> visualCandidates)
+    {
+        ArgumentNullException.ThrowIfNull(eventSource);
+        ArgumentNullException.ThrowIfNull(visualCandidates);
+        if (!_isCheckTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteCheckTargetSelection(
+            ResolveInteractionOwner(eventSource) ?? eventSource,
+            visualCandidates);
+        return true;
+    }
+
     public void CaptureCheckpoint(string? variableName = null)
     {
-        var control = PrepareSemanticCaptureTarget();
+        CaptureCheckpoint(PrepareSemanticCaptureTarget(), variableName);
+    }
+
+    void IRecorderCheckpointSessionDetails.CaptureCheckpoint(
+        RecorderCheckTargetSelection selection,
+        string? variableName)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        AddStep(
+            _stepFactory.TryCreateCheckpointStep(selection.ValueSnapshot, variableName),
+            selection.Target,
+            "Checkpoint:Remember");
+    }
+
+    private void CaptureCheckpoint(Control? control, string? variableName)
+    {
         AddStep(
             _stepFactory.TryCreateCheckpointStep(control, variableName),
             control,
@@ -2403,6 +2622,24 @@ internal sealed class RecorderSession :
     }
 
     public void CaptureCheckpointAssertion(Guid checkpointId)
+    {
+        CaptureCheckpointAssertion(PrepareSemanticCaptureTarget(), checkpointId);
+    }
+
+    void IRecorderCheckpointSessionDetails.CaptureCheckpointAssertion(
+        RecorderCheckTargetSelection selection,
+        Guid checkpointId,
+        RecorderComparisonKind comparisonKind)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        CaptureCheckpointAssertion(
+            selection.ValueSnapshot,
+            selection.Target,
+            checkpointId,
+            comparisonKind);
+    }
+
+    private void CaptureCheckpointAssertion(Control? control, Guid checkpointId)
     {
         var checkpoint = CreateCheckpointOptions()
             .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId);
@@ -2412,22 +2649,256 @@ internal sealed class RecorderSession :
             return;
         }
 
-        var control = PrepareSemanticCaptureTarget();
         AddStep(
             _stepFactory.TryCreateCheckpointAssertionStep(control, checkpoint),
             control,
             "Checkpoint:Compare");
     }
 
+    private void CaptureCheckpointAssertion(
+        RecorderSemanticValueSnapshot? snapshot,
+        Control source,
+        Guid checkpointId,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
+    {
+        var checkpoint = CreateCheckpointOptions()
+            .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId);
+        if (checkpoint is null)
+        {
+            SetStatus("Selected checkpoint is missing or ignored.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateCheckpointAssertionStep(snapshot, checkpoint, comparisonKind),
+            source,
+            "Checkpoint:Compare");
+    }
+
+    void IRecorderCheckpointSessionDetails.CapturePresenceAssertion(
+        RecorderCheckTargetSelection selection,
+        bool expectEmpty)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        AddStep(
+            _stepFactory.TryCreatePresenceAssertionStep(selection.ValueSnapshot, expectEmpty),
+            selection.Target,
+            expectEmpty ? "Assertion:IsEmpty" : "Assertion:HasValue");
+    }
+
+    void IRecorderCheckpointSessionDetails.CaptureEnabledAssertion(
+        RecorderCheckTargetSelection selection,
+        bool expectedEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        AddStep(
+            _stepFactory.TryCreateEnabledAssertionStep(
+                selection.Target,
+                selection.ValueSnapshot,
+                expectedEnabled),
+            selection.Target,
+            "Assertion:IsEnabled");
+    }
+
     public void CaptureLiteralAssertion(
         string expectedText,
         RecorderComparisonKind comparisonKind)
     {
-        var control = PrepareSemanticCaptureTarget();
+        CaptureLiteralAssertion(PrepareSemanticCaptureTarget(), expectedText, comparisonKind);
+    }
+
+    void IRecorderCheckpointSessionDetails.CaptureLiteralAssertion(
+        RecorderCheckTargetSelection selection,
+        string expectedText,
+        RecorderComparisonKind comparisonKind,
+        RecorderDateExpression? dateExpression)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        AddStep(
+            _stepFactory.TryCreateLiteralAssertionStep(
+                selection.ValueSnapshot,
+                expectedText,
+                comparisonKind,
+                dateExpression),
+            selection.Target,
+            "Assertion:Literal");
+    }
+
+    private void CaptureLiteralAssertion(
+        Control? control,
+        string expectedText,
+        RecorderComparisonKind comparisonKind)
+    {
         AddStep(
             _stepFactory.TryCreateLiteralAssertionStep(control, expectedText, comparisonKind),
             control,
             "Assertion:Literal");
+    }
+
+    private void CompleteCheckTargetSelection(
+        Control target,
+        IReadOnlyList<Control>? visualCandidates = null)
+    {
+        _pendingCheckTargetControl = null;
+        _pendingCheckTargetCandidates = Array.Empty<Control>();
+        _isCheckTargetSelectionActive = false;
+        var selectedTarget = target;
+        Control? configuredTarget = null;
+        RecorderSemanticValueSnapshot? snapshot = null;
+        string? error = null;
+        var configuredSnapshotCaptured = visualCandidates is { Count: > 0 }
+            && _stepFactory.TryCaptureConfiguredSemanticValueSnapshot(
+                visualCandidates,
+                out configuredTarget,
+                out snapshot,
+                out error);
+        if (configuredSnapshotCaptured)
+        {
+            selectedTarget = configuredTarget ?? target;
+        }
+        else if (string.IsNullOrWhiteSpace(error)
+                 && visualCandidates is { Count: > 0 }
+                 && TryCaptureDisabledVisualSemanticValueSnapshot(
+                     target,
+                     visualCandidates,
+                     out var disabledTarget,
+                     out snapshot,
+                     out error))
+        {
+            selectedTarget = disabledTarget ?? target;
+        }
+        else if (string.IsNullOrWhiteSpace(error))
+        {
+            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
+        }
+        else
+        {
+            selectedTarget = configuredTarget ?? target;
+        }
+
+        CheckTargetSelected?.Invoke(
+            this,
+            new RecorderCheckTargetSelectedEventArgs(
+                new RecorderCheckTargetSelection(
+                    selectedTarget,
+                    snapshot,
+                    error,
+                    selectedTarget.IsEffectivelyEnabled)));
+    }
+
+    private bool TryCaptureDisabledVisualSemanticValueSnapshot(
+        Control eventTarget,
+        IReadOnlyList<Control> visualCandidates,
+        out Control? resolvedTarget,
+        out RecorderSemanticValueSnapshot? snapshot,
+        out string? error)
+    {
+        resolvedTarget = null;
+        snapshot = null;
+        error = string.Empty;
+        Control? failedTarget = null;
+        string? failure = null;
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var candidates = visualCandidates
+            .Select(static candidate => ResolveInteractionOwner(candidate) ?? candidate)
+            .Where(candidate => !ReferenceEquals(candidate, eventTarget)
+                                && !candidate.IsEffectivelyEnabled
+                                && visited.Add(candidate))
+            .OrderByDescending(static candidate => candidate.GetVisualAncestors().Count());
+
+        foreach (var candidate in candidates)
+        {
+            if (_stepFactory.TryCaptureSemanticValueSnapshot(candidate, out snapshot, out var candidateError))
+            {
+                resolvedTarget = candidate;
+                error = string.Empty;
+                return true;
+            }
+
+            if (failedTarget is null && !string.IsNullOrWhiteSpace(candidateError))
+            {
+                failedTarget = candidate;
+                failure = candidateError;
+            }
+        }
+
+        if (failedTarget is null)
+        {
+            return false;
+        }
+
+        resolvedTarget = failedTarget;
+        error = failure;
+        return true;
+    }
+
+    private void CancelCheckTargetSelectionCore()
+    {
+        _pendingCheckTargetControl = null;
+        _pendingCheckTargetCandidates = Array.Empty<Control>();
+        _isCheckTargetSelectionActive = false;
+    }
+
+    private static List<Control> ResolveCheckTargetCandidates(
+        Control? eventTarget,
+        Control positionRoot,
+        Point position)
+    {
+        var candidates = new List<Control>();
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        AddCheckTargetAndRelations(eventTarget, candidates, visited);
+
+        foreach (var candidate in positionRoot
+                     .GetInputElementsAt(position, enabledElementsOnly: false)
+                     .OfType<Control>())
+        {
+            AddCheckTargetAndRelations(candidate, candidates, visited);
+        }
+
+        return candidates;
+    }
+
+    private static void AddCheckTargetAndRelations(
+        Control? source,
+        ICollection<Control> candidates,
+        ISet<Control> visited)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        var queue = new Queue<Control>();
+        queue.Enqueue(source);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            if (!visited.Add(current))
+            {
+                continue;
+            }
+
+            candidates.Add(current);
+            if (current.GetVisualParent() is Control visualParent)
+            {
+                queue.Enqueue(visualParent);
+            }
+
+            if (current is ILogical { LogicalParent: Control logicalParent })
+            {
+                queue.Enqueue(logicalParent);
+            }
+
+            if (current is StyledElement { TemplatedParent: Control templatedParent })
+            {
+                queue.Enqueue(templatedParent);
+            }
+
+            if (current is Popup { PlacementTarget: Control placementTarget })
+            {
+                queue.Enqueue(placementTarget);
+            }
+        }
     }
 
     private Control? PrepareSemanticCaptureTarget()
@@ -3086,14 +3557,35 @@ internal sealed class RecorderSession :
 
     private void RegisterPointerInput(Control? control)
     {
+        BeginNewCompositeInteraction(control);
+        _pendingGridComboSelectionContext = control is ComboBox or ListBox
+            ? _stepFactory.ResolveGridComboSelectionContext(control)
+            : null;
         _recentPointerControl = control;
         _recentPointerAt = DateTimeOffset.UtcNow;
     }
 
     private void RegisterKeyboardInput(Control control)
     {
+        BeginNewCompositeInteraction(control);
+        _pendingGridComboSelectionContext = control is ComboBox or ListBox
+            ? _stepFactory.ResolveGridComboSelectionContext(control)
+            : null;
         _recentKeyboardControl = control;
         _recentKeyboardAt = DateTimeOffset.UtcNow;
+    }
+
+    private void BeginNewCompositeInteraction(Control? control)
+    {
+        if (_completedCompositeSelection?.Sources.Any(source => ReferenceEquals(control, source)) == true)
+        {
+            _completedCompositeSelection = null;
+        }
+    }
+
+    private bool ShouldSuppressCompletedCompositeEvent(Control source)
+    {
+        return _completedCompositeSelection?.Sources.Any(candidate => ReferenceEquals(source, candidate)) == true;
     }
 
     private bool WasRecentlyTriggeredByUser(Control control)
@@ -3214,6 +3706,8 @@ internal sealed class RecorderSession :
         Control ActionSource,
         IReadOnlyList<string> SelectedValues,
         DateTimeOffset CapturedAt);
+
+    private sealed record CompletedCompositeSelection(IReadOnlyList<Control> Sources);
 
     private static bool IsPickerTemplateButton(Control? control)
     {
@@ -3614,8 +4108,20 @@ internal sealed class RecorderSession :
 
         if (step.ActionKind == RecordedActionKind.AssertValue)
         {
+            var target = $"{step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)}";
+            if (step.ComparisonKind == RecorderComparisonKind.HasValue)
+            {
+                return $"Assert {target} has value";
+            }
+
+            if (step.ComparisonKind == RecorderComparisonKind.IsEmpty)
+            {
+                return $"Assert {target} is empty";
+            }
+
             var comparison = step.ComparisonKind switch
             {
+                RecorderComparisonKind.NotEqual => "does not equal",
                 RecorderComparisonKind.Contains => "contains",
                 RecorderComparisonKind.Equivalent => "has the same items as",
                 _ => "equals"
@@ -3625,7 +4131,7 @@ internal sealed class RecorderSession :
                     .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId)?.VariableName
                     ?? checkpointId.ToString("N"))
                 : "expected literal";
-            return $"Assert {step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)} {comparison} {expected}";
+            return $"Assert {target} {comparison} {expected}";
         }
 
         return step.ValidationStatus switch

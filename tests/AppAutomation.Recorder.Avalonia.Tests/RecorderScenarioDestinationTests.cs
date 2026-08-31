@@ -8,7 +8,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel]
+[NotInParallel("RecorderOverlay")]
 public sealed class RecorderScenarioDestinationTests
 {
     [Test]

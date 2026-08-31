@@ -19,6 +19,7 @@ public sealed class ColorPickerControlTests
             await Assert.That(fixture.Current.Text).IsEqualTo("#FF336699");
             await Assert.That(string.Join(" > ", fixture.Actions))
                 .IsEqualTo("Open > Enter:#FF336699 > Confirm");
+            await Assert.That(fixture.RootResolutionCount).IsEqualTo(0);
         }
     }
 
@@ -47,7 +48,11 @@ public sealed class ColorPickerControlTests
 
         public ColorPickerFixture()
         {
-            Root = new FakeAvailability("AccentColor") { IsAvailable = true };
+            Root = new FakeAvailability("AccentColor")
+            {
+                IsAvailable = true,
+                IsEnabled = false
+            };
             Popup = new FakeAvailability("AccentColorPopup");
             Current = new FakeTextBox("AccentColorValue", "#FF000000", Actions);
             Custom = new FakeTextBox("AccentColorCustom", string.Empty, Actions);
@@ -91,6 +96,8 @@ public sealed class ColorPickerControlTests
 
         public ColorPickerPage Page { get; }
 
+        public int RootResolutionCount { get; private set; }
+
         public UiRuntimeCapabilities Capabilities { get; } = new("color-picker-test");
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
@@ -98,7 +105,7 @@ public sealed class ColorPickerControlTests
         {
             object control = definition.LocatorValue switch
             {
-                "AccentColor" when typeof(TControl) == typeof(IUiControl) => Root,
+                "AccentColor" when typeof(TControl) == typeof(IUiControl) => ResolveRoot(),
                 "AccentColorValue" when typeof(TControl) == typeof(ITextBoxControl) => Current,
                 "AccentColorCustom" when typeof(TControl) == typeof(ITextBoxControl) => Custom,
                 "AccentColorOpen" when typeof(TControl) == typeof(IButtonControl) => Open,
@@ -108,6 +115,12 @@ public sealed class ColorPickerControlTests
                     $"Unexpected control '{typeof(TControl).Name}:{definition.LocatorValue}'.")
             };
             return (TControl)control;
+        }
+
+        private FakeAvailability ResolveRoot()
+        {
+            RootResolutionCount++;
+            return Root;
         }
     }
 
@@ -163,7 +176,7 @@ public sealed class ColorPickerControlTests
 
         public string Name => AutomationId;
 
-        public bool IsEnabled => true;
+        public bool IsEnabled { get; set; } = true;
 
         public bool IsAvailable { get; set; }
     }

@@ -78,6 +78,7 @@ public sealed class RecorderMultiSelectCaptureTests
         using (Assert.Multiple())
         {
             await Assert.That(session.StepJournal.Count).IsEqualTo(1);
+            await Assert.That(session.StepJournal[0].StatusMessage).DoesNotContain("adapter-required");
             await Assert.That(session.StepJournal[0].Preview).Contains(expectedCommand);
             await Assert.That(session.StepJournal[0].Preview).DoesNotContain("Page.SetChecked");
             await Assert.That(session.StepJournal[0].Preview).DoesNotContain("Page.ClickButton");

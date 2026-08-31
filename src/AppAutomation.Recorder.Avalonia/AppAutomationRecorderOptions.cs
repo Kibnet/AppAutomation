@@ -61,6 +61,8 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<RecorderTimePickerHint> TimePickerHints { get; } = new List<RecorderTimePickerHint>();
 
+    public IList<RecorderDatePickerHint> DatePickerHints { get; } = new List<RecorderDatePickerHint>();
+
     public IList<RecorderSingleSelectHint> SingleSelectHints { get; } = new List<RecorderSingleSelectHint>();
 
     public IList<RecorderColorPickerHint> ColorPickerHints { get; } = new List<RecorderColorPickerHint>();
@@ -83,6 +85,9 @@ public sealed class AppAutomationRecorderOptions
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
 
     public IList<IRecorderAssertionExtractor> AssertionExtractors { get; } = new List<IRecorderAssertionExtractor>();
+
+    public IList<IRecorderSemanticValueResolver> SemanticValueResolvers { get; } =
+        new List<IRecorderSemanticValueResolver>();
 }
 
 public sealed record RecordedScenarioDestination(
@@ -200,6 +205,12 @@ public sealed record RecorderComboBoxFilterHint(
 public sealed record RecorderTimePickerHint(
     string LocatorValue,
     TimePickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderDatePickerHint(
+    string LocatorValue,
+    DatePickerParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 

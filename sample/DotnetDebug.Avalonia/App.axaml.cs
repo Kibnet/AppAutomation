@@ -115,6 +115,13 @@ public partial class App : Application
             RowIdentityColumnPropertyNames = ["Key"]
         });
         options.GridHints.Add(new RecorderGridHint(
+            "GridComboAutomationBridge",
+            "GridComboAutomationBridge",
+            ["Key", "State"])
+        {
+            RowIdentityColumnPropertyNames = ["Key"]
+        });
+        options.GridHints.Add(new RecorderGridHint(
             "SearchPickerGridAutomationBridge",
             "SearchPickerGridAutomationBridge",
             ["Key", "SelectedValue"])

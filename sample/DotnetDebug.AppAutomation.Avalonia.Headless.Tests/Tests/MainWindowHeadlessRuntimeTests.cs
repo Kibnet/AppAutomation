@@ -56,6 +56,9 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                     "ArmGridAutomationBridge",
                     ["Key", "Value", "Color", "State"])
                 .WithGridColumns(
+                    "GridComboAutomationBridge",
+                    ["Key", "State"])
+                .WithGridColumns(
                     "SearchPickerGridAutomationBridge",
                     ["Key", "SelectedValue"])
                 .WithDateRangeFilter(

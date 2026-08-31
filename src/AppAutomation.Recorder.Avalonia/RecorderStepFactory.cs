@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Reflection;
 using AppAutomation.Abstractions;
 using Avalonia;
 using Avalonia.Automation;
@@ -13,6 +14,10 @@ internal sealed class RecorderStepFactory
 {
     internal const string NoGridActionHintMessage = "Recorder does not have a grid action hint for this source.";
     internal const string NoGridSearchPickerHintMessage = "Recorder does not have a grid search picker hint for this editor.";
+    private static readonly string[] GridRowContextPropertyNames = ["Row", "RowData", "DataItem", "Item"];
+    private static readonly string[] GridColumnContextPropertyNames = ["FieldName", "ColumnName", "PropertyName"];
+    private static readonly string[] NestedGridColumnContextPropertyNames = ["FieldName", "ColumnName", "PropertyName", "Name"];
+    private static readonly string[] GridCellValueContextPropertyNames = ["Value", "CellValue", "DisplayValue"];
 
     private readonly AppAutomationRecorderOptions _options;
     private readonly Func<Control?>? _validationRootProvider;
@@ -34,7 +39,7 @@ internal sealed class RecorderStepFactory
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _validationRootProvider = validationRootProvider;
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
-        _stepValidator = new RecorderStepValidator();
+        _stepValidator = new RecorderStepValidator(options);
         _assertionExtractors = CreateAssertionExtractors(options);
     }
 
@@ -327,6 +332,34 @@ internal sealed class RecorderStepFactory
             ExtractSelectionText(results.SelectedItem));
     }
 
+    public GridComboSelectionContextResolution ResolveGridComboSelectionContext(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return TryResolveGridComboSelectionContext(source);
+    }
+
+    public GridComboSelectionCaptureResult TryCreateGridComboSelectionStep(
+        ComboBox results,
+        GridComboSelectionContextResolution? preparedContext = null)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        return TryCreateGridComboSelectionStepCore(
+            results,
+            ExtractSelectionText(results.SelectedItem),
+            preparedContext);
+    }
+
+    public GridComboSelectionCaptureResult TryCreateGridComboSelectionStep(
+        ListBox results,
+        GridComboSelectionContextResolution? preparedContext = null)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        return TryCreateGridComboSelectionStepCore(
+            results,
+            ExtractSelectionText(results.SelectedItem),
+            preparedContext);
+    }
+
     public ColorPickerCaptureResult TryCreateColorPickerStep(ComboBox palette)
     {
         ArgumentNullException.ThrowIfNull(palette);
@@ -522,6 +555,13 @@ internal sealed class RecorderStepFactory
             && MatchesLocator(current, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)));
     }
 
+    public bool ShouldSuppressGridComboSelectionButton(Control? source)
+    {
+        return EnumerateRelatedControls(source)
+            .OfType<ComboBox>()
+            .Any(comboBox => ResolveGridComboSelectionContext(comboBox).IsConfigured);
+    }
+
     public StepCreationResult TryCreateSearchPickerStep(
         TextBox searchInput,
         ComboBox results,
@@ -659,6 +699,9 @@ internal sealed class RecorderStepFactory
                     hint.Parts.SearchButtonLocator,
                     hint.Parts.HistoryOpenButtonLocator))
             || _options.TimePickerHints.Any(hint =>
+                !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
+                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
+            || _options.DatePickerHints.Any(hint =>
                 !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
                 && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator));
     }
@@ -1100,6 +1143,7 @@ internal sealed class RecorderStepFactory
             || MatchesNumericRangeTextPart(textBox)
             || MatchesFolderExportPathPart(textBox)
             || MatchesTimePickerInputPart(textBox)
+            || MatchesDatePickerValuePart(textBox)
             || ShouldSuppressSingleSelectInput(textBox)
             || _options.ColorPickerHints.Any(hint => IsColorPickerInput(textBox, hint))
             || MatchesGridEditValuePart(textBox);
@@ -1583,6 +1627,12 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("DatePicker does not have a selected date.");
         }
 
+        var configuredResult = TryCreateConfiguredDatePickerStep(datePicker, selectedDate.Date);
+        if (configuredResult is not null)
+        {
+            return configuredResult;
+        }
+
         var locatorResult = _selectorResolver.Resolve(datePicker, UiControlType.DateTimePicker);
         if (!locatorResult.Success || locatorResult.Control is null)
         {
@@ -1611,6 +1661,19 @@ internal sealed class RecorderStepFactory
             return StepCreationResult.Unsupported("Calendar does not have a selected date.");
         }
 
+        return TryCreateCalendarStep(calendar, selectedDate);
+    }
+
+    internal StepCreationResult TryCreateCalendarStep(Calendar calendar, DateTime selectedDate)
+    {
+        ArgumentNullException.ThrowIfNull(calendar);
+
+        var configuredResult = TryCreateConfiguredDatePickerStep(calendar, selectedDate.Date);
+        if (configuredResult is not null)
+        {
+            return configuredResult;
+        }
+
         var locatorResult = _selectorResolver.Resolve(calendar, UiControlType.Calendar);
         if (!locatorResult.Success || locatorResult.Control is null)
         {
@@ -1628,6 +1691,48 @@ internal sealed class RecorderStepFactory
                 ValidationMessage: locatorResult.ValidationMessage,
                 CanPersist: locatorResult.CanPersist),
             locatorResult.Message);
+    }
+
+    private StepCreationResult? TryCreateConfiguredDatePickerStep(Control source, DateTime selectedDate)
+    {
+        var hints = FindDatePickerHints(source).ToArray();
+        if (hints.Length == 0)
+        {
+            return null;
+        }
+
+        if (hints.Length > 1)
+        {
+            return StepCreationResult.Unsupported(
+                $"Date selection matches {hints.Length} recorder hints; configure unique date-picker part locators.");
+        }
+
+        var hint = hints[0];
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.DateTimePicker,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            source,
+            warning: null);
+        var logicalValidation = _selectorResolver.ResolveExisting(descriptor);
+        if (!logicalValidation.CanPersist)
+        {
+            return StepCreationResult.Unsupported(
+                logicalValidation.ValidationMessage
+                ?? $"Date-picker locator '{hint.LocatorKind}:{hint.LocatorValue}' is invalid.");
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.SetDate,
+                descriptor,
+                DateValue: selectedDate.Date,
+                ValidationStatus: logicalValidation.ValidationStatus,
+                ValidationMessage: logicalValidation.ValidationMessage,
+                CanPersist: true),
+            "Recorded configured date-picker selection.");
     }
 
     public StepCreationResult TryCreateAssertionStep(Control? source, RecorderAssertionMode mode)
@@ -1704,6 +1809,194 @@ internal sealed class RecorderStepFactory
         return true;
     }
 
+    internal bool TryCaptureSemanticValueSnapshot(
+        Control? source,
+        out RecorderSemanticValueSnapshot? snapshot,
+        out string? error)
+    {
+        snapshot = null;
+        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out error))
+        {
+            return false;
+        }
+
+        return TryCreateSemanticValueSnapshot(source!, candidate, out snapshot, out error);
+    }
+
+    internal bool TryCaptureConfiguredSemanticValueSnapshot(
+        IReadOnlyList<Control> sources,
+        out Control? resolvedSource,
+        out RecorderSemanticValueSnapshot? snapshot,
+        out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        resolvedSource = null;
+        snapshot = null;
+        error = string.Empty;
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var candidates = sources
+            .Where(static source => source is not null)
+            .Where(source => visited.Add(source))
+            .ToArray();
+        var resolvedCandidates = new List<(Control Source, RecorderSemanticValueSnapshot Snapshot)>();
+        Control? firstFailedSource = null;
+        string? firstError = null;
+        Control? definitiveFailedSource = null;
+        string? definitiveError = null;
+
+        foreach (var source in candidates)
+        {
+            if (TryResolveSemanticValue(
+                    source,
+                    requireLiteral: false,
+                    out var candidate,
+                    out var resolverError,
+                    out var isDefinitiveFailure))
+            {
+                if (TryCreateSemanticValueSnapshot(source, candidate, out var candidateSnapshot, out var snapshotError))
+                {
+                    resolvedCandidates.Add((source, candidateSnapshot!));
+                    continue;
+                }
+
+                firstFailedSource ??= source;
+                firstError ??= snapshotError;
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(resolverError))
+            {
+                firstFailedSource ??= source;
+                firstError ??= resolverError;
+                if (isDefinitiveFailure)
+                {
+                    definitiveFailedSource ??= source;
+                    definitiveError ??= resolverError;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(definitiveError))
+        {
+            resolvedSource = definitiveFailedSource;
+            error = definitiveError;
+            return false;
+        }
+
+        if (resolvedCandidates.Count == 0)
+        {
+            resolvedSource = firstFailedSource;
+            error = firstError ?? string.Empty;
+            return false;
+        }
+
+        var firstResolved = resolvedCandidates[0];
+        var conflicting = resolvedCandidates
+            .Skip(1)
+            .FirstOrDefault(candidate => !RefersToSameSemanticTarget(
+                firstResolved.Snapshot,
+                candidate.Snapshot));
+        if (conflicting != default)
+        {
+            error = "Candidate graph resolved multiple logical targets: "
+                + $"'{DescribeSemanticTarget(firstResolved.Snapshot)}' and "
+                + $"'{DescribeSemanticTarget(conflicting.Snapshot)}'.";
+            return false;
+        }
+
+        resolvedSource = firstResolved.Source;
+        snapshot = firstResolved.Snapshot;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool RefersToSameSemanticTarget(
+        RecorderSemanticValueSnapshot left,
+        RecorderSemanticValueSnapshot right)
+    {
+        var leftStep = left.Prototype;
+        var rightStep = right.Prototype;
+        return leftStep.Control.ControlType == rightStep.Control.ControlType
+            && leftStep.Control.LocatorKind == rightStep.Control.LocatorKind
+            && string.Equals(
+                leftStep.Control.LocatorValue,
+                rightStep.Control.LocatorValue,
+                StringComparison.Ordinal)
+            && leftStep.RowIndex == rightStep.RowIndex
+            && leftStep.ColumnIndex == rightStep.ColumnIndex
+            && string.Equals(
+                leftStep.GridTargetColumnName,
+                rightStep.GridTargetColumnName,
+                StringComparison.Ordinal)
+            && GridRowConditionsEqual(leftStep.GridRowConditions, rightStep.GridRowConditions);
+    }
+
+    private static bool GridRowConditionsEqual(
+        IReadOnlyList<RecordedGridRowCondition>? left,
+        IReadOnlyList<RecordedGridRowCondition>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!string.Equals(left[index].ColumnName, right[index].ColumnName, StringComparison.Ordinal)
+                || !string.Equals(left[index].Value, right[index].Value, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string DescribeSemanticTarget(RecorderSemanticValueSnapshot snapshot)
+    {
+        var step = snapshot.Prototype;
+        var target = $"{step.Control.LocatorKind}:{step.Control.LocatorValue}";
+        if (step.GridRowConditions is { Count: > 0 })
+        {
+            var row = string.Join(
+                ", ",
+                step.GridRowConditions.Select(condition => $"{condition.ColumnName}={condition.Value}"));
+            return $"{target}[{row}; {step.GridTargetColumnName}]";
+        }
+
+        return step.RowIndex is { } rowIndex && step.ColumnIndex is { } columnIndex
+            ? $"{target}[{rowIndex}, {columnIndex}]"
+            : target;
+    }
+
+    private bool TryCreateSemanticValueSnapshot(
+        Control source,
+        SemanticValueCandidate candidate,
+        out RecorderSemanticValueSnapshot? snapshot,
+        out string? error)
+    {
+        snapshot = null;
+        var prototypeResult = TryCreateSemanticSnapshotPrototype(source!, candidate);
+        if (!prototypeResult.Success || prototypeResult.Step is null)
+        {
+            error = prototypeResult.Message;
+            return false;
+        }
+
+        var description = new RecorderSemanticValueDescription(
+            candidate.ValueKind,
+            $"{candidate.Control.ProposedPropertyName}Checkpoint",
+            FormatLiteralText(candidate));
+        snapshot = new RecorderSemanticValueSnapshot(prototypeResult.Step, description);
+        error = string.Empty;
+        return true;
+    }
+
     internal StepCreationResult TryCreateCheckpointStep(Control? source, string? variableName = null)
     {
         if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out var error))
@@ -1731,9 +2024,30 @@ internal sealed class RecorderStepFactory
             : CreateStep(source!, step, "Remembered semantic value for replay-time checkpoint.");
     }
 
+    internal StepCreationResult TryCreateCheckpointStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        string? variableName = null)
+    {
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.CaptureCheckpoint,
+            candidate,
+            checkpointId: Guid.NewGuid(),
+            checkpointVariableName: string.IsNullOrWhiteSpace(variableName)
+                ? snapshot.Description.SuggestedCheckpointName
+                : variableName.Trim());
+        return CreateStepFromSnapshot(snapshot, step, "Remembered semantic value for replay-time checkpoint.");
+    }
+
     internal StepCreationResult TryCreateCheckpointAssertionStep(
         Control? source,
-        RecorderCheckpointOption checkpoint)
+        RecorderCheckpointOption checkpoint,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out var error))
@@ -1747,9 +2061,14 @@ internal sealed class RecorderStepFactory
                 $"Selected value is {candidate.ValueKind}, but checkpoint '{checkpoint.VariableName}' is {checkpoint.ValueKind}.");
         }
 
-        var comparison = candidate.ValueKind == RecorderValueKind.StringSet
-            ? RecorderComparisonKind.Equivalent
-            : RecorderComparisonKind.Equal;
+        if (!TryNormalizeCheckpointComparison(
+                candidate.ValueKind,
+                comparisonKind,
+                out var comparison,
+                out error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
         var step = CreateSemanticValueStep(
             RecordedActionKind.AssertValue,
             candidate,
@@ -1766,6 +2085,62 @@ internal sealed class RecorderStepFactory
                 grid.ColumnIndex,
                 excludeTargetColumnFromIdentity: true)
             : CreateStep(source!, step, $"Added assertion against checkpoint '{checkpoint.VariableName}'.");
+    }
+
+    internal StepCreationResult TryCreateCheckpointAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderCheckpointOption checkpoint,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (candidate.ValueKind != checkpoint.ValueKind)
+        {
+            return StepCreationResult.Unsupported(
+                $"Selected value is {candidate.ValueKind}, but checkpoint '{checkpoint.VariableName}' is {checkpoint.ValueKind}.");
+        }
+
+        if (!TryNormalizeCheckpointComparison(
+                candidate.ValueKind,
+                comparisonKind,
+                out var comparison,
+                out var error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: comparison,
+            expectedCheckpointId: checkpoint.CheckpointId);
+        return CreateStepFromSnapshot(snapshot, step, $"Added assertion against checkpoint '{checkpoint.VariableName}'.");
+    }
+
+    private static bool TryNormalizeCheckpointComparison(
+        RecorderValueKind valueKind,
+        RecorderComparisonKind requested,
+        out RecorderComparisonKind normalized,
+        out string error)
+    {
+        if (valueKind == RecorderValueKind.StringSet)
+        {
+            normalized = RecorderComparisonKind.Equivalent;
+            error = requested is RecorderComparisonKind.Equal or RecorderComparisonKind.Equivalent
+                ? string.Empty
+                : "String-set checkpoints support equivalent comparison only.";
+            return string.IsNullOrEmpty(error);
+        }
+
+        normalized = requested;
+        error = requested is RecorderComparisonKind.Equal or RecorderComparisonKind.NotEqual
+            ? string.Empty
+            : $"Checkpoint comparison '{requested}' is not supported for {valueKind} values.";
+        return string.IsNullOrEmpty(error);
     }
 
     internal StepCreationResult TryCreateLiteralAssertionStep(
@@ -1807,6 +2182,127 @@ internal sealed class RecorderStepFactory
             : CreateStep(source!, step, "Added literal value assertion.");
     }
 
+    internal StepCreationResult TryCreateLiteralAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        string expectedText,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal,
+        RecorderDateExpression? dateExpression = null)
+    {
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (!TryApplyLiteralText(candidate, expectedText, out candidate, out var error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        if (candidate.ValueKind == RecorderValueKind.StringSet
+            && comparisonKind == RecorderComparisonKind.Equal)
+        {
+            comparisonKind = RecorderComparisonKind.Equivalent;
+        }
+
+        if (!TryNormalizeLiteralDateExpression(
+                candidate,
+                dateExpression,
+                out dateExpression,
+                out error))
+        {
+            return StepCreationResult.Unsupported(error);
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: comparisonKind,
+            hasExpectedLiteral: true,
+            dateExpression: dateExpression);
+        return CreateStepFromSnapshot(snapshot, step, "Added literal value assertion.");
+    }
+
+    internal StepCreationResult TryCreateHasValueAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot)
+    {
+        return TryCreatePresenceAssertionStep(snapshot, expectEmpty: false);
+    }
+
+    internal StepCreationResult TryCreatePresenceAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        bool expectEmpty)
+    {
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (!RecorderValueAssertions.TryGetHasValueAssertionKind(candidate.ValueKind, out _))
+        {
+            return StepCreationResult.Unsupported(
+                $"A has-value assertion is not meaningful for {candidate.ValueKind} values.");
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: expectEmpty
+                ? RecorderComparisonKind.IsEmpty
+                : RecorderComparisonKind.HasValue);
+        return CreateStepFromSnapshot(
+            snapshot,
+            step,
+            expectEmpty ? "Added empty-value assertion." : "Added has-value assertion.");
+    }
+
+    internal StepCreationResult TryCreateEnabledAssertionStep(
+        Control? source,
+        RecorderSemanticValueSnapshot? valueSnapshot,
+        bool expectedEnabled)
+    {
+        if (source is null)
+        {
+            return StepCreationResult.Unsupported("No control is available for enabled-state assertion capture.");
+        }
+
+        if (valueSnapshot is not null)
+        {
+            var step = new RecordedStep(
+                RecordedActionKind.AssertValue,
+                valueSnapshot.Prototype.Control,
+                BoolValue: expectedEnabled,
+                ValueKind: RecorderValueKind.Boolean,
+                ValueAccessorKind: RecorderValueAccessorKind.IsEnabled,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true);
+            return CreateStepFromSnapshot(valueSnapshot, step, "Added enabled-state assertion.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(source, ClassifyControlType(source));
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        return CreateStep(
+            source,
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                locatorResult.Control,
+                BoolValue: expectedEnabled,
+                ValueKind: RecorderValueKind.Boolean,
+                ValueAccessorKind: RecorderValueAccessorKind.IsEnabled,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true,
+                Warning: locatorResult.Control.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist),
+            "Added enabled-state assertion.");
+    }
+
     private RecordedStep CreateSemanticValueStep(
         RecordedActionKind actionKind,
         SemanticValueCandidate candidate,
@@ -1814,7 +2310,8 @@ internal sealed class RecorderStepFactory
         string? checkpointVariableName = null,
         RecorderComparisonKind? comparisonKind = null,
         Guid? expectedCheckpointId = null,
-        bool hasExpectedLiteral = false)
+        bool hasExpectedLiteral = false,
+        RecorderDateExpression? dateExpression = null)
     {
         return new RecordedStep(
             actionKind,
@@ -1833,11 +2330,177 @@ internal sealed class RecorderStepFactory
             CheckpointId: checkpointId,
             CheckpointVariableName: checkpointVariableName,
             ExpectedCheckpointId: expectedCheckpointId,
-            HasExpectedLiteral: hasExpectedLiteral)
+            HasExpectedLiteral: hasExpectedLiteral,
+            DateExpression: dateExpression)
         {
             GridRowConditions = candidate.GridContext?.RowConditions,
             GridTargetColumnName = candidate.GridContext?.TargetColumnName
         };
+    }
+
+    private static bool TryNormalizeLiteralDateExpression(
+        SemanticValueCandidate candidate,
+        RecorderDateExpression? requested,
+        out RecorderDateExpression? normalized,
+        out string error)
+    {
+        normalized = requested?.ReferenceKind == RecorderDateReferenceKind.Exact
+            ? null
+            : requested;
+        error = string.Empty;
+        if (normalized is null)
+        {
+            return true;
+        }
+
+        if (candidate.ValueKind != RecorderValueKind.Date)
+        {
+            error = "A relative date can only be used with a date assertion.";
+            return false;
+        }
+
+        if (!candidate.DateValue.HasValue)
+        {
+            error = "A relative date cannot be used when the expected date is null.";
+            return false;
+        }
+
+        if (normalized.ReferenceKind != RecorderDateReferenceKind.RelativeToToday)
+        {
+            error = "The requested date reference is not supported.";
+            return false;
+        }
+
+        try
+        {
+            _ = DateTime.Today.AddDays(normalized.DayOffset);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            error = "The relative date is outside the supported range.";
+            return false;
+        }
+    }
+
+    private StepCreationResult TryCreateSemanticSnapshotPrototype(
+        Control source,
+        SemanticValueCandidate candidate)
+    {
+        var step = CreateSemanticValueStep(RecordedActionKind.CaptureCheckpoint, candidate);
+        StepCreationResult result;
+        if (candidate.GridContext is not { } grid)
+        {
+            result = CreateStep(source, step, "Captured semantic value target.");
+        }
+        else if (grid.RowConditions is { Count: > 0 }
+            && !string.IsNullOrWhiteSpace(grid.TargetColumnName))
+        {
+            result = CreateStep(
+                source,
+                step with
+                {
+                    GridRowConditions = grid.RowConditions,
+                    GridTargetColumnName = grid.TargetColumnName
+                },
+                "Captured stable grid value target.");
+        }
+        else if (grid.RowIndex >= 0 && grid.ColumnIndex >= 0)
+        {
+            result = CreateGridStep(
+                source,
+                step,
+                warning: string.Empty,
+                candidate.Control.LocatorValue,
+                candidate.Control.LocatorKind,
+                grid.RowIndex,
+                grid.ColumnIndex,
+                excludeTargetColumnFromIdentity: true);
+        }
+        else
+        {
+            return StepCreationResult.Unsupported(
+                "Grid value resolver must provide a stable row selector and target column.");
+        }
+
+        if (!result.Success || result.Step is null)
+        {
+            return result;
+        }
+
+        if (candidate.GridContext is not null
+            && (result.Step.GridRowConditions is not { Count: > 0 }
+                || string.IsNullOrWhiteSpace(result.Step.GridTargetColumnName)))
+        {
+            return StepCreationResult.Unsupported(
+                "Configure RowIdentityColumnPropertyNames before using Check for a grid value that must survive sorting, insertion, or editor replacement.");
+        }
+
+        var selectorValidation = _selectorResolver.ResolveExisting(result.Step);
+        if (!selectorValidation.CanPersist)
+        {
+            return StepCreationResult.Unsupported(
+                selectorValidation.ValidationMessage
+                ?? "The logical semantic value target could not be validated.");
+        }
+
+        return StepCreationResult.Created(
+            result.Step with
+            {
+                ValidationStatus = selectorValidation.ValidationStatus,
+                ValidationMessage = selectorValidation.ValidationMessage,
+                CanPersist = true
+            },
+            result.Message);
+    }
+
+    private static SemanticValueCandidate CreateCandidate(RecorderSemanticValueSnapshot snapshot)
+    {
+        var prototype = snapshot.Prototype;
+        GridValueContext? gridContext = null;
+        if (prototype.GridRowConditions is not null
+            || prototype.RowIndex.HasValue
+            || prototype.ColumnIndex.HasValue)
+        {
+            gridContext = new GridValueContext(
+                prototype.RowIndex ?? -1,
+                prototype.ColumnIndex ?? -1,
+                prototype.GridRowConditions,
+                prototype.GridTargetColumnName);
+        }
+
+        return new SemanticValueCandidate(
+            prototype.Control,
+            prototype.ValueKind ?? throw new InvalidOperationException("Semantic value snapshot does not contain a value kind."),
+            prototype.ValueAccessorKind ?? throw new InvalidOperationException("Semantic value snapshot does not contain an accessor kind."),
+            prototype.StringValue,
+            prototype.BoolValue,
+            prototype.DoubleValue,
+            prototype.DateValue,
+            prototype.TimeValue,
+            prototype.StringValues,
+            gridContext);
+    }
+
+    private static StepCreationResult CreateStepFromSnapshot(
+        RecorderSemanticValueSnapshot snapshot,
+        RecordedStep step,
+        string message)
+    {
+        var prototype = snapshot.Prototype;
+        return StepCreationResult.Created(
+            step with
+            {
+                Warning = prototype.Warning,
+                ValidationStatus = prototype.ValidationStatus,
+                ValidationMessage = prototype.ValidationMessage,
+                CanPersist = prototype.CanPersist,
+                StepId = Guid.NewGuid(),
+                LastValidationAt = DateTimeOffset.UtcNow,
+                GridRowConditions = prototype.GridRowConditions,
+                GridTargetColumnName = prototype.GridTargetColumnName
+            },
+            message);
     }
 
     private bool TryResolveSemanticValue(
@@ -1846,14 +2509,86 @@ internal sealed class RecorderStepFactory
         out SemanticValueCandidate candidate,
         out string error)
     {
+        return TryResolveSemanticValue(
+            source,
+            requireLiteral,
+            out candidate,
+            out error,
+            out _);
+    }
+
+    private bool TryResolveSemanticValue(
+        Control? source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error,
+        out bool isDefinitiveFailure)
+    {
         candidate = null!;
+        isDefinitiveFailure = false;
         if (source is null)
         {
             error = "No control is available for value capture.";
             return false;
         }
 
+        if (TryResolveConfiguredSemanticValue(
+                source,
+                requireLiteral,
+                out candidate,
+                out error,
+                out var configuredResolverHandled))
+        {
+            return true;
+        }
+
+        if (configuredResolverHandled)
+        {
+            isDefinitiveFailure = true;
+            return false;
+        }
+
+        if (TryResolveGridSearchPickerSemanticValue(source, requireLiteral, out candidate, out error))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
+        if (TryResolveGridEditorSemanticValue(source, requireLiteral, out candidate, out error))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
         if (TryResolveGridSemanticValue(source, requireLiteral, out candidate, out error))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
+        if (TryResolveNotificationSemanticValue(source, requireLiteral, out candidate, out error))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+
+        if (TryResolveDatePickerSemanticValue(source, requireLiteral, out candidate, out error))
         {
             return true;
         }
@@ -2050,6 +2785,411 @@ internal sealed class RecorderStepFactory
         return TryResolvePrimitiveSemanticValue(source, requireLiteral, out candidate, out error);
     }
 
+    private bool TryResolveNotificationSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        error = string.Empty;
+        var resolution = ResolveNotificationTextHint(source);
+        if (!resolution.IsConfigured)
+        {
+            return false;
+        }
+
+        if (!resolution.Success)
+        {
+            error = resolution.Error ?? "Configured notification does not expose a readable text part.";
+            return false;
+        }
+
+        var text = ExtractTextValue(resolution.TextControl!);
+        if (requireLiteral && text is null)
+        {
+            error = "Notification does not expose its current text.";
+            return false;
+        }
+
+        var hint = resolution.Hint!;
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.LocatorValue,
+                UiControlType.Notification,
+                hint.LocatorKind,
+                hint.FallbackToName,
+                resolution.NotificationRoot!,
+                warning: null),
+            RecorderValueKind.Text,
+            RecorderValueAccessorKind.Text,
+            StringValue: text);
+        return true;
+    }
+
+    private bool TryResolveDatePickerSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        error = string.Empty;
+        var hints = _options.DatePickerHints
+            .Where(hint => IsDatePickerPart(source, hint))
+            .ToArray();
+        if (hints.Length == 0)
+        {
+            return false;
+        }
+
+        if (hints.Length > 1)
+        {
+            error = $"Value source matches {hints.Length} date-picker hints; configure unique part locators.";
+            return false;
+        }
+
+        var hint = hints[0];
+        var selectedDate = TryReadDatePickerCommittedValue(hint);
+        if (requireLiteral && selectedDate is null)
+        {
+            error = "Date picker does not expose a committed selected date.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.LocatorValue,
+                UiControlType.DateTimePicker,
+                hint.LocatorKind,
+                hint.FallbackToName,
+                source,
+                warning: null),
+            RecorderValueKind.Date,
+            RecorderValueAccessorKind.SelectedDate,
+            DateValue: selectedDate);
+        return true;
+    }
+
+    private DateTime? TryReadDatePickerCommittedValue(RecorderDatePickerHint hint)
+    {
+        if (!TryFindControl(hint.Parts.ValueLocator, hint.Parts.LocatorKind, out var valueControl))
+        {
+            return null;
+        }
+
+        return valueControl switch
+        {
+            DatePicker { SelectedDate: { } selectedDate } => selectedDate.DateTime.Date,
+            TextBox textBox when TryParseDate(textBox.Text, out var value) => value.Date,
+            TextBlock textBlock when TryParseDate(textBlock.Text, out var value) => value.Date,
+            Label label when TryParseDate(label.Content?.ToString(), out var value) => value.Date,
+            _ => null
+        };
+    }
+
+    private static bool TryParseDate(string? text, out DateTime value)
+    {
+        var candidate = text?.Trim();
+        return DateTime.TryParse(
+                candidate,
+                System.Globalization.CultureInfo.CurrentCulture,
+                System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+                out value)
+            || DateTime.TryParse(
+                candidate,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+                out value);
+    }
+
+    private bool TryResolveConfiguredSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error,
+        out bool resolverHandled)
+    {
+        candidate = null!;
+        error = string.Empty;
+        resolverHandled = false;
+        foreach (var resolver in _options.SemanticValueResolvers)
+        {
+            var resolution = resolver.Resolve(source)
+                ?? RecorderSemanticValueResolution.Failed(
+                    $"Semantic value resolver '{resolver.GetType().Name}' returned no resolution result.");
+            if (resolution.Kind == RecorderSemanticValueResolutionKind.NotHandled)
+            {
+                continue;
+            }
+
+            resolverHandled = true;
+            if (resolution.Kind == RecorderSemanticValueResolutionKind.Failed)
+            {
+                error = string.IsNullOrWhiteSpace(resolution.ErrorMessage)
+                    ? $"Semantic value resolver '{resolver.GetType().Name}' failed without a diagnostic."
+                    : resolution.ErrorMessage.Trim();
+                return false;
+            }
+
+            if (resolution.Kind != RecorderSemanticValueResolutionKind.Resolved
+                || resolution.Target is not { } target)
+            {
+                error = $"Semantic value resolver '{resolver.GetType().Name}' returned an invalid resolution result.";
+                return false;
+            }
+
+            if (!TryCreateConfiguredSemanticValueCandidate(source, target, out candidate, out error))
+            {
+                return false;
+            }
+
+            if (requireLiteral && !HasLiteral(candidate))
+            {
+                error = $"Semantic value resolver '{resolver.GetType().Name}' did not provide the current value required for a literal assertion.";
+                return false;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryCreateConfiguredSemanticValueCandidate(
+        Control source,
+        RecorderSemanticValueTarget target,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        if (string.IsNullOrWhiteSpace(target.LocatorValue))
+        {
+            error = "Semantic value target must provide a logical locator.";
+            return false;
+        }
+
+        if (!IsValueAccessorCompatible(target.ValueKind, target.ValueAccessorKind))
+        {
+            error = $"Semantic value accessor '{target.ValueAccessorKind}' is not compatible with value kind '{target.ValueKind}'.";
+            return false;
+        }
+
+        GridValueContext? gridContext = null;
+        if (target.ValueAccessorKind == RecorderValueAccessorKind.GridCellText)
+        {
+            if (target.ControlType != UiControlType.Grid
+                || target.GridContext is not { RowConditions.Count: > 0 } configuredGrid
+                || string.IsNullOrWhiteSpace(configuredGrid.TargetColumnName)
+                || configuredGrid.RowConditions.Any(static condition =>
+                    string.IsNullOrWhiteSpace(condition.ColumnName)))
+            {
+                error = "Grid semantic value target must provide a logical Grid, a stable row selector, and a target column.";
+                return false;
+            }
+
+            var duplicateColumn = configuredGrid.RowConditions
+                .GroupBy(static condition => condition.ColumnName.Trim(), StringComparer.Ordinal)
+                .FirstOrDefault(static group => group.Count() > 1);
+            if (duplicateColumn is not null)
+            {
+                error = $"Grid semantic value target contains duplicate row-selector column '{duplicateColumn.Key}'.";
+                return false;
+            }
+
+            gridContext = new GridValueContext(
+                RowIndex: -1,
+                ColumnIndex: -1,
+                configuredGrid.RowConditions
+                    .Select(static condition => new RecordedGridRowCondition(
+                        condition.ColumnName.Trim(),
+                        condition.Value ?? string.Empty))
+                    .ToArray(),
+                configuredGrid.TargetColumnName.Trim());
+        }
+        else if (target.GridContext is not null)
+        {
+            error = "Only GridCellText semantic values may provide a grid context.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                target.LocatorValue,
+                target.ControlType,
+                target.LocatorKind,
+                target.FallbackToName,
+                source,
+                warning: null),
+            target.ValueKind,
+            target.ValueAccessorKind,
+            StringValue: target.StringValue,
+            BoolValue: target.BoolValue,
+            DoubleValue: target.DoubleValue,
+            DateValue: target.DateValue,
+            TimeValue: target.TimeValue,
+            StringValues: target.StringValues?.ToArray(),
+            GridContext: gridContext);
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool IsValueAccessorCompatible(
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind)
+    {
+        return valueKind switch
+        {
+            RecorderValueKind.Text => accessorKind is RecorderValueAccessorKind.Text or RecorderValueAccessorKind.SelectedItemText,
+            RecorderValueKind.Number => accessorKind == RecorderValueAccessorKind.NumericValue,
+            RecorderValueKind.Boolean => accessorKind is RecorderValueAccessorKind.IsChecked
+                or RecorderValueAccessorKind.IsToggled
+                or RecorderValueAccessorKind.IsSelected
+                or RecorderValueAccessorKind.IsExpanded
+                or RecorderValueAccessorKind.IsEnabled,
+            RecorderValueKind.Date => accessorKind == RecorderValueAccessorKind.SelectedDate,
+            RecorderValueKind.Time => accessorKind == RecorderValueAccessorKind.SelectedTime,
+            RecorderValueKind.Color => accessorKind == RecorderValueAccessorKind.Color,
+            RecorderValueKind.StringSet => accessorKind == RecorderValueAccessorKind.SelectedItems,
+            RecorderValueKind.GridCellText => accessorKind == RecorderValueAccessorKind.GridCellText,
+            _ => false
+        };
+    }
+
+    private bool TryResolveGridSearchPickerSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        error = string.Empty;
+        var matchingHints = _options.GridSearchPickerHints
+            .Where(hint => IsGridSearchPickerPart(source, hint))
+            .ToArray();
+        if (matchingHints.Length == 0)
+        {
+            return false;
+        }
+
+        if (matchingHints.Length != 1)
+        {
+            error = $"Value source matches {matchingHints.Length} grid SearchPicker hints; configure unique source and part locators.";
+            return false;
+        }
+
+        var hint = matchingHints[0];
+        if (!TryResolveGridSearchPickerContext(source, hint, out var rowIndex, out var columnIndex)
+            || !TryResolveGridSearchPickerGridSource(hint, out var gridHint, out var gridSource))
+        {
+            error = "Grid SearchPicker does not expose a resolvable row and column context.";
+            return false;
+        }
+
+        if (columnIndex < 0 || columnIndex >= gridHint.ColumnPropertyNames.Count)
+        {
+            error = "Grid SearchPicker column context is outside the configured grid columns.";
+            return false;
+        }
+
+        string? displayedValue = null;
+        if (TryReadItemsSource(gridSource, out var items)
+            && rowIndex >= 0
+            && rowIndex < items.Count
+            && TryFindControl(hint.TargetGridLocatorValue, hint.TargetGridLocatorKind, out var targetGrid)
+            && TryReadDisplayedGridCellValue(
+                targetGrid,
+                items[rowIndex],
+                rowIndex,
+                columnIndex,
+                gridHint.ColumnPropertyNames[columnIndex],
+                out var value))
+        {
+            displayedValue = value;
+        }
+
+        if (requireLiteral && displayedValue is null)
+        {
+            error = "Grid SearchPicker does not expose a committed displayed value for a literal assertion.";
+            return false;
+        }
+
+        var descriptorSource = TryFindControl(hint.TargetGridLocatorValue, hint.TargetGridLocatorKind, out var displayedGrid)
+            ? displayedGrid
+            : gridSource;
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.TargetGridLocatorValue,
+                UiControlType.Grid,
+                hint.TargetGridLocatorKind,
+                hint.TargetFallbackToName,
+                descriptorSource,
+                warning: null),
+            RecorderValueKind.GridCellText,
+            RecorderValueAccessorKind.GridCellText,
+            StringValue: displayedValue,
+            GridContext: new GridValueContext(rowIndex, columnIndex, null, null));
+        return true;
+    }
+
+    private bool TryResolveGridEditorSemanticValue(
+        Control source,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        error = string.Empty;
+        if (!TryResolveGridEditHint(source, out var hint))
+        {
+            return false;
+        }
+
+        if (hint.RowIndex < 0 || hint.ColumnIndex < 0)
+        {
+            error = "Grid editor does not expose a resolvable row and column context.";
+            return false;
+        }
+
+        string? displayedValue = null;
+        if (TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl))
+        {
+            displayedValue = ExtractTextValue(valueControl)?.Trim();
+            if (displayedValue is null
+                && hint.EditorKind == GridCellEditorKind.Number
+                && TryReadNumericValue(valueControl, out var numericValue))
+            {
+                displayedValue = numericValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        if (requireLiteral && displayedValue is null)
+        {
+            error = "Grid editor does not expose a committed displayed value for a literal assertion.";
+            return false;
+        }
+
+        var descriptorSource = TryFindControl(
+                hint.TargetGridLocatorValue,
+                hint.TargetGridLocatorKind,
+                out var targetGrid)
+            ? targetGrid
+            : source;
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.TargetGridLocatorValue,
+                UiControlType.Grid,
+                hint.TargetGridLocatorKind,
+                hint.TargetFallbackToName,
+                descriptorSource,
+                warning: null),
+            RecorderValueKind.GridCellText,
+            RecorderValueAccessorKind.GridCellText,
+            StringValue: displayedValue,
+            GridContext: new GridValueContext(hint.RowIndex, hint.ColumnIndex, null, null));
+        return true;
+    }
+
     private bool TryResolvePrimitiveSemanticValue(
         Control source,
         bool requireLiteral,
@@ -2057,7 +3197,19 @@ internal sealed class RecorderStepFactory
         out string error)
     {
         candidate = null!;
-        var controlType = ClassifyControlType(source);
+        var controlType = source is TextBox textBox
+            && RecorderSpinnerProxyConfiguration.IsInteractivePart(_options, textBox)
+                ? UiControlType.Spinner
+                : ClassifyControlType(source);
+        var capabilities = RecorderAssertionCapabilities.Get(controlType);
+        if (!capabilities.SupportsSemanticValue)
+        {
+            error = capabilities.RequiresConcreteTarget
+                ? $"Control '{source.GetType().Name}' requires a concrete value target before value checks are available."
+                : $"Control '{source.GetType().Name}' supports Exists and Enabled checks but does not expose a semantic value.";
+            return false;
+        }
+
         var locator = _selectorResolver.Resolve(source, controlType);
         if (!locator.Success || locator.Control is null)
         {
@@ -2065,49 +3217,79 @@ internal sealed class RecorderStepFactory
             return false;
         }
 
-        candidate = source switch
+        var valueKind = capabilities.ValueKinds.Single();
+        var accessorKind = capabilities.AccessorKinds.Single();
+        var resolvedCandidate = accessorKind switch
         {
-            NumericUpDown spinner => new SemanticValueCandidate(
-                locator.Control with { ControlType = UiControlType.Spinner },
-                RecorderValueKind.Number,
-                RecorderValueAccessorKind.NumericValue,
-                DoubleValue: spinner.Value is { } value ? decimal.ToDouble(value) : null),
-            TextBox textBox when RecorderSpinnerProxyConfiguration.IsInteractivePart(_options, textBox) =>
+            RecorderValueAccessorKind.Text when source is TextBox or TextBlock or Label =>
                 new SemanticValueCandidate(
-                    locator.Control with { ControlType = UiControlType.Spinner },
-                    RecorderValueKind.Number,
-                    RecorderValueAccessorKind.NumericValue,
-                    DoubleValue: double.TryParse(
-                        textBox.Text,
-                        System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var spinnerProxyValue)
-                            ? spinnerProxyValue
-                            : null),
-            Slider slider => new SemanticValueCandidate(locator.Control, RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue, DoubleValue: slider.Value),
-            ProgressBar progress => new SemanticValueCandidate(locator.Control, RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue, DoubleValue: progress.Value),
-            DatePicker datePicker => new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    StringValue: ExtractTextValue(source)),
+            RecorderValueAccessorKind.SelectedItemText when source is ComboBox comboBox =>
+                new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    StringValue: ExtractSelectionText(comboBox.SelectedItem)),
+            RecorderValueAccessorKind.SelectedItemText when source is ListBox listBox =>
+                new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    StringValue: ExtractSelectionText(listBox.SelectedItem)),
+            RecorderValueAccessorKind.NumericValue => new SemanticValueCandidate(
                 locator.Control,
-                RecorderValueKind.Date,
-                RecorderValueAccessorKind.SelectedDate,
-                DateValue: datePicker.SelectedDate?.DateTime.Date),
-            TimePicker timePicker => new SemanticValueCandidate(locator.Control, RecorderValueKind.Time, RecorderValueAccessorKind.SelectedTime, TimeValue: timePicker.SelectedTime),
-            ComboBox comboBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText, StringValue: ExtractSelectionText(comboBox.SelectedItem)),
-            ListBox listBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText, StringValue: ExtractSelectionText(listBox.SelectedItem)),
-            CheckBox checkBox => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsChecked, BoolValue: checkBox.IsChecked == true),
-            RadioButton radioButton => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsSelected, BoolValue: radioButton.IsChecked == true),
-            ToggleButton toggleButton => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsToggled, BoolValue: toggleButton.IsChecked == true),
-            TabItem tabItem => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsSelected, BoolValue: tabItem.IsSelected),
-            Expander expander => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsExpanded, BoolValue: expander.IsExpanded),
-            TextBox or TextBlock or Label => new SemanticValueCandidate(locator.Control, RecorderValueKind.Text, RecorderValueAccessorKind.Text, StringValue: ExtractTextValue(source)),
-            _ => new SemanticValueCandidate(locator.Control, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsEnabled, BoolValue: source.IsEnabled)
+                valueKind,
+                accessorKind,
+                DoubleValue: TryReadNumericValue(source, out var numericValue) ? numericValue : null),
+            RecorderValueAccessorKind.SelectedDate => new SemanticValueCandidate(
+                locator.Control,
+                valueKind,
+                accessorKind,
+                DateValue: TryReadDateValue(source, out var selectedDate) ? selectedDate.Date : null),
+            RecorderValueAccessorKind.SelectedTime when source is TimePicker timePicker =>
+                new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    TimeValue: timePicker.SelectedTime),
+            RecorderValueAccessorKind.IsChecked when source is CheckBox checkBox =>
+                new SemanticValueCandidate(locator.Control, valueKind, accessorKind, BoolValue: checkBox.IsChecked == true),
+            RecorderValueAccessorKind.IsToggled when source is ToggleButton toggleButton =>
+                new SemanticValueCandidate(locator.Control, valueKind, accessorKind, BoolValue: toggleButton.IsChecked == true),
+            RecorderValueAccessorKind.IsSelected => source switch
+            {
+                RadioButton radioButton => new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    BoolValue: radioButton.IsChecked == true),
+                TabItem tabItem => new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    BoolValue: tabItem.IsSelected),
+                TreeViewItem treeItem => new SemanticValueCandidate(
+                    locator.Control,
+                    valueKind,
+                    accessorKind,
+                    BoolValue: treeItem.IsSelected),
+                _ => null
+            },
+            RecorderValueAccessorKind.IsExpanded when source is Expander expander =>
+                new SemanticValueCandidate(locator.Control, valueKind, accessorKind, BoolValue: expander.IsExpanded),
+            _ => null
         };
 
-        if (candidate is null)
+        if (resolvedCandidate is null)
         {
-            error = $"Control '{source.GetType().Name}' does not expose a supported semantic value.";
+            error = $"Control '{source.GetType().Name}' does not implement semantic accessor '{accessorKind}'.";
             return false;
         }
+
+        candidate = resolvedCandidate;
 
         if (requireLiteral && !HasLiteral(candidate))
         {
@@ -2226,6 +3408,21 @@ internal sealed class RecorderStepFactory
                 hint.Parts.ResultsLocator,
                 hint.Parts.ApplyButtonLocator,
                 hint.Parts.ExpandButtonLocator));
+    }
+
+    private static bool IsGridSearchPickerPart(Control source, RecorderGridSearchPickerHint hint)
+    {
+        var relatedControls = EnumerateRelatedControls(source).ToArray();
+        var matchesSource = relatedControls.Any(current =>
+            HasExactLocator(current, hint.SourceLocatorKind, hint.SourceLocatorValue));
+        var matchesPart = relatedControls.Any(current =>
+            HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.SearchInputLocator)
+            || HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ResultsLocator)
+            || (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
+                && HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator!))
+            || (!string.IsNullOrWhiteSpace(hint.Parts.ExpandButtonLocator)
+                && HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ExpandButtonLocator!)));
+        return matchesSource && (matchesPart || HasExactLocator(source, hint.SourceLocatorKind, hint.SourceLocatorValue));
     }
 
     private static bool IsSearchControlPart(Control source, RecorderSearchControlHint hint)
@@ -2535,45 +3732,53 @@ internal sealed class RecorderStepFactory
     private bool TryCreateNotificationAssertionStep(Control source, RecorderAssertionMode mode, out StepCreationResult result)
     {
         result = StepCreationResult.Unsupported("Recorder could not derive a supported notification assertion for this control.");
-        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text or RecorderAssertionMode.Exists))
         {
             return false;
         }
 
-        if (!TryResolveNotificationTextHint(source, out var hint))
+        var resolution = ResolveNotificationTextHint(source);
+        if (!resolution.IsConfigured)
         {
             return false;
         }
 
-        if (!TryFindControl(hint.Parts.TextLocator, hint.Parts.LocatorKind, out var textControl))
+        if (!resolution.Success)
         {
-            result = StepCreationResult.Unsupported("Notification text part was not found.");
+            result = StepCreationResult.Unsupported(
+                resolution.Error ?? "Recorder could not resolve the configured notification instance.");
             return true;
         }
 
-        var text = ExtractTextValue(textControl);
+        var hint = resolution.Hint!;
+        var descriptor = CreateCompositeDescriptor(
+            hint.LocatorValue,
+            UiControlType.Notification,
+            hint.LocatorKind,
+            hint.FallbackToName,
+            resolution.NotificationRoot!,
+            warning: null);
+        if (mode == RecorderAssertionMode.Exists)
+        {
+            result = CreateStep(
+                resolution.NotificationRoot!,
+                new RecordedStep(RecordedActionKind.WaitUntilExists, descriptor));
+            return true;
+        }
+
+        var text = ExtractTextValue(resolution.TextControl!);
         if (string.IsNullOrWhiteSpace(text))
         {
             result = StepCreationResult.Unsupported("Notification text part does not expose text.");
             return true;
         }
 
-        var warning = "Recorded notification text assertion from configured parts.";
-        var descriptor = CreateCompositeDescriptor(
-            hint.LocatorValue,
-            UiControlType.Notification,
-            hint.LocatorKind,
-            hint.FallbackToName,
-            source,
-            warning);
         result = CreateStep(
-            source,
+            resolution.NotificationRoot!,
             new RecordedStep(
                 RecordedActionKind.WaitUntilNotificationContains,
                 descriptor,
-                StringValue: text.Trim(),
-                Warning: warning),
-            warning);
+                StringValue: text.Trim()));
         return true;
     }
 
@@ -2723,6 +3928,8 @@ internal sealed class RecorderStepFactory
             ComboBox => UiControlType.ComboBox,
             ListBox => UiControlType.ListBox,
             Slider => UiControlType.Slider,
+            ProgressBar => UiControlType.ProgressBar,
+            NumericUpDown => UiControlType.Spinner,
             TimePicker => UiControlType.TimePicker,
             Expander => UiControlType.Expander,
             DatePicker => UiControlType.DateTimePicker,
@@ -2743,17 +3950,19 @@ internal sealed class RecorderStepFactory
             TextBlock textBlock => textBlock.Text,
             Label label => label.Content?.ToString(),
             Button button => button.Content?.ToString(),
+            ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
+            ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
             _ => AutomationProperties.GetName(control)
         };
     }
 
     private bool TryResolveGridHint(Control source, out RecorderGridHint hint, out Control gridSource)
     {
-        for (Control? current = source; current is not null; current = current.GetVisualParent() as Control)
+        foreach (var current in EnumerateRelatedControls(source))
         {
             if (current is Window)
             {
-                break;
+                continue;
             }
 
             foreach (var candidate in _options.GridHints)
@@ -3195,19 +4404,41 @@ internal sealed class RecorderStepFactory
         return false;
     }
 
-    private bool TryResolveNotificationTextHint(Control source, out RecorderNotificationHint hint)
+    private NotificationTextHintResolution ResolveNotificationTextHint(Control source)
     {
+        var relatedControls = EnumerateRelatedControls(source).ToArray();
+        var matches = new List<NotificationTextHintResolution>();
+
         foreach (var candidate in _options.NotificationHints)
         {
-            if (MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.TextLocator))
+            var textControl = relatedControls.FirstOrDefault(control =>
+                HasExactLocator(control, candidate.Parts.LocatorKind, candidate.Parts.TextLocator));
+            if (textControl is null)
             {
-                hint = candidate;
-                return true;
+                continue;
+            }
+
+            var notificationRoot = EnumerateRelatedControls(textControl)
+                .Skip(1)
+                .FirstOrDefault(control => HasExactLocator(control, candidate.LocatorKind, candidate.LocatorValue));
+            if (notificationRoot is not null)
+            {
+                matches.Add(NotificationTextHintResolution.Matched(candidate, textControl, notificationRoot));
             }
         }
 
-        hint = null!;
-        return false;
+        if (matches.Count == 1)
+        {
+            return matches[0];
+        }
+
+        if (matches.Count > 1)
+        {
+            return NotificationTextHintResolution.Invalid(
+                $"Notification text belongs to {matches.Count} configured hints; locator configuration must identify one notification.");
+        }
+
+        return NotificationTextHintResolution.NotConfigured();
     }
 
     private bool TryResolveDateRangeFilterHint(
@@ -3377,6 +4608,205 @@ internal sealed class RecorderStepFactory
         return null;
     }
 
+    private GridComboSelectionCaptureResult TryCreateGridComboSelectionStepCore(
+        Control results,
+        string? selectedText,
+        GridComboSelectionContextResolution? preparedContext)
+    {
+        var currentContext = TryResolveGridComboSelectionContext(results);
+        var effectiveContext = preparedContext?.Context is { } prepared
+            && ReferenceEquals(prepared.SelectionSource, results)
+                ? preparedContext
+                : currentContext.IsConfigured
+                    ? currentContext
+                    : preparedContext ?? currentContext;
+        if (!effectiveContext.IsConfigured)
+        {
+            return new GridComboSelectionCaptureResult(
+                IsConfigured: false,
+                HasSelection: false,
+                Context: null,
+                StepCreationResult.Unsupported("Control is not a selection editor inside a configured grid cell."));
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedText))
+        {
+            return new GridComboSelectionCaptureResult(
+                IsConfigured: true,
+                HasSelection: false,
+                effectiveContext.Context,
+                StepCreationResult.Unsupported("Grid cell selection editor does not have a selected item to record."));
+        }
+
+        if (effectiveContext.Context is not { } context)
+        {
+            return new GridComboSelectionCaptureResult(
+                IsConfigured: true,
+                HasSelection: true,
+                Context: null,
+                StepCreationResult.Unsupported(
+                    effectiveContext.Error
+                    ?? "Configured grid selection editor does not expose an unambiguous row and column context."));
+        }
+
+        var hint = context.GridHint;
+        var validationSource = TryFindControl(
+                hint.TargetLocatorValue,
+                hint.TargetLocatorKind,
+                out var logicalGrid)
+            ? logicalGrid
+            : context.GridSource;
+        var descriptor = new RecordedControlDescriptor(
+            RecorderNaming.CreateControlPropertyName(hint.TargetLocatorValue, UiControlType.Grid),
+            UiControlType.Grid,
+            hint.TargetLocatorValue.Trim(),
+            hint.TargetLocatorKind,
+            hint.FallbackToName,
+            validationSource.GetType().FullName ?? validationSource.GetType().Name,
+            Warning: null);
+        var result = CreateGridStep(
+            validationSource,
+            new RecordedStep(
+                RecordedActionKind.SelectGridCellComboItem,
+                descriptor,
+                StringValue: selectedText.Trim(),
+                RowIndex: context.RowIndex,
+                ColumnIndex: context.ColumnIndex,
+                GridCellEditCommitMode: GridCellEditCommitMode.Commit),
+            null,
+            hint.TargetLocatorValue,
+            hint.TargetLocatorKind,
+            context.RowIndex,
+            context.ColumnIndex,
+            excludeTargetColumnFromIdentity: true);
+
+        return new GridComboSelectionCaptureResult(
+            IsConfigured: true,
+            HasSelection: true,
+            context,
+            result);
+    }
+
+    private GridComboSelectionContextResolution TryResolveGridComboSelectionContext(Control source)
+    {
+        if (source is not (ComboBox or ListBox))
+        {
+            return new GridComboSelectionContextResolution(false, null, null);
+        }
+
+        var matchingGrids = FindRelatedGridHints(source).Take(2).ToArray();
+        if (matchingGrids.Length == 0)
+        {
+            return new GridComboSelectionContextResolution(false, null, null);
+        }
+
+        if (matchingGrids.Length > 1)
+        {
+            return new GridComboSelectionContextResolution(
+                true,
+                null,
+                "Selection editor belongs to multiple configured grids; the logical grid locator is ambiguous.");
+        }
+
+        var (hint, gridSource) = matchingGrids[0];
+        if (!TryReadItemsSource(gridSource, out var items) || items.Count == 0)
+        {
+            return new GridComboSelectionContextResolution(
+                true,
+                null,
+                $"Grid '{hint.TargetLocatorValue}' does not expose a non-empty ItemsSource for selection capture.");
+        }
+
+        var currentCellText = TryReadGridCellContextText(source, out var contextText)
+            ? contextText
+            : null;
+        if (!TryResolveGridCell(
+                source,
+                gridSource,
+                hint,
+                items,
+                currentCellText,
+                out var rowIndex,
+                out var columnIndex,
+                out _))
+        {
+            var missingParts = new List<string>(2);
+            if (!TryResolveGridRow(source, gridSource, items, out _, out _))
+            {
+                missingParts.Add("row");
+            }
+
+            if (!TryResolveGridColumnIndex(
+                    source,
+                    gridSource,
+                    hint.ColumnPropertyNames,
+                    out _)
+                && string.IsNullOrWhiteSpace(currentCellText))
+            {
+                missingParts.Add("column");
+            }
+
+            var missing = missingParts.Count == 0
+                ? "row or column"
+                : string.Join(" and ", missingParts);
+            return new GridComboSelectionContextResolution(
+                true,
+                null,
+                $"Grid '{hint.TargetLocatorValue}' selection capture could not resolve an unambiguous {missing} context.");
+        }
+
+        return new GridComboSelectionContextResolution(
+            true,
+            new GridComboSelectionContext(source, gridSource, hint, rowIndex, columnIndex),
+            null);
+    }
+
+    private IEnumerable<(RecorderGridHint Hint, Control GridSource)> FindRelatedGridHints(Control source)
+    {
+        var matchedHints = new HashSet<RecorderGridHint>(ReferenceEqualityComparer.Instance);
+        var relatedControls = EnumerateRelatedControls(source).ToArray();
+        foreach (var current in relatedControls)
+        {
+            if (current is Window)
+            {
+                continue;
+            }
+
+            foreach (var hint in _options.GridHints)
+            {
+                if (matchedHints.Contains(hint)
+                    || !TryGetLocator(current, hint.SourceLocatorKind, out var locatorValue)
+                    || !string.Equals(hint.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matchedHints.Add(hint);
+                yield return (hint, current);
+            }
+        }
+
+        if (matchedHints.Count > 0)
+        {
+            yield break;
+        }
+
+        foreach (var hint in _options.GridHints)
+        {
+            if (!TryFindControl(
+                    hint.SourceLocatorValue,
+                    hint.SourceLocatorKind,
+                    out var gridSource)
+                || !TryReadItemsSource(gridSource, out var items)
+                || !TryResolveGridRow(source, gridSource, items, out _, out _))
+            {
+                continue;
+            }
+
+            yield return (hint, gridSource);
+        }
+    }
+
     private bool TryResolveGridSearchPickerContext(
         Control searchInput,
         RecorderGridSearchPickerHint hint,
@@ -3413,7 +4843,7 @@ internal sealed class RecorderStepFactory
             return columnIndex >= 0;
         }
 
-        if (TryResolveGridColumnIndex(searchInput, gridSource, gridHint.ColumnPropertyNames.Count, out columnIndex))
+        if (TryResolveGridColumnIndex(searchInput, gridSource, gridHint.ColumnPropertyNames, out columnIndex))
         {
             return true;
         }
@@ -3527,6 +4957,27 @@ internal sealed class RecorderStepFactory
         out int columnIndex,
         out string cellValue)
     {
+        return TryResolveGridCell(
+            source,
+            gridSource,
+            hint,
+            items,
+            observedTextOverride: null,
+            out rowIndex,
+            out columnIndex,
+            out cellValue);
+    }
+
+    private static bool TryResolveGridCell(
+        Control source,
+        Control gridSource,
+        RecorderGridHint hint,
+        IReadOnlyList<object?> items,
+        string? observedTextOverride,
+        out int rowIndex,
+        out int columnIndex,
+        out string cellValue)
+    {
         rowIndex = -1;
         columnIndex = -1;
         cellValue = string.Empty;
@@ -3536,65 +4987,71 @@ internal sealed class RecorderStepFactory
             return false;
         }
 
-        var observedText = ExtractTextValue(source)?.Trim();
+        if (!TryResolveGridRow(source, gridSource, items, out rowIndex, out var rowItem))
+        {
+            return false;
+        }
+
+        var observedText = string.IsNullOrWhiteSpace(observedTextOverride)
+            ? ExtractTextValue(source)?.Trim()
+            : observedTextOverride.Trim();
+        if (TryResolveGridColumnIndex(
+            source,
+            gridSource,
+            hint.ColumnPropertyNames,
+            out columnIndex))
+        {
+            if (TryReadDisplayedGridCellValue(
+                    gridSource,
+                    rowItem,
+                    rowIndex,
+                    columnIndex,
+                    hint.ColumnPropertyNames[columnIndex],
+                    out cellValue))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(observedText))
+            {
+                cellValue = observedText;
+                return true;
+            }
+
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(observedText))
         {
             return false;
         }
 
-        var hasSourceColumnIndex = TryResolveGridColumnIndex(
-            source,
-            gridSource,
-            hint.ColumnPropertyNames.Count,
-            out var sourceColumnIndex);
-
-        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        var matchedColumnIndex = -1;
+        var matchedValue = string.Empty;
+        var matchedColumnCount = 0;
+        for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
         {
-            var dataContext = current.DataContext;
-            if (dataContext is null || !TryFindItemIndex(items, dataContext, out rowIndex, out _))
+            if (!TryReadDisplayedGridCellValue(
+                    gridSource,
+                    rowItem,
+                    rowIndex,
+                    candidateColumnIndex,
+                    out var candidateValue)
+                || !string.Equals(candidateValue, observedText, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            if (hasSourceColumnIndex)
-            {
-                columnIndex = sourceColumnIndex;
-                cellValue = observedText;
-                return true;
-            }
+            matchedColumnIndex = candidateColumnIndex;
+            matchedValue = candidateValue;
+            matchedColumnCount++;
+        }
 
-            var matchedColumnIndex = -1;
-            var matchedValue = string.Empty;
-            var matchedColumnCount = 0;
-            for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
-            {
-                if (!TryReadDisplayedGridCellValue(
-                        gridSource,
-                        items[rowIndex],
-                        rowIndex,
-                        candidateColumnIndex,
-                        out var candidateValue)
-                    || !string.Equals(candidateValue, observedText, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                matchedColumnIndex = candidateColumnIndex;
-                matchedValue = candidateValue;
-                matchedColumnCount++;
-            }
-
-            if (matchedColumnCount == 1)
-            {
-                columnIndex = matchedColumnIndex;
-                cellValue = matchedValue;
-                return true;
-            }
-
-            if (matchedColumnCount > 1)
-            {
-                return false;
-            }
+        if (matchedColumnCount == 1)
+        {
+            columnIndex = matchedColumnIndex;
+            cellValue = matchedValue;
+            return true;
         }
 
         return false;
@@ -3607,12 +5064,32 @@ internal sealed class RecorderStepFactory
         out int rowIndex,
         out object item)
     {
-        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        foreach (var current in EnumerateRelatedControls(source))
         {
+            if (ReferenceEquals(current, gridSource))
+            {
+                continue;
+            }
+
             var dataContext = current.DataContext;
-            if (dataContext is not null && TryFindItemIndex(items, dataContext, out rowIndex, out item))
+            if (dataContext is null)
+            {
+                continue;
+            }
+
+            if (TryFindItemIndex(items, dataContext, out rowIndex, out item))
             {
                 return true;
+            }
+
+            foreach (var propertyName in GridRowContextPropertyNames)
+            {
+                if (TryReadObjectProperty(dataContext, propertyName, out var rowCandidate)
+                    && rowCandidate is not null
+                    && TryFindItemIndex(items, rowCandidate, out rowIndex, out item))
+                {
+                    return true;
+                }
             }
         }
 
@@ -3624,21 +5101,130 @@ internal sealed class RecorderStepFactory
     private static bool TryResolveGridColumnIndex(
         Control source,
         Control gridSource,
-        int columnCount,
+        IReadOnlyList<string> columnNames,
         out int columnIndex)
     {
-        for (Control? current = source; current is not null && !ReferenceEquals(current, gridSource); current = current.GetVisualParent() as Control)
+        foreach (var current in EnumerateRelatedControls(source))
         {
+            if (ReferenceEquals(current, gridSource))
+            {
+                continue;
+            }
+
             if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Cell", out var candidate)
                 && candidate >= 0
-                && candidate < columnCount)
+                && candidate < columnNames.Count)
             {
                 columnIndex = candidate;
+                return true;
+            }
+
+            if (TryReadGridColumnContextName(current.DataContext, out var contextColumnName)
+                && TryMatchGridColumnName(columnNames, contextColumnName, out columnIndex))
+            {
                 return true;
             }
         }
 
         columnIndex = -1;
+        return false;
+    }
+
+    private static bool TryReadGridColumnContextName(object? dataContext, out string columnName)
+    {
+        columnName = string.Empty;
+        if (dataContext is null)
+        {
+            return false;
+        }
+
+        foreach (var propertyName in GridColumnContextPropertyNames)
+        {
+            if (TryReadObjectProperty(dataContext, propertyName, out var directValue)
+                && directValue is not null
+                && directValue is not Control
+                && directValue is not IEnumerable
+                && directValue.ToString() is { } directText
+                && !string.IsNullOrWhiteSpace(directText))
+            {
+                columnName = directText.Trim();
+                return true;
+            }
+        }
+
+        if (!TryReadObjectProperty(dataContext, "Column", out var column) || column is null)
+        {
+            return false;
+        }
+
+        foreach (var propertyName in NestedGridColumnContextPropertyNames)
+        {
+            if (TryReadObjectProperty(column, propertyName, out var nestedValue)
+                && nestedValue?.ToString() is { } nestedText
+                && !string.IsNullOrWhiteSpace(nestedText))
+            {
+                columnName = nestedText.Trim();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryMatchGridColumnName(
+        IReadOnlyList<string> columnNames,
+        string contextColumnName,
+        out int columnIndex)
+    {
+        columnIndex = FindColumnIndex(columnNames, contextColumnName);
+        if (columnIndex >= 0)
+        {
+            return true;
+        }
+
+        var suffixMatches = columnNames
+            .Select((name, index) => (Name: name.Trim(), Index: index))
+            .Where(candidate =>
+                contextColumnName.EndsWith(candidate.Name, StringComparison.OrdinalIgnoreCase)
+                || candidate.Name.EndsWith(contextColumnName, StringComparison.OrdinalIgnoreCase))
+            .Take(2)
+            .ToArray();
+        if (suffixMatches.Length != 1)
+        {
+            return false;
+        }
+
+        columnIndex = suffixMatches[0].Index;
+        return true;
+    }
+
+    private static bool TryReadGridCellContextText(Control source, out string value)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            var dataContext = current.DataContext;
+            if (dataContext is null)
+            {
+                continue;
+            }
+
+            foreach (var propertyName in GridCellValueContextPropertyNames)
+            {
+                if (!TryReadObjectProperty(dataContext, propertyName, out var cellValue))
+                {
+                    continue;
+                }
+
+                var displayText = ExtractSelectionText(cellValue)?.Trim();
+                if (!string.IsNullOrWhiteSpace(displayText))
+                {
+                    value = displayText;
+                    return true;
+                }
+            }
+        }
+
+        value = string.Empty;
         return false;
     }
 
@@ -3749,25 +5335,50 @@ internal sealed class RecorderStepFactory
     private static bool TryReadPropertyValue(object item, string propertyName, out string value)
     {
         value = string.Empty;
+        if (!TryReadObjectProperty(item, propertyName, out var propertyValue))
+        {
+            return false;
+        }
+
+        value = propertyValue?.ToString() ?? string.Empty;
+        return true;
+    }
+
+    private static bool TryReadObjectProperty(object item, string propertyName, out object? value)
+    {
+        value = null;
         if (string.IsNullOrWhiteSpace(propertyName))
         {
             return false;
         }
 
-        var property = item.GetType().GetProperty(propertyName.Trim());
+        var normalizedPropertyName = propertyName.Trim();
+        var property = item.GetType()
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, normalizedPropertyName, StringComparison.Ordinal)
+                && candidate.GetIndexParameters().Length == 0
+                && candidate.GetMethod is { IsPublic: true });
         if (property is null)
         {
             return false;
         }
 
-        value = property.GetValue(item)?.ToString() ?? string.Empty;
-        return true;
+        try
+        {
+            value = property.GetValue(item);
+            return true;
+        }
+        catch (Exception exception) when (exception is TargetInvocationException or MethodAccessException)
+        {
+            return false;
+        }
     }
 
     private StepCreationResult CreateGridStep(
         Control source,
         RecordedStep step,
-        string warning,
+        string? warning,
         string targetGridLocatorValue,
         UiLocatorKind targetGridLocatorKind,
         int rowIndex,
@@ -3986,11 +5597,32 @@ internal sealed class RecorderStepFactory
         int columnIndex,
         out string value)
     {
+        return TryReadDisplayedGridCellValue(
+            gridSource,
+            rowItem,
+            rowIndex,
+            columnIndex,
+            columnName: null,
+            out value);
+    }
+
+    private static bool TryReadDisplayedGridCellValue(
+        Control gridSource,
+        object? rowItem,
+        int rowIndex,
+        int columnIndex,
+        string? columnName,
+        out string value)
+    {
         foreach (var candidate in EnumerateDescendantControls(gridSource))
         {
             var automationId = AutomationProperties.GetAutomationId(candidate);
-            if (!TryParseVisualGridIndex(automationId, "_Cell", out var candidateColumnIndex)
-                || candidateColumnIndex != columnIndex)
+            var matchesIndexedColumn = TryParseVisualGridIndex(automationId, "_Cell", out var candidateColumnIndex)
+                && candidateColumnIndex == columnIndex;
+            var matchesNamedColumn = !string.IsNullOrWhiteSpace(columnName)
+                && !string.IsNullOrWhiteSpace(automationId)
+                && automationId.EndsWith($"_{columnName.Trim()}Cell", StringComparison.OrdinalIgnoreCase);
+            if (!matchesIndexedColumn && !matchesNamedColumn)
             {
                 continue;
             }
@@ -4868,10 +6500,26 @@ internal sealed class RecorderStepFactory
         return _options.TimePickerHints.Any(hint => IsTimePickerInput(textBox, hint));
     }
 
+    private bool MatchesDatePickerValuePart(TextBox textBox)
+    {
+        return _options.DatePickerHints.Any(hint =>
+            MatchesLocator(textBox, hint.Parts.LocatorKind, hint.Parts.ValueLocator));
+    }
+
     private IEnumerable<RecorderTimePickerHint> FindTimePickerHints(TimePicker timePicker)
     {
         return _options.TimePickerHints.Where(hint =>
             MatchesLocator(timePicker, hint.Parts.LocatorKind, hint.Parts.TimePickerLocator));
+    }
+
+    private IEnumerable<RecorderDatePickerHint> FindDatePickerHints(Control source)
+    {
+        return _options.DatePickerHints.Where(hint => IsDatePickerPart(source, hint));
+    }
+
+    private static bool IsDatePickerPart(Control source, RecorderDatePickerHint hint)
+    {
+        return RecorderDatePickerHintMatcher.IsPart(source, hint);
     }
 
     private static bool IsSingleSelectResults(Control results, RecorderSingleSelectHint hint)
@@ -4936,6 +6584,11 @@ internal sealed class RecorderStepFactory
             if (current is StyledElement { TemplatedParent: Control templatedParent })
             {
                 queue.Enqueue(templatedParent);
+            }
+
+            if (current is Popup { PlacementTarget: Control placementTarget })
+            {
+                queue.Enqueue(placementTarget);
             }
         }
     }
@@ -5354,6 +7007,34 @@ internal sealed class RecorderStepFactory
             RecorderValidationStatus.Warning => "validation-warning",
             _ => null
         };
+    }
+
+    private sealed record NotificationTextHintResolution(
+        bool IsConfigured,
+        RecorderNotificationHint? Hint,
+        Control? TextControl,
+        Control? NotificationRoot,
+        string? Error)
+    {
+        public bool Success => Hint is not null && TextControl is not null && NotificationRoot is not null;
+
+        public static NotificationTextHintResolution NotConfigured()
+        {
+            return new NotificationTextHintResolution(false, null, null, null, null);
+        }
+
+        public static NotificationTextHintResolution Matched(
+            RecorderNotificationHint hint,
+            Control textControl,
+            Control notificationRoot)
+        {
+            return new NotificationTextHintResolution(true, hint, textControl, notificationRoot, null);
+        }
+
+        public static NotificationTextHintResolution Invalid(string error)
+        {
+            return new NotificationTextHintResolution(true, null, null, null, error);
+        }
     }
 
     private sealed class TextAssertionExtractor : IRecorderAssertionExtractor

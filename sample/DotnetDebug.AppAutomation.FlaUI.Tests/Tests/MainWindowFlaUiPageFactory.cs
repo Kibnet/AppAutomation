@@ -60,6 +60,9 @@ internal static class MainWindowFlaUiPageFactory
                     "ArmGridAutomationBridge",
                     ["Key", "Value", "Color", "State"])
                 .WithGridColumns(
+                    "GridComboAutomationBridge",
+                    ["Key", "State"])
+                .WithGridColumns(
                     "SearchPickerGridAutomationBridge",
                     ["Key", "SelectedValue"])
                 .WithComboBoxFilter(

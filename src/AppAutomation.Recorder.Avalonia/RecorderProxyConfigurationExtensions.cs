@@ -167,6 +167,67 @@ public static class RecorderProxyConfigurationExtensions
     }
 
     /// <summary>
+    /// Configures a logical date-time picker whose committed value and popup calendar are separate parts.
+    /// </summary>
+    public static AppAutomationRecorderOptions ConfigureDateTimePickerProxy(
+        this AppAutomationRecorderOptions options,
+        string logicalLocatorValue,
+        DatePickerParts parts,
+        UiLocatorKind logicalLocatorKind = UiLocatorKind.AutomationId,
+        bool fallbackToName = false)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logicalLocatorValue);
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentException.ThrowIfNullOrWhiteSpace(parts.RootLocator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(parts.ValueLocator);
+
+        var logicalLocator = logicalLocatorValue.Trim();
+        options.ControlHints.Add(new RecorderControlHint(
+            logicalLocator,
+            RecorderActionHint.None,
+            UiControlType.DateTimePicker,
+            logicalLocatorKind,
+            fallbackToName));
+        options.DatePickerHints.Add(new RecorderDatePickerHint(
+            logicalLocator,
+            parts,
+            logicalLocatorKind,
+            fallbackToName));
+
+        AddDatePickerAlias(options, logicalLocator, logicalLocatorKind, fallbackToName, parts.ValueLocator, parts.LocatorKind);
+        if (!string.IsNullOrWhiteSpace(parts.CalendarLocator))
+        {
+            AddDatePickerAlias(options, logicalLocator, logicalLocatorKind, fallbackToName, parts.CalendarLocator, parts.LocatorKind);
+        }
+
+        return options;
+    }
+
+    private static void AddDatePickerAlias(
+        AppAutomationRecorderOptions options,
+        string logicalLocatorValue,
+        UiLocatorKind logicalLocatorKind,
+        bool fallbackToName,
+        string sourceLocatorValue,
+        UiLocatorKind sourceLocatorKind)
+    {
+        if (sourceLocatorKind == logicalLocatorKind
+            && string.Equals(sourceLocatorValue.Trim(), logicalLocatorValue, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        options.LocatorAliases.Add(new RecorderLocatorAlias(
+            sourceLocatorValue.Trim(),
+            logicalLocatorValue,
+            UiControlType.DateTimePicker,
+            sourceLocatorKind,
+            logicalLocatorKind,
+            fallbackToName));
+    }
+
+    /// <summary>
     /// Configures a logical spinner that records through a writable text-box surface.
     /// </summary>
     public static AppAutomationRecorderOptions ConfigureSpinnerProxy(

@@ -284,14 +284,6 @@ public static partial class UiPageExtensions
         var expected = ColorValue.Normalize(color);
         var budget = UiOperationTimeoutBudget.Start(timeoutMs, "color-picker");
         var picker = Resolve(selector, page);
-        WaitUntil(
-            page,
-            selector,
-            () => picker.IsEnabled,
-            budget.RemainingMilliseconds,
-            $"Color picker '{picker.AutomationId}' is not enabled.",
-            expectedValue: "IsEnabled=true",
-            lastObservedValueFactory: () => $"IsEnabled={picker.IsEnabled}");
 
         if (picker is IColorPickerOperationControl operationControl)
         {
@@ -299,7 +291,21 @@ public static partial class UiPageExtensions
         }
         else
         {
+            WaitUntil(
+                page,
+                selector,
+                () => picker.IsEnabled,
+                budget.RemainingMilliseconds,
+                $"Color picker '{picker.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={picker.IsEnabled}");
             picker.Color = expected;
+        }
+
+        if (ColorValue.TryNormalize(picker.Color, out var appliedColor)
+            && string.Equals(appliedColor, expected, StringComparison.Ordinal))
+        {
+            return page;
         }
 
         WaitUntil(
@@ -1145,24 +1151,33 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IDateTimePickerControl>> selector,
         DateTime date,
-        int timeoutMs = 5000)
+        int timeoutMs = 60_000)
         where TSelf : UiPage
     {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "date-picker");
         var datePicker = Resolve(selector, page);
         WaitUntil(
             page,
             selector,
             () => datePicker.IsEnabled,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Date picker '{datePicker.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={datePicker.IsEnabled}");
-        datePicker.SelectedDate = date.Date;
+        if (datePicker is IDateTimePickerOperationControl operationControl)
+        {
+            operationControl.SetSelectedDate(date.Date, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            datePicker.SelectedDate = date.Date;
+        }
+
         WaitUntil(
             page,
             selector,
             () => datePicker.SelectedDate?.Date == date.Date,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Date picker '{datePicker.AutomationId}' did not reach expected date.",
             expectedValue: date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             lastObservedValueFactory: () => datePicker.SelectedDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "<null>");
