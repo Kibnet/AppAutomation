@@ -21,6 +21,7 @@ internal sealed class RecorderSession :
     IAppAutomationRecorderSessionDetails,
     IRecorderStepReorderSessionDetails,
     IRecorderCheckpointSessionDetails,
+    IRecorderGeneratedValueSessionDetails,
     IRecorderRelativeDateSessionDetails,
     IRecorderScenarioPathDetails,
     IRecorderScenarioSelectionDetails
@@ -71,6 +72,15 @@ internal sealed class RecorderSession :
     private Control? _pendingCheckTargetControl;
     private IReadOnlyList<Control> _pendingCheckTargetCandidates = Array.Empty<Control>();
     private bool _isCheckTargetSelectionActive;
+    private Control? _pendingGeneratedValueTargetControl;
+    private IReadOnlyList<Control> _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
+    private bool _isGeneratedValueTargetSelectionActive;
+    private Guid? _requestedGeneratedValueId;
+    private TextBox? _generatedValueTextApplication;
+    private TextBox? _completedGeneratedValueInput;
+    private string? _completedGeneratedValueText;
+    private RecordedValueSeries? _recordingGeneratedValueSeries;
+    private int _lastGeneratedValueOrdinal;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
@@ -98,6 +108,7 @@ internal sealed class RecorderSession :
     private string _scenarioName;
     private string? _scenarioDiscoveryError;
     private bool _isScanning;
+    private bool _isRestoringAutosave;
     private string _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
     private Task _scenarioDiscoveryTask = Task.CompletedTask;
 
@@ -228,6 +239,8 @@ internal sealed class RecorderSession :
 
     public event EventHandler<RecorderCheckTargetSelectedEventArgs>? CheckTargetSelected;
 
+    public event EventHandler<RecorderGeneratedValueTargetSelectedEventArgs>? GeneratedValueTargetSelected;
+
     internal event EventHandler? ExportRequested;
 
     internal event EventHandler? HotkeysChanged;
@@ -240,7 +253,11 @@ internal sealed class RecorderSession :
 
     public IReadOnlyList<RecorderCheckpointOption> Checkpoints => CreateCheckpointOptions();
 
+    public IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues => CreateGeneratedValueOptions();
+
     public bool IsCheckTargetSelectionActive => _isCheckTargetSelectionActive;
+
+    public bool IsGeneratedValueTargetSelectionActive => _isGeneratedValueTargetSelectionActive;
 
     public string LatestPreview { get; private set; } = string.Empty;
 
@@ -248,7 +265,7 @@ internal sealed class RecorderSession :
 
     public RecorderValidationStatus LatestValidationStatus { get; private set; } = RecorderValidationStatus.Valid;
 
-    public bool IsBusy => _activeOperationTask is not null;
+    public bool IsBusy => _activeOperationTask is not null || _isRestoringAutosave;
 
     public string BusyDescription => _busyDescription;
 
@@ -314,6 +331,10 @@ internal sealed class RecorderSession :
         && !IsBusy
         && !_isScanning;
 
+    public bool CanRestoreAutosave => CanChangeScenarioTarget
+        && ScenarioSelectionError is null
+        && _selectedScenarioDestination is not null;
+
     internal Task ScenarioDiscoveryTaskForTesting => _scenarioDiscoveryTask;
 
     internal RecorderHotkeySettings HotkeySettings => _hotkeySettings;
@@ -339,15 +360,20 @@ internal sealed class RecorderSession :
         _state = RecorderSessionState.Recording;
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
+        _completedGeneratedValueInput = null;
+        _completedGeneratedValueText = null;
         SetStatus("Recording.", RecorderValidationStatus.Valid);
     }
 
     public void Stop()
     {
         CancelCheckTargetSelectionCore();
+        CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
+        _completedGeneratedValueInput = null;
+        _completedGeneratedValueText = null;
         _state = RecorderSessionState.Off;
         SetStatus("Recording stopped.", RecorderValidationStatus.Valid);
     }
@@ -363,10 +389,15 @@ internal sealed class RecorderSession :
         }
 
         CancelCheckTargetSelectionCore();
+        CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
+        _completedGeneratedValueInput = null;
+        _completedGeneratedValueText = null;
         _steps.Clear();
+        _recordingGeneratedValueSeries = null;
+        _lastGeneratedValueOrdinal = 0;
         LatestPreview = string.Empty;
         _lastScenarioFilePath = null;
         _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
@@ -476,6 +507,9 @@ internal sealed class RecorderSession :
     public void Dispose()
     {
         CancelCheckTargetSelectionCore();
+        CancelGeneratedValueTargetSelectionCore();
+        _completedGeneratedValueInput = null;
+        _completedGeneratedValueText = null;
         _observationTimer?.Stop();
         _textDebounceTimer.Stop();
         _sliderDebounceTimer.Stop();
@@ -599,6 +633,78 @@ internal sealed class RecorderSession :
             _steps[targetIndex].ValidationStatus);
         RequestAutosaveIfRecording();
         return true;
+    }
+
+    public async Task<bool> RestoreAutosaveAsync(CancellationToken cancellationToken = default)
+    {
+        if (!CanRestoreAutosave)
+        {
+            SetStatus(
+                ScenarioSelectionError
+                    ?? "Stop recording and clear recorded steps before restoring an autosave.",
+                RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        var saveContext = CreateScenarioSaveContext();
+        if (saveContext is null)
+        {
+            SetStatus("Select a valid scenario destination before restoring an autosave.", RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        _isRestoringAutosave = true;
+        _busyDescription = "Restoring autosave...";
+        SetStatus("Restoring autosave...", RecorderValidationStatus.Valid);
+        RecorderAutosaveRestoreResult result;
+        try
+        {
+            result = await _codeGenerator.RestoreAutosaveAsync(
+                _window,
+                _options,
+                outputDirectoryOverride: null,
+                saveContext,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Autosave recovery was cancelled.", RecorderValidationStatus.Warning);
+            throw;
+        }
+        finally
+        {
+            _isRestoringAutosave = false;
+            _busyDescription = string.Empty;
+        }
+
+        if (!result.Success)
+        {
+            SetStatus(
+                result.Message,
+                result.Found ? RecorderValidationStatus.Invalid : RecorderValidationStatus.Warning);
+            return false;
+        }
+
+        _steps.Clear();
+        _steps.AddRange(result.Steps);
+        _recordingGeneratedValueSeries = null;
+        _lastGeneratedValueOrdinal = _steps
+            .Where(static step => step.DefinesGeneratedValue)
+            .Select(static step => step.GeneratedValueOrdinal ?? 0)
+            .DefaultIfEmpty()
+            .Max();
+        if (!string.IsNullOrWhiteSpace(result.DraftIdentity))
+        {
+            _autosaveDraftIdentity = result.DraftIdentity;
+        }
+
+        var graphValidation = ApplyScenarioGraphValidation();
+        UpdateLatestPreviewFromSteps();
+        SetStatusAfterGraphValidation(
+            graphValidation,
+            result.Message,
+            RecorderValidationStatus.Valid);
+        return graphValidation.Success;
     }
 
     public bool TryGetDateConfiguration(
@@ -806,6 +912,10 @@ internal sealed class RecorderSession :
             }
             : step;
         _steps.Add(updatedStep);
+        if (updatedStep.DefinesGeneratedValue && updatedStep.GeneratedValueOrdinal is { } ordinal)
+        {
+            _lastGeneratedValueOrdinal = Math.Max(_lastGeneratedValueOrdinal, ordinal);
+        }
         UpdateLatestPreviewFromSteps();
     }
 
@@ -1294,6 +1404,22 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_isGeneratedValueTargetSelectionActive)
+        {
+            var eventTarget = ResolveInteractionOwner(source) ?? source;
+            var positionRoot = _inputRoot ?? _window;
+            _pendingGeneratedValueTargetCandidates = ResolveCheckTargetCandidates(
+                eventTarget,
+                positionRoot,
+                e.GetPosition(positionRoot));
+            _pendingGeneratedValueTargetControl = eventTarget
+                ?? (_pendingGeneratedValueTargetCandidates.Count > 0
+                    ? _pendingGeneratedValueTargetCandidates[0]
+                    : null);
+            e.Handled = true;
+            return;
+        }
+
         var control = ResolveInteractionOwner(source);
         var isRightButtonPressed = e.GetCurrentPoint(_inputRoot ?? _window).Properties.IsRightButtonPressed;
         if (isRightButtonPressed)
@@ -1324,15 +1450,22 @@ internal sealed class RecorderSession :
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (!_isCheckTargetSelectionActive || _pendingCheckTargetControl is null)
+        if (_isCheckTargetSelectionActive && _pendingCheckTargetControl is not null)
         {
+            var target = _pendingCheckTargetControl;
+            var candidates = _pendingCheckTargetCandidates;
+            e.Handled = true;
+            CompleteCheckTargetSelection(target, candidates);
             return;
         }
 
-        var target = _pendingCheckTargetControl;
-        var candidates = _pendingCheckTargetCandidates;
-        e.Handled = true;
-        CompleteCheckTargetSelection(target, candidates);
+        if (_isGeneratedValueTargetSelectionActive && _pendingGeneratedValueTargetControl is not null)
+        {
+            var target = _pendingGeneratedValueTargetControl;
+            var candidates = _pendingGeneratedValueTargetCandidates;
+            e.Handled = true;
+            CompleteGeneratedValueTargetSelection(target, candidates);
+        }
     }
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
@@ -1353,6 +1486,12 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (ReferenceEquals(textBox, _completedGeneratedValueInput))
+        {
+            _completedGeneratedValueInput = null;
+            _completedGeneratedValueText = null;
+        }
+
         if (ShouldSuppressTemplateTextEntry(textBox))
         {
             return;
@@ -1366,9 +1505,11 @@ internal sealed class RecorderSession :
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_isCheckTargetSelectionActive && e.Key == Key.Escape)
+        if ((_isCheckTargetSelectionActive || _isGeneratedValueTargetSelectionActive)
+            && e.Key == Key.Escape)
         {
             CancelCheckTargetSelectionCore();
+            CancelGeneratedValueTargetSelectionCore();
             e.Handled = true;
             return;
         }
@@ -2278,6 +2419,22 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (ReferenceEquals(sender, _generatedValueTextApplication))
+        {
+            return;
+        }
+
+        if (ReferenceEquals(textBox, _completedGeneratedValueInput))
+        {
+            if (string.Equals(textBox.Text, _completedGeneratedValueText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _completedGeneratedValueInput = null;
+            _completedGeneratedValueText = null;
+        }
+
         if (ShouldSuppressCompletedCompositeEvent(textBox))
         {
             return;
@@ -2558,6 +2715,7 @@ internal sealed class RecorderSession :
             return;
         }
 
+        CancelGeneratedValueTargetSelectionCore();
         _pendingCheckTargetControl = null;
         _pendingCheckTargetCandidates = Array.Empty<Control>();
         _isCheckTargetSelectionActive = true;
@@ -2735,6 +2893,252 @@ internal sealed class RecorderSession :
             "Assertion:Literal");
     }
 
+    public void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null)
+    {
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        if (generatedValueId is not null
+            && CreateGeneratedValueOptions().All(option => option.GeneratedValueId != generatedValueId.Value))
+        {
+            SetStatus("Selected generated value is missing or ignored.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        CancelCheckTargetSelectionCore();
+        _pendingGeneratedValueTargetControl = null;
+        _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
+        _requestedGeneratedValueId = generatedValueId;
+        _isGeneratedValueTargetSelectionActive = true;
+    }
+
+    public void CancelGeneratedValueTargetSelection()
+    {
+        CancelGeneratedValueTargetSelectionCore();
+    }
+
+    internal bool SelectGeneratedValueTargetForTesting(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_isGeneratedValueTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteGeneratedValueTargetSelection(
+            ResolveInteractionOwner(source) ?? source,
+            [source]);
+        return true;
+    }
+
+    internal bool SelectGeneratedValueTargetForTesting(
+        Control eventSource,
+        IReadOnlyList<Control> visualCandidates)
+    {
+        ArgumentNullException.ThrowIfNull(eventSource);
+        ArgumentNullException.ThrowIfNull(visualCandidates);
+        if (!_isGeneratedValueTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteGeneratedValueTargetSelection(
+            ResolveInteractionOwner(eventSource) ?? eventSource,
+            visualCandidates);
+        return true;
+    }
+
+    public void ApplyGeneratedValue(RecorderGeneratedValueTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        if (!selection.Input.IsEffectivelyEnabled || selection.Input.IsReadOnly)
+        {
+            SetStatus("Generated values can only be entered into an enabled writable text field.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var result = _stepFactory.TryCreateGeneratedTextEntryStep(
+            selection.Input,
+            selection.GeneratedValue.PreviewValue,
+            selection.GeneratedValue,
+            selection.DefinesGeneratedValue);
+        if (!result.Success || result.Step is null)
+        {
+            AddStep(result, selection.Input, "GeneratedValue");
+            return;
+        }
+
+        if (ReferenceEquals(_pendingTextBox, selection.Input))
+        {
+            DiscardPendingText();
+        }
+
+        try
+        {
+            _generatedValueTextApplication = selection.Input;
+            selection.Input.Text = selection.GeneratedValue.PreviewValue;
+        }
+        finally
+        {
+            _generatedValueTextApplication = null;
+        }
+
+        if (!string.Equals(
+                selection.Input.Text,
+                selection.GeneratedValue.PreviewValue,
+                StringComparison.Ordinal))
+        {
+            SetStatus(
+                "The selected text field did not accept the generated value.",
+                RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        if (!AddStep(result, selection.Input, "GeneratedValue"))
+        {
+            return;
+        }
+
+        _completedGeneratedValueInput = selection.Input;
+        _completedGeneratedValueText = selection.GeneratedValue.PreviewValue;
+        if (selection.DefinesGeneratedValue)
+        {
+            _lastGeneratedValueOrdinal = Math.Max(_lastGeneratedValueOrdinal, selection.GeneratedValue.Ordinal);
+        }
+    }
+
+    public void CaptureGeneratedValueAssertion(
+        RecorderCheckTargetSelection selection,
+        Guid generatedValueId,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        var generatedValue = CreateGeneratedValueOptions()
+            .FirstOrDefault(option => option.GeneratedValueId == generatedValueId);
+        if (generatedValue is null)
+        {
+            SetStatus("Selected generated value is missing or ignored.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateGeneratedValueAssertionStep(
+                selection.ValueSnapshot,
+                generatedValue,
+                comparisonKind),
+            selection.Target,
+            "GeneratedValue:Compare");
+    }
+
+    private void CompleteGeneratedValueTargetSelection(
+        Control target,
+        IReadOnlyList<Control>? visualCandidates)
+    {
+        var requestedGeneratedValueId = _requestedGeneratedValueId;
+        CancelGeneratedValueTargetSelectionCore();
+
+        var existingValue = requestedGeneratedValueId is { } generatedValueId
+            ? CreateGeneratedValueOptions()
+                .FirstOrDefault(option => option.GeneratedValueId == generatedValueId)
+            : null;
+        if (requestedGeneratedValueId is not null && existingValue is null)
+        {
+            SetStatus("Selected generated value is missing or ignored.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var definesGeneratedValue = existingValue is null;
+        var generatedValue = existingValue ?? CreateNextGeneratedValueOption();
+        var candidates = (visualCandidates ?? [target])
+            .Prepend(target)
+            .OfType<TextBox>()
+            .Distinct()
+            .ToArray();
+        var resolved = new List<(TextBox Input, RecordedControlDescriptor Control)>();
+        string? firstFailure = null;
+        foreach (var input in candidates)
+        {
+            if (!input.IsEffectivelyEnabled || input.IsReadOnly)
+            {
+                firstFailure ??= "Generated values can only be entered into an enabled writable text field.";
+                continue;
+            }
+
+            var result = _stepFactory.TryCreateGeneratedTextEntryStep(
+                input,
+                generatedValue.PreviewValue,
+                generatedValue,
+                definesGeneratedValue);
+            if (result.Success && result.Step is { } step)
+            {
+                resolved.Add((input, step.Control));
+            }
+            else if (!string.IsNullOrWhiteSpace(result.Message))
+            {
+                firstFailure ??= result.Message;
+            }
+        }
+
+        var logicalTargets = resolved
+            .GroupBy(
+                candidate => (
+                    candidate.Control.ControlType,
+                    candidate.Control.LocatorKind,
+                    candidate.Control.LocatorValue))
+            .ToArray();
+        if (logicalTargets.Length == 0)
+        {
+            SetStatus(
+                firstFailure ?? "Select a writable text field for the generated value.",
+                RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        if (logicalTargets.Length > 1)
+        {
+            SetStatus(
+                "The selected point resolves to more than one writable text field.",
+                RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var selected = logicalTargets[0].First();
+        GeneratedValueTargetSelected?.Invoke(
+            this,
+            new RecorderGeneratedValueTargetSelectedEventArgs(
+                new RecorderGeneratedValueTargetSelection(
+                    selected.Input,
+                    generatedValue,
+                    definesGeneratedValue,
+                    selected.Control.ProposedPropertyName)));
+    }
+
+    private RecorderGeneratedValueOption CreateNextGeneratedValueOption()
+    {
+        var ordinal = _lastGeneratedValueOrdinal + 1;
+        var graphValidation = RecorderScenarioGraphValidator.Validate(
+            _steps.Where(static step => !step.IsIgnored && step.CanPersist).ToArray());
+        var reservedNames = graphValidation.CheckpointVariables.Values
+            .Concat(graphValidation.GeneratedValueVariables.Values)
+            .ToHashSet(StringComparer.Ordinal);
+        var variableName = RecorderNaming.CreateGeneratedValueVariableName(
+            $"generatedValue{ordinal}",
+            reservedNames);
+        _recordingGeneratedValueSeries ??= RecordedValueGenerator.Start();
+        return new RecorderGeneratedValueOption(
+            Guid.NewGuid(),
+            variableName,
+            ordinal,
+            _recordingGeneratedValueSeries.Create(ordinal));
+    }
+
     private void CompleteCheckTargetSelection(
         Control target,
         IReadOnlyList<Control>? visualCandidates = null)
@@ -2839,6 +3243,14 @@ internal sealed class RecorderSession :
         _isCheckTargetSelectionActive = false;
     }
 
+    private void CancelGeneratedValueTargetSelectionCore()
+    {
+        _pendingGeneratedValueTargetControl = null;
+        _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
+        _requestedGeneratedValueId = null;
+        _isGeneratedValueTargetSelectionActive = false;
+    }
+
     private static List<Control> ResolveCheckTargetCandidates(
         Control? eventTarget,
         Control positionRoot,
@@ -2910,7 +3322,7 @@ internal sealed class RecorderSession :
         return control;
     }
 
-    private void AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
+    private bool AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
     {
         if (!result.Success || result.Step is null)
         {
@@ -2920,7 +3332,7 @@ internal sealed class RecorderSession :
                 SetStatus(result.Message, RecorderValidationStatus.Invalid);
             }
 
-            return;
+            return false;
         }
 
         var recordedStep = RevalidateStep(result.Step);
@@ -2938,7 +3350,7 @@ internal sealed class RecorderSession :
                     ? "Invalid recorder step was skipped."
                     : recordedStep.ValidationMessage,
                 RecorderValidationStatus.Invalid);
-            return;
+            return false;
         }
 
         var fingerprint = CreateFingerprint(recordedStep);
@@ -2946,7 +3358,7 @@ internal sealed class RecorderSession :
         if (string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal)
             && now - _lastRecordedAt < TimeSpan.FromMilliseconds(250))
         {
-            return;
+            return false;
         }
 
         _steps.Add(recordedStep);
@@ -2962,6 +3374,7 @@ internal sealed class RecorderSession :
             ResolveStepStatusMessage(effectiveStep, result.Message),
             effectiveStep.ValidationStatus);
         RequestAutosaveIfRecording();
+        return effectiveStep.CanPersist;
     }
 
     private bool TryRecordGridAction(Control? source)
@@ -3223,6 +3636,11 @@ internal sealed class RecorderSession :
             step.CheckpointId?.ToString("N") ?? string.Empty,
             step.ExpectedCheckpointId?.ToString("N") ?? string.Empty,
             step.CheckpointVariableName ?? string.Empty,
+            step.GeneratedValueId?.ToString("N") ?? string.Empty,
+            step.GeneratedValueVariableName ?? string.Empty,
+            step.GeneratedValueOrdinal?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.DefinesGeneratedValue,
+            step.ExpectedGeneratedValueId?.ToString("N") ?? string.Empty,
             step.HasExpectedLiteral,
             step.CanPersist);
     }
@@ -4130,8 +4548,22 @@ internal sealed class RecorderSession :
                 ? "checkpoint " + (CreateCheckpointOptions()
                     .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId)?.VariableName
                     ?? checkpointId.ToString("N"))
-                : "expected literal";
+                : step.ExpectedGeneratedValueId is { } generatedValueId
+                    ? "generated value " + (CreateGeneratedValueOptions()
+                        .FirstOrDefault(candidate => candidate.GeneratedValueId == generatedValueId)?.VariableName
+                        ?? generatedValueId.ToString("N"))
+                    : "expected literal";
             return $"Assert {target} {comparison} {expected}";
+        }
+
+        if (step.ActionKind == RecordedActionKind.EnterText
+            && step.GeneratedValueId is { } valueId)
+        {
+            var generatedValue = CreateGeneratedValueOptions()
+                .FirstOrDefault(candidate => candidate.GeneratedValueId == valueId);
+            return step.DefinesGeneratedValue
+                ? $"Generate {generatedValue?.VariableName ?? step.GeneratedValueVariableName ?? "value"} and enter it into {step.Control.ProposedPropertyName}"
+                : $"Enter generated value {generatedValue?.VariableName ?? step.GeneratedValueVariableName ?? "value"} into {step.Control.ProposedPropertyName}";
         }
 
         return step.ValidationStatus switch
@@ -4295,18 +4727,46 @@ internal sealed class RecorderSession :
 
     private IReadOnlyList<RecorderCheckpointOption> CreateCheckpointOptions()
     {
-        var reservedNames = new HashSet<string>(StringComparer.Ordinal);
-        return _steps
-            .Where(static step => !step.IsIgnored
-                && step.CanPersist
-                && step.ActionKind == RecordedActionKind.CaptureCheckpoint
+        var graphSteps = _steps
+            .Where(static step => !step.IsIgnored && step.CanPersist)
+            .ToArray();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
+        return graphSteps
+            .Where(static step => step.ActionKind == RecordedActionKind.CaptureCheckpoint
                 && step.CheckpointId is not null
                 && step.ValueKind is not null)
             .Select(step => new RecorderCheckpointOption(
                 step.CheckpointId!.Value,
-                RecorderNaming.CreateCheckpointVariableName(step.CheckpointVariableName, reservedNames),
+                graphValidation.CheckpointVariables.TryGetValue(
+                    step.CheckpointId.Value,
+                    out var variableName)
+                    ? variableName
+                    : step.CheckpointVariableName ?? "checkpointValue",
                 step.ValueKind!.Value,
                 step.Control.ProposedPropertyName))
+            .ToArray();
+    }
+
+    private IReadOnlyList<RecorderGeneratedValueOption> CreateGeneratedValueOptions()
+    {
+        var graphSteps = _steps
+            .Where(static step => !step.IsIgnored && step.CanPersist)
+            .ToArray();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
+        return graphSteps
+            .Where(static step => step.ActionKind == RecordedActionKind.EnterText
+                && step.DefinesGeneratedValue
+                && step.GeneratedValueId is not null
+                && step.GeneratedValueOrdinal is > 0)
+            .Select(step => new RecorderGeneratedValueOption(
+                step.GeneratedValueId!.Value,
+                graphValidation.GeneratedValueVariables.TryGetValue(
+                    step.GeneratedValueId.Value,
+                    out var variableName)
+                    ? variableName
+                    : step.GeneratedValueVariableName ?? $"generatedValue{step.GeneratedValueOrdinal}",
+                step.GeneratedValueOrdinal!.Value,
+                step.StringValue ?? string.Empty))
             .ToArray();
     }
 
@@ -4389,7 +4849,7 @@ internal sealed class RecorderSession :
         SetStatus(
             graphValidation.Success
                 ? successMessage
-                : graphValidation.Error ?? "Checkpoint dependency graph is invalid.",
+                : graphValidation.Error ?? "Scenario dependency graph is invalid.",
             graphValidation.Success ? successStatus : RecorderValidationStatus.Invalid);
     }
 

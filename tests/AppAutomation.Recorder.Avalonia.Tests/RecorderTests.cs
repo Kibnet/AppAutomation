@@ -538,7 +538,7 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task ConfigureProxy_MapsInnerPartCapture_BackToTypedLogicalLocator()
+    public async Task ConfigureTextBoxProxy_MapsInnerPartWithoutNormalPathWarning()
     {
         var options = new AppAutomationRecorderOptions();
         options.ConfigureProxy(
@@ -562,7 +562,7 @@ public sealed class RecorderTests
             await Assert.That(result.Control).IsNotNull();
             await Assert.That(result.Control!.LocatorValue).IsEqualTo("ServerFilterEditor");
             await Assert.That(result.Control.ControlType).IsEqualTo(UiControlType.TextBox);
-            await Assert.That(result.Control.Warning).Contains("Mapped recorder locator");
+            await Assert.That(result.Control.Warning).IsNull();
             await Assert.That(result.ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
             await Assert.That(result.CanPersist).IsEqualTo(true);
         }

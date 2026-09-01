@@ -3,6 +3,7 @@ using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -508,9 +509,13 @@ public sealed class RecorderScenarioDestinationTests
         session.SelectedScenarioDestination = destination;
         session.CanStartRecording = true;
         session.CanChangeScenarioTarget = true;
+        session.CanRestoreAutosave = true;
         overlay.RefreshForTesting();
 
         await AssertReadyState(overlay, destination);
+        FindRequired<Button>(overlay, "RestoreAutosaveButton")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Assert.That(session.RestoreAutosaveCallCount).IsEqualTo(1);
     }
 
     private static RecorderScenarioDestinationProject CreateGenericScenarioProject()
@@ -563,6 +568,7 @@ public sealed class RecorderScenarioDestinationTests
         var status = FindRequired<TextBlock>(overlay, "ScenarioScanStatus");
         var destinationBox = FindRequired<ComboBox>(overlay, "ScenarioDestinationComboBox");
         var nameBox = FindRequired<TextBox>(overlay, "ScenarioNameTextBox");
+        var restoreButton = FindRequired<Button>(overlay, "RestoreAutosaveButton");
         var recordButton = FindRequired<Button>(overlay, "RecordButton");
 
         using (Assert.Multiple())
@@ -572,10 +578,13 @@ public sealed class RecorderScenarioDestinationTests
             await Assert.That(destinationBox.SelectedItem).IsEqualTo(destination);
             await Assert.That(nameBox.Text).IsEqualTo("RecordedSmoke");
             await Assert.That(recordButton.IsEnabled).IsTrue();
+            await Assert.That(restoreButton.IsEnabled).IsTrue();
             await Assert.That(AutomationProperties.GetAutomationId(destinationBox))
                 .IsEqualTo("RecorderScenarioDestination");
             await Assert.That(AutomationProperties.GetAutomationId(nameBox))
                 .IsEqualTo("RecorderScenarioName");
+            await Assert.That(AutomationProperties.GetAutomationId(restoreButton))
+                .IsEqualTo("RecorderRestoreAutosave");
         }
     }
 

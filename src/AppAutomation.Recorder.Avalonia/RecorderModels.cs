@@ -335,6 +335,12 @@ internal sealed record RecorderCheckpointOption(
     RecorderValueKind ValueKind,
     string ControlName);
 
+internal sealed record RecorderGeneratedValueOption(
+    Guid GeneratedValueId,
+    string VariableName,
+    int Ordinal,
+    string PreviewValue);
+
 internal sealed record RecordedControlDescriptor(
     string ProposedPropertyName,
     UiControlType ControlType,
@@ -400,7 +406,12 @@ internal sealed record RecordedStep(
     Guid? ExpectedCheckpointId = null,
     bool HasExpectedLiteral = false,
     RecorderDateExpression? DateExpression = null,
-    RecorderDateExpression? SecondDateExpression = null)
+    RecorderDateExpression? SecondDateExpression = null,
+    Guid? GeneratedValueId = null,
+    string? GeneratedValueVariableName = null,
+    int? GeneratedValueOrdinal = null,
+    bool DefinesGeneratedValue = false,
+    Guid? ExpectedGeneratedValueId = null)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 

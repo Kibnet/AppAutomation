@@ -416,6 +416,10 @@ internal sealed class FakeScenarioSelectionSession :
 
     public bool CanChangeScenarioTarget { get; set; }
 
+    public bool CanRestoreAutosave { get; set; }
+
+    public int RestoreAutosaveCallCount { get; private set; }
+
     public string CurrentScenarioFilePath => "future.g.cs";
 
     public void Start() => State = RecorderSessionState.Recording;
@@ -450,6 +454,12 @@ internal sealed class FakeScenarioSelectionSession :
     {
         ScenarioName = scenarioName ?? string.Empty;
         return true;
+    }
+
+    public Task<bool> RestoreAutosaveAsync(CancellationToken cancellationToken = default)
+    {
+        RestoreAutosaveCallCount++;
+        return Task.FromResult(true);
     }
 
     public void Dispose()

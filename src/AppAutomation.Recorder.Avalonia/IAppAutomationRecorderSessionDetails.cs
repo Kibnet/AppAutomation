@@ -72,6 +72,26 @@ internal interface IRecorderCheckpointSessionDetails
         RecorderDateExpression? dateExpression = null);
 }
 
+internal interface IRecorderGeneratedValueSessionDetails
+{
+    event EventHandler<RecorderGeneratedValueTargetSelectedEventArgs>? GeneratedValueTargetSelected;
+
+    IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues { get; }
+
+    bool IsGeneratedValueTargetSelectionActive { get; }
+
+    void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null);
+
+    void CancelGeneratedValueTargetSelection();
+
+    void ApplyGeneratedValue(RecorderGeneratedValueTargetSelection selection);
+
+    void CaptureGeneratedValueAssertion(
+        RecorderCheckTargetSelection selection,
+        Guid generatedValueId,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal);
+}
+
 internal interface IRecorderRelativeDateSessionDetails
 {
     bool TryGetDateConfiguration(
@@ -96,6 +116,18 @@ internal sealed record RecorderCheckTargetSelection(
 internal sealed class RecorderCheckTargetSelectedEventArgs(RecorderCheckTargetSelection selection) : EventArgs
 {
     public RecorderCheckTargetSelection Selection { get; } = selection;
+}
+
+internal sealed record RecorderGeneratedValueTargetSelection(
+    TextBox Input,
+    RecorderGeneratedValueOption GeneratedValue,
+    bool DefinesGeneratedValue,
+    string ControlName);
+
+internal sealed class RecorderGeneratedValueTargetSelectedEventArgs(
+    RecorderGeneratedValueTargetSelection selection) : EventArgs
+{
+    public RecorderGeneratedValueTargetSelection Selection { get; } = selection;
 }
 
 internal enum RecorderStepMoveDirection

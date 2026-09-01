@@ -285,6 +285,61 @@ internal sealed class RecorderStepFactory
             locatorResult.Message);
     }
 
+    internal StepCreationResult TryCreateGeneratedTextEntryStep(
+        TextBox textBox,
+        string previewValue,
+        RecorderGeneratedValueOption generatedValue,
+        bool definesGeneratedValue)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+        ArgumentNullException.ThrowIfNull(generatedValue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(previewValue);
+
+        if (TryResolveSearchControlHint(textBox, out _))
+        {
+            return StepCreationResult.Unsupported(
+                "Generated values can only be entered into a writable text field, not a SearchControl input.");
+        }
+
+        if (MatchesSearchPickerTextPart(textBox)
+            || MatchesGridSearchPickerTextPart(textBox)
+            || ShouldSuppressCompositeTextEntry(textBox))
+        {
+            return StepCreationResult.Unsupported(
+                "Generated values are not supported for an internal part of a composite control.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(textBox, UiControlType.TextBox);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        var descriptor = locatorResult.Control;
+        if (descriptor.ControlType != UiControlType.TextBox
+            || TryResolveActionHint(textBox, descriptor) != RecorderActionHint.None)
+        {
+            return StepCreationResult.Unsupported(
+                "Generated values can only be entered into a logical ITextBoxControl.");
+        }
+
+        return CreateStep(
+            textBox,
+            new RecordedStep(
+                RecordedActionKind.EnterText,
+                descriptor,
+                StringValue: previewValue,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist,
+                GeneratedValueId: generatedValue.GeneratedValueId,
+                GeneratedValueVariableName: generatedValue.VariableName,
+                GeneratedValueOrdinal: generatedValue.Ordinal,
+                DefinesGeneratedValue: definesGeneratedValue),
+            locatorResult.Message);
+    }
+
     public StepCreationResult TryCreateComboBoxStep(ComboBox comboBox)
     {
         ArgumentNullException.ThrowIfNull(comboBox);
@@ -2121,6 +2176,41 @@ internal sealed class RecorderStepFactory
         return CreateStepFromSnapshot(snapshot, step, $"Added assertion against checkpoint '{checkpoint.VariableName}'.");
     }
 
+    internal StepCreationResult TryCreateGeneratedValueAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderGeneratedValueOption generatedValue,
+        RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
+    {
+        ArgumentNullException.ThrowIfNull(generatedValue);
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (candidate.ValueKind is not RecorderValueKind.Text and not RecorderValueKind.GridCellText)
+        {
+            return StepCreationResult.Unsupported(
+                $"Selected value is {candidate.ValueKind}, but generated value '{generatedValue.VariableName}' is text.");
+        }
+
+        if (comparisonKind is not RecorderComparisonKind.Equal and not RecorderComparisonKind.NotEqual)
+        {
+            return StepCreationResult.Unsupported(
+                $"Generated text values do not support the {comparisonKind} comparison.");
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: comparisonKind,
+            expectedGeneratedValueId: generatedValue.GeneratedValueId);
+        return CreateStepFromSnapshot(
+            snapshot,
+            step,
+            $"Added assertion against generated value '{generatedValue.VariableName}'.");
+    }
+
     private static bool TryNormalizeCheckpointComparison(
         RecorderValueKind valueKind,
         RecorderComparisonKind requested,
@@ -2310,6 +2400,7 @@ internal sealed class RecorderStepFactory
         string? checkpointVariableName = null,
         RecorderComparisonKind? comparisonKind = null,
         Guid? expectedCheckpointId = null,
+        Guid? expectedGeneratedValueId = null,
         bool hasExpectedLiteral = false,
         RecorderDateExpression? dateExpression = null)
     {
@@ -2330,6 +2421,7 @@ internal sealed class RecorderStepFactory
             CheckpointId: checkpointId,
             CheckpointVariableName: checkpointVariableName,
             ExpectedCheckpointId: expectedCheckpointId,
+            ExpectedGeneratedValueId: expectedGeneratedValueId,
             HasExpectedLiteral: hasExpectedLiteral,
             DateExpression: dateExpression)
         {

@@ -173,6 +173,7 @@ internal sealed class RecorderSelectorResolver
         var isConfiguredSingleSelect = _options.SingleSelectHints.Any(hint =>
             hint.LocatorKind == alias.TargetLocatorKind
             && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
+        var isConfiguredTextBoxProxy = alias.TargetControlType == UiControlType.TextBox;
 
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -182,7 +183,11 @@ internal sealed class RecorderSelectorResolver
                 alias.TargetLocatorKind,
                 alias.FallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                isConfiguredSpinnerProxy || isConfiguredTimePicker || isConfiguredDatePicker || isConfiguredSingleSelect
+                isConfiguredSpinnerProxy
+                    || isConfiguredTimePicker
+                    || isConfiguredDatePicker
+                    || isConfiguredSingleSelect
+                    || isConfiguredTextBoxProxy
                     ? warning
                     : CombineMessage(warning, aliasMessage)),
             message: validation.Message ?? aliasMessage,

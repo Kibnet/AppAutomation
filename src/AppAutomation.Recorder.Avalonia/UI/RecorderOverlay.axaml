@@ -70,16 +70,26 @@
                                          automation:AutomationProperties.AutomationId="RecorderScenarioName" />
                             </StackPanel>
                         </Grid>
-                        <TextBlock x:Name="ScenarioSelectionErrorText"
-                                   Grid.Row="3"
-                                   Foreground="{DynamicResource RecorderDanger}"
-                                   TextWrapping="Wrap"
-                                   automation:AutomationProperties.AutomationId="RecorderScenarioSelectionError" />
+                        <Grid Grid.Row="3"
+                              ColumnDefinitions="Auto,*"
+                              ColumnSpacing="8">
+                            <Button x:Name="RestoreAutosaveButton"
+                                    Grid.Column="0"
+                                    Padding="8,3"
+                                    Content="Restore draft"
+                                    automation:AutomationProperties.AutomationId="RecorderRestoreAutosave" />
+                            <TextBlock x:Name="ScenarioSelectionErrorText"
+                                       Grid.Column="1"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource RecorderDanger}"
+                                       TextWrapping="Wrap"
+                                       automation:AutomationProperties.AutomationId="RecorderScenarioSelectionError" />
+                        </Grid>
                     </Grid>
                 </Border>
 
                 <Grid Grid.Row="1"
-                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
+                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
                       ColumnSpacing="8">
                     <Button x:Name="RecordButton"
                             Grid.Column="0"
@@ -109,21 +119,26 @@
                             Padding="10,4"
                             Content="Check"
                             automation:AutomationProperties.AutomationId="RecorderCheckButton" />
+                    <Button x:Name="GenerateValueButton"
+                            Grid.Column="6"
+                            Padding="10,4"
+                            Content="Generate value"
+                            automation:AutomationProperties.AutomationId="RecorderGenerateValueButton" />
                     <TextBlock x:Name="StepCounter"
-                               Grid.Column="6"
+                               Grid.Column="7"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderAccent}"
                                FontWeight="SemiBold"
                                Text="0 steps" />
                     <TextBlock x:Name="ValidationBadgeText"
-                               Grid.Column="7"
+                               Grid.Column="8"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Text="VALID" />
                     <TextBlock x:Name="StatusText"
-                               Grid.Column="8"
+                               Grid.Column="9"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderMuted}"

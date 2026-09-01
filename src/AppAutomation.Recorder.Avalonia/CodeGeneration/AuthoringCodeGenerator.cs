@@ -70,6 +70,95 @@ internal sealed class AuthoringCodeGenerator
         return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext, cancellationToken);
     }
 
+    internal Task<RecorderAutosaveRestoreResult> RestoreAutosaveAsync(
+        Window window,
+        AppAutomationRecorderOptions options,
+        string? outputDirectoryOverride,
+        RecorderScenarioSaveContext saveContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(saveContext);
+
+        if (string.IsNullOrWhiteSpace(options.AuthoringProjectDirectory))
+        {
+            return Task.FromResult(RecorderAutosaveRestoreResult.Failed(
+                "Authoring project directory is not configured."));
+        }
+
+        var projectDirectory = Path.GetFullPath(options.AuthoringProjectDirectory);
+        if (!Directory.Exists(projectDirectory))
+        {
+            return Task.FromResult(RecorderAutosaveRestoreResult.Failed(
+                $"Authoring project directory '{projectDirectory}' does not exist."));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var target = ResolveTargetConfiguration(
+            window,
+            options,
+            projectDirectory,
+            outputDirectoryOverride,
+            saveContext);
+        var diagnostics = new List<string>();
+        var candidates = new List<(string FilePath, RecorderAutosaveState State)>();
+        string? recoveryError = null;
+        foreach (var filePath in FindAutosaveFilesForDestination(target, diagnostics)
+                     .Where(static path => path.EndsWith(".g.cs.autosave", StringComparison.OrdinalIgnoreCase)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!RecorderAutosaveStateSerializer.TryRead(filePath, out var state, out var error))
+            {
+                recoveryError ??= error;
+                continue;
+            }
+
+            if (string.Equals(state!.ScenarioName, target.ScenarioName, StringComparison.Ordinal))
+            {
+                candidates.Add((filePath, state));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return Task.FromResult(recoveryError is null
+                ? RecorderAutosaveRestoreResult.NotFound(
+                    $"No autosave recovery was found for scenario '{target.ScenarioName}'.")
+                : RecorderAutosaveRestoreResult.Failed(recoveryError));
+        }
+
+        var recovery = candidates
+            .OrderByDescending(static candidate => candidate.State.SavedAtUtc)
+            .ThenByDescending(static candidate => File.GetLastWriteTimeUtc(candidate.FilePath))
+            .ThenBy(static candidate => candidate.FilePath, StringComparer.OrdinalIgnoreCase)
+            .First();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(recovery.State.Steps);
+        if (!graphValidation.Success)
+        {
+            return Task.FromResult(RecorderAutosaveRestoreResult.Failed(
+                $"Recorder autosave recovery graph is invalid: {graphValidation.Error}"));
+        }
+
+        var scenarioPrefix = $"{target.ScenarioClassName}.";
+        var pageFilePath = GetPairedPageAutosavePath(
+                target.PageClassName,
+                recovery.FilePath,
+                scenarioPrefix)
+            ?? Path.Combine(target.OutputDirectory, $"{target.PageClassName}.controls.g.cs.autosave");
+        var restoredTarget = new AuthoringSaveTarget(
+            pageFilePath,
+            recovery.FilePath,
+            recovery.State.MethodName);
+        _autosaveTargets[CreateAutosaveTargetKey(target, recovery.State.DraftIdentity)] =
+            new AutosaveTargetRegistration(CreateAutosaveDestinationKey(target), restoredTarget);
+
+        return Task.FromResult(RecorderAutosaveRestoreResult.Restored(
+            $"Restored {recovery.State.Steps.Count} recorded step(s) for scenario '{target.ScenarioName}'.",
+            recovery.State.DraftIdentity,
+            recovery.State.Steps));
+    }
+
     private async Task<RecorderSaveResult> SaveCoreAsync(
         Window window,
         AppAutomationRecorderOptions options,
@@ -113,7 +202,7 @@ internal sealed class AuthoringCodeGenerator
         if (!activeGraphValidation.Success)
         {
             return RecorderSaveResult.Failed(
-                $"Recorder checkpoint graph is invalid: {activeGraphValidation.Error}");
+                $"Recorder scenario graph is invalid: {activeGraphValidation.Error}");
         }
 
         var persistableSteps = activeSteps.Where(static step => step.CanPersist).ToArray();
@@ -134,12 +223,14 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var invalidSemanticStep = skippedSteps.FirstOrDefault(static step =>
-            step.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue);
+            step.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue
+            || step.GeneratedValueId is not null
+            || step.ExpectedGeneratedValueId is not null);
         if (invalidSemanticStep is not null)
         {
             return RecorderSaveResult.Failed(
                 invalidSemanticStep.ValidationMessage
-                ?? $"Recorder checkpoint step '{invalidSemanticStep.ActionKind}' is invalid and must be fixed or removed before save.",
+                ?? $"Recorder semantic step '{invalidSemanticStep.ActionKind}' is invalid and must be fixed or removed before save.",
                 diagnostics.ToArray());
         }
 
@@ -147,7 +238,7 @@ internal sealed class AuthoringCodeGenerator
         if (!graphValidation.Success)
         {
             return RecorderSaveResult.Failed(
-                $"Recorder checkpoint graph is invalid: {graphValidation.Error}",
+                $"Recorder scenario graph is invalid: {graphValidation.Error}",
                 diagnostics.ToArray());
         }
 
@@ -245,7 +336,16 @@ internal sealed class AuthoringCodeGenerator
             renderedStatements.Add(GenerateStepStatement(
                 step,
                 controlInfo!.PropertyName,
-                graphValidation.CheckpointVariables));
+                graphValidation.CheckpointVariables,
+                graphValidation.GeneratedValueVariables,
+                graphValidation.GeneratedValueSeriesVariable));
+        }
+
+        if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
+        {
+            renderedStatements.Insert(
+                0,
+                $"var {generatedValueSeriesVariable} = RecordedValueGenerator.Start();");
         }
 
         var containsAssertions = persistableSteps.Any(
@@ -283,6 +383,15 @@ internal sealed class AuthoringCodeGenerator
         var autosaveDestinationId = saveKind == AuthoringSaveKind.Autosave
             ? CreateAutosaveDestinationId(target)
             : null;
+        var autosaveStateMarker = saveKind == AuthoringSaveKind.Autosave
+            ? RecorderAutosaveStateSerializer.CreateMarker(
+                new RecorderAutosaveState(
+                    target.ScenarioName,
+                    saveContext?.DraftIdentity ?? string.Empty,
+                    saveTarget.MethodName,
+                    DateTimeOffset.UtcNow,
+                    persistableSteps))
+            : null;
 
         var pageSource = pageFilePath is null
             ? null
@@ -298,7 +407,8 @@ internal sealed class AuthoringCodeGenerator
                 containsAssertions,
                 containsRelativeDates,
                 isAutosave: saveKind == AuthoringSaveKind.Autosave,
-                autosaveDestinationId: autosaveDestinationId);
+                autosaveDestinationId: autosaveDestinationId,
+                autosaveStateMarker: autosaveStateMarker);
         }
         else if (!TryMergeScenarioPartial(
                      scenarioFilePath,
@@ -407,16 +517,25 @@ internal sealed class AuthoringCodeGenerator
         var graphValidation = RecorderScenarioGraphValidator.Validate(steps);
         if (!graphValidation.Success)
         {
-            return $"// AppAutomation recorder checkpoint error: {SanitizeCommentText(graphValidation.Error ?? "Unknown checkpoint graph error.")}";
+            return $"// AppAutomation recorder graph error: {SanitizeCommentText(graphValidation.Error ?? "Unknown scenario graph error.")}";
         }
 
         var builder = new StringBuilder();
+        if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
+        {
+            builder.Append("var ")
+                .Append(generatedValueSeriesVariable)
+                .AppendLine(" = RecordedValueGenerator.Start();");
+        }
+
         foreach (var step in steps)
         {
             builder.AppendLine(GenerateStepStatement(
                 step,
                 step.Control.ProposedPropertyName,
-                graphValidation.CheckpointVariables));
+                graphValidation.CheckpointVariables,
+                graphValidation.GeneratedValueVariables,
+                graphValidation.GeneratedValueSeriesVariable));
         }
 
         return builder.ToString().TrimEnd();
@@ -437,7 +556,7 @@ internal sealed class AuthoringCodeGenerator
         var graphValidation = RecorderScenarioGraphValidator.Validate(scenarioSteps);
         if (graphValidation.StepErrors.TryGetValue(step.StepId, out var error))
         {
-            return $"// AppAutomation recorder checkpoint error: {SanitizeCommentText(error)}";
+            return $"// AppAutomation recorder graph error: {SanitizeCommentText(error)}";
         }
 
         var checkpointVariables = graphValidation.CheckpointVariables;
@@ -453,10 +572,15 @@ internal sealed class AuthoringCodeGenerator
             checkpointVariables = variables;
         }
 
-        return GenerateStepStatement(
+        var statement = GenerateStepStatement(
             step,
             step.Control.ProposedPropertyName,
-            checkpointVariables);
+            checkpointVariables,
+            graphValidation.GeneratedValueVariables,
+            graphValidation.GeneratedValueSeriesVariable);
+        return step.DefinesGeneratedValue && graphValidation.GeneratedValueSeriesVariable is { } seriesVariable
+            ? $"var {seriesVariable} = RecordedValueGenerator.Start();{Environment.NewLine}{statement}"
+            : statement;
     }
 
     private static string? ValidateSnapshot(AuthoringTargetConfiguration target, AuthoringProjectSnapshot snapshot)
@@ -1034,7 +1158,8 @@ internal sealed class AuthoringCodeGenerator
             containsAssertions,
             containsRelativeDates,
             isAutosave: false,
-            autosaveDestinationId: null);
+            autosaveDestinationId: null,
+            autosaveStateMarker: null);
         var generatedMethod = CSharpSyntaxTree.ParseText(generatedSource)
             .GetCompilationUnitRoot()
             .DescendantNodes()
@@ -1080,11 +1205,16 @@ internal sealed class AuthoringCodeGenerator
         bool containsAssertions,
         bool containsRelativeDates,
         bool isAutosave,
-        string? autosaveDestinationId)
+        string? autosaveDestinationId,
+        string? autosaveStateMarker)
     {
         var builder = new StringBuilder();
         builder.AppendLine(RecorderGeneratedMarker);
         AppendAutosaveDestinationMarker(builder, autosaveDestinationId);
+        if (!string.IsNullOrWhiteSpace(autosaveStateMarker))
+        {
+            builder.AppendLine(autosaveStateMarker);
+        }
         builder.AppendLine("using AppAutomation.Abstractions;");
         if (containsRelativeDates)
         {
@@ -1200,7 +1330,9 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateStepStatement(
         RecordedStep step,
         string propertyName,
-        IReadOnlyDictionary<Guid, string> checkpointVariables)
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        string? generatedValueSeriesVariable)
     {
         var statement = step.ActionKind switch
         {
@@ -1211,8 +1343,13 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.AssertValue => GenerateAssertionStatement(
                 step,
                 propertyName,
-                checkpointVariables),
-            RecordedActionKind.EnterText => $"Page.EnterText(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
+                checkpointVariables,
+                generatedValueVariables),
+            RecordedActionKind.EnterText => GenerateEnterTextStatement(
+                step,
+                propertyName,
+                generatedValueVariables,
+                generatedValueSeriesVariable),
             RecordedActionKind.ClickButton => $"Page.ClickButton(static page => page.{propertyName});",
             RecordedActionKind.SetChecked => $"Page.SetChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SetToggled => $"Page.SetToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1339,7 +1476,8 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateAssertionStatement(
         RecordedStep step,
         string propertyName,
-        IReadOnlyDictionary<Guid, string> checkpointVariables)
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        IReadOnlyDictionary<Guid, string> generatedValueVariables)
     {
         var actual = GenerateValueExpression(step, propertyName);
         if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
@@ -1373,6 +1511,14 @@ internal sealed class AuthoringCodeGenerator
                 throw new InvalidOperationException($"Assertion references unvalidated checkpoint '{checkpointId}'.");
             }
         }
+        else if (step.ExpectedGeneratedValueId is { } generatedValueId)
+        {
+            if (!generatedValueVariables.TryGetValue(generatedValueId, out expected!))
+            {
+                throw new InvalidOperationException(
+                    $"Assertion references unvalidated generated value '{generatedValueId}'.");
+            }
+        }
         else
         {
             expected = FormatExpectedLiteral(step);
@@ -1392,6 +1538,38 @@ internal sealed class AuthoringCodeGenerator
         };
 
         return $"await {assertion};";
+    }
+
+    private static string GenerateEnterTextStatement(
+        RecordedStep step,
+        string propertyName,
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        string? generatedValueSeriesVariable)
+    {
+        if (step.GeneratedValueId is not { } generatedValueId)
+        {
+            return $"Page.EnterText(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");";
+        }
+
+        if (!generatedValueVariables.TryGetValue(generatedValueId, out var variableName))
+        {
+            throw new InvalidOperationException(
+                $"EnterText references unvalidated generated value '{generatedValueId}'.");
+        }
+
+        var enterText = $"Page.EnterText(static page => page.{propertyName}, {variableName});";
+        if (!step.DefinesGeneratedValue)
+        {
+            return enterText;
+        }
+
+        if (generatedValueSeriesVariable is null || step.GeneratedValueOrdinal is not > 0)
+        {
+            throw new InvalidOperationException(
+                $"Generated value definition '{generatedValueId}' does not have a validated series and ordinal.");
+        }
+
+        return $"var {variableName} = {generatedValueSeriesVariable}.Create({step.GeneratedValueOrdinal.Value});{Environment.NewLine}{enterText}";
     }
 
     private static string GenerateValueExpression(RecordedStep step, string propertyName)

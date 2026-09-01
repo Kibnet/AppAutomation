@@ -25,6 +25,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _exportButton;
     private Button? _settingsButton;
     private Button? _checkButton;
+    private Button? _generateValueButton;
     private Button? _copyDiagnosticLogPathButton;
     private CheckBox? _diagnosticLogCheckBox;
     private TextBlock? _stepCounter;
@@ -41,6 +42,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private TextBlock? _scenarioScanStatus;
     private ComboBox? _scenarioDestinationComboBox;
     private TextBox? _scenarioNameTextBox;
+    private Button? _restoreAutosaveButton;
     private TextBlock? _scenarioSelectionErrorText;
     private ScrollViewer? _stepJournalScrollViewer;
     private Panel? _stepJournalPanel;
@@ -48,6 +50,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
     private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
     private IRecorderCheckpointSessionDetails? _checkpointDetails;
+    private IRecorderGeneratedValueSessionDetails? _generatedValueDetails;
     private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
     private int _renderedJournalEntryCount;
     private bool _isRefreshingScenarioSelection;
@@ -77,6 +80,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
         _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
         _checkpointDetails = session as IRecorderCheckpointSessionDetails;
+        _generatedValueDetails = session as IRecorderGeneratedValueSessionDetails;
         _relativeDateDetails = session as IRecorderRelativeDateSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
@@ -121,6 +125,11 @@ internal sealed partial class RecorderOverlay : UserControl
             _checkpointDetails.CheckTargetSelected += OnCheckTargetSelected;
         }
 
+        if (_generatedValueDetails is not null)
+        {
+            _generatedValueDetails.GeneratedValueTargetSelected += OnGeneratedValueTargetSelected;
+        }
+
         Refresh();
     }
 
@@ -153,6 +162,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _exportButton = this.FindControl<Button>("ExportButton");
         _settingsButton = this.FindControl<Button>("SettingsButton");
         _checkButton = this.FindControl<Button>("CheckButton");
+        _generateValueButton = this.FindControl<Button>("GenerateValueButton");
         _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
         _diagnosticLogCheckBox = this.FindControl<CheckBox>("DiagnosticLogCheckBox");
         _stepCounter = this.FindControl<TextBlock>("StepCounter");
@@ -169,6 +179,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _scenarioScanStatus = this.FindControl<TextBlock>("ScenarioScanStatus");
         _scenarioDestinationComboBox = this.FindControl<ComboBox>("ScenarioDestinationComboBox");
         _scenarioNameTextBox = this.FindControl<TextBox>("ScenarioNameTextBox");
+        _restoreAutosaveButton = this.FindControl<Button>("RestoreAutosaveButton");
         _scenarioSelectionErrorText = this.FindControl<TextBlock>("ScenarioSelectionErrorText");
         _stepJournalScrollViewer = this.FindControl<ScrollViewer>("StepJournalScrollViewer");
         _stepJournalPanel = this.FindControl<Panel>("StepJournalPanel");
@@ -203,6 +214,11 @@ internal sealed partial class RecorderOverlay : UserControl
             _checkButton.Click += OnCheckClick;
         }
 
+        if (_generateValueButton is not null)
+        {
+            _generateValueButton.Click += OnGenerateValueClick;
+        }
+
         if (_diagnosticLogCheckBox is not null)
         {
             _diagnosticLogCheckBox.Click += OnDiagnosticLogToggleClick;
@@ -223,6 +239,11 @@ internal sealed partial class RecorderOverlay : UserControl
             _scenarioNameTextBox.TextChanged += OnScenarioNameTextChanged;
         }
 
+        if (_restoreAutosaveButton is not null)
+        {
+            _restoreAutosaveButton.Click += OnRestoreAutosaveClick;
+        }
+
         AddHandler(
             InputElement.KeyDownEvent,
             OnOverlayKeyDown,
@@ -232,13 +253,21 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private void OnOverlayKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape || _checkpointDetails?.IsCheckTargetSelectionActive != true)
+        if (e.Key != Key.Escape)
         {
             return;
         }
 
-        _checkpointDetails.CancelCheckTargetSelection();
-        e.Handled = true;
+        if (_checkpointDetails?.IsCheckTargetSelectionActive == true)
+        {
+            _checkpointDetails.CancelCheckTargetSelection();
+            e.Handled = true;
+        }
+        else if (_generatedValueDetails?.IsGeneratedValueTargetSelectionActive == true)
+        {
+            _generatedValueDetails.CancelGeneratedValueTargetSelection();
+            e.Handled = true;
+        }
     }
 
     private void OnScenarioDestinationSelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -346,9 +375,142 @@ internal sealed partial class RecorderOverlay : UserControl
         Refresh();
     }
 
+    private async void OnRestoreAutosaveClick(object? sender, RoutedEventArgs e)
+    {
+        if (_scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        await _scenarioSelectionDetails.RestoreAutosaveAsync();
+        Refresh();
+    }
+
     private void OnCheckClick(object? sender, RoutedEventArgs e)
     {
         _checkpointDetails?.BeginCheckTargetSelection();
+    }
+
+    private void OnGenerateValueClick(object? sender, RoutedEventArgs e)
+    {
+        if (_generateValueButton is null || _generatedValueDetails is null)
+        {
+            return;
+        }
+
+        CreateGeneratedValueMenu().ShowAt(_generateValueButton);
+    }
+
+    private MenuFlyout CreateGeneratedValueMenu()
+    {
+        if (_generatedValueDetails is null)
+        {
+            throw new InvalidOperationException("Recorder generated-value details are not attached.");
+        }
+
+        var menu = new MenuFlyout();
+        var create = new MenuItem { Header = "New value" };
+        create.Click += (_, _) => _generatedValueDetails.BeginGeneratedValueTargetSelection();
+        menu.Items.Add(create);
+
+        var existingValues = _generatedValueDetails.GeneratedValues;
+        if (existingValues.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+        }
+
+        foreach (var generatedValue in existingValues)
+        {
+            var reuse = new MenuItem
+            {
+                Header = $"{generatedValue.VariableName} ({generatedValue.PreviewValue})",
+                Tag = generatedValue.GeneratedValueId
+            };
+            reuse.Click += (_, _) =>
+                _generatedValueDetails.BeginGeneratedValueTargetSelection(generatedValue.GeneratedValueId);
+            menu.Items.Add(reuse);
+        }
+
+        return menu;
+    }
+
+    internal MenuFlyout CreateGeneratedValueMenuForTesting() => CreateGeneratedValueMenu();
+
+    private void OnGeneratedValueTargetSelected(
+        object? sender,
+        RecorderGeneratedValueTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() => ShowGeneratedValueConfirmation(e.Selection));
+    }
+
+    private void ShowGeneratedValueConfirmation(RecorderGeneratedValueTargetSelection selection)
+    {
+        if (_generateValueButton is null)
+        {
+            return;
+        }
+
+        var flyout = new Flyout();
+        flyout.Content = CreateGeneratedValueConfirmation(selection, flyout.Hide);
+        flyout.ShowAt(_generateValueButton);
+    }
+
+    internal Control CreateGeneratedValueConfirmationForTesting(
+        RecorderGeneratedValueTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateGeneratedValueConfirmation(selection, static () => { });
+    }
+
+    private StackPanel CreateGeneratedValueConfirmation(
+        RecorderGeneratedValueTargetSelection selection,
+        Action close)
+    {
+        if (_generatedValueDetails is null)
+        {
+            throw new InvalidOperationException("Recorder generated-value details are not attached.");
+        }
+
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        add.Click += (_, _) =>
+        {
+            _generatedValueDetails.ApplyGeneratedValue(selection);
+            close();
+        };
+        cancel.Click += (_, _) => close();
+
+        return new StackPanel
+        {
+            Width = 300,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = selection.DefinesGeneratedValue
+                        ? "Generate and enter value"
+                        : "Enter generated value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                new TextBlock
+                {
+                    Text = selection.GeneratedValue.PreviewValue,
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new TextBlock
+                {
+                    Text = $"Target: {selection.ControlName}",
+                    Foreground = GetBrush("RecorderMuted")
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
     }
 
     private void OnCheckTargetSelected(object? sender, RecorderCheckTargetSelectedEventArgs e)
@@ -436,6 +598,38 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         menu.Items.Add(compare);
+
+        var compareWithGenerated = new MenuItem { Header = "Compare with generated value" };
+        var generatedValues = currentValue?.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
+            ? _generatedValueDetails?.GeneratedValues ?? Array.Empty<RecorderGeneratedValueOption>()
+            : Array.Empty<RecorderGeneratedValueOption>();
+        compareWithGenerated.IsEnabled = generatedValues.Count > 0;
+        foreach (var generatedValue in generatedValues)
+        {
+            var generatedValueItem = new MenuItem
+            {
+                Header = generatedValue.VariableName,
+                Tag = generatedValue.GeneratedValueId
+            };
+            foreach (var comparisonKind in new[]
+                     {
+                         RecorderComparisonKind.Equal,
+                         RecorderComparisonKind.NotEqual
+                     })
+            {
+                var comparisonItem = new MenuItem { Header = DescribeComparison(comparisonKind) };
+                comparisonItem.Click += (_, _) =>
+                    _generatedValueDetails?.CaptureGeneratedValueAssertion(
+                        selection,
+                        generatedValue.GeneratedValueId,
+                        comparisonKind);
+                generatedValueItem.Items.Add(comparisonItem);
+            }
+
+            compareWithGenerated.Items.Add(generatedValueItem);
+        }
+
+        menu.Items.Add(compareWithGenerated);
 
         if (currentValue is not null
             && RecorderValueAssertions.TryGetHasValueAssertionKind(currentValue.ValueKind, out _))
@@ -882,6 +1076,16 @@ internal sealed partial class RecorderOverlay : UserControl
             }
         }
 
+        if (_generateValueButton is not null)
+        {
+            _generateValueButton.IsEnabled = !isBusy
+                && _session.State == RecorderSessionState.Recording
+                && _generatedValueDetails is not null;
+            ToolTip.SetTip(
+                _generateValueButton,
+                "Create a new runtime value or reuse one already generated in this scenario.");
+        }
+
         if (_stepCounter is not null)
         {
             _stepCounter.Text = _session.PersistableStepCount == _session.StepCount
@@ -987,6 +1191,11 @@ internal sealed partial class RecorderOverlay : UserControl
                 }
 
                 _scenarioNameTextBox.IsEnabled = selection.CanChangeScenarioTarget;
+            }
+
+            if (_restoreAutosaveButton is not null)
+            {
+                _restoreAutosaveButton.IsEnabled = selection.CanRestoreAutosave;
             }
 
             if (_scenarioSelectionErrorText is not null)
