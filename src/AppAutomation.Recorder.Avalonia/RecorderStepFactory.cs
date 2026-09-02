@@ -2211,6 +2211,60 @@ internal sealed class RecorderStepFactory
             $"Added assertion against generated value '{generatedValue.VariableName}'.");
     }
 
+    internal static bool TryCreateNumericControlOperand(
+        RecorderSemanticValueSnapshot? snapshot,
+        out RecorderNumericOperand? operand,
+        out string error)
+    {
+        operand = null;
+        if (snapshot is null)
+        {
+            error = "The selected operand does not expose a readable semantic value.";
+            return false;
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (candidate.ValueKind != RecorderValueKind.Number
+            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        {
+            error = "Selected operand does not expose a numeric value.";
+            return false;
+        }
+
+        operand = RecorderNumericOperand.FromControl(
+            candidate.Control,
+            candidate.ValueAccessorKind);
+        error = string.Empty;
+        return true;
+    }
+
+    internal StepCreationResult TryCreateCalculatedAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderNumericExpectedExpression expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported(
+                "The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (candidate.ValueKind != RecorderValueKind.Number
+            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        {
+            return StepCreationResult.Unsupported(
+                "A calculated expected value can only be used with a numeric control.");
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: RecorderComparisonKind.Equal,
+            numericExpectedExpression: expression);
+        return CreateStepFromSnapshot(snapshot, step, "Added calculated numeric assertion.");
+    }
+
     private static bool TryNormalizeCheckpointComparison(
         RecorderValueKind valueKind,
         RecorderComparisonKind requested,
@@ -2402,7 +2456,8 @@ internal sealed class RecorderStepFactory
         Guid? expectedCheckpointId = null,
         Guid? expectedGeneratedValueId = null,
         bool hasExpectedLiteral = false,
-        RecorderDateExpression? dateExpression = null)
+        RecorderDateExpression? dateExpression = null,
+        RecorderNumericExpectedExpression? numericExpectedExpression = null)
     {
         return new RecordedStep(
             actionKind,
@@ -2423,7 +2478,8 @@ internal sealed class RecorderStepFactory
             ExpectedCheckpointId: expectedCheckpointId,
             ExpectedGeneratedValueId: expectedGeneratedValueId,
             HasExpectedLiteral: hasExpectedLiteral,
-            DateExpression: dateExpression)
+            DateExpression: dateExpression,
+            NumericExpectedExpression: numericExpectedExpression)
         {
             GridRowConditions = candidate.GridContext?.RowConditions,
             GridTargetColumnName = candidate.GridContext?.TargetColumnName

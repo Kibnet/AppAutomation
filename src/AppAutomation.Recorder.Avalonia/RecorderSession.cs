@@ -72,6 +72,9 @@ internal sealed class RecorderSession :
     private Control? _pendingCheckTargetControl;
     private IReadOnlyList<Control> _pendingCheckTargetCandidates = Array.Empty<Control>();
     private bool _isCheckTargetSelectionActive;
+    private Control? _pendingNumericOperandTargetControl;
+    private IReadOnlyList<Control> _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
+    private bool _isNumericOperandTargetSelectionActive;
     private Control? _pendingGeneratedValueTargetControl;
     private IReadOnlyList<Control> _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
     private bool _isGeneratedValueTargetSelectionActive;
@@ -239,6 +242,8 @@ internal sealed class RecorderSession :
 
     public event EventHandler<RecorderCheckTargetSelectedEventArgs>? CheckTargetSelected;
 
+    public event EventHandler<RecorderNumericOperandTargetSelectedEventArgs>? NumericOperandTargetSelected;
+
     public event EventHandler<RecorderGeneratedValueTargetSelectedEventArgs>? GeneratedValueTargetSelected;
 
     internal event EventHandler? ExportRequested;
@@ -256,6 +261,8 @@ internal sealed class RecorderSession :
     public IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues => CreateGeneratedValueOptions();
 
     public bool IsCheckTargetSelectionActive => _isCheckTargetSelectionActive;
+
+    public bool IsNumericOperandTargetSelectionActive => _isNumericOperandTargetSelectionActive;
 
     public bool IsGeneratedValueTargetSelectionActive => _isGeneratedValueTargetSelectionActive;
 
@@ -368,6 +375,7 @@ internal sealed class RecorderSession :
     public void Stop()
     {
         CancelCheckTargetSelectionCore();
+        CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
         _pendingGridComboSelectionContext = null;
@@ -389,6 +397,7 @@ internal sealed class RecorderSession :
         }
 
         CancelCheckTargetSelectionCore();
+        CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
         _pendingGridComboSelectionContext = null;
@@ -507,6 +516,7 @@ internal sealed class RecorderSession :
     public void Dispose()
     {
         CancelCheckTargetSelectionCore();
+        CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
@@ -1404,6 +1414,22 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_isNumericOperandTargetSelectionActive)
+        {
+            var eventTarget = ResolveInteractionOwner(source) ?? source;
+            var positionRoot = _inputRoot ?? _window;
+            _pendingNumericOperandTargetCandidates = ResolveCheckTargetCandidates(
+                eventTarget,
+                positionRoot,
+                e.GetPosition(positionRoot));
+            _pendingNumericOperandTargetControl = eventTarget
+                ?? (_pendingNumericOperandTargetCandidates.Count > 0
+                    ? _pendingNumericOperandTargetCandidates[0]
+                    : null);
+            e.Handled = true;
+            return;
+        }
+
         if (_isGeneratedValueTargetSelectionActive)
         {
             var eventTarget = ResolveInteractionOwner(source) ?? source;
@@ -1459,6 +1485,15 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_isNumericOperandTargetSelectionActive && _pendingNumericOperandTargetControl is not null)
+        {
+            var target = _pendingNumericOperandTargetControl;
+            var candidates = _pendingNumericOperandTargetCandidates;
+            e.Handled = true;
+            CompleteNumericOperandTargetSelection(target, candidates);
+            return;
+        }
+
         if (_isGeneratedValueTargetSelectionActive && _pendingGeneratedValueTargetControl is not null)
         {
             var target = _pendingGeneratedValueTargetControl;
@@ -1505,10 +1540,13 @@ internal sealed class RecorderSession :
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if ((_isCheckTargetSelectionActive || _isGeneratedValueTargetSelectionActive)
+        if ((_isCheckTargetSelectionActive
+             || _isNumericOperandTargetSelectionActive
+             || _isGeneratedValueTargetSelectionActive)
             && e.Key == Key.Escape)
         {
             CancelCheckTargetSelectionCore();
+            CancelNumericOperandTargetSelectionCore();
             CancelGeneratedValueTargetSelectionCore();
             e.Handled = true;
             return;
@@ -2715,6 +2753,7 @@ internal sealed class RecorderSession :
             return;
         }
 
+        CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         _pendingCheckTargetControl = null;
         _pendingCheckTargetCandidates = Array.Empty<Control>();
@@ -2724,6 +2763,54 @@ internal sealed class RecorderSession :
     public void CancelCheckTargetSelection()
     {
         CancelCheckTargetSelectionCore();
+    }
+
+    public void BeginNumericOperandTargetSelection()
+    {
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        CancelCheckTargetSelectionCore();
+        CancelGeneratedValueTargetSelectionCore();
+        _pendingNumericOperandTargetControl = null;
+        _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
+        _isNumericOperandTargetSelectionActive = true;
+    }
+
+    public void CancelNumericOperandTargetSelection()
+    {
+        CancelNumericOperandTargetSelectionCore();
+    }
+
+    internal bool SelectNumericOperandTargetForTesting(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_isNumericOperandTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteNumericOperandTargetSelection(ResolveInteractionOwner(source) ?? source, [source]);
+        return true;
+    }
+
+    internal bool SelectNumericOperandTargetForTesting(
+        Control eventSource,
+        IReadOnlyList<Control> visualCandidates)
+    {
+        ArgumentNullException.ThrowIfNull(eventSource);
+        ArgumentNullException.ThrowIfNull(visualCandidates);
+        if (!_isNumericOperandTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteNumericOperandTargetSelection(
+            ResolveInteractionOwner(eventSource) ?? eventSource,
+            visualCandidates);
+        return true;
     }
 
     internal bool SelectCheckTargetForTesting(Control source)
@@ -2858,6 +2945,18 @@ internal sealed class RecorderSession :
             "Assertion:IsEnabled");
     }
 
+    void IRecorderCheckpointSessionDetails.CaptureCalculatedAssertion(
+        RecorderCheckTargetSelection selection,
+        RecorderNumericExpectedExpression expression)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(expression);
+        AddStep(
+            _stepFactory.TryCreateCalculatedAssertionStep(selection.ValueSnapshot, expression),
+            selection.Target,
+            "Assertion:Calculated");
+    }
+
     public void CaptureLiteralAssertion(
         string expectedText,
         RecorderComparisonKind comparisonKind)
@@ -2908,6 +3007,7 @@ internal sealed class RecorderSession :
         }
 
         CancelCheckTargetSelectionCore();
+        CancelNumericOperandTargetSelectionCore();
         _pendingGeneratedValueTargetControl = null;
         _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
         _requestedGeneratedValueId = generatedValueId;
@@ -3190,6 +3290,66 @@ internal sealed class RecorderSession :
                     selectedTarget.IsEffectivelyEnabled)));
     }
 
+    private void CompleteNumericOperandTargetSelection(
+        Control target,
+        IReadOnlyList<Control>? visualCandidates = null)
+    {
+        _pendingNumericOperandTargetControl = null;
+        _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
+        _isNumericOperandTargetSelectionActive = false;
+        var selectedTarget = target;
+        Control? configuredTarget = null;
+        RecorderSemanticValueSnapshot? snapshot = null;
+        string? error = null;
+        var configuredSnapshotCaptured = visualCandidates is { Count: > 0 }
+            && _stepFactory.TryCaptureConfiguredSemanticValueSnapshot(
+                visualCandidates,
+                out configuredTarget,
+                out snapshot,
+                out error);
+        if (configuredSnapshotCaptured)
+        {
+            selectedTarget = configuredTarget ?? target;
+        }
+        else if (string.IsNullOrWhiteSpace(error)
+                 && visualCandidates is { Count: > 0 }
+                 && TryCaptureDisabledVisualSemanticValueSnapshot(
+                     target,
+                     visualCandidates,
+                     out var disabledTarget,
+                     out snapshot,
+                     out error))
+        {
+            selectedTarget = disabledTarget ?? target;
+        }
+        else if (string.IsNullOrWhiteSpace(error))
+        {
+            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
+        }
+        else
+        {
+            selectedTarget = configuredTarget ?? target;
+        }
+
+        RecorderNumericOperand? operand = null;
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            RecorderStepFactory.TryCreateNumericControlOperand(
+                snapshot,
+                out operand,
+                out error);
+        }
+
+        NumericOperandTargetSelected?.Invoke(
+            this,
+            new RecorderNumericOperandTargetSelectedEventArgs(
+                new RecorderNumericOperandTargetSelection(
+                    selectedTarget,
+                    operand,
+                    operand?.Control?.ProposedPropertyName,
+                    error)));
+    }
+
     private bool TryCaptureDisabledVisualSemanticValueSnapshot(
         Control eventTarget,
         IReadOnlyList<Control> visualCandidates,
@@ -3241,6 +3401,13 @@ internal sealed class RecorderSession :
         _pendingCheckTargetControl = null;
         _pendingCheckTargetCandidates = Array.Empty<Control>();
         _isCheckTargetSelectionActive = false;
+    }
+
+    private void CancelNumericOperandTargetSelectionCore()
+    {
+        _pendingNumericOperandTargetControl = null;
+        _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
+        _isNumericOperandTargetSelectionActive = false;
     }
 
     private void CancelGeneratedValueTargetSelectionCore()
@@ -3641,8 +3808,32 @@ internal sealed class RecorderSession :
             step.GeneratedValueOrdinal?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.DefinesGeneratedValue,
             step.ExpectedGeneratedValueId?.ToString("N") ?? string.Empty,
+            CreateNumericExpressionFingerprint(step.NumericExpectedExpression),
             step.HasExpectedLiteral,
             step.CanPersist);
+    }
+
+    private static string CreateNumericExpressionFingerprint(RecorderNumericExpectedExpression? expression)
+    {
+        return expression is null
+            ? string.Empty
+            : string.Join(
+                ":",
+                expression.Operation,
+                CreateNumericOperandFingerprint(expression.Left),
+                CreateNumericOperandFingerprint(expression.Right));
+    }
+
+    private static string CreateNumericOperandFingerprint(RecorderNumericOperand operand)
+    {
+        return string.Join(
+            ",",
+            operand.Kind,
+            operand.LiteralValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            operand.CheckpointId?.ToString("N") ?? string.Empty,
+            operand.Control?.LocatorKind.ToString() ?? string.Empty,
+            operand.Control?.LocatorValue ?? string.Empty,
+            operand.ValueAccessorKind?.ToString() ?? string.Empty);
     }
 
     private static string ResolveStepStatusMessage(RecordedStep step, string? fallbackMessage)
@@ -4552,7 +4743,9 @@ internal sealed class RecorderSession :
                     ? "generated value " + (CreateGeneratedValueOptions()
                         .FirstOrDefault(candidate => candidate.GeneratedValueId == generatedValueId)?.VariableName
                         ?? generatedValueId.ToString("N"))
-                    : "expected literal";
+                    : step.NumericExpectedExpression is not null
+                        ? "calculated value"
+                        : "expected literal";
             return $"Assert {target} {comparison} {expected}";
         }
 

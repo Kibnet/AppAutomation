@@ -127,6 +127,21 @@ internal enum RecorderComparisonKind
     NotEqual = 5
 }
 
+internal enum RecorderArithmeticOperation
+{
+    Add = 0,
+    Subtract = 1,
+    Multiply = 2,
+    Divide = 3
+}
+
+internal enum RecorderNumericOperandKind
+{
+    Literal = 0,
+    Checkpoint = 1,
+    Control = 2
+}
+
 internal enum RecorderHasValueAssertionKind
 {
     NotEmpty = 0,
@@ -360,6 +375,33 @@ internal sealed record RecorderDateExpression(
     RecorderDateReferenceKind ReferenceKind,
     int DayOffset);
 
+internal sealed record RecorderNumericOperand(
+    RecorderNumericOperandKind Kind,
+    double? LiteralValue = null,
+    Guid? CheckpointId = null,
+    RecordedControlDescriptor? Control = null,
+    RecorderValueAccessorKind? ValueAccessorKind = null)
+{
+    public static RecorderNumericOperand FromLiteral(double value) =>
+        new(RecorderNumericOperandKind.Literal, LiteralValue: value);
+
+    public static RecorderNumericOperand FromCheckpoint(Guid checkpointId) =>
+        new(RecorderNumericOperandKind.Checkpoint, CheckpointId: checkpointId);
+
+    public static RecorderNumericOperand FromControl(
+        RecordedControlDescriptor control,
+        RecorderValueAccessorKind valueAccessorKind) =>
+        new(
+            RecorderNumericOperandKind.Control,
+            Control: control ?? throw new ArgumentNullException(nameof(control)),
+            ValueAccessorKind: valueAccessorKind);
+}
+
+internal sealed record RecorderNumericExpectedExpression(
+    RecorderArithmeticOperation Operation,
+    RecorderNumericOperand Left,
+    RecorderNumericOperand Right);
+
 internal sealed record RecorderDateOperandConfiguration(
     DateTime? ExactDate,
     RecorderDateReferenceKind ReferenceKind,
@@ -411,7 +453,8 @@ internal sealed record RecordedStep(
     string? GeneratedValueVariableName = null,
     int? GeneratedValueOrdinal = null,
     bool DefinesGeneratedValue = false,
-    Guid? ExpectedGeneratedValueId = null)
+    Guid? ExpectedGeneratedValueId = null,
+    RecorderNumericExpectedExpression? NumericExpectedExpression = null)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 

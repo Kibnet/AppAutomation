@@ -52,6 +52,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderCheckpointSessionDetails? _checkpointDetails;
     private IRecorderGeneratedValueSessionDetails? _generatedValueDetails;
     private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
+    private RecorderCalculatedAssertionDraft? _calculatedAssertionDraft;
     private int _renderedJournalEntryCount;
     private bool _isRefreshingScenarioSelection;
 
@@ -123,6 +124,7 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_checkpointDetails is not null)
         {
             _checkpointDetails.CheckTargetSelected += OnCheckTargetSelected;
+            _checkpointDetails.NumericOperandTargetSelected += OnNumericOperandTargetSelected;
         }
 
         if (_generatedValueDetails is not null)
@@ -515,7 +517,37 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private void OnCheckTargetSelected(object? sender, RecorderCheckTargetSelectedEventArgs e)
     {
-        RunOnUiThread(() => ShowCheckMenu(e.Selection));
+        RunOnUiThread(() =>
+        {
+            _calculatedAssertionDraft = null;
+            ShowCheckMenu(e.Selection);
+        });
+    }
+
+    private void OnNumericOperandTargetSelected(
+        object? sender,
+        RecorderNumericOperandTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() =>
+        {
+            if (_calculatedAssertionDraft is not { } draft)
+            {
+                return;
+            }
+
+            if (e.Selection.Operand is { } operand)
+            {
+                draft.SetSelectedControlOperand(operand, e.Selection.ControlName);
+                draft.Error = null;
+            }
+            else
+            {
+                draft.Error = e.Selection.Error
+                    ?? "Selected operand does not expose a numeric value.";
+            }
+
+            ShowCalculatedAssertionEditor(draft.Selection, draft);
+        });
     }
 
     private void ShowCheckMenu(RecorderCheckTargetSelection selection)
@@ -598,6 +630,14 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         menu.Items.Add(compare);
+
+        var compareWithCalculated = new MenuItem
+        {
+            Header = "Compare with calculated value…",
+            IsEnabled = currentValue?.ValueKind == RecorderValueKind.Number
+        };
+        compareWithCalculated.Click += (_, _) => ShowCalculatedAssertionEditor(selection);
+        menu.Items.Add(compareWithCalculated);
 
         var compareWithGenerated = new MenuItem { Header = "Compare with generated value" };
         var generatedValues = currentValue?.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
@@ -698,6 +738,310 @@ internal sealed partial class RecorderOverlay : UserControl
             _checkpointDetails.CapturePresenceAssertion(selection, expectEmpty: true);
         assertPresence.ItemsSource = new[] { hasValue, empty };
         return assertPresence;
+    }
+
+    private void ShowCalculatedAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        RecorderCalculatedAssertionDraft? existingDraft = null)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        if (selection.ValueDescription?.ValueKind != RecorderValueKind.Number)
+        {
+            ShowSettingsError("A calculated expected value can only be used with a numeric control.");
+            return;
+        }
+
+        var draft = existingDraft ?? new RecorderCalculatedAssertionDraft(selection);
+        _calculatedAssertionDraft = draft;
+        var flyout = new Flyout();
+        flyout.Content = CreateCalculatedAssertionEditor(
+            draft,
+            preserveDraft =>
+            {
+                flyout.Hide();
+                if (!preserveDraft)
+                {
+                    _calculatedAssertionDraft = null;
+                }
+            });
+        flyout.ShowAt(_checkButton);
+    }
+
+    internal Control CreateCalculatedAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateCalculatedAssertionEditor(
+            new RecorderCalculatedAssertionDraft(selection),
+            static _ => { });
+    }
+
+    private StackPanel CreateCalculatedAssertionEditor(
+        RecorderCalculatedAssertionDraft draft,
+        Action<bool> close)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        var operation = new ComboBox
+        {
+            Name = "RecorderCalculatedOperation",
+            ItemsSource = new[] { "+", "−", "×", "÷" },
+            SelectedIndex = (int)draft.Operation,
+            MinWidth = 90
+        };
+        var validation = new TextBlock
+        {
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var add = new Button
+        {
+            Name = "RecorderCalculatedAdd",
+            Content = "Add",
+            Padding = new Thickness(10, 4)
+        };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        Action refresh = static () => { };
+        var leftEditor = CreateNumericOperandEditor(draft.Left, operandIndex: 0, () =>
+        {
+            draft.Error = null;
+            refresh();
+        });
+        var rightEditor = CreateNumericOperandEditor(draft.Right, operandIndex: 1, () =>
+        {
+            draft.Error = null;
+            refresh();
+        });
+
+        refresh = () =>
+        {
+            draft.Operation = (RecorderArithmeticOperation)Math.Clamp(operation.SelectedIndex, 0, 3);
+            var leftValid = TryCreateNumericOperand(draft.Left, out _, out var leftError);
+            var rightValid = TryCreateNumericOperand(draft.Right, out var rightOperand, out var rightError);
+            var dividesByLiteralZero = draft.Operation == RecorderArithmeticOperation.Divide
+                && rightOperand?.Kind == RecorderNumericOperandKind.Literal
+                && rightOperand.LiteralValue == 0;
+            var error = draft.Error
+                ?? (!leftValid ? leftError : null)
+                ?? (!rightValid ? rightError : null)
+                ?? (dividesByLiteralZero ? "Cannot divide by a literal zero." : null);
+            add.IsEnabled = leftValid && rightValid && !dividesByLiteralZero;
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        };
+
+        operation.SelectionChanged += (_, _) =>
+        {
+            draft.Error = null;
+            refresh();
+        };
+        add.Click += (_, _) =>
+        {
+            var leftValid = TryCreateNumericOperand(draft.Left, out var left, out var leftError);
+            var rightValid = TryCreateNumericOperand(draft.Right, out var right, out var rightError);
+            if (!leftValid || !rightValid)
+            {
+                validation.Text = leftError ?? rightError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            _checkpointDetails.CaptureCalculatedAssertion(
+                draft.Selection,
+                new RecorderNumericExpectedExpression(draft.Operation, left!, right!));
+            close(false);
+        };
+        cancel.Click += (_, _) =>
+        {
+            _checkpointDetails.CancelNumericOperandTargetSelection();
+            close(false);
+        };
+
+        var content = new StackPanel
+        {
+            Width = 360,
+            Spacing = 7,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Calculated expected value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                leftEditor,
+                new TextBlock { Text = "Operation" },
+                operation,
+                rightEditor,
+                validation,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
+        refresh();
+        return content;
+
+        Control CreateNumericOperandEditor(
+            RecorderNumericOperandDraft operandDraft,
+            int operandIndex,
+            Action changed)
+        {
+            var numericCheckpoints = _checkpointDetails.Checkpoints
+                .Where(static checkpoint => checkpoint.ValueKind == RecorderValueKind.Number)
+                .ToArray();
+            var source = new ComboBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Source",
+                ItemsSource = new[] { "Number", "Checkpoint", "UI element" },
+                SelectedIndex = (int)operandDraft.Kind,
+                MinWidth = 125
+            };
+            var literal = new TextBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Literal",
+                Text = operandDraft.LiteralText,
+                MinWidth = 120,
+                PlaceholderText = "Number"
+            };
+            var checkpoint = new ComboBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Checkpoint",
+                ItemsSource = numericCheckpoints
+                    .Select(static option => $"{option.VariableName} ({option.ControlName})")
+                    .ToArray(),
+                SelectedIndex = Math.Max(
+                    0,
+                    Array.FindIndex(
+                        numericCheckpoints,
+                        option => option.CheckpointId == operandDraft.CheckpointId)),
+                MinWidth = 210
+            };
+            if (numericCheckpoints.Length > 0 && operandDraft.CheckpointId is null)
+            {
+                operandDraft.CheckpointId = numericCheckpoints[checkpoint.SelectedIndex].CheckpointId;
+            }
+
+            var selectControl = new Button
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Select",
+                Content = "Select element",
+                Padding = new Thickness(10, 4)
+            };
+            var selectedControl = new TextBlock
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Selected",
+                Text = operandDraft.ControlName is null
+                    ? "No element selected"
+                    : $"Selected: {operandDraft.ControlName}",
+                Foreground = GetBrush("RecorderMuted"),
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            void RefreshOperand()
+            {
+                operandDraft.Kind = (RecorderNumericOperandKind)Math.Clamp(source.SelectedIndex, 0, 2);
+                literal.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Literal;
+                checkpoint.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Checkpoint;
+                selectControl.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Control;
+                selectedControl.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Control;
+                changed();
+            }
+
+            source.SelectionChanged += (_, _) => RefreshOperand();
+            literal.TextChanged += (_, _) =>
+            {
+                operandDraft.LiteralText = literal.Text ?? string.Empty;
+                changed();
+            };
+            checkpoint.SelectionChanged += (_, _) =>
+            {
+                operandDraft.CheckpointId = checkpoint.SelectedIndex >= 0
+                    && checkpoint.SelectedIndex < numericCheckpoints.Length
+                    ? numericCheckpoints[checkpoint.SelectedIndex].CheckpointId
+                    : null;
+                changed();
+            };
+            selectControl.Click += (_, _) =>
+            {
+                draft.PendingOperandIndex = operandIndex;
+                draft.Error = null;
+                close(true);
+                _checkpointDetails.BeginNumericOperandTargetSelection();
+            };
+
+            var panel = new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    new TextBlock { Text = $"Operand {operandIndex + 1}" },
+                    source,
+                    literal,
+                    checkpoint,
+                    selectControl,
+                    selectedControl
+                }
+            };
+            RefreshOperand();
+            return panel;
+        }
+    }
+
+    private static bool TryCreateNumericOperand(
+        RecorderNumericOperandDraft draft,
+        out RecorderNumericOperand? operand,
+        out string? error)
+    {
+        operand = null;
+        error = null;
+        switch (draft.Kind)
+        {
+            case RecorderNumericOperandKind.Literal:
+                if (!double.TryParse(
+                        draft.LiteralText,
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out var value)
+                    || !double.IsFinite(value))
+                {
+                    error = "Enter a finite number using invariant decimal format.";
+                    return false;
+                }
+
+                operand = RecorderNumericOperand.FromLiteral(value);
+                return true;
+            case RecorderNumericOperandKind.Checkpoint:
+                if (draft.CheckpointId is not { } checkpointId)
+                {
+                    error = "Select a numeric checkpoint.";
+                    return false;
+                }
+
+                operand = RecorderNumericOperand.FromCheckpoint(checkpointId);
+                return true;
+            case RecorderNumericOperandKind.Control:
+                if (draft.ControlOperand is null)
+                {
+                    error = "Select a numeric UI element.";
+                    return false;
+                }
+
+                operand = draft.ControlOperand;
+                return true;
+            default:
+                error = "Select an operand source.";
+                return false;
+        }
     }
 
     private void ShowEnabledAssertionEditor(RecorderCheckTargetSelection selection)
@@ -1839,6 +2183,42 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             _dayOffset.IsEnabled = _exactDate.HasValue && _mode.SelectedIndex == 1;
         }
+    }
+
+    private sealed class RecorderCalculatedAssertionDraft(RecorderCheckTargetSelection selection)
+    {
+        public RecorderCheckTargetSelection Selection { get; } = selection;
+
+        public RecorderNumericOperandDraft Left { get; } = new();
+
+        public RecorderNumericOperandDraft Right { get; } = new();
+
+        public RecorderArithmeticOperation Operation { get; set; }
+
+        public int PendingOperandIndex { get; set; }
+
+        public string? Error { get; set; }
+
+        public void SetSelectedControlOperand(RecorderNumericOperand operand, string? controlName)
+        {
+            var target = PendingOperandIndex == 0 ? Left : Right;
+            target.Kind = RecorderNumericOperandKind.Control;
+            target.ControlOperand = operand;
+            target.ControlName = controlName;
+        }
+    }
+
+    private sealed class RecorderNumericOperandDraft
+    {
+        public RecorderNumericOperandKind Kind { get; set; }
+
+        public string LiteralText { get; set; } = "0";
+
+        public Guid? CheckpointId { get; set; }
+
+        public RecorderNumericOperand? ControlOperand { get; set; }
+
+        public string? ControlName { get; set; }
     }
 
     internal readonly record struct RecorderOverlayPalette(

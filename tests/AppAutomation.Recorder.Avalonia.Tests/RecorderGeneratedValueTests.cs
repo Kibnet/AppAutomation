@@ -275,14 +275,31 @@ public sealed class RecorderGeneratedValueTests
                 ValueKind: RecorderValueKind.Text,
                 ValueAccessorKind: RecorderValueAccessorKind.Text,
                 ComparisonKind: RecorderComparisonKind.Equal,
-                ExpectedGeneratedValueId: generatedValueId)
+                ExpectedGeneratedValueId: generatedValueId),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("CalculatedAmount", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Add,
+                    RecorderNumericOperand.FromControl(
+                        Descriptor("AdjustmentAmount", UiControlType.Spinner),
+                        RecorderValueAccessorKind.NumericValue),
+                    RecorderNumericOperand.FromLiteral(1)))
         };
 
         var autosave = await project.AutosaveAsync(context, steps);
         var autosaveSource = await File.ReadAllTextAsync(autosave.ScenarioFilePath!);
         var customerName = TextBox("CustomerName");
         var additionalName = TextBox("AdditionalName");
-        var root = new StackPanel { Children = { customerName, additionalName } };
+        var calculatedAmount = NumericInput("CalculatedAmount", 4);
+        var adjustmentAmount = NumericInput("AdjustmentAmount", 3);
+        var root = new StackPanel
+        {
+            Children = { customerName, additionalName, calculatedAmount, adjustmentAmount }
+        };
         var options = RecorderScenarioDestinationProject.CreateInteractiveOptions(
             project.RootPath,
             scenarioName: "Generated value flow");
@@ -308,7 +325,7 @@ public sealed class RecorderGeneratedValueTests
         using (Assert.Multiple())
         {
             await Assert.That(restored).IsTrue();
-            await Assert.That(restoredSession.StepCount).IsEqualTo(3);
+            await Assert.That(restoredSession.StepCount).IsEqualTo(4);
             await Assert.That(restoredSession.GeneratedValues.Select(value => value.Ordinal))
                 .IsEquivalentTo([1, 2]);
             await Assert.That(generatedSelection!.GeneratedValue.Ordinal).IsEqualTo(2);
@@ -319,6 +336,8 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(source).Contains("var generatedValue1 = recordedValues.Create(1);");
             await Assert.That(source).Contains("var generatedValue2 = recordedValues.Create(2);");
             await Assert.That(source).Contains("IsEqualTo(generatedValue1)");
+            await Assert.That(source)
+                .Contains("Page.CalculatedAmount.Value).IsEqualTo(Page.AdjustmentAmount.Value + 1)");
             await Assert.That(source).DoesNotContain("Recorded_20260901_141502347_1");
             await Assert.That(compileErrors).IsEmpty();
         }
@@ -329,6 +348,13 @@ public sealed class RecorderGeneratedValueTests
         var textBox = new TextBox();
         AutomationProperties.SetAutomationId(textBox, automationId);
         return textBox;
+    }
+
+    private static NumericUpDown NumericInput(string automationId, decimal value)
+    {
+        var input = new NumericUpDown { Value = value };
+        AutomationProperties.SetAutomationId(input, automationId);
+        return input;
     }
 
     private static RecorderSession CreateSession(Control root, AppAutomationRecorderOptions? options = null)

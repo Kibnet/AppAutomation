@@ -229,6 +229,7 @@ internal static class RecorderScenarioGraphValidator
             return step.ExpectedCheckpointId.HasValue
                 || step.ExpectedGeneratedValueId.HasValue
                 || step.HasExpectedLiteral
+                || step.NumericExpectedExpression is not null
                 ? RecorderGraphStepValidationResult.Invalid(
                     $"Assertion step {index + 1} cannot define an expected value for {comparisonKind}.")
                 : RecorderGraphStepValidationResult.Valid;
@@ -236,11 +237,23 @@ internal static class RecorderScenarioGraphValidator
 
         var expectationSourceCount = (step.ExpectedCheckpointId.HasValue ? 1 : 0)
             + (step.ExpectedGeneratedValueId.HasValue ? 1 : 0)
-            + (step.HasExpectedLiteral ? 1 : 0);
+            + (step.HasExpectedLiteral ? 1 : 0)
+            + (step.NumericExpectedExpression is not null ? 1 : 0);
         if (expectationSourceCount != 1)
         {
             return RecorderGraphStepValidationResult.Invalid(
-                $"Assertion step {index + 1} must define exactly one expected value source: checkpoint, generated value or literal.");
+                $"Assertion step {index + 1} must define exactly one expected value source: checkpoint, generated value, literal or calculated expression.");
+        }
+
+        if (step.NumericExpectedExpression is { } numericExpression)
+        {
+            return ValidateNumericExpression(
+                step,
+                index,
+                valueKind,
+                comparisonKind,
+                numericExpression,
+                checkpointValueKinds);
         }
 
         if (step.ExpectedCheckpointId is { } expectedCheckpointId)
@@ -261,6 +274,157 @@ internal static class RecorderScenarioGraphValidator
                 expectedGeneratedValueId,
                 generatedValueVariables)
             : RecorderGraphStepValidationResult.Valid;
+    }
+
+    private static RecorderGraphStepValidationResult ValidateNumericExpression(
+        RecordedStep step,
+        int index,
+        RecorderValueKind actualKind,
+        RecorderComparisonKind comparisonKind,
+        RecorderNumericExpectedExpression expression,
+        IReadOnlyDictionary<Guid, RecorderValueKind> checkpointValueKinds)
+    {
+        if (!Enum.IsDefined(expression.Operation))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} has an unsupported arithmetic operation '{expression.Operation}'.");
+        }
+
+        if (actualKind != RecorderValueKind.Number
+            || step.ValueAccessorKind != RecorderValueAccessorKind.NumericValue
+            || comparisonKind != RecorderComparisonKind.Equal)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} can use a calculated expected value only with an equal numeric assertion.");
+        }
+
+        var leftValidation = ValidateNumericOperand(
+            expression.Left,
+            "left",
+            index,
+            checkpointValueKinds);
+        if (!leftValidation.IsValid)
+        {
+            return leftValidation;
+        }
+
+        var rightValidation = ValidateNumericOperand(
+            expression.Right,
+            "right",
+            index,
+            checkpointValueKinds);
+        if (!rightValidation.IsValid)
+        {
+            return rightValidation;
+        }
+
+        return expression.Operation == RecorderArithmeticOperation.Divide
+               && expression.Right.Kind == RecorderNumericOperandKind.Literal
+               && expression.Right.LiteralValue == 0
+            ? RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} cannot divide by a literal zero.")
+            : RecorderGraphStepValidationResult.Valid;
+    }
+
+    private static RecorderGraphStepValidationResult ValidateNumericOperand(
+        RecorderNumericOperand? operand,
+        string operandName,
+        int index,
+        IReadOnlyDictionary<Guid, RecorderValueKind> checkpointValueKinds)
+    {
+        if (operand is null)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} does not define its {operandName} numeric operand.");
+        }
+
+        return operand.Kind switch
+        {
+            RecorderNumericOperandKind.Literal => ValidateNumericLiteralOperand(operand, operandName, index),
+            RecorderNumericOperandKind.Checkpoint => ValidateNumericCheckpointOperand(
+                operand,
+                operandName,
+                index,
+                checkpointValueKinds),
+            RecorderNumericOperandKind.Control => ValidateNumericControlOperand(operand, operandName, index),
+            _ => RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} has an unsupported {operandName} numeric operand kind '{operand.Kind}'.")
+        };
+    }
+
+    private static RecorderGraphStepValidationResult ValidateNumericLiteralOperand(
+        RecorderNumericOperand operand,
+        string operandName,
+        int index)
+    {
+        var sourceCount = (operand.LiteralValue.HasValue ? 1 : 0)
+            + (operand.CheckpointId.HasValue ? 1 : 0)
+            + (operand.Control is not null ? 1 : 0)
+            + (operand.ValueAccessorKind.HasValue ? 1 : 0);
+        return sourceCount == 1
+               && operand.LiteralValue is { } value
+               && double.IsFinite(value)
+            ? RecorderGraphStepValidationResult.Valid
+            : RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} has an invalid {operandName} numeric literal.");
+    }
+
+    private static RecorderGraphStepValidationResult ValidateNumericCheckpointOperand(
+        RecorderNumericOperand operand,
+        string operandName,
+        int index,
+        IReadOnlyDictionary<Guid, RecorderValueKind> checkpointValueKinds)
+    {
+        var sourceCount = (operand.LiteralValue.HasValue ? 1 : 0)
+            + (operand.CheckpointId.HasValue ? 1 : 0)
+            + (operand.Control is not null ? 1 : 0)
+            + (operand.ValueAccessorKind.HasValue ? 1 : 0);
+        if (sourceCount != 1 || operand.CheckpointId is not { } checkpointId || checkpointId == Guid.Empty)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} has an invalid {operandName} numeric checkpoint operand.");
+        }
+
+        if (!checkpointValueKinds.TryGetValue(checkpointId, out var checkpointKind))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} references a missing or later checkpoint '{checkpointId}' in its {operandName} numeric operand.");
+        }
+
+        return checkpointKind == RecorderValueKind.Number
+            ? RecorderGraphStepValidationResult.Valid
+            : RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} references non-numeric checkpoint kind {checkpointKind} in its {operandName} operand.");
+    }
+
+    private static RecorderGraphStepValidationResult ValidateNumericControlOperand(
+        RecorderNumericOperand operand,
+        string operandName,
+        int index)
+    {
+        var sourceCount = (operand.LiteralValue.HasValue ? 1 : 0)
+            + (operand.CheckpointId.HasValue ? 1 : 0)
+            + (operand.Control is not null ? 1 : 0);
+        if (sourceCount != 1
+            || operand.Control is not { } control
+            || operand.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} {operandName} control does not expose a numeric value.");
+        }
+
+        if (!Enum.IsDefined(control.ControlType))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} {operandName} control has an unsupported control type '{control.ControlType}'.");
+        }
+
+        var capability = RecorderAssertionCapabilities.Get(control.ControlType);
+        return capability.ValueKinds.Contains(RecorderValueKind.Number)
+               && capability.AccessorKinds.Contains(RecorderValueAccessorKind.NumericValue)
+            ? RecorderGraphStepValidationResult.Valid
+            : RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} {operandName} control does not expose a numeric value.");
     }
 
     private static RecorderGraphStepValidationResult ValidateGeneratedValueExpectation(

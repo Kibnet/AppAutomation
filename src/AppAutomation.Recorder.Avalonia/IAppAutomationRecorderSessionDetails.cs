@@ -46,13 +46,21 @@ internal interface IRecorderCheckpointSessionDetails
 {
     event EventHandler<RecorderCheckTargetSelectedEventArgs>? CheckTargetSelected;
 
+    event EventHandler<RecorderNumericOperandTargetSelectedEventArgs>? NumericOperandTargetSelected;
+
     IReadOnlyList<RecorderCheckpointOption> Checkpoints { get; }
 
     bool IsCheckTargetSelectionActive { get; }
 
+    bool IsNumericOperandTargetSelectionActive { get; }
+
     void BeginCheckTargetSelection();
 
     void CancelCheckTargetSelection();
+
+    void BeginNumericOperandTargetSelection();
+
+    void CancelNumericOperandTargetSelection();
 
     void CaptureCheckpoint(RecorderCheckTargetSelection selection, string? variableName = null);
 
@@ -64,6 +72,10 @@ internal interface IRecorderCheckpointSessionDetails
     void CapturePresenceAssertion(RecorderCheckTargetSelection selection, bool expectEmpty);
 
     void CaptureEnabledAssertion(RecorderCheckTargetSelection selection, bool expectedEnabled);
+
+    void CaptureCalculatedAssertion(
+        RecorderCheckTargetSelection selection,
+        RecorderNumericExpectedExpression expression);
 
     void CaptureLiteralAssertion(
         RecorderCheckTargetSelection selection,
@@ -116,6 +128,18 @@ internal sealed record RecorderCheckTargetSelection(
 internal sealed class RecorderCheckTargetSelectedEventArgs(RecorderCheckTargetSelection selection) : EventArgs
 {
     public RecorderCheckTargetSelection Selection { get; } = selection;
+}
+
+internal sealed record RecorderNumericOperandTargetSelection(
+    Control Target,
+    RecorderNumericOperand? Operand,
+    string? ControlName,
+    string? Error);
+
+internal sealed class RecorderNumericOperandTargetSelectedEventArgs(
+    RecorderNumericOperandTargetSelection selection) : EventArgs
+{
+    public RecorderNumericOperandTargetSelection Selection { get; } = selection;
 }
 
 internal sealed record RecorderGeneratedValueTargetSelection(

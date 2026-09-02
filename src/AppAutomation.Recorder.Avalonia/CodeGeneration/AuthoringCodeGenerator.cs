@@ -242,47 +242,46 @@ internal sealed class AuthoringCodeGenerator
                 diagnostics.ToArray());
         }
 
-        var plannedControlsByKey = new Dictionary<string, RecordedControlDescriptor>(StringComparer.Ordinal);
-        foreach (var stepGroup in persistableSteps.GroupBy(step =>
-                     AuthoringProjectScanner.CreateControlKey(step.Control.LocatorKind, step.Control.LocatorValue)))
+        var controlUsageGroups = persistableSteps
+            .SelectMany(GetControlUsages)
+            .GroupBy(
+                usage => AuthoringProjectScanner.CreateControlKey(
+                    usage.Control.LocatorKind,
+                    usage.Control.LocatorValue),
+                StringComparer.Ordinal)
+            .ToArray();
+        var reservedPropertyNames = new HashSet<string>(snapshot.ExistingControlPropertyNames, StringComparer.Ordinal);
+        var generatedControlsByKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
+        var generatedControls = new List<ExistingControlInfo>();
+        var resolvedControlsByKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
+        var renderedStatements = new List<string>(persistableSteps.Length);
+
+        foreach (var usageGroup in controlUsageGroups)
         {
-            var typedSteps = stepGroup
-                .Where(static step => !IsTypeAgnosticControlAction(step.ActionKind))
-                .ToArray();
-            var requiredTypes = typedSteps
-                .Select(static step => step.Control.ControlType)
+            cancellationToken.ThrowIfCancellationRequested();
+            var typedUsages = usageGroup.Where(static usage => !usage.IsTypeAgnostic).ToArray();
+            var requiredTypes = typedUsages
+                .Select(static usage => usage.Control.ControlType)
                 .Distinct()
                 .ToArray();
             if (requiredTypes.Length > 1)
             {
-                var control = stepGroup.First().Control;
+                var conflictingControl = usageGroup.First().Control;
                 return RecorderSaveResult.Failed(
-                    $"Recorded actions for locator '{control.LocatorKind}:{control.LocatorValue}' require incompatible control types: {string.Join(", ", requiredTypes.Select(static type => $"UiControlType.{type}"))}. Recorder will not generate duplicate control properties.",
+                    $"Recorded actions for locator '{conflictingControl.LocatorKind}:{conflictingControl.LocatorValue}' require incompatible control types: {string.Join(", ", requiredTypes.Select(static type => $"UiControlType.{type}"))}. Recorder will not generate duplicate control properties.",
                     diagnostics.ToArray());
             }
 
-            plannedControlsByKey.Add(
-                stepGroup.Key,
-                (typedSteps.FirstOrDefault() ?? stepGroup.First()).Control);
-        }
-
-        var reservedPropertyNames = new HashSet<string>(snapshot.ExistingControlPropertyNames, StringComparer.Ordinal);
-        var generatedControlsByKey = new Dictionary<string, ExistingControlInfo>(StringComparer.Ordinal);
-        var generatedControls = new List<ExistingControlInfo>();
-        var renderedStatements = new List<string>(persistableSteps.Length);
-
-        foreach (var step in persistableSteps)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var key = AuthoringProjectScanner.CreateControlKey(step.Control.LocatorKind, step.Control.LocatorValue);
+            var usage = typedUsages.Length > 0 ? typedUsages[0] : usageGroup.First();
+            var control = usage.Control;
+            var key = usageGroup.Key;
             var typedKey = AuthoringProjectScanner.CreateTypedControlKey(
-                step.Control.LocatorKind,
-                step.Control.LocatorValue,
-                step.Control.ControlType);
+                control.LocatorKind,
+                control.LocatorValue,
+                control.ControlType);
             var hasExistingControl = snapshot.ExistingControlsByKey.TryGetValue(key, out var existingControl);
             ExistingControlInfo? controlInfo = null;
-            if (IsTypeAgnosticControlAction(step.ActionKind) && hasExistingControl)
+            if (typedUsages.Length == 0 && hasExistingControl)
             {
                 controlInfo = existingControl;
             }
@@ -293,16 +292,15 @@ internal sealed class AuthoringCodeGenerator
             else if (hasExistingControl)
             {
                 return RecorderSaveResult.Failed(
-                    CreateIncompatibleControlMessage(step, existingControl!),
+                    CreateIncompatibleControlMessage(control, usage.Requirement, existingControl!),
                     diagnostics.ToArray());
             }
             else if (generatedControlsByKey.TryGetValue(key, out var generatedControl))
             {
-                if (!IsTypeAgnosticControlAction(step.ActionKind)
-                    && generatedControl.ControlType != step.Control.ControlType)
+                if (typedUsages.Length > 0 && generatedControl.ControlType != control.ControlType)
                 {
                     return RecorderSaveResult.Failed(
-                        CreateIncompatibleControlMessage(step, generatedControl),
+                        CreateIncompatibleControlMessage(control, usage.Requirement, generatedControl),
                         diagnostics.ToArray());
                 }
 
@@ -310,35 +308,52 @@ internal sealed class AuthoringCodeGenerator
             }
             else
             {
-                var plannedControl = plannedControlsByKey[key];
-                var propertyName = RecorderNaming.EnsureUniqueName(plannedControl.ProposedPropertyName, reservedPropertyNames);
+                var propertyName = RecorderNaming.EnsureUniqueName(control.ProposedPropertyName, reservedPropertyNames);
                 controlInfo = new ExistingControlInfo(
                     propertyName,
-                    plannedControl.ControlType,
-                    plannedControl.LocatorValue,
-                    plannedControl.LocatorKind,
-                    plannedControl.FallbackToName);
+                    control.ControlType,
+                    control.LocatorValue,
+                    control.LocatorKind,
+                    control.FallbackToName);
                 generatedControlsByKey.Add(key, controlInfo);
                 generatedControls.Add(controlInfo);
 
-                if (!string.Equals(propertyName, plannedControl.ProposedPropertyName, StringComparison.Ordinal))
+                if (!string.Equals(propertyName, control.ProposedPropertyName, StringComparison.Ordinal))
                 {
                     diagnostics.Add(
-                        $"Control '{plannedControl.LocatorValue}' was renamed from '{plannedControl.ProposedPropertyName}' to '{propertyName}' to avoid a collision.");
+                        $"Control '{control.LocatorValue}' was renamed from '{control.ProposedPropertyName}' to '{propertyName}' to avoid a collision.");
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(step.Warning))
+            resolvedControlsByKey.Add(key, controlInfo!);
+            foreach (var warning in usageGroup
+                         .Select(static candidate => candidate.Control.Warning)
+                         .Where(static warning => !string.IsNullOrWhiteSpace(warning))
+                         .Distinct(StringComparer.Ordinal))
             {
-                diagnostics.Add(step.Warning);
+                diagnostics.Add(warning!);
             }
+        }
+
+        var propertyNamesByControlKey = resolvedControlsByKey.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.PropertyName,
+            StringComparer.Ordinal);
+        foreach (var step in persistableSteps)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = AuthoringProjectScanner.CreateControlKey(
+                step.Control.LocatorKind,
+                step.Control.LocatorValue);
+            var controlInfo = resolvedControlsByKey[key];
 
             renderedStatements.Add(GenerateStepStatement(
                 step,
                 controlInfo!.PropertyName,
                 graphValidation.CheckpointVariables,
                 graphValidation.GeneratedValueVariables,
-                graphValidation.GeneratedValueSeriesVariable));
+                graphValidation.GeneratedValueSeriesVariable,
+                propertyNamesByControlKey));
         }
 
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
@@ -467,12 +482,43 @@ internal sealed class AuthoringCodeGenerator
             or RecordedActionKind.InvokeContextMenuItem;
     }
 
+    private static IEnumerable<RecorderControlUsage> GetControlUsages(RecordedStep step)
+    {
+        yield return new RecorderControlUsage(
+            step.Control,
+            IsTypeAgnosticControlAction(step.ActionKind),
+            step.ActionKind.ToString());
+
+        if (step.NumericExpectedExpression is not { } expression)
+        {
+            yield break;
+        }
+
+        foreach (var operand in new[] { expression.Left, expression.Right })
+        {
+            if (operand.Kind == RecorderNumericOperandKind.Control
+                && operand.Control is { } control)
+            {
+                yield return new RecorderControlUsage(
+                    control,
+                    IsTypeAgnostic: false,
+                    "calculated numeric assertion operand");
+            }
+        }
+    }
+
     private static string CreateIncompatibleControlMessage(
-        RecordedStep step,
+        RecordedControlDescriptor control,
+        string requirement,
         ExistingControlInfo existingControl)
     {
-        return $"Control '{existingControl.PropertyName}' for locator '{step.Control.LocatorKind}:{step.Control.LocatorValue}' is declared as UiControlType.{existingControl.ControlType}, which is incompatible with {step.ActionKind} requiring UiControlType.{step.Control.ControlType}. Recorder will not generate a duplicate control property.";
+        return $"Control '{existingControl.PropertyName}' for locator '{control.LocatorKind}:{control.LocatorValue}' is declared as UiControlType.{existingControl.ControlType}, which is incompatible with {requirement} requiring UiControlType.{control.ControlType}. Recorder will not generate a duplicate control property.";
     }
+
+    private readonly record struct RecorderControlUsage(
+        RecordedControlDescriptor Control,
+        bool IsTypeAgnostic,
+        string Requirement);
 
     internal RecorderOutputDescription DescribeOutput(
         Window window,
@@ -1332,7 +1378,8 @@ internal sealed class AuthoringCodeGenerator
         string propertyName,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
-        string? generatedValueSeriesVariable)
+        string? generatedValueSeriesVariable,
+        IReadOnlyDictionary<string, string>? controlPropertyNames = null)
     {
         var statement = step.ActionKind switch
         {
@@ -1344,7 +1391,8 @@ internal sealed class AuthoringCodeGenerator
                 step,
                 propertyName,
                 checkpointVariables,
-                generatedValueVariables),
+                generatedValueVariables,
+                controlPropertyNames),
             RecordedActionKind.EnterText => GenerateEnterTextStatement(
                 step,
                 propertyName,
@@ -1477,7 +1525,8 @@ internal sealed class AuthoringCodeGenerator
         RecordedStep step,
         string propertyName,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
-        IReadOnlyDictionary<Guid, string> generatedValueVariables)
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<string, string>? controlPropertyNames)
     {
         var actual = GenerateValueExpression(step, propertyName);
         if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
@@ -1504,7 +1553,14 @@ internal sealed class AuthoringCodeGenerator
         }
 
         string expected;
-        if (step.ExpectedCheckpointId is { } checkpointId)
+        if (step.NumericExpectedExpression is { } numericExpression)
+        {
+            expected = GenerateNumericExpectedExpression(
+                numericExpression,
+                checkpointVariables,
+                controlPropertyNames);
+        }
+        else if (step.ExpectedCheckpointId is { } checkpointId)
         {
             if (!checkpointVariables.TryGetValue(checkpointId, out expected!))
             {
@@ -1538,6 +1594,69 @@ internal sealed class AuthoringCodeGenerator
         };
 
         return $"await {assertion};";
+    }
+
+    private static string GenerateNumericExpectedExpression(
+        RecorderNumericExpectedExpression expression,
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        IReadOnlyDictionary<string, string>? controlPropertyNames)
+    {
+        var left = GenerateNumericOperand(expression.Left, checkpointVariables, controlPropertyNames);
+        var right = GenerateNumericOperand(expression.Right, checkpointVariables, controlPropertyNames);
+        var operation = expression.Operation switch
+        {
+            RecorderArithmeticOperation.Add => "+",
+            RecorderArithmeticOperation.Subtract => "-",
+            RecorderArithmeticOperation.Multiply => "*",
+            RecorderArithmeticOperation.Divide => "/",
+            _ => throw new InvalidOperationException(
+                $"Arithmetic operation '{expression.Operation}' is not supported.")
+        };
+        return $"{left} {operation} {right}";
+    }
+
+    private static string GenerateNumericOperand(
+        RecorderNumericOperand operand,
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        IReadOnlyDictionary<string, string>? controlPropertyNames)
+    {
+        return operand.Kind switch
+        {
+            RecorderNumericOperandKind.Literal => FormatDouble(operand.LiteralValue),
+            RecorderNumericOperandKind.Checkpoint when operand.CheckpointId is { } checkpointId
+                && checkpointVariables.TryGetValue(checkpointId, out var variableName) => variableName,
+            RecorderNumericOperandKind.Checkpoint => throw new InvalidOperationException(
+                $"Calculated assertion references unvalidated checkpoint '{operand.CheckpointId}'."),
+            RecorderNumericOperandKind.Control when operand.Control is { } control =>
+                GenerateNumericControlOperand(control, operand.ValueAccessorKind, controlPropertyNames),
+            _ => throw new InvalidOperationException(
+                $"Calculated assertion contains an invalid numeric operand '{operand.Kind}'.")
+        };
+    }
+
+    private static string GenerateNumericControlOperand(
+        RecordedControlDescriptor control,
+        RecorderValueAccessorKind? accessorKind,
+        IReadOnlyDictionary<string, string>? controlPropertyNames)
+    {
+        if (accessorKind != RecorderValueAccessorKind.NumericValue)
+        {
+            throw new InvalidOperationException(
+                $"Control operand '{control.ProposedPropertyName}' does not expose a numeric value.");
+        }
+
+        var propertyName = control.ProposedPropertyName;
+        if (controlPropertyNames is not null)
+        {
+            var key = AuthoringProjectScanner.CreateControlKey(control.LocatorKind, control.LocatorValue);
+            if (!controlPropertyNames.TryGetValue(key, out propertyName!))
+            {
+                throw new InvalidOperationException(
+                    $"Control operand '{control.LocatorKind}:{control.LocatorValue}' was not planned for generation.");
+            }
+        }
+
+        return $"Page.{propertyName}.Value";
     }
 
     private static string GenerateEnterTextStatement(

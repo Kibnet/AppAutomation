@@ -316,6 +316,46 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
+    [Arguments(0, "+")]
+    [Arguments(1, "-")]
+    [Arguments(2, "*")]
+    [Arguments(3, "/")]
+    public async Task Preview_RendersCalculatedNumericExpectedValue(
+        int operation,
+        string expectedOperator)
+    {
+        var checkpointId = Guid.NewGuid();
+        var steps = new[]
+        {
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("QuantityBefore", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                CheckpointId: checkpointId,
+                CheckpointVariableName: "quantityBefore"),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    (RecorderArithmeticOperation)operation,
+                    RecorderNumericOperand.FromCheckpoint(checkpointId),
+                    RecorderNumericOperand.FromControl(
+                        Descriptor("Adjustment", UiControlType.Spinner),
+                        RecorderValueAccessorKind.NumericValue)))
+        };
+
+        var preview = CreateGenerator().GeneratePreview(steps);
+
+        await Assert.That(preview).IsEqualTo(
+            "var quantityBefore = Page.QuantityBefore.Value;" + Environment.NewLine
+            + $"await Assert.That(Page.RemainingQuantity.Value).IsEqualTo(quantityBefore {expectedOperator} Page.Adjustment.Value);");
+    }
+
+    [Test]
     public async Task Preview_MaterializesStringSetCheckpointBeforeComparison()
     {
         var checkpointId = Guid.NewGuid();
@@ -667,6 +707,18 @@ public sealed class RecorderCheckpointAssertionTests
                     RecorderValueKind.Number,
                     RecorderValueAccessorKind.NumericValue,
                     doubleValue: 42.5),
+                new RecordedStep(
+                    RecordedActionKind.AssertValue,
+                    Descriptor("CalculatedAmount", UiControlType.Spinner),
+                    ValueKind: RecorderValueKind.Number,
+                    ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                    ComparisonKind: RecorderComparisonKind.Equal,
+                    NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                        RecorderArithmeticOperation.Subtract,
+                        RecorderNumericOperand.FromControl(
+                            Descriptor("AdjustmentValue", UiControlType.Spinner),
+                            RecorderValueAccessorKind.NumericValue),
+                        RecorderNumericOperand.FromLiteral(2))),
                 LiteralAssertion(
                     Descriptor("EnabledCheck", UiControlType.CheckBox),
                     RecorderValueKind.Boolean,
@@ -740,9 +792,12 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(scenarioSource).Contains("Page.StatusFilter.SelectedItems).IsNotEmpty();");
             await Assert.That(scenarioSource).Contains(".Contains(");
             await Assert.That(scenarioSource).Contains(".IsEquivalentTo(");
+            await Assert.That(scenarioSource)
+                .Contains("Page.CalculatedAmount.Value).IsEqualTo(Page.AdjustmentValue.Value - 2)");
             await Assert.That(scenarioSource).DoesNotContain("global::TUnit.Assertions");
             await Assert.That(scenarioSource).DoesNotContain("WaitUntilTextEquals");
             await Assert.That(CountOccurrences(controlsSource, "ObservedValue")).IsEqualTo(2);
+            await Assert.That(CountOccurrences(controlsSource, "AdjustmentValue")).IsEqualTo(2);
             await Assert.That(compileErrors).IsEmpty();
         }
     }
@@ -918,6 +973,100 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
+    public async Task GraphValidator_ValidatesCalculatedNumericOperandsAndDependencies()
+    {
+        var missingCheckpointId = Guid.NewGuid();
+        var missingCheckpoint = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Subtract,
+                    RecorderNumericOperand.FromCheckpoint(missingCheckpointId),
+                    RecorderNumericOperand.FromLiteral(1)),
+                StepId: Guid.NewGuid())
+        ]);
+        var nonNumericControl = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Add,
+                    RecorderNumericOperand.FromControl(
+                        Descriptor("Status", UiControlType.TextBox),
+                        RecorderValueAccessorKind.Text),
+                    RecorderNumericOperand.FromLiteral(1)),
+                StepId: Guid.NewGuid())
+        ]);
+        var conflictingExpectedSources = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                DoubleValue: 3,
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Multiply,
+                    RecorderNumericOperand.FromLiteral(2),
+                    RecorderNumericOperand.FromLiteral(3)),
+                StepId: Guid.NewGuid())
+        ]);
+        var invalidLiteral = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Divide,
+                    RecorderNumericOperand.FromLiteral(double.NaN),
+                    RecorderNumericOperand.FromLiteral(1)),
+                StepId: Guid.NewGuid())
+        ]);
+        var literalDivisionByZero = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Divide,
+                    RecorderNumericOperand.FromLiteral(1),
+                    RecorderNumericOperand.FromLiteral(0)),
+                StepId: Guid.NewGuid())
+        ]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(missingCheckpoint.Success).IsFalse();
+            await Assert.That(missingCheckpoint.Error).Contains("missing or later checkpoint");
+            await Assert.That(nonNumericControl.Success).IsFalse();
+            await Assert.That(nonNumericControl.Error).Contains("numeric value");
+            await Assert.That(conflictingExpectedSources.Success).IsFalse();
+            await Assert.That(conflictingExpectedSources.Error).Contains("exactly one expected value source");
+            await Assert.That(invalidLiteral.Success).IsFalse();
+            await Assert.That(invalidLiteral.Error).Contains("invalid left numeric literal");
+            await Assert.That(literalDivisionByZero.Success).IsFalse();
+            await Assert.That(literalDivisionByZero.Error).Contains("divide by a literal zero");
+        }
+    }
+
+    [Test]
     public async Task GraphValidator_RejectsHasValueForAlwaysPresentScalar()
     {
         var validation = RecorderScenarioGraphValidator.Validate(
@@ -1071,6 +1220,74 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
+    public async Task CheckMode_CapturesCalculatedValueFromCheckpointLiteralAndUiControl()
+    {
+        var root = new StackPanel();
+        var quantityBefore = new NumericUpDown { Value = 10 };
+        var remainingQuantity = new NumericUpDown { Value = 7 };
+        var adjustment = new NumericUpDown { Value = 3, IsEnabled = false };
+        var note = new TextBox { Text = "not numeric" };
+        AutomationProperties.SetAutomationId(quantityBefore, "QuantityBefore");
+        AutomationProperties.SetAutomationId(remainingQuantity, "RemainingQuantity");
+        AutomationProperties.SetAutomationId(adjustment, "Adjustment");
+        AutomationProperties.SetAutomationId(note, "Note");
+        root.Children.Add(quantityBefore);
+        root.Children.Add(remainingQuantity);
+        root.Children.Add(adjustment);
+        root.Children.Add(note);
+        using var session = CreateSession(root);
+        session.Start();
+        var details = (IRecorderCheckpointSessionDetails)session;
+
+        RecorderCheckTargetSelection? checkpointSelection = null;
+        session.CheckTargetSelected += (_, eventArgs) => checkpointSelection = eventArgs.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(quantityBefore);
+        details.CaptureCheckpoint(checkpointSelection!, "quantityBefore");
+
+        RecorderCheckTargetSelection? assertionSelection = null;
+        session.CheckTargetSelected += (_, eventArgs) => assertionSelection = eventArgs.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(remainingQuantity);
+
+        RecorderNumericOperandTargetSelection? operandSelection = null;
+        details.NumericOperandTargetSelected += (_, eventArgs) => operandSelection = eventArgs.Selection;
+        details.BeginNumericOperandTargetSelection();
+        session.SelectNumericOperandTargetForTesting(note);
+        var rejectedOperand = operandSelection;
+        details.BeginNumericOperandTargetSelection();
+        session.SelectNumericOperandTargetForTesting(adjustment);
+        details.CaptureCalculatedAssertion(
+            assertionSelection!,
+            new RecorderNumericExpectedExpression(
+                RecorderArithmeticOperation.Subtract,
+                RecorderNumericOperand.FromCheckpoint(details.Checkpoints.Single().CheckpointId),
+                operandSelection!.Operand!));
+
+        var assertionStepId = session.StepJournal[^1].StepId;
+        var movedBeforeCheckpoint = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
+        var invalidAfterMove = session.StepJournal.Single(entry => entry.StepId == assertionStepId);
+        var movedBack = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Later);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(movedBeforeCheckpoint).IsTrue();
+            await Assert.That(rejectedOperand!.Operand).IsNull();
+            await Assert.That(rejectedOperand.Error).Contains("numeric value");
+            await Assert.That(operandSelection!.Operand).IsNotNull();
+            await Assert.That(invalidAfterMove.CanPersist).IsFalse();
+            await Assert.That(invalidAfterMove.StatusMessage).Contains("missing or later checkpoint");
+            await Assert.That(movedBack).IsTrue();
+            await Assert.That(session.StepCount).IsEqualTo(2);
+            await Assert.That(session.PersistableStepCount).IsEqualTo(2);
+            await Assert.That(session.ExportPreview()).Contains(
+                "await Assert.That(Page.RemainingQuantity.Value).IsEqualTo(quantityBefore - Page.Adjustment.Value);");
+            await Assert.That(session.StepJournal[^1].StatusMessage)
+                .IsEqualTo("Assert RemainingQuantity.Value equals calculated value");
+        }
+    }
+
+    [Test]
     public async Task CheckMenu_OffersEmptyAndNotEqualChoicesWithoutAddingPersistentControls()
     {
         var root = new StackPanel();
@@ -1090,6 +1307,12 @@ public sealed class RecorderCheckpointAssertionTests
         var textPresence = checkMenu.Items
             .OfType<MenuItem>()
             .Single(item => string.Equals(item.Header?.ToString(), "Has Value", StringComparison.Ordinal));
+        var textCalculated = checkMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => string.Equals(
+                item.Header?.ToString(),
+                "Compare with calculated value…",
+                StringComparison.Ordinal));
         var literalEditor = overlay.CreateLiteralAssertionEditorForTesting(selection!);
         var comparison = literalEditor.GetLogicalDescendants()
             .OfType<ComboBox>()
@@ -1119,6 +1342,40 @@ public sealed class RecorderCheckpointAssertionTests
             .OfType<MenuItem>()
             .Single(item => string.Equals(item.Header?.ToString(), "Has Value", StringComparison.Ordinal));
 
+        var numericRoot = new StackPanel();
+        var amount = new NumericUpDown { Value = 12 };
+        AutomationProperties.SetAutomationId(amount, "Amount");
+        numericRoot.Children.Add(amount);
+        using var numericSession = CreateSession(numericRoot);
+        numericSession.Start();
+        RecorderCheckTargetSelection? numericSelection = null;
+        numericSession.CheckTargetSelected += (_, eventArgs) => numericSelection = eventArgs.Selection;
+        numericSession.BeginCheckTargetSelection();
+        numericSession.SelectCheckTargetForTesting(amount);
+        var numericOverlay = new RecorderOverlay();
+        numericOverlay.Attach(numericSession, new AppAutomationRecorderOptions());
+        var numericMenu = numericOverlay.CreateCheckMenuForTesting(numericSelection!);
+        var calculated = numericMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => string.Equals(
+                item.Header?.ToString(),
+                "Compare with calculated value…",
+                StringComparison.Ordinal));
+        var calculatedEditor = numericOverlay.CreateCalculatedAssertionEditorForTesting(numericSelection!);
+        var calculatedOperation = calculatedEditor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderCalculatedOperation");
+        var calculatedAdd = calculatedEditor.GetLogicalDescendants()
+            .OfType<Button>()
+            .Single(control => control.Name == "RecorderCalculatedAdd");
+        var rightLiteral = calculatedEditor.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(control => control.Name == "RecorderCalculatedOperand2Literal");
+        calculatedOperation.SelectedIndex = (int)RecorderArithmeticOperation.Divide;
+        var divideByZeroEnabled = calculatedAdd.IsEnabled;
+        rightLiteral.Text = "2";
+        rightLiteral.RaiseEvent(new TextChangedEventArgs(TextBox.TextChangedEvent));
+
         using (Assert.Multiple())
         {
             await Assert.That(textPresence.Items.OfType<MenuItem>().Select(item => item.Header?.ToString() ?? string.Empty))
@@ -1127,6 +1384,15 @@ public sealed class RecorderCheckpointAssertionTests
                 .IsEquivalentTo(["IsNotNull", "IsNull"]);
             await Assert.That(comparison.Items.Cast<object>().Select(static item => item.ToString()))
                 .Contains("Not equals");
+            await Assert.That(textCalculated.IsEnabled).IsFalse();
+            await Assert.That(calculated.IsEnabled).IsTrue();
+            await Assert.That(calculatedEditor.GetLogicalDescendants()
+                    .OfType<ComboBox>()
+                    .Single(control => control.Name == "RecorderCalculatedOperation")
+                    .Items.Cast<object>().Select(static item => item.ToString() ?? string.Empty))
+                .IsEquivalentTo(["+", "−", "×", "÷"]);
+            await Assert.That(divideByZeroEnabled).IsFalse();
+            await Assert.That(calculatedAdd.IsEnabled).IsTrue();
             await Assert.That(session.ExportPreview())
                 .IsEqualTo("await Assert.That(Page.ObservedValue.Text).IsEmpty();");
         }
