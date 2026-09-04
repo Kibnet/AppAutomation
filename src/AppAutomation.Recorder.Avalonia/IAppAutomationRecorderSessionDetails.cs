@@ -120,7 +120,8 @@ internal sealed record RecorderCheckTargetSelection(
     Control Target,
     RecorderSemanticValueSnapshot? ValueSnapshot,
     string? ValueDescriptionError,
-    bool IsEnabled)
+    bool IsEnabled,
+    bool CanCaptureAssertions = true)
 {
     public RecorderSemanticValueDescription? ValueDescription => ValueSnapshot?.Description;
 }

@@ -1070,7 +1070,12 @@ public enum GridCellEditorKind
     /// <summary>
     /// A color picker editor.
     /// </summary>
-    Color = 6
+    Color = 6,
+
+    /// <summary>
+    /// A boolean check-box editor.
+    /// </summary>
+    CheckBox = 7
 }
 
 /// <summary>
@@ -1110,6 +1115,11 @@ public sealed record GridCellEditRequest(
     /// Maximum time available to provider-specific editor discovery and selection.
     /// </summary>
     public int TimeoutMs { get; init; } = 5000;
+
+    /// <summary>
+    /// Optional cell-scoped parts for composite or templated editors.
+    /// </summary>
+    public GridCellEditorParts? EditorParts { get; init; }
 }
 
 /// <summary>

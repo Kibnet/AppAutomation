@@ -88,6 +88,7 @@ internal sealed class RecorderSession :
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
+    private PendingCatalogGridEdit? _pendingCatalogGridEdit;
     private GridComboSelectionContextResolution? _pendingGridComboSelectionContext;
     private CompletedCompositeSelection? _completedCompositeSelection;
     private RoutedEventArgs? _lastMenuItemClickEvent;
@@ -132,6 +133,7 @@ internal sealed class RecorderSession :
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _ = _options.FreezeGridHints();
         _validationRootProvider = validationRootProvider ?? (() => window.Content as Control);
         _logger = options.Logger ?? NullLogger.Instance;
         _hasConfiguredLogger = options.Logger is not null;
@@ -365,6 +367,7 @@ internal sealed class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
@@ -378,6 +381,7 @@ internal sealed class RecorderSession :
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
+        _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
@@ -400,6 +404,7 @@ internal sealed class RecorderSession :
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
         FlushPendingState();
+        _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
@@ -910,6 +915,13 @@ internal sealed class RecorderSession :
         FlushPendingState();
     }
 
+    internal void CancelPendingGridCellEditForTesting()
+    {
+        FlushPendingText();
+        FlushPendingSpinner();
+        CancelPendingCatalogGridEdit();
+    }
+
     internal void AddRecordedStepForTesting(RecordedStep step)
     {
         var updatedStep = step.StepId == Guid.Empty
@@ -1402,46 +1414,42 @@ internal sealed class RecorderSession :
         var source = e.Source as Control;
         if (_isCheckTargetSelectionActive)
         {
-            var eventTarget = ResolveInteractionOwner(source) ?? source;
             var positionRoot = _inputRoot ?? _window;
             _pendingCheckTargetCandidates = ResolveCheckTargetCandidates(
-                eventTarget,
+                source,
                 positionRoot,
                 e.GetPosition(positionRoot));
-            _pendingCheckTargetControl = eventTarget
-                ?? (_pendingCheckTargetCandidates.Count > 0 ? _pendingCheckTargetCandidates[0] : null);
+            _pendingCheckTargetControl = _pendingCheckTargetCandidates.Count > 0
+                ? _pendingCheckTargetCandidates[0]
+                : ResolveInteractionOwner(source) ?? source;
             e.Handled = true;
             return;
         }
 
         if (_isNumericOperandTargetSelectionActive)
         {
-            var eventTarget = ResolveInteractionOwner(source) ?? source;
             var positionRoot = _inputRoot ?? _window;
             _pendingNumericOperandTargetCandidates = ResolveCheckTargetCandidates(
-                eventTarget,
+                source,
                 positionRoot,
                 e.GetPosition(positionRoot));
-            _pendingNumericOperandTargetControl = eventTarget
-                ?? (_pendingNumericOperandTargetCandidates.Count > 0
-                    ? _pendingNumericOperandTargetCandidates[0]
-                    : null);
+            _pendingNumericOperandTargetControl = _pendingNumericOperandTargetCandidates.Count > 0
+                ? _pendingNumericOperandTargetCandidates[0]
+                : ResolveInteractionOwner(source) ?? source;
             e.Handled = true;
             return;
         }
 
         if (_isGeneratedValueTargetSelectionActive)
         {
-            var eventTarget = ResolveInteractionOwner(source) ?? source;
             var positionRoot = _inputRoot ?? _window;
             _pendingGeneratedValueTargetCandidates = ResolveCheckTargetCandidates(
-                eventTarget,
+                source,
                 positionRoot,
                 e.GetPosition(positionRoot));
-            _pendingGeneratedValueTargetControl = eventTarget
-                ?? (_pendingGeneratedValueTargetCandidates.Count > 0
-                    ? _pendingGeneratedValueTargetCandidates[0]
-                    : null);
+            _pendingGeneratedValueTargetControl = _pendingGeneratedValueTargetCandidates.Count > 0
+                ? _pendingGeneratedValueTargetCandidates[0]
+                : ResolveInteractionOwner(source) ?? source;
             e.Handled = true;
             return;
         }
@@ -1466,6 +1474,7 @@ internal sealed class RecorderSession :
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
+        CommitPendingCatalogGridEditIfSwitchingTo(control);
         RegisterPointerInput(control);
 
         if (FindAncestorOrSelf<Button>(source) is null)
@@ -1570,6 +1579,12 @@ internal sealed class RecorderSession :
             if (e.Key == Key.Escape)
             {
                 _pendingContextMenuOwner = null;
+                FlushPendingText();
+                FlushPendingSpinner();
+                if (CancelPendingCatalogGridEdit())
+                {
+                    return;
+                }
             }
             else if (e.Key == Key.Apps
                      || (e.Key == Key.F10 && e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
@@ -1591,9 +1606,12 @@ internal sealed class RecorderSession :
             if (focused is TextBox && e.Key is Key.Enter or Key.Tab)
             {
                 FlushPendingText();
+                CommitPendingCatalogGridEdit();
             }
             else if (e.Key is Key.Enter)
             {
+                FlushPendingSpinner();
+                CommitPendingCatalogGridEdit();
                 TryRecordGridAction(focused);
             }
         }
@@ -1758,6 +1776,11 @@ internal sealed class RecorderSession :
         }
 
         var control = ResolveButtonActionOwner(eventSource);
+        if (control is CheckBox && TryRecordCatalogGridCellEdit(control, "GridCheckBoxEdit"))
+        {
+            return;
+        }
+
         if (TryRecordGridAction(control))
         {
             return;
@@ -1903,14 +1926,20 @@ internal sealed class RecorderSession :
     private bool TryRecordGridComboSelection(ComboBox comboBox)
     {
         return CompleteGridComboSelection(
-            _stepFactory.TryCreateGridComboSelectionStep(comboBox, _pendingGridComboSelectionContext),
+            _stepFactory.TryCreateGridComboSelectionStep(
+                comboBox,
+                _pendingGridComboSelectionContext,
+                _pendingTextValue),
             comboBox);
     }
 
     private bool TryRecordGridComboSelection(ListBox listBox)
     {
         return CompleteGridComboSelection(
-            _stepFactory.TryCreateGridComboSelectionStep(listBox, _pendingGridComboSelectionContext),
+            _stepFactory.TryCreateGridComboSelectionStep(
+                listBox,
+                _pendingGridComboSelectionContext,
+                _pendingTextValue),
             listBox);
     }
 
@@ -1934,7 +1963,8 @@ internal sealed class RecorderSession :
         AddStep(capture.StepResult, source, "GridComboSelection");
         if (capture.StepResult.Success
             && _steps.Count > previousStepCount
-            && _steps[^1].ActionKind == RecordedActionKind.SelectGridCellComboItem
+            && _steps[^1].ActionKind is RecordedActionKind.SelectGridCellComboItem
+                or RecordedActionKind.SearchAndSelectGridCell
             && _steps[^1].CanPersist)
         {
             _completedCompositeSelection = new CompletedCompositeSelection([source]);
@@ -2345,6 +2375,13 @@ internal sealed class RecorderSession :
 
         FlushPendingTextIfSwitchingTo(spinner);
         FlushPendingSliderIfSwitchingTo(spinner);
+        if (TryRecordCatalogGridCellEdit(spinner, "GridSpinnerEdit", deferUntilCommit: true))
+        {
+            _pendingSpinner = null;
+            _spinnerDebounceTimer.Stop();
+            return;
+        }
+
         _pendingSpinner = spinner;
         _spinnerDebounceTimer.Stop();
         _spinnerDebounceTimer.Start();
@@ -2368,6 +2405,11 @@ internal sealed class RecorderSession :
 
         FlushPendingSliderIfSwitchingTo(timePicker);
         FlushPendingSpinnerIfSwitchingTo(timePicker);
+
+        if (TryRecordCatalogGridCellEdit(timePicker, "GridTimeEdit"))
+        {
+            return;
+        }
 
         if (_stepFactory.TryResolveTimePickerHint(timePicker, out var hint))
         {
@@ -2421,6 +2463,11 @@ internal sealed class RecorderSession :
             FlushPendingTextIfSwitchingTo(datePicker);
             FlushPendingSliderIfSwitchingTo(datePicker);
             FlushPendingSpinnerIfSwitchingTo(datePicker);
+            if (TryRecordCatalogGridCellEdit(datePicker, "GridDateEdit"))
+            {
+                return;
+            }
+
             AddStep(_stepFactory.TryCreateDatePickerStep(datePicker), datePicker, "DatePickerSelection");
         }
     }
@@ -2437,6 +2484,11 @@ internal sealed class RecorderSession :
             FlushPendingTextIfSwitchingTo(calendar);
             FlushPendingSliderIfSwitchingTo(calendar);
             FlushPendingSpinnerIfSwitchingTo(calendar);
+            if (TryRecordCatalogGridCellEdit(calendar, "GridCalendarEdit"))
+            {
+                return;
+            }
+
             var selectedDate = e.GetNewValue<DateTime?>();
             var result = selectedDate is { } value
                 ? _stepFactory.TryCreateCalendarStep(calendar, value)
@@ -2552,6 +2604,15 @@ internal sealed class RecorderSession :
             }
 
             FlushPendingText();
+            CommitPendingCatalogGridEdit();
+            return;
+        }
+
+        if (sender is TextBox lostFocusTextBox
+            && _pendingCatalogGridEdit is { } pending
+            && AreRelated(pending.Source, lostFocusTextBox))
+        {
+            CommitPendingCatalogGridEdit();
         }
     }
 
@@ -2595,19 +2656,21 @@ internal sealed class RecorderSession :
             return true;
         }
 
-        return IsInsideConfiguredGrid(textBox);
+        return IsInsideConfiguredGrid(textBox)
+            && (!_stepFactory.IsCatalogGridCell(textBox)
+                || _stepFactory.ShouldSuppressCatalogGridTextEntry(textBox));
     }
 
     private bool IsInsideConfiguredGrid(Control source)
     {
-        if (_options.GridHints.Count == 0)
+        if (!_options.EnumerateGridHints().Any())
         {
             return false;
         }
 
         foreach (var current in EnumerateRelatedControls(source))
         {
-            foreach (var hint in _options.GridHints)
+            foreach (var hint in _options.EnumerateGridHints())
             {
                 if (TryGetLocator(current, hint.SourceLocatorKind, out var locator)
                     && string.Equals(hint.SourceLocatorValue.Trim(), locator, StringComparison.Ordinal))
@@ -2838,7 +2901,26 @@ internal sealed class RecorderSession :
 
         CompleteCheckTargetSelection(
             ResolveInteractionOwner(eventSource) ?? eventSource,
-            visualCandidates);
+            ResolveCheckTargetCandidates(eventSource, visualCandidates, visualCandidates));
+        return true;
+    }
+
+    internal bool SelectCheckTargetForTesting(
+        Control eventSource,
+        IReadOnlyList<Control> inputCandidates,
+        IReadOnlyList<Control> visualCandidates)
+    {
+        ArgumentNullException.ThrowIfNull(eventSource);
+        ArgumentNullException.ThrowIfNull(inputCandidates);
+        ArgumentNullException.ThrowIfNull(visualCandidates);
+        if (!_isCheckTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteCheckTargetSelection(
+            ResolveInteractionOwner(eventSource) ?? eventSource,
+            ResolveCheckTargetCandidates(eventSource, inputCandidates, visualCandidates));
         return true;
     }
 
@@ -2852,6 +2934,11 @@ internal sealed class RecorderSession :
         string? variableName)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         AddStep(
             _stepFactory.TryCreateCheckpointStep(selection.ValueSnapshot, variableName),
             selection.Target,
@@ -2877,6 +2964,11 @@ internal sealed class RecorderSession :
         RecorderComparisonKind comparisonKind)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         CaptureCheckpointAssertion(
             selection.ValueSnapshot,
             selection.Target,
@@ -2925,6 +3017,11 @@ internal sealed class RecorderSession :
         bool expectEmpty)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         AddStep(
             _stepFactory.TryCreatePresenceAssertionStep(selection.ValueSnapshot, expectEmpty),
             selection.Target,
@@ -2936,6 +3033,11 @@ internal sealed class RecorderSession :
         bool expectedEnabled)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         AddStep(
             _stepFactory.TryCreateEnabledAssertionStep(
                 selection.Target,
@@ -2951,6 +3053,11 @@ internal sealed class RecorderSession :
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(expression);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         AddStep(
             _stepFactory.TryCreateCalculatedAssertionStep(selection.ValueSnapshot, expression),
             selection.Target,
@@ -2971,6 +3078,11 @@ internal sealed class RecorderSession :
         RecorderDateExpression? dateExpression)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         AddStep(
             _stepFactory.TryCreateLiteralAssertionStep(
                 selection.ValueSnapshot,
@@ -3120,6 +3232,11 @@ internal sealed class RecorderSession :
         RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
     {
         ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
         var generatedValue = CreateGeneratedValueOptions()
             .FirstOrDefault(option => option.GeneratedValueId == generatedValueId);
         if (generatedValue is null)
@@ -3135,6 +3252,19 @@ internal sealed class RecorderSession :
                 comparisonKind),
             selection.Target,
             "GeneratedValue:Compare");
+    }
+
+    private bool CanCaptureCheckSelection(RecorderCheckTargetSelection selection)
+    {
+        if (selection.CanCaptureAssertions)
+        {
+            return true;
+        }
+
+        SetStatus(
+            selection.ValueDescriptionError ?? "Select one unambiguous control before adding a check.",
+            RecorderValidationStatus.Invalid);
+        return false;
     }
 
     private void CompleteGeneratedValueTargetSelection(
@@ -3246,48 +3376,10 @@ internal sealed class RecorderSession :
         _pendingCheckTargetControl = null;
         _pendingCheckTargetCandidates = Array.Empty<Control>();
         _isCheckTargetSelectionActive = false;
-        var selectedTarget = target;
-        Control? configuredTarget = null;
-        RecorderSemanticValueSnapshot? snapshot = null;
-        string? error = null;
-        var configuredSnapshotCaptured = visualCandidates is { Count: > 0 }
-            && _stepFactory.TryCaptureConfiguredSemanticValueSnapshot(
-                visualCandidates,
-                out configuredTarget,
-                out snapshot,
-                out error);
-        if (configuredSnapshotCaptured)
-        {
-            selectedTarget = configuredTarget ?? target;
-        }
-        else if (string.IsNullOrWhiteSpace(error)
-                 && visualCandidates is { Count: > 0 }
-                 && TryCaptureDisabledVisualSemanticValueSnapshot(
-                     target,
-                     visualCandidates,
-                     out var disabledTarget,
-                     out snapshot,
-                     out error))
-        {
-            selectedTarget = disabledTarget ?? target;
-        }
-        else if (string.IsNullOrWhiteSpace(error))
-        {
-            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
-        }
-        else
-        {
-            selectedTarget = configuredTarget ?? target;
-        }
-
+        var selection = ResolveCheckTargetSelection(target, visualCandidates);
         CheckTargetSelected?.Invoke(
             this,
-            new RecorderCheckTargetSelectedEventArgs(
-                new RecorderCheckTargetSelection(
-                    selectedTarget,
-                    snapshot,
-                    error,
-                    selectedTarget.IsEffectivelyEnabled)));
+            new RecorderCheckTargetSelectedEventArgs(selection));
     }
 
     private void CompleteNumericOperandTargetSelection(
@@ -3297,45 +3389,13 @@ internal sealed class RecorderSession :
         _pendingNumericOperandTargetControl = null;
         _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
         _isNumericOperandTargetSelectionActive = false;
-        var selectedTarget = target;
-        Control? configuredTarget = null;
-        RecorderSemanticValueSnapshot? snapshot = null;
-        string? error = null;
-        var configuredSnapshotCaptured = visualCandidates is { Count: > 0 }
-            && _stepFactory.TryCaptureConfiguredSemanticValueSnapshot(
-                visualCandidates,
-                out configuredTarget,
-                out snapshot,
-                out error);
-        if (configuredSnapshotCaptured)
-        {
-            selectedTarget = configuredTarget ?? target;
-        }
-        else if (string.IsNullOrWhiteSpace(error)
-                 && visualCandidates is { Count: > 0 }
-                 && TryCaptureDisabledVisualSemanticValueSnapshot(
-                     target,
-                     visualCandidates,
-                     out var disabledTarget,
-                     out snapshot,
-                     out error))
-        {
-            selectedTarget = disabledTarget ?? target;
-        }
-        else if (string.IsNullOrWhiteSpace(error))
-        {
-            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
-        }
-        else
-        {
-            selectedTarget = configuredTarget ?? target;
-        }
-
+        var selection = ResolveCheckTargetSelection(target, visualCandidates);
+        var error = selection.ValueDescriptionError;
         RecorderNumericOperand? operand = null;
-        if (string.IsNullOrWhiteSpace(error))
+        if (selection.CanCaptureAssertions && string.IsNullOrWhiteSpace(error))
         {
             RecorderStepFactory.TryCreateNumericControlOperand(
-                snapshot,
+                selection.ValueSnapshot,
                 out operand,
                 out error);
         }
@@ -3344,56 +3404,49 @@ internal sealed class RecorderSession :
             this,
             new RecorderNumericOperandTargetSelectedEventArgs(
                 new RecorderNumericOperandTargetSelection(
-                    selectedTarget,
+                    selection.Target,
                     operand,
                     operand?.Control?.ProposedPropertyName,
                     error)));
     }
 
-    private bool TryCaptureDisabledVisualSemanticValueSnapshot(
-        Control eventTarget,
-        IReadOnlyList<Control> visualCandidates,
-        out Control? resolvedTarget,
-        out RecorderSemanticValueSnapshot? snapshot,
-        out string? error)
+    private RecorderCheckTargetSelection ResolveCheckTargetSelection(
+        Control target,
+        IReadOnlyList<Control>? visualCandidates)
     {
-        resolvedTarget = null;
-        snapshot = null;
-        error = string.Empty;
-        Control? failedTarget = null;
-        string? failure = null;
-        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var candidates = visualCandidates
-            .Select(static candidate => ResolveInteractionOwner(candidate) ?? candidate)
-            .Where(candidate => !ReferenceEquals(candidate, eventTarget)
-                                && !candidate.IsEffectivelyEnabled
-                                && visited.Add(candidate))
-            .OrderByDescending(static candidate => candidate.GetVisualAncestors().Count());
-
-        foreach (var candidate in candidates)
+        var selectedTarget = target;
+        Control? configuredTarget = null;
+        RecorderSemanticValueSnapshot? snapshot = null;
+        string? error = null;
+        var canCaptureAssertions = true;
+        var definitiveFailure = false;
+        var configuredSnapshotCaptured = visualCandidates is { Count: > 0 }
+            && _stepFactory.TryCaptureConfiguredSemanticValueSnapshot(
+                visualCandidates,
+                out configuredTarget,
+                out snapshot,
+                out error,
+                out definitiveFailure);
+        if (configuredSnapshotCaptured)
         {
-            if (_stepFactory.TryCaptureSemanticValueSnapshot(candidate, out snapshot, out var candidateError))
-            {
-                resolvedTarget = candidate;
-                error = string.Empty;
-                return true;
-            }
-
-            if (failedTarget is null && !string.IsNullOrWhiteSpace(candidateError))
-            {
-                failedTarget = candidate;
-                failure = candidateError;
-            }
+            selectedTarget = configuredTarget ?? target;
+        }
+        else if (string.IsNullOrWhiteSpace(error))
+        {
+            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
+        }
+        else
+        {
+            selectedTarget = configuredTarget ?? target;
+            canCaptureAssertions = !definitiveFailure;
         }
 
-        if (failedTarget is null)
-        {
-            return false;
-        }
-
-        resolvedTarget = failedTarget;
-        error = failure;
-        return true;
+        return new RecorderCheckTargetSelection(
+            selectedTarget,
+            snapshot,
+            error,
+            selectedTarget.IsEffectivelyEnabled,
+            canCaptureAssertions);
     }
 
     private void CancelCheckTargetSelectionCore()
@@ -3418,23 +3471,125 @@ internal sealed class RecorderSession :
         _isGeneratedValueTargetSelectionActive = false;
     }
 
-    private static List<Control> ResolveCheckTargetCandidates(
+    private List<Control> ResolveCheckTargetCandidates(
         Control? eventTarget,
         Control positionRoot,
         Point position)
     {
-        var candidates = new List<Control>();
-        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        AddCheckTargetAndRelations(eventTarget, candidates, visited);
+        var rootIsAttached = TopLevel.GetTopLevel(positionRoot) is not null;
+        return ResolveCheckTargetCandidatesCore(
+            eventTarget,
+            positionRoot
+                .GetInputElementsAt(position, enabledElementsOnly: false)
+                .OfType<Control>(),
+            positionRoot
+                .GetVisualsAt(position)
+                .OfType<Control>(),
+            requireAttachedVisual: rootIsAttached);
+    }
 
-        foreach (var candidate in positionRoot
-                     .GetInputElementsAt(position, enabledElementsOnly: false)
-                     .OfType<Control>())
+    private List<Control> ResolveCheckTargetCandidates(
+        Control? eventTarget,
+        IEnumerable<Control> inputCandidates,
+        IEnumerable<Control> visualCandidates)
+    {
+        return ResolveCheckTargetCandidatesCore(
+            eventTarget,
+            inputCandidates,
+            visualCandidates,
+            requireAttachedVisual: false);
+    }
+
+    private List<Control> ResolveCheckTargetCandidatesCore(
+        Control? eventTarget,
+        IEnumerable<Control> inputCandidates,
+        IEnumerable<Control> visualCandidates,
+        bool requireAttachedVisual)
+    {
+        var visitedSpatial = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var spatialCandidates = visualCandidates
+            .Concat(inputCandidates)
+            .Append(eventTarget)
+            .Where(static candidate => candidate is not null)
+            .Select(static candidate => candidate!)
+            .Where(candidate => visitedSpatial.Add(candidate))
+            .Where(candidate => IsCaptureHitCandidate(candidate, requireAttachedVisual))
+            .Where(candidate => !IsPlaybackOnlyGridSurface(candidate))
+            .ToArray();
+        var leafCandidates = spatialCandidates
+            .Where(candidate => !spatialCandidates.Any(other =>
+                !ReferenceEquals(candidate, other)
+                && IsAncestorOrSelf(candidate, other)))
+            .ToArray();
+        var selected = leafCandidates.FirstOrDefault()
+            ?? spatialCandidates.FirstOrDefault();
+        if (selected is null)
         {
-            AddCheckTargetAndRelations(candidate, candidates, visited);
+            return [];
         }
 
+        var candidates = new List<Control>();
+        var visitedPath = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        AddCheckTargetAndRelations(
+            ResolveInteractionOwner(selected) ?? selected,
+            candidates,
+            visitedPath);
         return candidates;
+    }
+
+    private bool IsPlaybackOnlyGridSurface(Control candidate)
+    {
+        foreach (var definition in _options.GridAutomation)
+        {
+            if (definition.CaptureLocatorKind == definition.RuntimeLocatorKind
+                && string.Equals(
+                    definition.CaptureLocatorValue,
+                    definition.RuntimeLocatorValue,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            for (Control? current = candidate; current is not null; current = current.GetVisualParent() as Control)
+            {
+                if (MatchesLocator(current, definition.RuntimeLocatorKind, definition.RuntimeLocatorValue))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsCaptureHitCandidate(Control candidate, bool requireAttachedVisual)
+    {
+        if (!candidate.IsVisible || !candidate.IsHitTestVisible)
+        {
+            return false;
+        }
+
+        if (requireAttachedVisual && TopLevel.GetTopLevel(candidate) is null)
+        {
+            return false;
+        }
+
+        var effectiveOpacity = 1d;
+        for (Visual? current = candidate; current is not null; current = current.GetVisualParent())
+        {
+            if (!current.IsVisible)
+            {
+                return false;
+            }
+
+            effectiveOpacity *= current.Opacity;
+            if (effectiveOpacity <= 0.01d)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void AddCheckTargetAndRelations(
@@ -3559,6 +3714,76 @@ internal sealed class RecorderSession :
         }
 
         AddStep(result, source, "GridAction");
+        return true;
+    }
+
+    private bool TryRecordCatalogGridCellEdit(
+        Control source,
+        string diagnosticContext,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        bool deferUntilCommit = false)
+    {
+        var capture = _stepFactory.TryCreateGridCellEditStep(source, commitMode);
+        if (!capture.IsConfigured)
+        {
+            return false;
+        }
+
+        if (deferUntilCommit && capture.StepResult.Success)
+        {
+            if (_pendingCatalogGridEdit is { } pending
+                && !AreRelated(pending.Source, source))
+            {
+                CommitPendingCatalogGridEdit();
+            }
+
+            _pendingCatalogGridEdit = new PendingCatalogGridEdit(
+                source,
+                capture.StepResult,
+                diagnosticContext);
+            return true;
+        }
+
+        AddStep(capture.StepResult, source, diagnosticContext);
+        return true;
+    }
+
+    private bool CommitPendingCatalogGridEdit()
+    {
+        if (_pendingCatalogGridEdit is not { } pending)
+        {
+            return false;
+        }
+
+        _pendingCatalogGridEdit = null;
+        AddStep(pending.StepResult, pending.Source, pending.DiagnosticContext);
+        return true;
+    }
+
+    private void CommitPendingCatalogGridEditIfSwitchingTo(Control? source)
+    {
+        if (_pendingCatalogGridEdit is { } pending
+            && (source is null || !AreRelated(pending.Source, source)))
+        {
+            CommitPendingCatalogGridEdit();
+        }
+    }
+
+    private bool CancelPendingCatalogGridEdit()
+    {
+        if (_pendingCatalogGridEdit is not { } pending)
+        {
+            return false;
+        }
+
+        _pendingCatalogGridEdit = null;
+        var stepResult = pending.StepResult.Step is { } step
+            ? pending.StepResult with
+            {
+                Step = step with { GridCellEditCommitMode = GridCellEditCommitMode.Cancel }
+            }
+            : pending.StepResult;
+        AddStep(stepResult, pending.Source, $"{pending.DiagnosticContext}Cancel");
         return true;
     }
 
@@ -3861,6 +4086,7 @@ internal sealed class RecorderSession :
         FlushPendingText();
         FlushPendingSlider();
         FlushPendingSpinner();
+        CommitPendingCatalogGridEdit();
         DiscardPendingTimePicker();
         DiscardPendingSingleSelect();
         DiscardPendingColorPicker();
@@ -4054,6 +4280,11 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (TryRecordCatalogGridCellEdit(textBox, "GridTextEdit", deferUntilCommit: true))
+        {
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
     }
 
@@ -4119,6 +4350,7 @@ internal sealed class RecorderSession :
         }
 
         FlushPendingText();
+        CommitPendingCatalogGridEditIfSwitchingTo(control);
     }
 
     private void FlushPendingSliderIfSwitchingTo(Control? control)
@@ -4149,6 +4381,7 @@ internal sealed class RecorderSession :
         }
 
         FlushPendingSpinner();
+        CommitPendingCatalogGridEditIfSwitchingTo(control);
     }
 
     private bool HasPendingCompositeSelection(Control results)
@@ -4166,22 +4399,42 @@ internal sealed class RecorderSession :
 
     private void RegisterPointerInput(Control? control)
     {
+        CommitPendingCatalogGridEditIfSwitchingTo(control);
         BeginNewCompositeInteraction(control);
-        _pendingGridComboSelectionContext = control is ComboBox or ListBox
-            ? _stepFactory.ResolveGridComboSelectionContext(control)
-            : null;
+        UpdatePendingGridCellContext(control);
         _recentPointerControl = control;
         _recentPointerAt = DateTimeOffset.UtcNow;
     }
 
     private void RegisterKeyboardInput(Control control)
     {
+        CommitPendingCatalogGridEditIfSwitchingTo(control);
         BeginNewCompositeInteraction(control);
-        _pendingGridComboSelectionContext = control is ComboBox or ListBox
-            ? _stepFactory.ResolveGridComboSelectionContext(control)
-            : null;
+        UpdatePendingGridCellContext(control);
         _recentKeyboardControl = control;
         _recentKeyboardAt = DateTimeOffset.UtcNow;
+    }
+
+    private void UpdatePendingGridCellContext(Control? control)
+    {
+        if (control is null)
+        {
+            _pendingGridComboSelectionContext = null;
+            return;
+        }
+
+        var resolution = _stepFactory.ResolveGridComboSelectionContext(control);
+        if (resolution.IsConfigured)
+        {
+            _pendingGridComboSelectionContext = resolution;
+            return;
+        }
+
+        if (_pendingGridComboSelectionContext?.Context is not { } pending
+            || !_stepFactory.IsGridCellContextPart(control, pending))
+        {
+            _pendingGridComboSelectionContext = null;
+        }
     }
 
     private void BeginNewCompositeInteraction(Control? control)
@@ -4317,6 +4570,11 @@ internal sealed class RecorderSession :
         DateTimeOffset CapturedAt);
 
     private sealed record CompletedCompositeSelection(IReadOnlyList<Control> Sources);
+
+    private sealed record PendingCatalogGridEdit(
+        Control Source,
+        StepCreationResult StepResult,
+        string DiagnosticContext);
 
     private static bool IsPickerTemplateButton(Control? control)
     {

@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DotnetDebug.AppAutomation.Authoring\DotnetDebug.AppAutomation.Authoring.csproj" />
+    <ProjectReference Include="..\DotnetDebug.AppAutomation.Configuration\DotnetDebug.AppAutomation.Configuration.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
     <ProjectReference Include="..\DotnetDebug.AppAutomation.TestHost\DotnetDebug.AppAutomation.TestHost.csproj" />
     <ProjectReference Include="..\..\src\AppAutomation.Avalonia.Headless\AppAutomation.Avalonia.Headless.csproj" />

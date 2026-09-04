@@ -5,6 +5,9 @@ namespace AppAutomation.Recorder.Avalonia;
 
 public sealed class AppAutomationRecorderOptions
 {
+    private readonly object _gridHintsSync = new();
+    private IReadOnlyList<RecorderGridHint>? _normalizedGridHints;
+
     public string ScenarioName { get; init; } = "Scenario";
 
     public string? AuthoringProjectDirectory { get; init; }
@@ -36,6 +39,11 @@ public sealed class AppAutomationRecorderOptions
     public RecorderOverlayOptions Overlay { get; init; } = new();
 
     public RecorderValidationOptions Validation { get; init; } = new();
+
+    /// <summary>
+    /// Gets the provider-neutral grid definitions shared with Headless and FlaUI runtime setup.
+    /// </summary>
+    public GridAutomationCatalog GridAutomation { get; init; } = new();
 
     public IList<RecorderControlHint> ControlHints { get; } = new List<RecorderControlHint>();
 
@@ -88,6 +96,49 @@ public sealed class AppAutomationRecorderOptions
 
     public IList<IRecorderSemanticValueResolver> SemanticValueResolvers { get; } =
         new List<IRecorderSemanticValueResolver>();
+
+    internal IReadOnlyList<RecorderGridHint> FreezeGridHints()
+    {
+        lock (_gridHintsSync)
+        {
+            if (_normalizedGridHints is not null)
+            {
+                return _normalizedGridHints;
+            }
+
+            var configuredLocators = new HashSet<(UiLocatorKind Kind, string Value)>();
+            var normalized = new List<RecorderGridHint>(GridAutomation.Count + GridHints.Count);
+            foreach (var definition in GridAutomation)
+            {
+                configuredLocators.Add((definition.CaptureLocatorKind, definition.CaptureLocatorValue));
+                normalized.Add(new RecorderGridHint(
+                    definition.CaptureLocatorValue,
+                    definition.RuntimeLocatorValue,
+                    Array.AsReadOnly(definition.Columns.Select(static column => column.LogicalName).ToArray()),
+                    definition.CaptureLocatorKind,
+                    definition.RuntimeLocatorKind,
+                    definition.RuntimeFallbackToName)
+                {
+                    RowIdentityColumnPropertyNames = definition.RowIdentityColumns
+                });
+            }
+
+            normalized.AddRange(GridHints.Where(hint =>
+                !configuredLocators.Contains((hint.SourceLocatorKind, hint.SourceLocatorValue))));
+            _normalizedGridHints = Array.AsReadOnly(normalized.ToArray());
+            return _normalizedGridHints;
+        }
+    }
+
+    internal IReadOnlyList<RecorderGridHint> EnumerateGridHints() => FreezeGridHints();
+
+    internal GridAutomationDefinition? FindGridDefinition(RecorderGridHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        return GridAutomation.FirstOrDefault(definition =>
+            definition.CaptureLocatorKind == hint.SourceLocatorKind
+            && string.Equals(definition.CaptureLocatorValue, hint.SourceLocatorValue, StringComparison.Ordinal));
+    }
 }
 
 public sealed record RecordedScenarioDestination(

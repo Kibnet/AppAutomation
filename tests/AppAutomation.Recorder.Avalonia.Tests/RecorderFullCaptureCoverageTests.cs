@@ -403,6 +403,7 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.EditGridCellDate, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 3, DateValue: date),
             new RecordedStep(RecordedActionKind.EditGridCellTime, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, TimeValue: new TimeSpan(9, 45, 30)),
             new RecordedStep(RecordedActionKind.EditGridCellColor, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "#FF336699"),
+            new RecordedStep(RecordedActionKind.SetGridCellChecked, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 5, BoolValue: true),
             new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 5, StringValue: "Approved"),
             new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
             new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"]),

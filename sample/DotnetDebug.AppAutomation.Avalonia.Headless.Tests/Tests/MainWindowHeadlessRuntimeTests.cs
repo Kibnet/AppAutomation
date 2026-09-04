@@ -5,6 +5,7 @@ using AppAutomation.TUnit;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
+using DotnetDebug.AppAutomation.Configuration;
 using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTests;
@@ -55,12 +56,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                 .WithGridColumns(
                     "ArmGridAutomationBridge",
                     ["Key", "Value", "Color", "State"])
-                .WithGridColumns(
-                    "GridComboAutomationBridge",
-                    ["Key", "State"])
-                .WithGridColumns(
-                    "SearchPickerGridAutomationBridge",
-                    ["Key", "SelectedValue"])
+                .WithGridAutomation(SampleGridAutomation.CreateHeadlessCatalog())
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

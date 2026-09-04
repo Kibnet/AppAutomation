@@ -26,17 +26,17 @@ The main gaps are custom/composite component roots that are implemented as `Temp
 | `BaseEditor` family | `BaseEditor`, `TextEditor`, `ButtonEditor`, `PopupEditor`, `ComboBoxEditor`, `DateEditor`, `SpinEditor` | Recorder classifies standard Avalonia controls first and falls back to generic `AutomationElement` for custom roots. The actual user action lives in inner parts like `PART_RealEditor`, `PART_PopupOpenButton`, `PART_ItemsSelector`. |
 | `MxSplitButton` | `MxSplitButton : ContentControl`, `PART_PrimaryButton`, `PART_PopupOpenButton` | Recorder does not distinguish primary action from dropdown-open action. |
 | `NotificationMessage` / `NotificationMessageContainer` | `NotificationMessage : TemplatedControl`, `NotificationMessageContainer : ItemsControl` | Without explicit hints or ids, recorder cannot infer notification-root semantics or dismiss flow automatically. |
-| `DataGridControl` | `DataGridControl : DataControlBase` | Root capture does not yield row/cell/action semantics unless a bridge or `GridHint` is configured. |
 | `TreeListControl` | `TreeListControl : TreeListControlBase` | Recorder has no tree-grid capture model. |
 | `PropertyGridControl` | `PropertyGridControl : TemplatedControl` | Recorder does not understand row/category/editor semantics from the root. |
 | `ListViewControl` | `ListViewControl : TemplatedControl` | Recorder cannot treat it as a stable `ListBox`-like surface automatically. |
 | `Toolbar`, `PopupMenu`, `RibbonControl`, `DockManager` | Command and docking surfaces are rooted in custom controls | Generic root capture does not match real user intent such as selecting a command, opening a popup, or activating a document pane. |
 
+Grid cells are covered through `GridAutomationCatalog`: native metadata is used when available, while nonstandard grids declare columns, row identity, display paths, and editor parts without a per-table semantic resolver.
+
 ## 3. What has no correct Headless and FlaUI support today
 
 ### 3.1 Missing in both runtimes without new adapters or bridges
 
-- `DataGridControl`
 - `TreeListControl`
 - `PropertyGridControl`
 - `ListViewControl`
@@ -92,7 +92,6 @@ They still need characterization tests, but they are not the primary architectur
 
 1. Add editor adapters over internal parts for read/write, popup open/close, selection and commit/cancel.
 2. Add typed support or bridge support for:
-   - `DataGridControl`
    - `TreeListControl`
    - `PropertyGridControl`
    - `ListViewControl`
@@ -102,7 +101,7 @@ They still need characterization tests, but they are not the primary architectur
 ### 5.4 FlaUI
 
 1. Implement the same adapter contracts over real UIA plus explicit `AutomationId`.
-2. Use bridge-first coverage for data/tree/property/list surfaces until native UIA patterns are proven by tests.
+2. Use bridge-first coverage for tree/property/list surfaces until native UIA patterns are proven by tests. Grids use the shared `GridAutomationCatalog`, with a bridge allowed only as the playback target.
 3. Add runtime diagnostics when the provider does not expose the required pattern, instead of silently treating the control as supported.
 
 ### 5.5 Tests
@@ -120,7 +119,7 @@ They still need characterization tests, but they are not the primary architectur
    - notification dismiss/assert
    - dialog confirm/cancel
    - toolbar/menu/ribbon command selection
-4. Add bridge or adapter contract tests first for `DataGridControl`, `TreeListControl`, `PropertyGridControl` and `ListViewControl`, then runtime smoke tests in both `Headless` and `FlaUI`.
+4. Add bridge or adapter contract tests first for `TreeListControl`, `PropertyGridControl` and `ListViewControl`, then runtime smoke tests in both `Headless` and `FlaUI`.
 
 ## 6. Practical prioritization
 
@@ -128,7 +127,7 @@ Recommended order:
 
 1. Standardize selector contract for custom component roots and template parts.
 2. Close recorder recognition gaps for the editor family and split buttons.
-3. Add bridge-first support for `DataGridControl`, `TreeListControl`, `PropertyGridControl` and `ListViewControl`.
+3. Add bridge-first support for `TreeListControl`, `PropertyGridControl` and `ListViewControl`.
 4. Add command-surface support for toolbar/menu/ribbon.
 5. Add docking-shell support only for stable pane activation; keep drag/floating/layout persistence out of the first milestone.
 
@@ -164,17 +163,17 @@ Recommended order:
 | Семейство `BaseEditor` | `BaseEditor`, `TextEditor`, `ButtonEditor`, `PopupEditor`, `ComboBoxEditor`, `DateEditor`, `SpinEditor` | Recorder сначала классифицирует стандартные Avalonia controls, а custom root сводит к generic `AutomationElement`. Реальное действие живёт во внутренних parts вроде `PART_RealEditor`, `PART_PopupOpenButton`, `PART_ItemsSelector`. |
 | `MxSplitButton` | `MxSplitButton : ContentControl`, `PART_PrimaryButton`, `PART_PopupOpenButton` | Recorder не различает primary action и открытие dropdown. |
 | `NotificationMessage` / `NotificationMessageContainer` | `NotificationMessage : TemplatedControl`, `NotificationMessageContainer : ItemsControl` | Без explicit hints или ids recorder не может автоматически понять notification-root и dismiss flow. |
-| `DataGridControl` | `DataGridControl : DataControlBase` | Захват root не даёт row/cell/action semantics без bridge или `GridHint`. |
 | `TreeListControl` | `TreeListControl : TreeListControlBase` | У recorder нет tree-grid модели захвата. |
 | `PropertyGridControl` | `PropertyGridControl : TemplatedControl` | Recorder не понимает row/category/editor semantics от корня. |
 | `ListViewControl` | `ListViewControl : TemplatedControl` | Recorder не может автоматически рассматривать его как стабильную `ListBox`-подобную поверхность. |
 | `Toolbar`, `PopupMenu`, `RibbonControl`, `DockManager` | Command и docking surfaces rooted в custom controls | Generic root capture не соответствует реальному пользовательскому intent: выбор команды, открытие popup, активация pane и т.д. |
 
+Ячейки таблиц покрываются через `GridAutomationCatalog`: при наличии используются native metadata, а нестандартная таблица декларативно задаёт колонки, ключ строки, display paths и editor parts без отдельного semantic resolver-класса.
+
 ## 3. Для чего сейчас нет корректной поддержки в Headless и FlaUI
 
 ### 3.1 Нет корректной модели в обоих runtime без новых adapters или bridges
 
-- `DataGridControl`
 - `TreeListControl`
 - `PropertyGridControl`
 - `ListViewControl`
@@ -230,7 +229,6 @@ Recommended order:
 
 1. Добавить editor adapters поверх внутренних parts для read/write, popup open/close, selection и commit/cancel.
 2. Добавить typed support или bridge support для:
-   - `DataGridControl`
    - `TreeListControl`
    - `PropertyGridControl`
    - `ListViewControl`
@@ -240,7 +238,7 @@ Recommended order:
 ### 5.4 FlaUI
 
 1. Реализовать тот же adapter contract поверх реального UIA и explicit `AutomationId`.
-2. Для data/tree/property/list surfaces использовать bridge-first подход, пока native UIA patterns не подтверждены тестами.
+2. Для tree/property/list surfaces использовать bridge-first подход, пока native UIA patterns не подтверждены тестами. Таблицы используют общий `GridAutomationCatalog`, а bridge допускается только как playback target.
 3. Добавить runtime diagnostics, когда provider не отдаёт требуемый pattern, вместо молчаливого притворного "supported".
 
 ### 5.5 Тесты
@@ -258,7 +256,7 @@ Recommended order:
    - notification dismiss/assert
    - dialog confirm/cancel
    - toolbar/menu/ribbon command selection
-4. Для `DataGridControl`, `TreeListControl`, `PropertyGridControl`, `ListViewControl` сначала добавить bridge или adapter contract tests, потом runtime smoke tests в `Headless` и `FlaUI`.
+4. Для `TreeListControl`, `PropertyGridControl`, `ListViewControl` сначала добавить bridge или adapter contract tests, потом runtime smoke tests в `Headless` и `FlaUI`.
 
 ## 6. Практический порядок работ
 
@@ -266,6 +264,6 @@ Recommended order:
 
 1. Нормализовать selector contract для custom roots и template parts.
 2. Закрыть recorder recognition gaps для editor family и split buttons.
-3. Добавить bridge-first поддержку для `DataGridControl`, `TreeListControl`, `PropertyGridControl`, `ListViewControl`.
+3. Добавить bridge-first поддержку для `TreeListControl`, `PropertyGridControl`, `ListViewControl`.
 4. Добавить command-surface support для toolbar/menu/ribbon.
 5. Поддержку docking-shell сначала ограничить стабильной activation логикой; drag/floating/layout persistence оставить вне первого этапа.

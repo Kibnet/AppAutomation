@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia;
+using DotnetDebug.AppAutomation.Configuration;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
@@ -82,7 +83,8 @@ public partial class App : Application
             Hotkeys = string.IsNullOrWhiteSpace(saveHotkey)
                 ? RecorderHotkeys.Default
                 : new RecorderHotkeys { Save = saveHotkey },
-            AllowNameLocators = false
+            AllowNameLocators = false,
+            GridAutomation = SampleGridAutomation.CreateRecorderCatalog()
         };
         options.MultiSelectHints.Add(new RecorderMultiSelectHint(
             "MultiSelection",
@@ -111,20 +113,6 @@ public partial class App : Application
             "ArmEremexDataGridControl",
             "ArmGridAutomationBridge",
             ["Key", "Value", "Color", "State"])
-        {
-            RowIdentityColumnPropertyNames = ["Key"]
-        });
-        options.GridHints.Add(new RecorderGridHint(
-            "GridComboAutomationBridge",
-            "GridComboAutomationBridge",
-            ["Key", "State"])
-        {
-            RowIdentityColumnPropertyNames = ["Key"]
-        });
-        options.GridHints.Add(new RecorderGridHint(
-            "SearchPickerGridAutomationBridge",
-            "SearchPickerGridAutomationBridge",
-            ["Key", "SelectedValue"])
         {
             RowIdentityColumnPropertyNames = ["Key"]
         });
@@ -199,16 +187,6 @@ public partial class App : Application
                 confirmButtonAutomationId: "ArmAccentColorConfirmButton",
                 cancelButtonAutomationId: "ArmAccentColorCancelButton",
                 commitMode: ColorPickerCommitMode.Confirm)));
-        options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
-            "SearchPickerGridEditor",
-            "SearchPickerGridAutomationBridge",
-            SearchPickerParts.ByAutomationIds(
-                "SearchPickerGridEditor_Input",
-                "SearchPickerGridEditor_Results",
-                expandButtonAutomationId: "SearchPickerGridEditor_OpenButton",
-                resultsKind: SearchPickerResultsKind.ListBox,
-                opensOnSearch: true),
-            ColumnName: "SelectedValue"));
         options.DateRangeFilterHints.Add(new RecorderDateRangeFilterHint(
             "ArmDateRangeFilter",
             DateRangeFilterParts.ByAutomationIds(

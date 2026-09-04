@@ -134,12 +134,21 @@ public sealed class HeadlessControlResolverTests
             .ClickButton(static candidate => candidate.BuildGridButton)
             .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
             .WaitUntilGridRowsAtLeast(static candidate => candidate.DemoDataGrid, 5)
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 0, "R3")
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 1, "13")
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 2, "Odd");
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R3"),
+                "Value",
+                "13")
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R3"),
+                "Parity",
+                "Odd");
 
         using (Assert.Multiple())
         {
+            await Assert.That(page.DemoDataGrid is IAddressableGridControl).IsTrue();
+            await Assert.That(page.DemoDataGrid is IGridColumnMetadataControl).IsTrue();
             await Assert.That(page.DemoDataGrid.Rows.Count).IsGreaterThanOrEqualTo(5);
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("R3");
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("13");

@@ -4,6 +4,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using Avalonia.Automation;
+using Avalonia.VisualTree;
 using AvaloniaControl = Avalonia.Controls.Control;
 using AvaloniaTemplatedControl = Avalonia.Controls.Primitives.TemplatedControl;
 using AvaloniaWindow = Avalonia.Controls.Window;
@@ -134,7 +135,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         var element = FindElement(definition);
         var nativeGrid = TryRead(() => element.AsGrid());
         return nativeGrid is null
-            ? new HeadlessVisualGridControl(element)
+            ? new HeadlessVisualGridControl(_window, element)
             : new HeadlessGridControl(nativeGrid);
     }
 
@@ -520,7 +521,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         };
     }
 
-    private static IReadOnlyList<string> ReadDisplayValues(object? item)
+    private static IReadOnlyList<string> ReadDisplayValues(object? item, string? gridAutomationId)
     {
         if (item is null)
         {
@@ -537,20 +538,43 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             .Where(static property => property.CanRead)
             .ToArray();
 
-        var preferredProperties = properties
+        var displayProperties = properties
             .Where(static property =>
-                property.Name.StartsWith("Eremex", StringComparison.Ordinal)
-                && !property.Name.Contains("Automation", StringComparison.Ordinal))
+                property.PropertyType == typeof(string)
+                && property.GetIndexParameters().Length == 0
+                && !property.Name.Contains("Automation", StringComparison.Ordinal)
+                && !property.Name.EndsWith("Id", StringComparison.Ordinal))
             .ToArray();
 
-        var displayProperties = preferredProperties.Length > 0
-            ? preferredProperties
-            : properties
+        if (!string.IsNullOrWhiteSpace(gridAutomationId))
+        {
+            var automationPrefix = properties
                 .Where(static property =>
                     property.PropertyType == typeof(string)
-                    && !property.Name.Contains("Automation", StringComparison.Ordinal)
-                    && !property.Name.EndsWith("Id", StringComparison.Ordinal))
-                .ToArray();
+                    && property.GetIndexParameters().Length == 0)
+                .Select(property => new
+                {
+                    property.Name,
+                    Value = property.GetValue(item) as string
+                })
+                .Where(candidate =>
+                    candidate.Name.Contains("Automation", StringComparison.Ordinal)
+                    && candidate.Value?.StartsWith(
+                        $"{gridAutomationId}_Row",
+                        StringComparison.Ordinal) == true)
+                .Select(static candidate => candidate.Name[..candidate.Name.IndexOf("Automation", StringComparison.Ordinal)])
+                .FirstOrDefault(static prefix => !string.IsNullOrWhiteSpace(prefix));
+            if (automationPrefix is not null)
+            {
+                var scopedProperties = displayProperties
+                    .Where(property => property.Name.StartsWith(automationPrefix, StringComparison.Ordinal))
+                    .ToArray();
+                if (scopedProperties.Length > 0)
+                {
+                    displayProperties = scopedProperties;
+                }
+            }
+        }
 
         return displayProperties
             .Select(property => property.GetValue(item)?.ToString() ?? string.Empty)
@@ -1676,7 +1700,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
     }
 
-    private sealed class HeadlessGridControl : HeadlessControlBase<Grid>, IGridControl
+    private sealed class HeadlessGridControl : HeadlessControlBase<Grid>, IAddressableGridControl, IGridColumnMetadataControl
     {
         public HeadlessGridControl(Grid inner) : base(inner)
         {
@@ -1685,17 +1709,105 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         public IReadOnlyList<IGridRowControl> Rows =>
             Inner.Rows.Select(row => (IGridRowControl)new HeadlessGridRowControl(row)).ToArray();
 
+        public IReadOnlyList<string> ColumnNames => Inner.ColumnNames;
+
         public IGridRowControl? GetRowByIndex(int index)
         {
             var row = Inner.GetRowByIndex(index);
             return row is null ? null : new HeadlessGridRowControl(row);
         }
+
+        public bool TryGetColumnIndex(string columnName, out int columnIndex)
+        {
+            var matches = Inner.ColumnNames
+                .Select(static (candidate, index) => (Candidate: candidate, Index: index))
+                .Where(candidate => string.Equals(
+                    candidate.Candidate,
+                    columnName?.Trim(),
+                    StringComparison.Ordinal))
+                .Take(2)
+                .ToArray();
+            columnIndex = matches.Length == 1 ? matches[0].Index : -1;
+            return matches.Length == 1;
+        }
+
+        public GridRowResolution ResolveRow(GridRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var matches = GridRuntimeResolver.FindMatchingRowIndexes(this, row);
+            var description = $"grid='{AutomationId}'; selector={GridRuntimeResolver.DescribeRowSelector(row)}; matches={matches.Count}; rows={Rows.Count}";
+            return matches.Count switch
+            {
+                0 => GridRowResolution.NotFound(description),
+                1 => GridRowResolution.Unique(description),
+                _ => GridRowResolution.Ambiguous(matches.Count, description)
+            };
+        }
+
+        public GridCellValueSnapshot ReadCell(GridCellAddress address, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(address);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var rowIndex = ResolveUniqueRowIndex(address.Row);
+            if (!TryGetColumnIndex(address.ColumnName, out var columnIndex))
+            {
+                throw new InvalidOperationException($"Grid column '{address.ColumnName}' was not found in grid '{AutomationId}'.");
+            }
+
+            return Inner.ReadCellValue(rowIndex, columnIndex);
+        }
+
+        public string CopyCell(GridCellAddress address, int timeoutMs) =>
+            ReadCell(address, timeoutMs).DisplayText ?? string.Empty;
+
+        public void EditCell(GridCellAddress address, GridCellValueEditRequest request, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(address);
+            ArgumentNullException.ThrowIfNull(request);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var rowIndex = ResolveUniqueRowIndex(address.Row);
+            if (!TryGetColumnIndex(address.ColumnName, out var columnIndex))
+            {
+                throw new InvalidOperationException($"Grid column '{address.ColumnName}' was not found in grid '{AutomationId}'.");
+            }
+
+            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+            {
+                Inner.ValidateCellValue(rowIndex, columnIndex, request.Value);
+                return;
+            }
+
+            Inner.SetCellValue(rowIndex, columnIndex, request.Value);
+        }
+
+        public void OpenRow(GridRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            Inner.SelectRow(ResolveUniqueRowIndex(row));
+        }
+
+        private int ResolveUniqueRowIndex(GridRowSelector row)
+        {
+            var matches = GridRuntimeResolver.FindMatchingRowIndexes(this, row);
+            if (matches.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid row selector '{GridRuntimeResolver.DescribeRowSelector(row)}' matched {matches.Count} rows in grid '{AutomationId}'; expected exactly one.");
+            }
+
+            return matches[0];
+        }
     }
 
-    private sealed class HeadlessVisualGridControl : HeadlessControlBase<AutomationElement>, IEditableGridControl
+    private sealed class HeadlessVisualGridControl : HeadlessControlBase<AutomationElement>, IEditableGridControl, IIndexedAddressableGridControl
     {
-        public HeadlessVisualGridControl(AutomationElement inner) : base(inner)
+        private readonly AutomationElement _searchRoot;
+
+        public HeadlessVisualGridControl(AutomationElement searchRoot, AutomationElement inner) : base(inner)
         {
+            _searchRoot = searchRoot ?? throw new ArgumentNullException(nameof(searchRoot));
         }
 
         public IReadOnlyList<IGridRowControl> Rows => ReadRows();
@@ -1706,6 +1818,98 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return index >= 0 && index < rows.Count
                 ? rows[index]
                 : null;
+        }
+
+        public GridRowResolution ResolveRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+
+            var matches = FindMatchingRows(row);
+            var description = DescribeResolution(row, matches.Count);
+            return matches.Count switch
+            {
+                0 => GridRowResolution.NotFound(description),
+                1 => GridRowResolution.Unique(description),
+                _ => GridRowResolution.Ambiguous(matches.Count, description)
+            };
+        }
+
+        public GridCellValueSnapshot ReadCell(
+            GridIndexedRowSelector row,
+            GridRuntimeColumn column,
+            int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(column);
+            var match = ResolveUniqueRow(row, timeoutMs);
+            return ReadCellSnapshot(match, column);
+        }
+
+        public string CopyCell(
+            GridIndexedRowSelector row,
+            GridRuntimeColumn column,
+            int timeoutMs)
+        {
+            return ReadCell(row, column, timeoutMs).DisplayText ?? string.Empty;
+        }
+
+        public void EditCell(
+            GridIndexedRowSelector row,
+            GridRuntimeColumn column,
+            GridCellValueEditRequest request,
+            int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(column);
+            ArgumentNullException.ThrowIfNull(request);
+            var match = ResolveUniqueRow(row, timeoutMs);
+            EnsureVisualRow(match);
+            EditCell(new GridCellEditRequest(
+                match.RowIndex,
+                column.ColumnIndex,
+                request.Value,
+                request.EditorKind,
+                request.CommitMode,
+                request.SearchText)
+            {
+                TimeoutMs = timeoutMs,
+                EditorParts = request.EditorParts ?? column.EditorParts
+            });
+        }
+
+        public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            var match = ResolveUniqueRow(row, timeoutMs);
+            EnsureVisualRow(match);
+            if (match.Item is not null && TrySelectGridItem(match.Item))
+            {
+                return;
+            }
+
+            throw new NotSupportedException(
+                $"Visual grid '{AutomationId}' does not expose a provider-neutral row activation action in Headless runtime.");
+        }
+
+        private bool TrySelectGridItem(object item)
+        {
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                var selectedItemProperties = Inner.Control.GetType()
+                    .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    .Where(static property =>
+                        string.Equals(property.Name, "SelectedItem", StringComparison.Ordinal)
+                        && property.GetIndexParameters().Length == 0
+                        && property.SetMethod is { IsPublic: true })
+                    .Take(2)
+                    .ToArray();
+                if (selectedItemProperties.Length != 1
+                    || !selectedItemProperties[0].PropertyType.IsInstanceOfType(item))
+                {
+                    return false;
+                }
+
+                selectedItemProperties[0].SetValue(Inner.Control, item);
+                return ReferenceEquals(selectedItemProperties[0].GetValue(Inner.Control), item);
+            });
         }
 
         public void EditCell(GridCellEditRequest request)
@@ -1719,7 +1923,11 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 ?? throw new InvalidOperationException(
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] was not found in grid '{AutomationId}'.");
 
-            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+            // Preserve the legacy index-based contract: before declarative editor parts existed,
+            // Cancel was a no-op and therefore could not mutate the underlying value. Catalog-backed
+            // editors that declare a real cancel part still exercise the full edit/cancel lifecycle.
+            if (request.CommitMode == GridCellEditCommitMode.Cancel
+                && request.EditorParts?.CancelButton is null)
             {
                 return;
             }
@@ -1728,6 +1936,17 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             {
                 throw new InvalidOperationException(
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a writable '{request.EditorKind}' editor.");
+            }
+
+            var invoked = InvokeEditorButton(
+                cell.Control,
+                request.CommitMode == GridCellEditCommitMode.Cancel
+                    ? request.EditorParts?.CancelButton
+                    : request.EditorParts?.ConfirmButton);
+            if (request.CommitMode == GridCellEditCommitMode.Cancel && !invoked)
+            {
+                throw new NotSupportedException(
+                    $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' requires a configured cancel button for Headless replay.");
             }
         }
 
@@ -1752,11 +1971,17 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
                 var controls = ReadCellControls(cell.Control);
+                var configuredInput = ResolveEditorPart(cell.Control, request.EditorParts?.Input);
+                if (configuredInput is not null)
+                {
+                    controls.Remove(configuredInput);
+                    controls.Insert(0, configuredInput);
+                }
 
                 if (request.EditorKind == GridCellEditorKind.SearchPicker)
                 {
                     controls = MaterializeSearchPickerControls(cell.Control, controls);
-                    return TryWriteSearchPicker(controls, request);
+                    return TryWriteSearchPicker(cell.Control, controls, request);
                 }
 
                 foreach (var candidate in controls)
@@ -1813,7 +2038,8 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return controls;
         }
 
-        private static bool TryWriteSearchPicker(
+        private bool TryWriteSearchPicker(
+            global::Avalonia.Controls.Control cell,
             IReadOnlyList<global::Avalonia.Controls.Control> controls,
             GridCellEditRequest request)
         {
@@ -1822,8 +2048,18 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 return false;
             }
 
-            var searchInput = controls.OfType<global::Avalonia.Controls.TextBox>().FirstOrDefault();
-            var results = controls.OfType<global::Avalonia.Controls.ListBox>().FirstOrDefault();
+            var searchInput = ResolveEditorPart(cell, request.EditorParts?.Input)
+                as global::Avalonia.Controls.TextBox
+                ?? controls.OfType<global::Avalonia.Controls.TextBox>().FirstOrDefault();
+            var results = ResolveEditorPart(cell, request.EditorParts?.Results)
+                as global::Avalonia.Controls.ListBox
+                ?? controls.OfType<global::Avalonia.Controls.ListBox>().FirstOrDefault();
+            if (results is null)
+            {
+                InvokeEditorButton(cell, request.EditorParts?.OpenButton);
+                results = ResolveEditorPart(cell, request.EditorParts?.Results)
+                    as global::Avalonia.Controls.ListBox;
+            }
             if (searchInput is null || results is null)
             {
                 return false;
@@ -1848,6 +2084,20 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 case global::Avalonia.Controls.ComboBox comboBox
                     when request.EditorKind == GridCellEditorKind.ComboBox:
                     return TrySelectComboBoxItem(comboBox, request.Value);
+                case global::Avalonia.Controls.NumericUpDown numericUpDown
+                    when request.EditorKind == GridCellEditorKind.Number
+                         && decimal.TryParse(
+                             request.Value,
+                             System.Globalization.NumberStyles.Number,
+                             System.Globalization.CultureInfo.InvariantCulture,
+                             out var number):
+                    numericUpDown.Value = number;
+                    return true;
+                case global::Avalonia.Controls.CheckBox checkBox
+                    when request.EditorKind == GridCellEditorKind.CheckBox
+                         && bool.TryParse(request.Value, out var isChecked):
+                    checkBox.IsChecked = isChecked;
+                    return true;
                 case global::Avalonia.Controls.TextBox textBox
                     when request.EditorKind is GridCellEditorKind.Text
                         or GridCellEditorKind.Number
@@ -1864,7 +2114,9 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             }
         }
 
-        private static bool TryWriteTextLikeControl(global::Avalonia.Controls.Control control, string value)
+        private static bool TryWriteTextLikeControl(
+            global::Avalonia.Controls.Control control,
+            string value)
         {
             switch (control)
             {
@@ -1877,6 +2129,110 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 default:
                     return false;
             }
+        }
+
+        private bool InvokeEditorButton(
+            global::Avalonia.Controls.Control cell,
+            GridRelativeLocator? locator)
+        {
+            if (ResolveEditorPart(cell, locator) is global::Avalonia.Controls.Button button)
+            {
+                button.RaiseEvent(new global::Avalonia.Interactivity.RoutedEventArgs(
+                    global::Avalonia.Controls.Button.ClickEvent,
+                    button));
+                return true;
+            }
+
+            return false;
+        }
+
+        private global::Avalonia.Controls.Control? ResolveEditorPart(
+            global::Avalonia.Controls.Control cell,
+            GridRelativeLocator? locator)
+        {
+            if (locator is null)
+            {
+                return null;
+            }
+
+            if (locator.Scope == GridRelativeLocatorScope.EditorRoot)
+            {
+                var matchingRoots = cell.GetVisualChildren()
+                    .OfType<global::Avalonia.Controls.Control>()
+                    .Where(static root => root.IsAttachedToVisualTree() && root.IsEffectivelyVisible)
+                    .Select(root => new
+                    {
+                        Root = root,
+                        Matches = FindEditorPartMatches(root, locator)
+                    })
+                    .Where(static candidate => candidate.Matches.Length > 0)
+                    .Take(2)
+                    .ToArray();
+                if (matchingRoots.Length > 1)
+                {
+                    throw CreateAmbiguousEditorPartException(locator);
+                }
+
+                if (matchingRoots.Length == 1)
+                {
+                    return RequireUniqueEditorPart(matchingRoots[0].Matches, locator);
+                }
+
+                return null;
+            }
+
+            var scopeRoot = locator.Scope switch
+            {
+                GridRelativeLocatorScope.Cell => cell,
+                GridRelativeLocatorScope.GridRoot => Inner.Control,
+                GridRelativeLocatorScope.DetachedPopup => _searchRoot.Control,
+                _ => cell
+            };
+            return RequireUniqueEditorPart(FindEditorPartMatches(scopeRoot, locator), locator);
+        }
+
+        private static global::Avalonia.Controls.Control[] FindEditorPartMatches(
+            global::Avalonia.Controls.Control scopeRoot,
+            GridRelativeLocator locator)
+        {
+            return new[] { scopeRoot }
+                .Concat(ControlTree.EnumerateDescendants(scopeRoot))
+                .Where(static candidate =>
+                    candidate.IsAttachedToVisualTree()
+                    && candidate.IsEffectivelyVisible)
+                .Where(candidate => locator.LocatorKind switch
+                {
+                    UiLocatorKind.AutomationId => string.Equals(
+                        AutomationProperties.GetAutomationId(candidate),
+                        locator.LocatorValue,
+                        StringComparison.Ordinal),
+                    UiLocatorKind.Name => string.Equals(
+                        AutomationElement.ReadControlName(candidate),
+                        locator.LocatorValue,
+                        StringComparison.Ordinal),
+                    _ => false
+                })
+                .Take(2)
+                .ToArray();
+        }
+
+        private global::Avalonia.Controls.Control? RequireUniqueEditorPart(
+            global::Avalonia.Controls.Control[] matches,
+            GridRelativeLocator locator)
+        {
+            if (matches.Length > 1)
+            {
+                throw CreateAmbiguousEditorPartException(locator);
+            }
+
+            return matches.Length == 1 ? matches[0] : null;
+        }
+
+        private InvalidOperationException CreateAmbiguousEditorPartException(GridRelativeLocator locator)
+        {
+            return new InvalidOperationException(
+                $"Grid editor part '{locator.LocatorKind}:{locator.LocatorValue}' is ambiguous "
+                + $"within scope '{locator.Scope}' of the active cell in grid '{AutomationId}'.");
         }
 
         private static bool TrySelectComboBoxItem(global::Avalonia.Controls.ComboBox comboBox, string itemText)
@@ -1980,7 +2336,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return value?.Trim() ?? string.Empty;
         }
 
-        private IReadOnlyList<IGridRowControl> ReadRows()
+        private IGridRowControl[] ReadRows()
         {
             if (string.IsNullOrWhiteSpace(AutomationId))
             {
@@ -2000,6 +2356,190 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 .ToArray();
         }
 
+        private IndexedHeadlessRow ResolveUniqueRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var matches = FindMatchingRows(row);
+            if (matches.Count != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid row selector matched {matches.Count} rows in grid '{AutomationId}'; expected exactly one. "
+                    + DescribeResolution(row, matches.Count));
+            }
+
+            return matches[0];
+        }
+
+        private List<IndexedHeadlessRow> FindMatchingRows(GridIndexedRowSelector selector)
+        {
+            var rows = ReadIndexedRows();
+            return rows
+                .Where(row => selector.Conditions.All(condition =>
+                    string.Equals(
+                        ReadCellSnapshot(row, condition.Column).DisplayText,
+                        condition.ExpectedText,
+                        StringComparison.Ordinal)))
+                .ToList();
+        }
+
+        private IndexedHeadlessRow[] ReadIndexedRows()
+        {
+            var sourceItems = ReadSourceItems();
+            if (sourceItems.Length > 0)
+            {
+                return sourceItems
+                    .Select(static (item, index) => new IndexedHeadlessRow(index, item, null))
+                    .ToArray();
+            }
+
+            return ReadVisualRows()
+                .Select(row => new IndexedHeadlessRow(
+                    ParseVisualGridIndex(row.AutomationId, "_Row"),
+                    null,
+                    row))
+                .Where(static row => row.RowIndex != int.MaxValue)
+                .ToArray();
+        }
+
+        private object?[] ReadSourceItems()
+        {
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                if (Inner.Control is not global::Avalonia.Controls.ItemsControl itemsControl
+                    || itemsControl.ItemsSource is not IEnumerable source)
+                {
+                    return Array.Empty<object?>();
+                }
+
+                return source.Cast<object?>().ToArray();
+            });
+        }
+
+        private static GridCellValueSnapshot ReadCellSnapshot(
+            IndexedHeadlessRow row,
+            GridRuntimeColumn column)
+        {
+            if (row.Item is not null)
+            {
+                var rawValue = ReadPropertyPath(row.Item, column.SourceFieldName);
+                var displayedValue = string.IsNullOrWhiteSpace(column.DisplayValuePath)
+                    ? rawValue
+                    : ReadPropertyPath(row.Item, column.DisplayValuePath);
+                return new GridCellValueSnapshot(
+                    FormatRuntimeValue(displayedValue, column),
+                    rawValue,
+                    column.ValueKind)
+                {
+                    ValueSource = row.Item
+                };
+            }
+
+            if (row.VisualRow is null)
+            {
+                return new GridCellValueSnapshot(null, null, column.ValueKind);
+            }
+
+            var cells = new HeadlessVisualGridRowControl(row.VisualRow).Cells;
+            var displayText = column.ColumnIndex < cells.Count
+                ? cells[column.ColumnIndex].Value
+                : null;
+            return new GridCellValueSnapshot(
+                displayText,
+                ParseRuntimeValue(displayText, column),
+                column.ValueKind);
+        }
+
+        private void EnsureVisualRow(IndexedHeadlessRow row)
+        {
+            if (FindVisualCell(row.RowIndex, 0) is not null || row.Item is null)
+            {
+                return;
+            }
+
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            {
+                var methods = Inner.Control.GetType()
+                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    .Where(static method => string.Equals(method.Name, "ScrollIntoView", StringComparison.Ordinal))
+                    .OrderBy(static method => method.GetParameters().Length)
+                    .ToArray();
+                foreach (var method in methods)
+                {
+                    var parameters = method.GetParameters();
+                    if (parameters.Length == 0 || !parameters[0].ParameterType.IsInstanceOfType(row.Item))
+                    {
+                        continue;
+                    }
+
+                    var arguments = new object?[parameters.Length];
+                    arguments[0] = row.Item;
+                    for (var index = 1; index < arguments.Length; index++)
+                    {
+                        arguments[index] = parameters[index].HasDefaultValue
+                            ? parameters[index].DefaultValue
+                            : null;
+                    }
+
+                    method.Invoke(Inner.Control, arguments);
+                    break;
+                }
+
+                return true;
+            });
+        }
+
+        private string DescribeResolution(GridIndexedRowSelector selector, int matchCount)
+        {
+            var conditions = string.Join(", ", selector.Conditions.Select(static condition =>
+                $"column[{condition.ColumnIndex}]='{condition.ExpectedText}'"));
+            return $"grid='{AutomationId}'; selector={conditions}; matches={matchCount}; rows={ReadIndexedRows().Length}";
+        }
+
+        private static object? ReadPropertyPath(object source, string? path)
+        {
+            return GridPropertyValueReader.TryReadPath(source, path, out var value)
+                ? value
+                : null;
+        }
+
+        private static string? FormatRuntimeValue(object? value, GridRuntimeColumn column)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var culture = string.IsNullOrWhiteSpace(column.CultureName)
+                ? System.Globalization.CultureInfo.InvariantCulture
+                : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
+            return !string.IsNullOrWhiteSpace(column.FormatString) && value is IFormattable formattable
+                ? formattable.ToString(column.FormatString, culture)
+                : Convert.ToString(value, culture);
+        }
+
+        private static object? ParseRuntimeValue(string? value, GridRuntimeColumn column)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var culture = string.IsNullOrWhiteSpace(column.CultureName)
+                ? System.Globalization.CultureInfo.InvariantCulture
+                : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
+            return column.ValueKind switch
+            {
+                GridCellValueKind.Number when decimal.TryParse(value, System.Globalization.NumberStyles.Number, culture, out var number) => number,
+                GridCellValueKind.Date when DateTime.TryParse(value, culture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var date) => date,
+                GridCellValueKind.Time when TimeSpan.TryParse(value, culture, out var time) => time,
+                GridCellValueKind.Boolean when bool.TryParse(value, out var boolean) => boolean,
+                _ => value
+            };
+        }
+
+        private sealed record IndexedHeadlessRow(int RowIndex, object? Item, AutomationElement? VisualRow);
+
         private AutomationElement[] ReadVisualRows()
         {
             var rowPrefix = $"{AutomationId}_Row";
@@ -2009,8 +2549,9 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 .ToArray();
         }
 
-        private IReadOnlyList<IReadOnlyList<string>> ReadDataRows()
+        private IReadOnlyList<string>[] ReadDataRows()
         {
+            var automationId = AutomationId;
             return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
                 if (Inner.Control is not global::Avalonia.Controls.ItemsControl itemsControl
@@ -2021,7 +2562,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
 
                 return source
                     .Cast<object?>()
-                    .Select(ReadDisplayValues)
+                    .Select(item => ReadDisplayValues(item, automationId))
                     .Where(static values => values.Count > 0)
                     .ToArray();
             });

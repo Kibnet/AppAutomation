@@ -7,15 +7,18 @@ public sealed class GridRowSelector
 {
     private readonly IReadOnlyList<GridRowCondition> _conditions;
 
-    private GridRowSelector(GridRowCondition[] conditions)
+    private GridRowSelector(GridRowCondition[] conditions, bool hasDeclaredUniqueIdentity = false)
     {
         _conditions = Array.AsReadOnly(conditions);
+        HasDeclaredUniqueIdentity = hasDeclaredUniqueIdentity;
     }
 
     /// <summary>
     /// Gets the ordered row conditions.
     /// </summary>
     public IReadOnlyList<GridRowCondition> Conditions => _conditions;
+
+    internal bool HasDeclaredUniqueIdentity { get; }
 
     /// <summary>
     /// Starts a selector with an exact cell condition.
@@ -38,7 +41,14 @@ public sealed class GridRowSelector
                 nameof(columnName));
         }
 
-        return new GridRowSelector([.. _conditions, condition]);
+        return new GridRowSelector([.. _conditions, condition], HasDeclaredUniqueIdentity);
+    }
+
+    internal GridRowSelector WithDeclaredUniqueIdentity()
+    {
+        return HasDeclaredUniqueIdentity
+            ? this
+            : new GridRowSelector(_conditions.ToArray(), hasDeclaredUniqueIdentity: true);
     }
 
     private static GridRowCondition CreateCondition(string columnName, string value)

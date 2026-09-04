@@ -20,6 +20,8 @@ using Microsoft.Extensions.Logging;
 using TUnit.Assertions;
 using TUnit.Core;
 
+[assembly: NotInParallel]
+
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
 [NotInParallel("RecorderOverlay")]

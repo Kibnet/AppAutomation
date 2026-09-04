@@ -3,6 +3,7 @@ using System.Linq;
 using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
 using DotnetDebug.AppAutomation.Authoring.Pages;
+using DotnetDebug.AppAutomation.Configuration;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -328,6 +329,11 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
     [NotInParallel(DesktopUiConstraint)]
     public async Task SearchPicker_CardAndGrid_RuntimeParity_Works()
     {
+        var firstRow = GridRowSelector.ByCell("Key", "Row-1");
+        var recorderFingerprint = SampleGridAutomation.CreateRecorderCatalog().Fingerprint;
+        var headlessFingerprint = SampleGridAutomation.CreateHeadlessCatalog().Fingerprint;
+        var flaUiFingerprint = SampleGridAutomation.CreateFlaUiCatalog().Fingerprint;
+
         Page
             .SelectTabItem(p => p.ArmDesktopTabItem)
             .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
@@ -337,14 +343,32 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
         Page
             .SelectTabItem(p => p.DataGridTabItem)
-            .SearchAndSelectGridCell(p => p.SearchPickerGridAutomationBridge, 0, 1, "ga", "Gamma")
+            .SearchAndSelectGridCell(
+                p => p.SearchPickerGridAutomationBridge,
+                firstRow,
+                "SelectedValue",
+                "ga",
+                "Gamma")
             .WaitUntilTextEquals(p => p.SearchPickerGridSearchInput, "Gamma")
-            .WaitUntilGridCellEquals(p => p.SearchPickerGridAutomationBridge, 0, 1, "Gamma");
+            .WaitUntilGridCellEquals(
+                p => p.SearchPickerGridAutomationBridge,
+                firstRow,
+                "SelectedValue",
+                "Gamma");
 
         using (Assert.Multiple())
         {
+            await Assert.That(recorderFingerprint).IsEqualTo(headlessFingerprint);
+            await Assert.That(recorderFingerprint).IsEqualTo(flaUiFingerprint);
+            await Assert.That(((IGridAutomationCatalogControl)Page.SearchPickerGridAutomationBridge)
+                    .GridAutomationFingerprint)
+                .IsEqualTo(recorderFingerprint);
             await Assert.That(Page.SearchPickerGridSearchInput.Text).IsEqualTo("Gamma");
-            await Assert.That(Page.SearchPickerGridAutomationBridge.GetRowByIndex(0)!.Cells[1].Value).IsEqualTo("Gamma");
+            await Assert.That(GridValueReader.ReadCellText(
+                    Page.SearchPickerGridAutomationBridge,
+                    firstRow,
+                    "SelectedValue"))
+                .IsEqualTo("Gamma");
         }
     }
 

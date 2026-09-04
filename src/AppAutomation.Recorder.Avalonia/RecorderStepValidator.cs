@@ -96,7 +96,8 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.EditGridCellDate
                 or RecordedActionKind.EditGridCellTime
                 or RecordedActionKind.EditGridCellColor
-                or RecordedActionKind.SelectGridCellComboItem => true,
+                or RecordedActionKind.SelectGridCellComboItem
+                or RecordedActionKind.SetGridCellChecked => true,
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog

@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
 using Avalonia.Automation;
@@ -1044,6 +1045,125 @@ internal class Grid : AutomationElement
 
     public GridRow[] Rows => Ui(() => ReadRows(Native));
 
+    public string[] ColumnNames => Ui(() => Native.Columns
+        .Select(static column =>
+            AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(column.Header)
+            ?? column.SortMemberPath
+            ?? string.Empty)
+        .ToArray());
+
+    public void SelectRow(int index)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (index < 0 || index >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {index} was not found.");
+            }
+
+            Native.SelectedItem = items[index];
+            Native.ScrollIntoView(items[index], null);
+            return true;
+        });
+    }
+
+    public void SetCellValue(int rowIndex, int columnIndex, string value)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
+            }
+
+            WritePropertyPath(items[rowIndex], path, value);
+            return true;
+        });
+    }
+
+    public void ValidateCellValue(int rowIndex, int columnIndex, string value)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
+            }
+
+            object? owner = items[rowIndex];
+            var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (var index = 0; index < segments.Length - 1; index++)
+            {
+                owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
+            }
+
+            if (owner is null || segments.Length == 0)
+            {
+                throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
+            }
+
+            var property = ReadProperty(owner, segments[^1]);
+            if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
+            {
+                throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
+            }
+
+            _ = ConvertText(value, property.PropertyType);
+            return true;
+        });
+    }
+
+    public GridCellValueSnapshot ReadCellValue(int rowIndex, int columnIndex)
+    {
+        return Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            var rawValue = string.IsNullOrWhiteSpace(path)
+                ? items[rowIndex]
+                : ReadPropertyPathValue(items[rowIndex], path);
+            return new GridCellValueSnapshot(
+                rawValue?.ToString() ?? string.Empty,
+                rawValue,
+                InferValueKind(rawValue));
+        });
+    }
+
     public GridRow? GetRowByIndex(int index)
     {
         return Ui(() =>
@@ -1060,23 +1180,152 @@ internal class Grid : AutomationElement
 
     private static GridRow[] ReadRows(global::Avalonia.Controls.DataGrid dataGrid)
     {
-        if (dataGrid.ItemsSource is not IEnumerable source)
-        {
-            return Array.Empty<GridRow>();
-        }
-
-        var columnBindings = dataGrid.Columns
-            .OfType<DataGridBoundColumn>()
-            .Select(static column => column.Binding)
+        var columnPaths = dataGrid.Columns
+            .Select(static column => ReadColumnPath(column))
             .ToArray();
 
-        var rows = new List<GridRow>();
-        foreach (var item in source)
+        return ReadItems(dataGrid)
+            .Select(item => new GridRow(item, columnPaths))
+            .ToArray();
+    }
+
+    private static object?[] ReadItems(global::Avalonia.Controls.DataGrid dataGrid)
+    {
+        return dataGrid.ItemsSource is IEnumerable source
+            ? source.Cast<object?>().ToArray()
+            : Array.Empty<object?>();
+    }
+
+    private static string? ReadColumnPath(DataGridColumn column)
+    {
+        if (!string.IsNullOrWhiteSpace(column.SortMemberPath))
         {
-            rows.Add(new GridRow(item, columnBindings));
+            return column.SortMemberPath;
         }
 
-        return rows.ToArray();
+        return column is DataGridBoundColumn boundColumn
+            ? boundColumn.Binding switch
+            {
+                ReflectionBinding { Path: { } reflectionPath } => reflectionPath,
+                CompiledBinding { Path: { } compiledPath } => compiledPath.ToString(),
+                _ => null
+            }
+            : null;
+    }
+
+    private static void WritePropertyPath(object? item, string path, string value)
+    {
+        object? owner = item;
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var index = 0; index < segments.Length - 1; index++)
+        {
+            owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
+        }
+
+        if (owner is null || segments.Length == 0)
+        {
+            throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
+        }
+
+        var property = ReadProperty(owner, segments[^1]);
+        if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
+        {
+            throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
+        }
+
+        property.SetValue(owner, ConvertText(value, property.PropertyType));
+    }
+
+    private static PropertyInfo? ReadProperty(object owner, string name)
+    {
+        var matches = owner.GetType()
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property =>
+                property.CanRead
+                && property.GetIndexParameters().Length == 0
+                && string.Equals(property.Name, name, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static object? ReadPropertyPathValue(object? item, string path)
+    {
+        var current = item;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is null)
+            {
+                return null;
+            }
+
+            var property = ReadProperty(current, segment);
+            if (property is null)
+            {
+                return null;
+            }
+
+            current = property.GetValue(current);
+        }
+
+        return current;
+    }
+
+    private static GridCellValueKind InferValueKind(object? value)
+    {
+        return value switch
+        {
+            null => GridCellValueKind.Text,
+            bool => GridCellValueKind.Boolean,
+            DateTime or DateTimeOffset or DateOnly => GridCellValueKind.Date,
+            TimeSpan or TimeOnly => GridCellValueKind.Time,
+            byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal =>
+                GridCellValueKind.Number,
+            Enum => GridCellValueKind.Selection,
+            _ => GridCellValueKind.Text
+        };
+    }
+
+    private static object? ConvertText(string value, Type targetType)
+    {
+        var nullableType = Nullable.GetUnderlyingType(targetType);
+        var effectiveType = nullableType ?? targetType;
+        if (nullableType is not null && string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        if (effectiveType == typeof(string))
+        {
+            return value;
+        }
+
+        if (effectiveType.IsEnum)
+        {
+            return Enum.Parse(effectiveType, value, ignoreCase: false);
+        }
+
+        if (effectiveType == typeof(DateTime))
+        {
+            return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
+        }
+
+        if (effectiveType == typeof(DateTimeOffset))
+        {
+            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
+        }
+
+        if (effectiveType == typeof(TimeSpan))
+        {
+            return TimeSpan.Parse(value, CultureInfo.InvariantCulture);
+        }
+
+        if (effectiveType == typeof(Guid))
+        {
+            return Guid.Parse(value);
+        }
+
+        return Convert.ChangeType(value, effectiveType, CultureInfo.InvariantCulture);
     }
 }
 
@@ -1089,15 +1338,15 @@ internal class DataGridView : Grid
 
 internal class GridRow
 {
-    internal GridRow(object? item, IReadOnlyList<BindingBase?> columnBindings)
+    internal GridRow(object? item, IReadOnlyList<string?> columnPaths)
     {
         Item = item;
-        ColumnBindings = columnBindings;
+        ColumnPaths = columnPaths;
     }
 
     private object? Item { get; }
 
-    private IReadOnlyList<BindingBase?> ColumnBindings { get; }
+    private IReadOnlyList<string?> ColumnPaths { get; }
 
     public GridCell[] Cells
     {
@@ -1113,10 +1362,10 @@ internal class GridRow
                 return [new GridCell(value)];
             }
 
-            if (ColumnBindings.Count > 0)
+            if (ColumnPaths.Count > 0)
             {
-                return ColumnBindings
-                    .Select(binding => new GridCell(ReadBoundValue(Item, binding)))
+                return ColumnPaths
+                    .Select(path => new GridCell(ReadBoundValue(Item, path)))
                     .ToArray();
             }
 
@@ -1142,15 +1391,8 @@ internal class GridRow
         }
     }
 
-    private static string ReadBoundValue(object item, BindingBase? binding)
+    private static string ReadBoundValue(object item, string? path)
     {
-        var path = binding switch
-        {
-            ReflectionBinding { Path: { } reflectionPath } => reflectionPath,
-            CompiledBinding { Path: { } compiledPath } => compiledPath.ToString(),
-            _ => null
-        };
-
         if (!string.IsNullOrWhiteSpace(path))
         {
             return ReadPropertyPath(item, path);
@@ -1169,15 +1411,19 @@ internal class GridRow
                 return string.Empty;
             }
 
-            var property = current
-                .GetType()
-                .GetProperty(segment, BindingFlags.Public | BindingFlags.Instance);
-            if (property is null || !property.CanRead)
+            var matches = current.GetType()
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(property => property.CanRead
+                                   && property.GetIndexParameters().Length == 0
+                                   && string.Equals(property.Name, segment, StringComparison.Ordinal))
+                .Take(2)
+                .ToArray();
+            if (matches.Length != 1)
             {
                 return string.Empty;
             }
 
-            current = property.GetValue(current);
+            current = matches[0].GetValue(current);
         }
 
         return current?.ToString() ?? string.Empty;

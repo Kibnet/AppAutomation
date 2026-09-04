@@ -575,6 +575,17 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         var menu = new MenuFlyout();
+        if (!selection.CanCaptureAssertions)
+        {
+            menu.Items.Add(new MenuItem
+            {
+                Header = selection.ValueDescriptionError
+                    ?? "Select one unambiguous control before adding a check.",
+                IsEnabled = false
+            });
+            return menu;
+        }
+
         var currentValue = selection.ValueDescription;
         var hasReadableValue = currentValue is not null;
         var remember = new MenuItem

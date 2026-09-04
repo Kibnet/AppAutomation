@@ -1,6 +1,7 @@
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
+using System.ComponentModel.DataAnnotations;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -335,6 +336,184 @@ public sealed class RecorderStableGridSelectorTests
             await Assert.That(snapshot).IsNull();
             await Assert.That(error).Contains("concrete grid cell");
             await Assert.That(error).DoesNotContain("IsEnabled");
+        }
+    }
+
+    [Test]
+    [Arguments(0, "ITEM-10")]
+    [Arguments(4, "ITEM-50")]
+    public async Task GridCatalog_CapturesEveryColumnAcrossVisibleRowsWithStableAddress(
+        int rowIndex,
+        string expectedKey)
+    {
+        foreach (var column in new[]
+                 {
+                     new CatalogCaptureColumn(
+                         "Key",
+                         "Key",
+                         "rowKey",
+                         RecorderValueKind.Text,
+                         "ReadCellText"),
+                     new CatalogCaptureColumn(
+                         "RequiredQuantity",
+                         "RequiredAmount",
+                         "requiredAmount",
+                         RecorderValueKind.Number,
+                         "ReadCellNumber")
+                 })
+        {
+            var fixture = new CatalogGridCaptureFixture(
+                includeRowIdentity: true,
+                rowIndex,
+                column.SourceFieldName);
+
+            var result = fixture.CaptureCheckpoint(column.CheckpointName);
+            var preview = CreateGenerator().GeneratePreview(result.Step!);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(result.Success).IsTrue();
+                await Assert.That(result.Step!.ValueKind).IsEqualTo(column.ValueKind);
+                await Assert.That(result.Step.ValueAccessorKind).IsEqualTo(RecorderValueAccessorKind.GridCellValue);
+                await Assert.That(result.Step.GridRowConditions).IsEquivalentTo(
+                [
+                    new RecordedGridRowCondition("Key", expectedKey)
+                ]);
+                await Assert.That(result.Step.GridTargetColumnName).IsEqualTo(column.LogicalName);
+                await Assert.That(result.Step.RowIndex).IsNull();
+                await Assert.That(result.Step.ColumnIndex).IsNull();
+                await Assert.That(preview).Contains(
+                    $"var {column.CheckpointName} = GridValueReader.{column.ReaderMethod}(Page.ItemsGrid, "
+                    + $"GridRowSelector.ByCell(\"Key\", \"{expectedKey}\"), \"{column.LogicalName}\");");
+                await Assert.That(preview).DoesNotContain("ArchiveGrid");
+            }
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_RejectsCaptureWithoutStableRowIdentity()
+    {
+        var fixture = new CatalogGridCaptureFixture(includeRowIdentity: false);
+
+        var result = fixture.CaptureCheckpoint();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsFalse();
+            await Assert.That(result.Message).Contains("Configure IdentifyRowsBy");
+        }
+    }
+
+    [Test]
+    public async Task NativeGrid_UsesOnlyExplicitModelKeyAsAutomaticIdentity()
+    {
+        var grid = new NativeGridMetadataHost
+        {
+            ItemsSource = new[] { new NativeGridRow("ITEM-42", "Ready") },
+            Columns =
+            [
+                new NativeTextColumn("Key", "Key", isReadOnly: true),
+                new NativeTextColumn("State", "State", isReadOnly: true),
+                new NativeTextColumn("Localized status", string.Empty, isReadOnly: true)
+            ]
+        };
+
+        var columns = GridCellMetadataExtractor.ReadNativeColumns(grid);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(columns.Single(column => column.SourceFieldName == "Key").IsStableIdentityCandidate)
+                .IsTrue();
+            await Assert.That(columns.Single(column => column.SourceFieldName == "State").IsStableIdentityCandidate)
+                .IsFalse();
+            await Assert.That(columns.Single(column => column.LogicalName == "Localized status").SourceFieldName)
+                .IsEmpty();
+        }
+    }
+
+    [Test]
+    [Arguments(GridCellEditorKind.Text, "EditGridCellText")]
+    [Arguments(GridCellEditorKind.Number, "EditGridCellNumber")]
+    [Arguments(GridCellEditorKind.Date, "EditGridCellDate")]
+    [Arguments(GridCellEditorKind.Time, "EditGridCellTime")]
+    [Arguments(GridCellEditorKind.CheckBox, "SetGridCellChecked")]
+    [Arguments(GridCellEditorKind.Color, "EditGridCellColor")]
+    public async Task GridCatalog_RecordsTypedCellActionWithStableAddress(
+        GridCellEditorKind editorKind,
+        string generatedMethod)
+    {
+        var fixture = new CatalogGridActionFixture(editorKind);
+
+        var result = fixture.Capture();
+        var preview = CreateGenerator().GeneratePreview(result.Step!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.CanPersist).IsTrue();
+            await Assert.That(result.Step.GridRowConditions).IsEquivalentTo(
+            [
+                new RecordedGridRowCondition("Key", "ITEM-42")
+            ]);
+            await Assert.That(result.Step.GridTargetColumnName).IsEqualTo("Value");
+            await Assert.That(result.Step.RowIndex).IsNull();
+            await Assert.That(result.Step.ColumnIndex).IsNull();
+            await Assert.That(preview).Contains($"Page.{generatedMethod}(static page => page.ItemsGrid");
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task GridCatalog_TextEditIsRecordedOnlyWhenCommittedOrCancelled(bool cancel)
+    {
+        using var fixture = new CatalogGridTransactionFixture();
+
+        fixture.EnterText("Updated");
+        if (cancel)
+        {
+            fixture.Cancel();
+        }
+        else
+        {
+            fixture.Commit();
+        }
+
+        var entry = fixture.Session.StepJournal.Single();
+        using (Assert.Multiple())
+        {
+            await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(entry.Preview).Contains(
+                "Page.EditGridCellText(static page => page.ItemsGrid, "
+                + "GridRowSelector.ByCell(\"Key\", \"ITEM-42\"), \"Value\", \"Updated\"");
+            await Assert.That(entry.Preview.Contains("GridCellEditCommitMode.Cancel", StringComparison.Ordinal))
+                .IsEqualTo(cancel);
+            await Assert.That(entry.Preview).DoesNotContain("Page.EnterText");
+        }
+    }
+
+    [Test]
+    [Arguments(GridCellEditorKind.ComboBox, "SelectGridCellComboItem")]
+    [Arguments(GridCellEditorKind.SearchPicker, "SearchAndSelectGridCell")]
+    public async Task GridCatalog_RecordsSelectionActionWithStableAddress(
+        GridCellEditorKind editorKind,
+        string generatedMethod)
+    {
+        using var fixture = new GridComboSelectionFixture(
+            useCatalog: true,
+            catalogEditorKind: editorKind,
+            addDuplicateEditorPart: true);
+
+        fixture.SelectStatus("Ready", keyboard: false);
+
+        var entry = fixture.Session.StepJournal.Single();
+        using (Assert.Multiple())
+        {
+            await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(entry.Preview).Contains(
+                $"Page.{generatedMethod}(static page => page.ItemsGrid, "
+                + "GridRowSelector.ByCell(\"Key\", \"ITEM-42\"), \"Status\"");
+            await Assert.That(entry.Preview).DoesNotContain("SelectListBoxItem");
         }
     }
 
@@ -725,7 +904,10 @@ public sealed class RecorderStableGridSelectorTests
             bool exposeColumnContext = true,
             bool useStableIdentity = true,
             bool detachPopupBeforeSelection = false,
-            string rowContextPropertyName = "Row")
+            string rowContextPropertyName = "Row",
+            bool useCatalog = false,
+            GridCellEditorKind catalogEditorKind = GridCellEditorKind.ComboBox,
+            bool addDuplicateEditorPart = false)
         {
             var row = new ItemRow("ITEM-42", "Draft");
             var column = new GridColumnContext(exposeColumnContext ? "WorkflowStatus" : "UnmappedColumn");
@@ -773,6 +955,19 @@ public sealed class RecorderStableGridSelectorTests
             statusCell.Child = _editor;
             sourceRow.Children.Add(keyCell);
             sourceRow.Children.Add(statusCell);
+            if (addDuplicateEditorPart)
+            {
+                var otherCell = new Border();
+                var otherEditor = new Border();
+                var duplicateResults = new ListBox
+                {
+                    Name = "PART_ItemsSelector",
+                    ItemsSource = new[] { "Draft", "Ready" }
+                };
+                otherEditor.Child = duplicateResults;
+                otherCell.Child = otherEditor;
+                sourceRow.Children.Add(otherCell);
+            }
             sourceGrid.Children.Add(sourceRow);
             targetGrid.Children.Add(targetKeyCell);
             targetGrid.Children.Add(targetStatusCell);
@@ -783,17 +978,46 @@ public sealed class RecorderStableGridSelectorTests
                 root.Children.Add(_results);
             }
 
+            var gridAutomation = new GridAutomationCatalog();
+            if (useCatalog)
+            {
+                var definition = GridAutomationDefinition
+                    .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                    .WithColumns(
+                        GridColumnDefinition.Auto("Key"),
+                        GridColumnDefinition.Map("Status")
+                            .FromField("WorkflowStatus")
+                            .DisplayValueFrom("Product")
+                            .EditWith(
+                                catalogEditorKind,
+                                new GridCellEditorParts(
+                                    Results: new GridRelativeLocator(
+                                        "PART_ItemsSelector",
+                                        GridRelativeLocatorScope.EditorRoot,
+                                        UiLocatorKind.Name))));
+                if (useStableIdentity)
+                {
+                    definition = definition.IdentifyRowsBy("Key");
+                }
+
+                gridAutomation = gridAutomation.Add(definition);
+            }
+
             Options = new AppAutomationRecorderOptions
             {
-                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false },
+                GridAutomation = gridAutomation
             };
-            Options.GridHints.Add(new RecorderGridHint(
-                "ItemsGridVisual",
-                "ItemsGrid",
-                ["Key", "Status"])
+            if (!useCatalog)
             {
-                RowIdentityColumnPropertyNames = useStableIdentity ? ["Key"] : []
-            });
+                Options.GridHints.Add(new RecorderGridHint(
+                    "ItemsGridVisual",
+                    "ItemsGrid",
+                    ["Key", "Status"])
+                {
+                    RowIdentityColumnPropertyNames = useStableIdentity ? ["Key"] : []
+                });
+            }
             _stepFactory = new RecorderStepFactory(Options, () => root);
 
             Session = new RecorderSession(
@@ -899,6 +1123,247 @@ public sealed class RecorderStableGridSelectorTests
         }
     }
 
+    private sealed class CatalogGridCaptureFixture
+    {
+        private readonly RecorderStepFactory _factory;
+        private readonly TextBlock _selectedCell;
+
+        public CatalogGridCaptureFixture(
+            bool includeRowIdentity,
+            int selectedRowIndex = 0,
+            string selectedSourceField = "RequiredQuantity")
+        {
+            var rows = new[]
+            {
+                new CatalogItemRow("ITEM-10", 10.5m),
+                new CatalogItemRow("ITEM-20", 20.5m),
+                new CatalogItemRow("ITEM-30", 30.5m),
+                new CatalogItemRow("ITEM-40", 40.5m),
+                new CatalogItemRow("ITEM-50", 10.5m)
+            };
+            var row = rows[selectedRowIndex];
+            object selectedValue = selectedSourceField switch
+            {
+                "Key" => row.Key,
+                "RequiredQuantity" => row.RequiredQuantity,
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(selectedSourceField),
+                    selectedSourceField,
+                    null)
+            };
+            var cellContext = new CatalogCellContext(
+                row,
+                new GridColumnContext(selectedSourceField),
+                selectedValue);
+            var root = new StackPanel();
+            var archiveRow = new CatalogItemRow("ITEM-10", 999m);
+            var archiveGrid = new GridHost { ItemsSource = new[] { archiveRow } };
+            var archiveRuntimeGrid = new Border();
+            var sourceGrid = new GridHost { ItemsSource = rows };
+            var rowPresenter = new Border { DataContext = cellContext };
+            _selectedCell = new TextBlock
+            {
+                Text = selectedValue.ToString(),
+                DataContext = cellContext
+            };
+            var runtimeGrid = new Border();
+
+            AutomationProperties.SetAutomationId(archiveGrid, "ArchiveGridVisual");
+            AutomationProperties.SetAutomationId(archiveRuntimeGrid, "ArchiveGrid");
+            AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
+            rowPresenter.Child = _selectedCell;
+            sourceGrid.Children.Add(rowPresenter);
+            root.Children.Add(archiveGrid);
+            root.Children.Add(archiveRuntimeGrid);
+            root.Children.Add(sourceGrid);
+            root.Children.Add(runtimeGrid);
+
+            var definition = CreateDefinition("ItemsGrid", "ItemsGridVisual", "ItemsGrid");
+            if (includeRowIdentity)
+            {
+                definition = definition.IdentifyRowsBy("Key");
+            }
+
+            var archiveDefinition = CreateDefinition(
+                    "ArchiveGrid",
+                    "ArchiveGridVisual",
+                    "ArchiveGrid")
+                .IdentifyRowsBy("Key");
+
+            var options = new AppAutomationRecorderOptions
+            {
+                GridAutomation = new GridAutomationCatalog()
+                    .Add(archiveDefinition)
+                    .Add(definition),
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+            _factory = new RecorderStepFactory(options, () => root);
+        }
+
+        public StepCreationResult CaptureCheckpoint(string variableName = "requiredAmount")
+        {
+            return _factory.TryCreateCheckpointStep(_selectedCell, variableName);
+        }
+
+        private static GridAutomationDefinition CreateDefinition(
+            string pagePropertyName,
+            string captureAutomationId,
+            string runtimeAutomationId)
+        {
+            return GridAutomationDefinition
+                .ByAutomationIds(pagePropertyName, captureAutomationId, runtimeAutomationId)
+                .WithColumns(
+                    GridColumnDefinition.Auto("Key"),
+                    GridColumnDefinition.Map("RequiredAmount")
+                        .FromField("RequiredQuantity")
+                        .AsValue(GridCellValueKind.Number));
+        }
+    }
+
+    private sealed class CatalogGridActionFixture
+    {
+        private readonly RecorderStepFactory _factory;
+        private readonly Control _editor;
+
+        public CatalogGridActionFixture(GridCellEditorKind editorKind)
+        {
+            var value = CreateValue(editorKind);
+            var row = new CatalogActionRow("ITEM-42", value.RawValue);
+            var context = new CatalogActionCellContext(
+                row,
+                new GridColumnContext("Value"),
+                value.RawValue);
+            var root = new StackPanel();
+            var sourceGrid = new GridHost { ItemsSource = new[] { row } };
+            var cell = new Border { DataContext = context };
+            _editor = value.Editor;
+            _editor.DataContext = context;
+            var runtimeGrid = new Border();
+
+            AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
+            cell.Child = _editor;
+            sourceGrid.Children.Add(cell);
+            root.Children.Add(sourceGrid);
+            root.Children.Add(runtimeGrid);
+
+            var definition = GridAutomationDefinition
+                .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Key"),
+                    GridColumnDefinition.Auto("Value")
+                        .AsValue(value.ValueKind)
+                        .EditWith(editorKind))
+                .IdentifyRowsBy("Key");
+            var options = new AppAutomationRecorderOptions
+            {
+                GridAutomation = new GridAutomationCatalog().Add(definition),
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+            _factory = new RecorderStepFactory(options, () => root);
+        }
+
+        public StepCreationResult Capture()
+        {
+            return _factory.TryCreateGridCellEditStep(_editor).StepResult;
+        }
+
+        private static CatalogActionValue CreateValue(GridCellEditorKind editorKind)
+        {
+            return editorKind switch
+            {
+                GridCellEditorKind.Text => new CatalogActionValue(
+                    new TextBox { Text = "Updated" },
+                    "Updated",
+                    GridCellValueKind.Text),
+                GridCellEditorKind.Number => new CatalogActionValue(
+                    new NumericUpDown { Value = 12.5m },
+                    12.5m,
+                    GridCellValueKind.Number),
+                GridCellEditorKind.Date => new CatalogActionValue(
+                    new DatePicker { SelectedDate = new DateTimeOffset(2026, 9, 3, 0, 0, 0, TimeSpan.Zero) },
+                    new DateTime(2026, 9, 3),
+                    GridCellValueKind.Date),
+                GridCellEditorKind.Time => new CatalogActionValue(
+                    new TimePicker { SelectedTime = new TimeSpan(9, 45, 0) },
+                    new TimeSpan(9, 45, 0),
+                    GridCellValueKind.Time),
+                GridCellEditorKind.CheckBox => new CatalogActionValue(
+                    new CheckBox { IsChecked = true },
+                    true,
+                    GridCellValueKind.Boolean),
+                GridCellEditorKind.Color => new CatalogActionValue(
+                    new TextBox { Text = "#336699" },
+                    "#336699",
+                    GridCellValueKind.Color),
+                _ => throw new ArgumentOutOfRangeException(nameof(editorKind), editorKind, null)
+            };
+        }
+    }
+
+    private sealed class CatalogGridTransactionFixture : IDisposable
+    {
+        private readonly TextBox _editor;
+
+        public CatalogGridTransactionFixture()
+        {
+            var row = new CatalogActionRow("ITEM-42", "Initial");
+            var context = new CatalogActionCellContext(
+                row,
+                new GridColumnContext("Value"),
+                row.Value);
+            var root = new StackPanel();
+            var sourceGrid = new GridHost { ItemsSource = new[] { row } };
+            var cell = new Border { DataContext = context };
+            _editor = new TextBox { Text = "Initial", DataContext = context };
+            var runtimeGrid = new Border();
+
+            AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
+            cell.Child = _editor;
+            sourceGrid.Children.Add(cell);
+            root.Children.Add(sourceGrid);
+            root.Children.Add(runtimeGrid);
+
+            var definition = GridAutomationDefinition
+                .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Key"),
+                    GridColumnDefinition.Auto("Value")
+                        .AsValue(GridCellValueKind.Text)
+                        .EditWith(GridCellEditorKind.Text))
+                .IdentifyRowsBy("Key");
+            var options = new AppAutomationRecorderOptions
+            {
+                GridAutomation = new GridAutomationCatalog().Add(definition),
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+
+            Session = new RecorderSession(
+                RecorderTestWindow.CreateStub(),
+                options,
+                validationRootProvider: () => root,
+                attachWindowHandlers: false);
+            Session.Start();
+            Session.RefreshObservedControlsForTesting();
+        }
+
+        public RecorderSession Session { get; }
+
+        public void EnterText(string text)
+        {
+            Session.RegisterKeyboardInputForTesting(_editor);
+            _editor.Text = text;
+        }
+
+        public void Commit() => Session.FlushPendingStateForTesting();
+
+        public void Cancel() => Session.CancelPendingGridCellEditForTesting();
+
+        public void Dispose() => Session.Dispose();
+    }
+
     private static string ValueAt(OrderRow row, int columnIndex)
     {
         return columnIndex switch
@@ -915,9 +1380,74 @@ public sealed class RecorderStableGridSelectorTests
         public object? ItemsSource { get; init; }
     }
 
+    private sealed class NativeGridMetadataHost : Panel
+    {
+        public object? ItemsSource { get; init; }
+
+        public IReadOnlyList<NativeTextColumn> Columns { get; init; } = [];
+    }
+
+    private sealed class NativeTextColumn(
+        string header,
+        string sortMemberPath,
+        bool isReadOnly)
+    {
+        public string Header { get; } = header;
+
+        public string SortMemberPath { get; } = sortMemberPath;
+
+        public bool IsVisible => true;
+
+        public bool IsReadOnly { get; } = isReadOnly;
+    }
+
+    private sealed record NativeGridRow(
+        [property: Key] string Key,
+        string State);
+
     private sealed record OrderRow(string OrderId, string Customer, string Status);
 
     private sealed record ItemRow(string Key, string Product);
+
+    private sealed class CatalogItemRow(string key, decimal requiredQuantity) : IEquatable<CatalogItemRow>
+    {
+        public string Key { get; } = key;
+
+        public decimal RequiredQuantity { get; } = requiredQuantity;
+
+        public bool Equals(CatalogItemRow? other)
+        {
+            return other is not null && RequiredQuantity == other.RequiredQuantity;
+        }
+
+        public override bool Equals(object? obj) => obj is CatalogItemRow other && Equals(other);
+
+        public override int GetHashCode() => RequiredQuantity.GetHashCode();
+    }
+
+    private sealed record CatalogCaptureColumn(
+        string SourceFieldName,
+        string LogicalName,
+        string CheckpointName,
+        RecorderValueKind ValueKind,
+        string ReaderMethod);
+
+    private sealed record CatalogActionRow(string Key, object? Value);
+
+    private sealed record CatalogActionCellContext(
+        CatalogActionRow Row,
+        GridColumnContext Column,
+        object? Value);
+
+    private sealed record CatalogActionValue(
+        Control Editor,
+        object? RawValue,
+        GridCellValueKind ValueKind);
+
+    private sealed record CatalogCellContext(
+        CatalogItemRow Row,
+        GridColumnContext Column,
+        object Value);
 
     private sealed record GridCellContext(ItemRow Row, GridColumnContext Column, string Value);
 

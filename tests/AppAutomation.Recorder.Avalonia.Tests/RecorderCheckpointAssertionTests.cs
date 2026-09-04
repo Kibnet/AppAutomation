@@ -213,7 +213,7 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task Factory_HasValueAssertionDoesNotRequireCurrentSearchPickerSelection()
+    public async Task Factory_PresenceAssertionsHandleMissingSearchPickerSelection()
     {
         var root = new StackPanel();
         var logicalRoot = new Border();
@@ -232,20 +232,26 @@ public sealed class RecorderCheckpointAssertionTests
         var factory = new RecorderStepFactory(options, () => root);
 
         var captured = factory.TryCaptureSemanticValueSnapshot(input, out var snapshot, out var captureError);
-        var assertion = factory.TryCreateHasValueAssertionStep(snapshot);
-        var preview = CreateGenerator().GeneratePreview([assertion.Step!]);
+        var hasValueAssertion = factory.TryCreateHasValueAssertionStep(snapshot);
+        var emptyAssertion = factory.TryCreatePresenceAssertionStep(snapshot, expectEmpty: true);
+        var generator = CreateGenerator();
+        var hasValuePreview = generator.GeneratePreview([hasValueAssertion.Step!]);
+        var emptyPreview = generator.GeneratePreview([emptyAssertion.Step!]);
 
         using (Assert.Multiple())
         {
             await Assert.That(captured).IsTrue();
             await Assert.That(captureError).IsEmpty();
-            await Assert.That(assertion.Success).IsTrue();
-            await Assert.That(assertion.Step!.Control.LocatorValue).IsEqualTo("CustomerPicker");
-            await Assert.That(assertion.Step.ValueAccessorKind).IsEqualTo(RecorderValueAccessorKind.SelectedItemText);
-            await Assert.That(assertion.Step.StringValue).IsNull();
-            await Assert.That(assertion.Step.ComparisonKind).IsEqualTo(RecorderComparisonKind.HasValue);
-            await Assert.That(preview)
+            await Assert.That(hasValueAssertion.Success).IsTrue();
+            await Assert.That(hasValueAssertion.Step!.Control.LocatorValue).IsEqualTo("CustomerPicker");
+            await Assert.That(hasValueAssertion.Step.ValueAccessorKind).IsEqualTo(RecorderValueAccessorKind.SelectedItemText);
+            await Assert.That(hasValueAssertion.Step.StringValue).IsNull();
+            await Assert.That(hasValueAssertion.Step.ComparisonKind).IsEqualTo(RecorderComparisonKind.HasValue);
+            await Assert.That(hasValuePreview)
                 .IsEqualTo("await Assert.That(Page.CustomerPicker.SelectedItemText).IsNotEmpty();");
+            await Assert.That(emptyAssertion.Success).IsTrue();
+            await Assert.That(emptyPreview)
+                .IsEqualTo("await Assert.That(Page.CustomerPicker.SelectedItemText).IsNull();");
         }
     }
 
@@ -469,7 +475,7 @@ public sealed class RecorderCheckpointAssertionTests
         {
             await Assert.That(graphValidation.Success).IsTrue();
             await Assert.That(preview).IsEqualTo(
-                "await Assert.That(Page.OptionalText.Text).IsEmpty();" + Environment.NewLine
+                "await Assert.That(Page.OptionalText.Text).IsNull();" + Environment.NewLine
                 + "await Assert.That(Page.OptionalDate.SelectedDate).IsNull();" + Environment.NewLine
                 + "await Assert.That(Page.StatusLabel.Text).IsNotEqualTo(\"Archived\");");
         }
@@ -1403,14 +1409,14 @@ public sealed class RecorderCheckpointAssertionTests
     {
         var root = new StackPanel();
         var container = new DockPanel();
-        var generatedIdentifier = new TextBox
+        var saveButton = new Button
         {
-            Text = "Generated",
+            Content = "Save",
             IsEnabled = false
         };
         AutomationProperties.SetAutomationId(container, "DetailsPanel");
-        AutomationProperties.SetAutomationId(generatedIdentifier, "GeneratedIdentifier");
-        container.Children.Add(generatedIdentifier);
+        AutomationProperties.SetAutomationId(saveButton, "SaveButton");
+        container.Children.Add(saveButton);
         root.Children.Add(container);
         using var session = CreateSession(root);
         session.Start();
@@ -1418,12 +1424,15 @@ public sealed class RecorderCheckpointAssertionTests
         session.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
 
         session.BeginCheckTargetSelection();
-        session.SelectCheckTargetForTesting(container, [container, generatedIdentifier]);
+        session.SelectCheckTargetForTesting(
+            container,
+            inputCandidates: [container],
+            visualCandidates: [container, saveButton]);
 
         using (Assert.Multiple())
         {
-            await Assert.That(ReferenceEquals(selection!.Target, generatedIdentifier)).IsTrue();
-            await Assert.That(selection.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
+            await Assert.That(ReferenceEquals(selection!.Target, saveButton)).IsTrue();
+            await Assert.That(selection.ValueDescription).IsNull();
             await Assert.That(selection.IsEnabled).IsFalse();
         }
 
@@ -1441,7 +1450,6 @@ public sealed class RecorderCheckpointAssertionTests
             .OfType<Button>()
             .Single(button => string.Equals(button.Content?.ToString(), "Add", StringComparison.Ordinal));
         await Assert.That(expectedEnabled.SelectedIndex).IsEqualTo(1);
-        expectedEnabled.SelectedIndex = 0;
         add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
         using (Assert.Multiple())
@@ -1453,8 +1461,9 @@ public sealed class RecorderCheckpointAssertionTests
                 .IsFalse();
             await Assert.That(expectedEnabled.Items.Count).IsEqualTo(2);
             await Assert.That(session.ExportPreview())
-                .IsEqualTo("await Assert.That(Page.GeneratedIdentifier.IsEnabled).IsEqualTo(true);");
+                .IsEqualTo("await Assert.That(Page.SaveButton.IsEnabled).IsEqualTo(false);");
         }
+
     }
 
     [Test]
@@ -1579,7 +1588,7 @@ public sealed class RecorderCheckpointAssertionTests
         RecorderCheckTargetSelection? displaySelection = null;
         session.CheckTargetSelected += (_, eventArgs) => displaySelection = eventArgs.Selection;
         session.BeginCheckTargetSelection();
-        session.SelectCheckTargetForTesting(eventSource, [eventSource, display]);
+        session.SelectCheckTargetForTesting(eventSource, [display, eventSource]);
         if (checkpoint is not null)
         {
             details.CaptureCheckpointAssertion(displaySelection!, checkpoint.CheckpointId);

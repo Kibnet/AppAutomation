@@ -2255,6 +2255,30 @@ public static partial class UiPageExtensions
             timeoutMs);
     }
 
+    /// <summary>
+    /// Sets a boolean value in a check-box grid cell addressed by zero-based indexes.
+    /// </summary>
+    public static TSelf SetGridCellChecked<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        bool isChecked,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            isChecked.ToString(CultureInfo.InvariantCulture),
+            GridCellEditorKind.CheckBox,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
         where TSelf : UiPage
     {

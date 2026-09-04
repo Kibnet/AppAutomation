@@ -1470,6 +1470,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SelectGridCellComboItem => HasNamedGridRow(step)
                 ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+            RecordedActionKind.SetGridCellChecked => HasNamedGridRow(step)
+                ? $"Page.SetGridCellChecked(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatBoolean(step.BoolValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                : $"Page.SetGridCellChecked(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatBoolean(step.BoolValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.DismissDialog => $"Page.DismissDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
@@ -1535,6 +1538,7 @@ internal sealed class AuthoringCodeGenerator
                 || !RecorderValueAssertions.TryGetPresenceAssertionKind(
                     valueKind,
                     step.ComparisonKind == RecorderComparisonKind.IsEmpty,
+                    valueIsNull: step.StringValue is null,
                     out var assertionKind))
             {
                 throw new InvalidOperationException(
@@ -1714,7 +1718,8 @@ internal sealed class AuthoringCodeGenerator
             RecorderValueAccessorKind.IsSelected => $"{control}.IsSelected",
             RecorderValueAccessorKind.IsExpanded => $"{control}.IsExpanded",
             RecorderValueAccessorKind.IsEnabled => $"{control}.IsEnabled",
-            RecorderValueAccessorKind.GridCellText => GenerateGridCellExpression(step, control),
+            RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue =>
+                GenerateGridCellExpression(step, control),
             _ => throw new InvalidOperationException(
                 $"Value accessor '{step.ValueAccessorKind}' is not supported for {step.Control.ControlType}.")
         };
@@ -1722,9 +1727,22 @@ internal sealed class AuthoringCodeGenerator
 
     private static string GenerateGridCellExpression(RecordedStep step, string control)
     {
-        return HasNamedGridRow(step)
-            ? $"GridValueReader.ReadCellText({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})"
-            : $"GridValueReader.ReadCellText({control}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)})";
+        if (!HasNamedGridRow(step))
+        {
+            return $"GridValueReader.ReadCellText({control}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)})";
+        }
+
+        var methodName = step.ValueAccessorKind == RecorderValueAccessorKind.GridCellValue
+            ? step.ValueKind switch
+            {
+                RecorderValueKind.Number => "ReadCellNumber",
+                RecorderValueKind.Date => "ReadCellDate",
+                RecorderValueKind.Time => "ReadCellTime",
+                RecorderValueKind.Boolean => "ReadCellBoolean",
+                _ => "ReadCellText"
+            }
+            : "ReadCellText";
+        return $"GridValueReader.{methodName}({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})";
     }
 
     private static string FormatExpectedLiteral(RecordedStep step)

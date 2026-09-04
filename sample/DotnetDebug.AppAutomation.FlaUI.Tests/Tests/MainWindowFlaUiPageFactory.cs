@@ -2,6 +2,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
 using DotnetDebug.AppAutomation.Authoring.Pages;
+using DotnetDebug.AppAutomation.Configuration;
 
 namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
@@ -59,12 +60,7 @@ internal static class MainWindowFlaUiPageFactory
                 .WithGridColumns(
                     "ArmGridAutomationBridge",
                     ["Key", "Value", "Color", "State"])
-                .WithGridColumns(
-                    "GridComboAutomationBridge",
-                    ["Key", "State"])
-                .WithGridColumns(
-                    "SearchPickerGridAutomationBridge",
-                    ["Key", "SelectedValue"])
+                .WithGridAutomation(SampleGridAutomation.CreateFlaUiCatalog())
                 .WithComboBoxFilter(
                     "ArmStatusFilter",
                     ComboBoxFilterParts.ByAutomationIds(

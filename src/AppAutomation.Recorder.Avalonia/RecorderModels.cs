@@ -69,7 +69,8 @@ public enum RecordedActionKind
     InvokeMenuItem = 61,
     InvokeContextMenuItem = 62,
     CaptureCheckpoint = 63,
-    AssertValue = 64
+    AssertValue = 64,
+    SetGridCellChecked = 65
 }
 
 public enum RecorderAssertionMode
@@ -114,7 +115,8 @@ public enum RecorderValueAccessorKind
     IsSelected = 9,
     IsExpanded = 10,
     IsEnabled = 11,
-    GridCellText = 12
+    GridCellText = 12,
+    GridCellValue = 13
 }
 
 internal enum RecorderComparisonKind
@@ -179,10 +181,29 @@ internal static class RecorderValueAssertions
         bool expectEmpty,
         out RecorderHasValueAssertionKind assertionKind)
     {
+        return TryGetPresenceAssertionKind(
+            valueKind,
+            expectEmpty,
+            valueIsNull: false,
+            out assertionKind);
+    }
+
+    public static bool TryGetPresenceAssertionKind(
+        RecorderValueKind valueKind,
+        bool expectEmpty,
+        bool valueIsNull,
+        out RecorderHasValueAssertionKind assertionKind)
+    {
         if (!TryGetHasValueAssertionKind(valueKind, out var positiveKind))
         {
             assertionKind = default;
             return false;
+        }
+
+        if (expectEmpty && valueKind == RecorderValueKind.Text && valueIsNull)
+        {
+            assertionKind = RecorderHasValueAssertionKind.Null;
+            return true;
         }
 
         assertionKind = (positiveKind, expectEmpty) switch
@@ -527,9 +548,12 @@ internal sealed record ColorPickerCaptureResult(
 internal sealed record GridComboSelectionContext(
     Control SelectionSource,
     Control GridSource,
+    Control CellSource,
+    Control EditorRoot,
     RecorderGridHint GridHint,
     int RowIndex,
-    int ColumnIndex);
+    int ColumnIndex,
+    string? LogicalColumnName = null);
 
 internal sealed record GridComboSelectionContextResolution(
     bool IsConfigured,
@@ -540,6 +564,10 @@ internal sealed record GridComboSelectionCaptureResult(
     bool IsConfigured,
     bool HasSelection,
     GridComboSelectionContext? Context,
+    StepCreationResult StepResult);
+
+internal sealed record GridCellEditCaptureResult(
+    bool IsConfigured,
     StepCreationResult StepResult);
 
 internal sealed record ResolvedControlResult(

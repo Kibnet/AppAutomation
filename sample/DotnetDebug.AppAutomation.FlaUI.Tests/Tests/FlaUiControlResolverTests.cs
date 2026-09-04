@@ -242,6 +242,52 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task AvaloniaDataGrid_StableAddressFindsVirtualizedRow()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "60")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 60")
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R60"),
+                "Value",
+                "184",
+                timeoutMs: 30000)
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R1"),
+                "Value",
+                "7",
+                timeoutMs: 30000);
+
+        var duplicateIdentityCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("DemoDataGrid", "DemoDataGrid", "DemoDataGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Row"),
+                    GridColumnDefinition.Auto("Value").AsValue(GridCellValueKind.Number),
+                    GridColumnDefinition.Auto("Parity"))
+                .IdentifyRowsBy("Parity"));
+        var duplicateIdentityPage = new MainWindowPage(
+            new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+                .WithGridAutomation(duplicateIdentityCatalog));
+        var duplicateIdentityException = await Assert.That(() => GridValueReader.ReadCellText(
+                duplicateIdentityPage.DemoDataGrid,
+                GridRowSelector.ByCell("Parity", "Even"),
+                "Value"))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(duplicateIdentityException!.Message).Contains("matched");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task VisualGridActions_OpenRowAndEditColor()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();

@@ -674,7 +674,7 @@ internal sealed class RecorderSelectorResolver
             }
         }
 
-        var gridHint = _options.GridHints.FirstOrDefault(candidate =>
+        var gridHint = _options.EnumerateGridHints().FirstOrDefault(candidate =>
             candidate.SourceLocatorKind == locatorKind
             && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal));
         if (gridHint is null || string.IsNullOrWhiteSpace(gridHint.TargetLocatorValue))

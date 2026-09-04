@@ -136,6 +136,10 @@ public sealed class RecorderRelativeDateTests
 
         root.Children.Remove(popupCalendar);
         var selection = factory.TryCreateCalendarStep(popupCalendar, selectedDate);
+        var directTextAssertion = factory.TryCreateAssertionStep(
+            createdDateValue,
+            RecorderAssertionMode.Text);
+        var directTextAssertionPreview = CreateGenerator().GeneratePreview(directTextAssertion.Step!);
 
         using var session = new RecorderSession(
             RecorderTestWindow.CreateStub(),
@@ -187,6 +191,19 @@ public sealed class RecorderRelativeDateTests
             await Assert.That(revalidatedSelection.CanPersist).IsTrue();
             await Assert.That(revalidatedSelection.StatusMessage ?? string.Empty)
                 .DoesNotContain("not compatible");
+            await Assert.That(directTextAssertion.Success).IsTrue();
+            await Assert.That(directTextAssertion.Step!.ActionKind).IsEqualTo(RecordedActionKind.AssertValue);
+            await Assert.That(directTextAssertion.Step.Control.LocatorValue).IsEqualTo("CreatedDate");
+            await Assert.That(directTextAssertion.Step.Control.ControlType).IsEqualTo(UiControlType.DateTimePicker);
+            await Assert.That(directTextAssertion.Step.ValueAccessorKind)
+                .IsEqualTo(RecorderValueAccessorKind.SelectedDate);
+            await Assert.That(directTextAssertion.Step.DateValue).IsEqualTo(DateTime.Today);
+            await Assert.That(directTextAssertion.Step.CanPersist).IsTrue();
+            await Assert.That(directTextAssertion.Step.ValidationMessage ?? string.Empty)
+                .DoesNotContain("wrapper/composite");
+            await Assert.That(directTextAssertionPreview)
+                .Contains("Page.CreatedDate.SelectedDate).IsEqualTo(");
+            await Assert.That(directTextAssertionPreview).DoesNotContain("WaitUntilTextEquals");
             await Assert.That(checkSelection).IsNotNull();
             await Assert.That(string.IsNullOrEmpty(checkSelection!.ValueDescriptionError)).IsTrue();
             await Assert.That(checkSelection.ValueDescription!.ValueKind).IsEqualTo(RecorderValueKind.Date);

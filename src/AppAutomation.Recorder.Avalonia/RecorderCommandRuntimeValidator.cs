@@ -181,6 +181,9 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
+            RecordedActionKind.SetGridCellChecked => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
+                .Concat(RequireBool(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCoordinates(step, target, requireTargetColumn: false)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
@@ -249,7 +252,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 $"UiControlType.{step.Control.ControlType} does not expose {step.ValueAccessorKind} as {step.ValueKind}.");
         }
 
-        if (step.ValueAccessorKind == RecorderValueAccessorKind.GridCellText)
+        if (step.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
+            or RecorderValueAccessorKind.GridCellValue)
         {
             foreach (var finding in RequireGridCoordinates(step, target, requireTargetColumn: true))
             {
@@ -315,6 +319,11 @@ internal sealed class RecorderCommandRuntimeValidator
             (UiControlType.Grid or UiControlType.DataGridView,
                 RecorderValueKind.GridCellText,
                 RecorderValueAccessorKind.GridCellText) => true,
+            (UiControlType.Grid or UiControlType.DataGridView,
+                RecorderValueKind.Text or RecorderValueKind.Number or RecorderValueKind.Boolean
+                    or RecorderValueKind.Date or RecorderValueKind.Time or RecorderValueKind.Color
+                    or RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellValue) => true,
             _ => false
         };
     }
@@ -548,7 +557,12 @@ internal sealed class RecorderCommandRuntimeValidator
 
     private bool IsConfiguredGridAction(RecordedStep step)
     {
-        return _recorderOptions.GridActionHints.Any(hint =>
+        return _recorderOptions.GridAutomation.Any(definition =>
+                MatchesGridTarget(
+                    step.Control,
+                    definition.RuntimeLocatorValue,
+                    definition.RuntimeLocatorKind))
+            || _recorderOptions.GridActionHints.Any(hint =>
                 MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
             || _recorderOptions.GridSearchPickerHints.Any(hint =>
                 MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
@@ -766,7 +780,7 @@ internal sealed class RecorderCommandRuntimeValidator
 
     private bool IsConfiguredGridMetadata(RecordedStep step)
     {
-        return _recorderOptions.GridHints.Any(hint =>
+        return _recorderOptions.EnumerateGridHints().Any(hint =>
             hint.ColumnPropertyNames.Count > 0
             && MatchesGridTarget(step.Control, hint.TargetLocatorValue, hint.TargetLocatorKind));
     }

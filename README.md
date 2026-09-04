@@ -368,23 +368,34 @@ Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
 
 `EnterSearch`, `ClearSearch`, and `ApplySearchFromHistory` cover input, clearing, and history selection. History remains optional state of the same control; use `SearchHistoryResultsKind.ListBox` only when its results are a `ListBox`. `ISearchPickerControl` remains the separate abstraction for relation pickers such as `ServerSearchComboBox`.
 
-Register each grid's own ordered column names, then identify rows by the business columns that are stable for that grid:
+Use one catalog for Recorder, Headless, and FlaUI. Native grids can supply their own metadata; a templated grid needs only declarative columns, editor kinds, and a stable row identity:
 
 ```csharp
-var resolver = innerResolver.WithGridColumns(
-    "OrdersGrid",
-    ["OrderId", "Customer", "Status", "Total"]);
+var grids = new GridAutomationCatalog().Add(
+    GridAutomationDefinition.ByAutomationIds(
+            "ItemsGrid",
+            "ItemsGridVisual",
+            "ItemsGrid")
+        .WithColumns(
+            GridColumnDefinition.Auto("Code"),
+            GridColumnDefinition.Map("Item")
+                .FromField("ItemReference")
+                .DisplayValueFrom("ItemReference.Name"),
+            GridColumnDefinition.Auto("Quantity")
+                .AsValue(GridCellValueKind.Number)
+                .EditWith(GridCellEditorKind.Number),
+            GridColumnDefinition.Auto("State")
+                .EditWith(GridCellEditorKind.ComboBox))
+        .IdentifyRowsBy("Code"));
 
-var order = GridRowSelector
-    .ByCell("OrderId", "ORD-42")
-    .AndCell("Customer", "North");
+var recorderOptions = new AppAutomationRecorderOptions { GridAutomation = grids };
+var resolver = innerResolver.WithGridAutomation(grids);
+var row = GridRowSelector.ByCell("Code", "ITEM-42");
 
-Page.WaitUntilGridContainsRow(static page => page.OrdersGrid, order);
-Page.WaitUntilGridCellEquals(static page => page.OrdersGrid, order, "Status", "Ready");
-Page.OpenGridRow(static page => page.OrdersGrid, order);
+Page.WaitUntilGridCellEquals(static page => page.ItemsGrid, row, "State", "Ready");
 ```
 
-Rows are resolved on every poll, so insertion and sorting do not invalidate the selector; operations require one unique match. Configure Recorder keys through `RecorderGridHint.RowIdentityColumnPropertyNames`; without them it keeps legacy row/column indexes. Existing index overloads are unchanged.
+Stable addresses are re-resolved for the action and its postcondition, so sorting, filtering, insertion, and virtualization do not turn a row into a stale index. Ambiguous or missing identity blocks new catalog capture. Legacy `WithGridColumns(...)` and public index overloads remain available.
 
 ## What remains consumer responsibility
 
@@ -792,23 +803,34 @@ Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
 
 `EnterSearch`, `ClearSearch` и `ApplySearchFromHistory` покрывают ввод, очистку и выбор из истории. История остаётся необязательным состоянием того же контрола; `SearchHistoryResultsKind.ListBox` нужен только для результатов в `ListBox`. `ISearchPickerControl` остаётся отдельной абстракцией для relation picker, например `ServerSearchComboBox`.
 
-Для каждой таблицы регистрируется её собственный упорядоченный список колонок, после чего строка задаётся стабильными бизнес-полями именно этой таблицы:
+Один catalog передаётся Recorder, Headless и FlaUI. Native grid может отдать metadata автоматически; для templated grid достаточно декларативно указать колонки, типы редакторов и стабильный ключ строки:
 
 ```csharp
-var resolver = innerResolver.WithGridColumns(
-    "OrdersGrid",
-    ["OrderId", "Customer", "Status", "Total"]);
+var grids = new GridAutomationCatalog().Add(
+    GridAutomationDefinition.ByAutomationIds(
+            "ItemsGrid",
+            "ItemsGridVisual",
+            "ItemsGrid")
+        .WithColumns(
+            GridColumnDefinition.Auto("Code"),
+            GridColumnDefinition.Map("Item")
+                .FromField("ItemReference")
+                .DisplayValueFrom("ItemReference.Name"),
+            GridColumnDefinition.Auto("Quantity")
+                .AsValue(GridCellValueKind.Number)
+                .EditWith(GridCellEditorKind.Number),
+            GridColumnDefinition.Auto("State")
+                .EditWith(GridCellEditorKind.ComboBox))
+        .IdentifyRowsBy("Code"));
 
-var order = GridRowSelector
-    .ByCell("OrderId", "ORD-42")
-    .AndCell("Customer", "North");
+var recorderOptions = new AppAutomationRecorderOptions { GridAutomation = grids };
+var resolver = innerResolver.WithGridAutomation(grids);
+var row = GridRowSelector.ByCell("Code", "ITEM-42");
 
-Page.WaitUntilGridContainsRow(static page => page.OrdersGrid, order);
-Page.WaitUntilGridCellEquals(static page => page.OrdersGrid, order, "Status", "Ready");
-Page.OpenGridRow(static page => page.OrdersGrid, order);
+Page.WaitUntilGridCellEquals(static page => page.ItemsGrid, row, "State", "Ready");
 ```
 
-Строки разрешаются заново при каждом опросе, поэтому вставка и сортировка не ломают селектор; для операции требуется одно уникальное совпадение. Ключ Recorder задаётся через `RecorderGridHint.RowIdentityColumnPropertyNames`; без него сохраняются прежние индексы строки и колонки. Существующие index-based overloads не меняются.
+Стабильный адрес заново разрешается для действия и postcondition, поэтому сортировка, фильтрация, вставка и виртуализация не превращают строку в устаревший индекс. При неоднозначном или отсутствующем ключе новый catalog capture не сохраняется. Legacy `WithGridColumns(...)` и публичные index overloads остаются доступны.
 
 ## Что остаётся на стороне потребителя
 
