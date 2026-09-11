@@ -4,6 +4,7 @@ using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using AppAutomation.TUnit;
 using AppAutomation.FlaUI.Session;
+using FlaUI.Core.Definitions;
 using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
@@ -19,6 +20,8 @@ public sealed class MainWindowFlaUiRuntimeTests : MainWindowScenariosBase<MainWi
 
     protected override MainWindowPage CreatePage(FlaUiRuntimeSession session)
     {
+        // Keep the showcase viewport independent of the desktop's default window size.
+        session.Inner.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
         return MainWindowFlaUiPageFactory.Create(session.Inner);
     }
 

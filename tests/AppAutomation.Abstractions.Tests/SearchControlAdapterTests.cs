@@ -65,17 +65,17 @@ public sealed class SearchControlAdapterTests
     {
         var fixture = new SearchControlFixture(configureActionButtons: true);
         fixture.SearchButton.IsEnabled = false;
-        fixture.Input.OnEnter = _ => EnableAfterDelay(fixture.SearchButton);
+        fixture.Input.OnEnter = _ => fixture.SearchButton.EnableAfterNextReadinessCheck();
 
         fixture.CreatePage().EnterSearch(
             static page => page.TableSearch,
-            "orders",
-            timeoutMs: 1000);
+            "orders");
 
         using (Assert.Multiple())
         {
             await Assert.That(fixture.SearchButton.InvokeCount).IsEqualTo(1);
             await Assert.That(fixture.SearchButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(fixture.SearchButton.DisabledReadinessCheckCount).IsEqualTo(1);
         }
     }
 
@@ -85,17 +85,17 @@ public sealed class SearchControlAdapterTests
         var fixture = new SearchControlFixture(configureActionButtons: true);
         fixture.HistoryButton.IsEnabled = false;
         fixture.HistoryButton.OnInvoke = () => fixture.ShowHistory("orders");
-        EnableAfterDelay(fixture.HistoryButton);
+        fixture.HistoryButton.EnableAfterNextReadinessCheck();
 
         fixture.CreatePage().ApplySearchFromHistory(
             static page => page.TableSearch,
-            "orders",
-            timeoutMs: 1000);
+            "orders");
 
         using (Assert.Multiple())
         {
             await Assert.That(fixture.HistoryButton.InvokeCount).IsEqualTo(1);
             await Assert.That(fixture.HistoryButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(fixture.HistoryButton.DisabledReadinessCheckCount).IsEqualTo(1);
             await Assert.That(fixture.AppliedHistoryItem).IsEqualTo("orders");
         }
     }
@@ -241,7 +241,7 @@ public sealed class SearchControlAdapterTests
 
         public string Name => AutomationId;
 
-        public bool IsEnabled { get; set; } = true;
+        public virtual bool IsEnabled { get; set; } = true;
     }
 
     private sealed class FakeTextBox : FakeControl, ITextBoxControl
@@ -263,6 +263,8 @@ public sealed class SearchControlAdapterTests
 
     private sealed class FakeButton : FakeControl, IButtonControl
     {
+        private bool _enableAfterNextCheck;
+
         public FakeButton(string automationId) : base(automationId)
         {
         }
@@ -271,11 +273,41 @@ public sealed class SearchControlAdapterTests
 
         public bool WasInvokedWhileDisabled { get; private set; }
 
+        public int DisabledReadinessCheckCount { get; private set; }
+
+        public override bool IsEnabled
+        {
+            get
+            {
+                if (_enableAfterNextCheck)
+                {
+                    if (DisabledReadinessCheckCount == 0)
+                    {
+                        DisabledReadinessCheckCount++;
+                        return false;
+                    }
+
+                    base.IsEnabled = true;
+                    _enableAfterNextCheck = false;
+                }
+
+                return base.IsEnabled;
+            }
+            set => base.IsEnabled = value;
+        }
+
+        public void EnableAfterNextReadinessCheck()
+        {
+            base.IsEnabled = false;
+            DisabledReadinessCheckCount = 0;
+            _enableAfterNextCheck = true;
+        }
+
         public Action? OnInvoke { get; set; }
 
         public void Invoke()
         {
-            if (!IsEnabled)
+            if (!base.IsEnabled)
             {
                 WasInvokedWhileDisabled = true;
                 throw new InvalidOperationException($"Button '{AutomationId}' is disabled.");
@@ -299,15 +331,6 @@ public sealed class SearchControlAdapterTests
         }
 
         public ISearchControl TableSearch => Resolve<ISearchControl>(TableSearchDefinition);
-    }
-
-    private static void EnableAfterDelay(FakeControl control)
-    {
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            control.IsEnabled = true;
-        });
     }
 
     private sealed class FakeAvailabilityControl : FakeControl, IUiControlAvailability

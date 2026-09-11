@@ -7,6 +7,7 @@ using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -201,6 +202,8 @@ public sealed class FlaUiControlResolverTests
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        // This bridge test reads realized rows; virtualization is covered separately.
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
         var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
 
         page

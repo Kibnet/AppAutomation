@@ -290,19 +290,21 @@ public sealed class GridRowSelectorTests
         var fixture = new GridFixture(Row("ORD-1", "Draft", "10"));
         var page = fixture.CreatePage();
         var delayedRow = GridRowSelector.ByCell("OrderId", "ORD-2");
-        var addRow = Task.Run(async () =>
+        var rowReadCount = 0;
+        fixture.Grid.BeforeReadRows = () =>
         {
-            await Task.Delay(150);
-            fixture.Rows.Add(Row("ORD-2", "Ready", "20"));
-        });
+            if (++rowReadCount == 2)
+            {
+                fixture.Rows.Add(Row("ORD-2", "Ready", "20"));
+            }
+        };
 
         var returnedPage = page.WaitUntilGridContainsRow(
             static candidate => candidate.Orders,
-            delayedRow,
-            timeoutMs: 1000);
-        await addRow;
+            delayedRow);
 
         await Assert.That(ReferenceEquals(returnedPage, page)).IsTrue();
+        await Assert.That(rowReadCount).IsGreaterThanOrEqualTo(2);
     }
 
     [Test]
@@ -457,7 +459,16 @@ public sealed class GridRowSelectorTests
 
         public bool IsEnabled => true;
 
-        public IReadOnlyList<IGridRowControl> Rows => rows;
+        public Action? BeforeReadRows { get; set; }
+
+        public IReadOnlyList<IGridRowControl> Rows
+        {
+            get
+            {
+                BeforeReadRows?.Invoke();
+                return rows;
+            }
+        }
 
         public IGridRowControl? GetRowByIndex(int index)
         {
