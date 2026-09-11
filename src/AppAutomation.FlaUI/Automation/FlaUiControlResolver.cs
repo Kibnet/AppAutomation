@@ -48,6 +48,20 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class
     {
+        try
+        {
+            return ResolveCore<TControl>(definition);
+        }
+        catch (ElementNotAvailableException exception)
+        {
+            throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                $"Control '{definition.LocatorValue}' became detached during resolution.", exception);
+        }
+    }
+
+    private TControl ResolveCore<TControl>(UiControlDefinition definition)
+        where TControl : class
+    {
         ArgumentNullException.ThrowIfNull(definition);
 
         if (typeof(TControl) == typeof(IMultiSelectItemsControl))
@@ -93,7 +107,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         };
 
         return resolved as TControl
-            ?? throw new InvalidOperationException(
+            ?? throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
                 $"Resolved control '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
     }
 
@@ -158,7 +172,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         if (definition.Scope is not null)
         {
             return FindScopedElement(definition)
-                ?? throw new ElementNotAvailableException(
+                ?? throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
                     $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found "
                     + $"inside scope [{definition.Scope.LocatorKind}:{definition.Scope.LocatorValue}].");
         }
@@ -190,13 +204,24 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return rootSearch;
         }
 
-        throw new ElementNotAvailableException(
+        throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
     }
 
     private AutomationElement? FindScopedElement(UiControlDefinition definition)
     {
-        return FindScopedCandidates(definition).FirstOrDefault(IsAttachedAndAvailable);
+        var matches = DistinctElements(FindScopedCandidates(definition)
+            .Where(IsAttachedAndAvailable))
+            .ToArray();
+        if (matches.Length > 1)
+        {
+            throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
+                $"Locator [{definition.LocatorKind}:{definition.LocatorValue}] is ambiguous inside scope "
+                + $"[{definition.Scope!.LocatorKind}:{definition.Scope.LocatorValue}]: {matches.Length} controls. "
+                + $"Candidates: {string.Join(", ", matches.Select(GetAutomationElementIdentity))}.");
+        }
+
+        return matches.SingleOrDefault();
     }
 
     private AutomationElement[] FindSearchHistoryButtons(UiControlDefinition definition)
@@ -205,10 +230,9 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             ? GetProcessSearchRoots().SelectMany(root => FindCandidates(root, definition))
             : FindScopedCandidates(definition);
 
-        return candidates
+        return DistinctElements(candidates
             .Where(IsAttachedAndAvailable)
-            .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Button)
-            .DistinctBy(GetAutomationElementIdentity)
+            .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Button))
             .ToArray();
     }
 
@@ -216,31 +240,10 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     {
         var scope = definition.Scope!;
         var scopeRoots = FindScopeRoots(scope);
-        var directCandidates = scopeRoots
+        return scopeRoots
             .SelectMany(root => FindCandidates(root, definition))
             .Where(IsAttachedAndAvailable)
             .ToArray();
-        if (directCandidates.Length > 0)
-        {
-            return directCandidates;
-        }
-
-        var anchors = scopeRoots.Length > 0
-            ? scopeRoots
-            : FindScopeAnchors(scope);
-        if (anchors.Length == 0)
-        {
-            return Array.Empty<AutomationElement>();
-        }
-
-        return GetProcessSearchRoots()
-            .Select(root => FindCandidates(root, definition)
-                .Where(IsAttachedAndAvailable)
-                .ToArray())
-            .Where(static candidates => candidates.Length > 0)
-            .OrderBy(candidates => candidates.Min(candidate =>
-                anchors.Min(anchor => GetBoundsDistanceSquared(anchor, candidate))))
-            .FirstOrDefault() ?? Array.Empty<AutomationElement>();
     }
 
     private AutomationElement[] FindCandidates(AutomationElement root, UiControlDefinition definition)
@@ -268,12 +271,27 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
     private AutomationElement[] FindScopeRoots(UiControlScope scope)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope.LocatorValue);
-        return GetProcessSearchRoots()
+        return DistinctElements(GetProcessSearchRoots()
             .SelectMany(root => new[] { root }.Concat(FindAutomationDescendants(root)))
             .Where(candidate => MatchesLocator(candidate, scope))
-            .Where(candidate => TryRead(() => candidate.IsAvailable))
-            .DistinctBy(GetAutomationElementIdentity)
+            .Where(candidate => TryRead(() => candidate.IsAvailable)))
             .ToArray();
+    }
+
+    private static IEnumerable<AutomationElement> DistinctElements(IEnumerable<AutomationElement> candidates)
+    {
+        var runtimeIds = new HashSet<string>(StringComparer.Ordinal);
+        var references = new HashSet<AutomationElement>(ReferenceEqualityComparer.Instance);
+        foreach (var candidate in candidates)
+        {
+            var runtimeId = TryRead(() => candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault);
+            if (runtimeId is { Length: > 0 }
+                    ? runtimeIds.Add(string.Join(',', runtimeId))
+                    : references.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
     }
 
     private static string GetAutomationElementIdentity(AutomationElement candidate)
@@ -294,42 +312,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             TryRead(() => candidate.BoundingRectangle));
     }
 
-    private AutomationElement[] FindScopeAnchors(UiControlScope scope)
-    {
-        if (string.IsNullOrWhiteSpace(scope.AnchorLocatorValue))
-        {
-            return Array.Empty<AutomationElement>();
-        }
 
-        var anchorScope = scope with { LocatorValue = scope.AnchorLocatorValue };
-        return FindScopeRoots(anchorScope);
-    }
-
-    private static long GetBoundsDistanceSquared(AutomationElement first, AutomationElement second)
-    {
-        var firstBounds = TryRead(() => first.BoundingRectangle);
-        var secondBounds = TryRead(() => second.BoundingRectangle);
-        if (firstBounds.Width <= 0
-            || firstBounds.Height <= 0
-            || secondBounds.Width <= 0
-            || secondBounds.Height <= 0)
-        {
-            return long.MaxValue;
-        }
-
-        var horizontalDistance = firstBounds.Right < secondBounds.Left
-            ? secondBounds.Left - firstBounds.Right
-            : secondBounds.Right < firstBounds.Left
-                ? firstBounds.Left - secondBounds.Right
-                : 0;
-        var verticalDistance = firstBounds.Bottom < secondBounds.Top
-            ? secondBounds.Top - firstBounds.Bottom
-            : secondBounds.Bottom < firstBounds.Top
-                ? firstBounds.Top - secondBounds.Bottom
-                : 0;
-        return (long)horizontalDistance * horizontalDistance
-            + (long)verticalDistance * verticalDistance;
-    }
 
     private static bool MatchesLocator(AutomationElement candidate, UiControlScope scope)
     {
@@ -3236,7 +3219,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 ?? throw new InvalidOperationException(
                     $"Grid column '{address.ColumnName}' was not found in the selected row of grid '{AutomationId}'.");
             var value = new FlaUiGridCellControl(cell).Value;
-            return new GridCellValueSnapshot(value, value, GridCellValueKind.Text);
+            return new GridCellValueSnapshot(value, value, GridCellValueKind.Text) { IsDisplayOnly = true };
         }
 
         public string CopyCell(GridCellAddress address, int timeoutMs) =>
@@ -3854,7 +3837,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 return new GridCellValueSnapshot(
                     displayText,
                     displayText,
-                    GridCellValueKind.Text);
+                    GridCellValueKind.Text) { IsDisplayOnly = true };
             }
 
             return ReadCell(
@@ -4153,7 +4136,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 }
 
                 return string.Equals(
-                    row.GetCellText(columnIndex),
+                    GridRuntimeResolver.ReadRowConditionText(AutomationId, selector, condition,
+                        new GridCellValueSnapshot(row.GetCellText(columnIndex)) { IsDisplayOnly = true }),
                     condition.Value,
                     StringComparison.Ordinal);
             });
@@ -4170,7 +4154,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 }
 
                 return string.Equals(
-                    row.CellTexts[columnIndex],
+                    GridRuntimeResolver.ReadRowConditionText(AutomationId, selector, condition,
+                        new GridCellValueSnapshot(row.CellTexts[columnIndex]) { IsDisplayOnly = true }),
                     condition.Value,
                     StringComparison.Ordinal);
             });
@@ -4229,22 +4214,23 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             ArgumentNullException.ThrowIfNull(row);
             return new GridIndexedRowSelector(
                 row.Conditions.Select(condition => new GridIndexedCellCondition(
-                    CreateRuntimeColumn(condition.ColumnName),
+                    CreateRuntimeColumn(condition.ColumnName, configuration: row.FindColumnDefinition(condition.ColumnName)),
                     condition.Value)));
         }
 
         private GridRuntimeColumn CreateRuntimeColumn(
             string columnName,
             GridCellEditorKind? editorKind = null,
-            GridCellEditorParts? editorParts = null)
+            GridCellEditorParts? editorParts = null,
+            GridColumnDefinition? configuration = null)
         {
             return new GridRuntimeColumn(
                 ResolveNamedColumnIndex(columnName),
                 columnName,
-                displayValuePath: null,
-                formatString: null,
-                cultureName: null,
-                GridCellValueKind.Text,
+                displayValuePath: configuration?.DisplayValuePath,
+                formatString: configuration?.FormatString,
+                cultureName: configuration?.CultureName,
+                configuration?.ValueKind ?? GridCellValueNormalizer.InferValueKind(configuration?.EditorKind),
                 editorKind,
                 editorParts);
         }
@@ -4300,10 +4286,9 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                 ?? throw new InvalidOperationException(
                     $"Grid '{AutomationId}' row {rowIndex} no longer exposes column {column.ColumnIndex}.");
             var displayText = ReadVisualGridCellText(cell);
-            return new GridCellValueSnapshot(
-                displayText,
-                ParseGridRuntimeValue(displayText, column),
-                column.ValueKind);
+            return GridCellValueNormalizer.Normalize(AutomationId,
+                new GridCellValueSnapshot(displayText, displayText, column.ValueKind) { IsDisplayOnly = true },
+                column);
         }
 
         public string CopyCell(
@@ -4995,7 +4980,9 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
                     if (selector.Conditions.All(condition =>
                             condition.ColumnIndex < row.Cells.Count
                             && string.Equals(
-                                ReadVisualGridCellText(row.Cells[condition.ColumnIndex]),
+                                GridCellValueNormalizer.Normalize(AutomationId,
+                                    new GridCellValueSnapshot(ReadVisualGridCellText(row.Cells[condition.ColumnIndex]))
+                                    { IsDisplayOnly = true }, condition.Column).DisplayText,
                                 condition.ExpectedText,
                                 StringComparison.Ordinal)))
                     {
@@ -5973,25 +5960,6 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             return $"grid='{AutomationId}'; selector={conditions}; matches={matchCount}";
         }
 
-        private static object? ParseGridRuntimeValue(string? value, GridRuntimeColumn column)
-        {
-            if (value is null)
-            {
-                return null;
-            }
-
-            var culture = string.IsNullOrWhiteSpace(column.CultureName)
-                ? CultureInfo.InvariantCulture
-                : CultureInfo.GetCultureInfo(column.CultureName);
-            return column.ValueKind switch
-            {
-                GridCellValueKind.Number when decimal.TryParse(value, System.Globalization.NumberStyles.Number, culture, out var number) => number,
-                GridCellValueKind.Date when DateTime.TryParse(value, culture, DateTimeStyles.AllowWhiteSpaces, out var date) => date,
-                GridCellValueKind.Time when TimeSpan.TryParse(value, culture, out var time) => time,
-                GridCellValueKind.Boolean when bool.TryParse(value, out var boolean) => boolean,
-                _ => value
-            };
-        }
 
         private IReadOnlyList<IGridRowControl> ReadVisualRows()
         {
@@ -6288,7 +6256,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             _cells.Select(cell => (IGridCellControl)new FlaUiVisualGridCellControl(cell)).ToArray();
     }
 
-    private sealed class FlaUiVisualGridCellControl : IGridCellControl
+    private sealed class FlaUiVisualGridCellControl : IGridCellValueControl
     {
         private readonly AutomationElement _inner;
 
@@ -6298,6 +6266,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
 
         public string Value => ReadVisualGridCellText(_inner) ?? string.Empty;
+
+        public GridCellValueSnapshot ValueSnapshot => new(Value, Value) { IsDisplayOnly = true };
     }
 
     private sealed class FlaUiDataGridViewControl : FlaUiControlBase<DataGridView>, IGridControl
@@ -6334,7 +6304,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             _inner.Cells.Select(cell => (IGridCellControl)new FlaUiGridCellControl(cell)).ToArray();
     }
 
-    private sealed class FlaUiGridCellControl : IGridCellControl
+    private sealed class FlaUiGridCellControl : IGridCellValueControl
     {
         private readonly GridCell _inner;
 
@@ -6347,6 +6317,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
             ReadAutomationElementText(_inner)
             ?? ReadObjectText(TryRead(() => _inner.Value))
             ?? string.Empty;
+
+        public GridCellValueSnapshot ValueSnapshot => new(Value, Value) { IsDisplayOnly = true };
     }
 
     private sealed class FlaUiObjectGridRowControl : IGridRowControl
@@ -6382,7 +6354,7 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         }
     }
 
-    private sealed class FlaUiObjectGridCellControl : IGridCellControl
+    private sealed class FlaUiObjectGridCellControl : IGridCellValueControl
     {
         private readonly object _inner;
 
@@ -6390,6 +6362,8 @@ public sealed class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollec
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         }
+
+        public GridCellValueSnapshot ValueSnapshot => new(Value, Value) { IsDisplayOnly = true };
 
         public string Value
         {

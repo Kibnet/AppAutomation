@@ -6735,12 +6735,7 @@ internal sealed class RecorderStepFactory
 
         try
         {
-            var culture = string.IsNullOrWhiteSpace(column?.CultureName)
-                ? System.Globalization.CultureInfo.InvariantCulture
-                : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
-            text = value is IFormattable formattable
-                ? formattable.ToString(column?.FormatString, culture) ?? string.Empty
-                : value.ToString() ?? string.Empty;
+            text = GridCellValueNormalizer.FormatValue(value, column) ?? string.Empty;
             return true;
         }
         catch (FormatException)

@@ -21,7 +21,8 @@ public static class GridValueReader
                 $"Grid column index {columnIndex} does not exist in row {rowIndex}. Current cell count: {row.Cells.Count}.");
         }
 
-        return row.Cells[columnIndex].Value;
+        return GridRuntimeResolver.ReadCellSnapshot(grid, row.Cells[columnIndex], columnIndex).DisplayText
+            ?? string.Empty;
     }
 
     /// <summary>Reads a displayed cell after re-resolving one stable row selector.</summary>
@@ -70,7 +71,20 @@ public static class GridValueReader
             return addressableGrid.ReadCell(new GridCellAddress(rowSelector, columnName), timeoutMs);
         }
 
-        return new GridCellValueSnapshot(ReadCellText(grid, rowSelector, columnName));
+        var columnIndex = GridRuntimeResolver.ResolveColumnIndex(grid, columnName);
+        if (!GridRuntimeResolver.TryResolveUniqueRowIndex(grid, rowSelector, out var rowIndex))
+        {
+            throw new InvalidOperationException("Grid row selector matched 0 rows; exactly one row is required.");
+        }
+
+        var row = grid.GetRowByIndex(rowIndex)
+            ?? throw new InvalidOperationException($"Grid row {rowIndex} disappeared while reading '{columnName}'.");
+        if (columnIndex >= row.Cells.Count)
+        {
+            throw new InvalidOperationException($"Grid column '{columnName}' does not exist in row {rowIndex}.");
+        }
+
+        return GridRuntimeResolver.ReadCellSnapshot(grid, row.Cells[columnIndex], columnIndex);
     }
 
     /// <summary>Reads a nullable numeric cell value through a stable address.</summary>
@@ -135,23 +149,9 @@ public static class GridValueReader
             return null;
         }
 
-        return snapshot.RawValue switch
-        {
-            DateTime value => value.Date,
-            DateTimeOffset value => value.Date,
-            DateOnly value => value.ToDateTime(TimeOnly.MinValue),
-            _ when DateTime.TryParse(
-                snapshot.DisplayText,
-                System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AllowWhiteSpaces,
-                out var parsed) => parsed.Date,
-            _ when DateTime.TryParse(
-                snapshot.DisplayText,
-                System.Globalization.CultureInfo.CurrentCulture,
-                System.Globalization.DateTimeStyles.AllowWhiteSpaces,
-                out var parsed) => parsed.Date,
-            _ => throw CreateConversionException(snapshot, "date")
-        };
+        return GridValueConversion.TryConvertDate(snapshot, out var value, out var diagnostic)
+            ? value
+            : throw new InvalidOperationException(diagnostic);
     }
 
     private static TimeSpan? ConvertTime(GridCellValueSnapshot snapshot)
@@ -161,22 +161,9 @@ public static class GridValueReader
             return null;
         }
 
-        return snapshot.RawValue switch
-        {
-            TimeSpan value => value,
-            TimeOnly value => value.ToTimeSpan(),
-            DateTime value => value.TimeOfDay,
-            DateTimeOffset value => value.TimeOfDay,
-            _ when TimeSpan.TryParse(
-                snapshot.DisplayText,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var parsed) => parsed,
-            _ when TimeSpan.TryParse(
-                snapshot.DisplayText,
-                System.Globalization.CultureInfo.CurrentCulture,
-                out var parsed) => parsed,
-            _ => throw CreateConversionException(snapshot, "time")
-        };
+        return GridValueConversion.TryConvertTime(snapshot, out var value, out var diagnostic)
+            ? value
+            : throw new InvalidOperationException(diagnostic);
     }
 
     private static bool? ConvertBoolean(GridCellValueSnapshot snapshot)
@@ -220,32 +207,113 @@ internal static class GridValueConversion
             return true;
         }
 
+        return TryConvertText(
+            snapshot,
+            "number",
+            static (string text, System.Globalization.CultureInfo culture, out decimal parsed) =>
+                decimal.TryParse(text, SupportedNumberStyles, culture, out parsed),
+            out value,
+            out diagnostic);
+    }
+
+    public static bool TryConvertDate(
+        GridCellValueSnapshot snapshot,
+        out DateTime value,
+        out string? diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        DateTime? typedValue = snapshot.RawValue switch
+        {
+            DateTime date => date.Date,
+            DateTimeOffset date => date.Date,
+            DateOnly date => date.ToDateTime(TimeOnly.MinValue),
+            _ => null
+        };
+        if (typedValue.HasValue)
+        {
+            value = typedValue.Value;
+            diagnostic = null;
+            return true;
+        }
+
+        return TryConvertText(
+            snapshot,
+            "date",
+            static (string text, System.Globalization.CultureInfo culture, out DateTime parsed) =>
+            {
+                var success = DateTime.TryParse(
+                    text, culture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out parsed);
+                parsed = parsed.Date;
+                return success;
+            },
+            out value,
+            out diagnostic);
+    }
+
+    public static bool TryConvertTime(
+        GridCellValueSnapshot snapshot,
+        out TimeSpan value,
+        out string? diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        TimeSpan? typedValue = snapshot.RawValue switch
+        {
+            TimeSpan time => time,
+            TimeOnly time => time.ToTimeSpan(),
+            DateTime date => date.TimeOfDay,
+            DateTimeOffset date => date.TimeOfDay,
+            _ => null
+        };
+        if (typedValue.HasValue)
+        {
+            value = typedValue.Value;
+            diagnostic = null;
+            return true;
+        }
+
+        return TryConvertText(
+            snapshot,
+            "time",
+            static (string text, System.Globalization.CultureInfo culture, out TimeSpan parsed) =>
+                TimeSpan.TryParse(text, culture, out parsed),
+            out value,
+            out diagnostic);
+    }
+
+    private static bool TryConvertText<TValue>(
+        GridCellValueSnapshot snapshot,
+        string valueKind,
+        TryParseValue<TValue> tryParse,
+        out TValue value,
+        out string? diagnostic)
+        where TValue : struct
+    {
         var text = snapshot.DisplayText;
         if (string.IsNullOrWhiteSpace(text))
         {
             value = default;
-            diagnostic = $"Grid cell value '{text ?? "<null>"}' cannot be read as number.";
+            diagnostic = $"Grid cell value '{text ?? "<null>"}' cannot be read as {valueKind}.";
             return false;
         }
 
         if (!string.IsNullOrWhiteSpace(snapshot.CultureName))
         {
             var culture = System.Globalization.CultureInfo.GetCultureInfo(snapshot.CultureName);
-            if (decimal.TryParse(text, SupportedNumberStyles, culture, out value))
+            if (tryParse(text, culture, out value))
             {
                 diagnostic = null;
                 return true;
             }
 
             diagnostic =
-                $"Grid cell value '{text}' cannot be read as number using configured culture '{culture.Name}'.";
+                $"Grid cell value '{text}' cannot be read as {valueKind} using configured culture '{culture.Name}'.";
             return false;
         }
 
         var parsedValues = CandidateCultures()
             .Select(culture =>
             {
-                var parsed = decimal.TryParse(text, SupportedNumberStyles, culture, out var candidate);
+                var parsed = tryParse(text, culture, out var candidate);
                 return (culture.Name, Parsed: parsed, Value: candidate);
             })
             .Where(static candidate => candidate.Parsed)
@@ -263,8 +331,8 @@ internal static class GridValueConversion
 
         value = default;
         diagnostic = distinctValues.Length == 0
-            ? $"Grid cell value '{text}' cannot be read as number using the UI, current, or invariant culture."
-            : $"Grid cell value '{text}' is culture-ambiguous and resolves to different numbers: "
+            ? $"Grid cell value '{text}' cannot be read as {valueKind} using the UI, current, or invariant culture."
+            : $"Grid cell value '{text}' is culture-ambiguous and resolves to different {valueKind} values: "
                 + string.Join(
                     ", ",
                     parsedValues.Select(static candidate =>
@@ -272,6 +340,11 @@ internal static class GridValueConversion
                 + ". Configure the grid column culture explicitly.";
         return false;
     }
+
+    private delegate bool TryParseValue<TValue>(
+        string text,
+        System.Globalization.CultureInfo culture,
+        out TValue value);
 
     private static bool TryConvertTypedNumber(object? rawValue, out decimal value)
     {

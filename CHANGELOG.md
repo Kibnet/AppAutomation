@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Save Recorder controls and scenarios as a rollback-protected file transaction; retain recovery on failed saves.
+- Reject ambiguous scoped controls and propagate composite configuration errors instead of treating them as missing popup parts.
+- Share grid projection, formatting and explicit culture handling across value reads and stable-row matching.
+- Replace generated-value timestamps with a UTC date and compact cryptographic series identifier, shared by the numbered values of each invocation.
+- Coordinate polling tests with independent state-change workers rather than read-count-driven mutations.
+
 - Merge `[UiControl]` declarations from all partial files of a Page into one generated Page source, deduplicating exact repeats and reporting conflicting names or locators.
 - Keep Recorder output in one Page controls file and one scenario file per destination, merging later saves without changing user-authored partials, marking and cleaning recovery by stable destination, and queuing a final save behind an active autosave.
 - Reuse Recorder controls by locator across Page partials and `const string` identifiers, allowing `WaitUntilExists` to use a more specific control while rejecting incompatible typed actions instead of generating suffixed duplicates.

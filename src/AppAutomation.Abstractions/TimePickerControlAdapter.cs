@@ -190,7 +190,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
             {
                 return ResolveTimePicker();
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -207,7 +207,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
             {
                 return ResolveButton("Open", _parts.OpenButtonLocator);
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -221,17 +221,16 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                 return selectedTime;
             }
 
-            var inputTime = TryReadTime(_parts.InputLocator, "Input", UiControlType.TextBox);
+            var inputTime = TryReadTime(_parts.InputLocator, "Input");
             if (inputTime is not null)
             {
                 return inputTime;
             }
 
-            return TryReadTime(_parts.RootLocator, "CommittedRoot", UiControlType.TimePicker)
-                ?? TryReadTime(_parts.RootLocator, "CommittedRootText", UiControlType.Label);
+            return TryReadTime(_parts.RootLocator, "CommittedRoot");
         }
 
-        private TimeSpan? TryReadTime(string? locator, string suffix, UiControlType controlType)
+        private TimeSpan? TryReadTime(string? locator, string suffix)
         {
             if (string.IsNullOrWhiteSpace(locator))
             {
@@ -240,18 +239,26 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
 
             try
             {
-                if (controlType == UiControlType.TimePicker)
+                try
                 {
-                    return _resolver.Resolve<ITimePickerControl>(
-                        CreateDefinition(suffix, controlType, locator)).SelectedTime;
+                    return suffix == "CommittedRoot"
+                        ? _resolver.Resolve<ITimePickerControl>(CreateDefinition(suffix, UiControlType.TimePicker, locator)).SelectedTime
+                        : TryParseTime(_resolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locator)).Text);
                 }
-
-                var text = controlType == UiControlType.TextBox
-                    ? _resolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, controlType, locator)).Text
-                    : _resolver.Resolve<IReadableTextControl>(CreateDefinition(suffix, controlType, locator)).Text;
-                return TryParseTime(text);
+                catch (UiControlResolutionException exception) when (exception.Failure == UiControlResolutionFailure.TypeMismatch)
+                {
+                    var control = _resolver.Resolve<IUiControl>(
+                        CreateDefinition(suffix, UiControlType.AutomationElement, locator));
+                    var text = control switch
+                    {
+                        IReadableTextControl readable => readable.Text,
+                        _ when suffix == "CommittedRoot" => null,
+                        _ => throw new NotSupportedException($"Time-picker input '{locator}' must expose readable text.")
+                    };
+                    return TryParseTime(text);
+                }
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -294,7 +301,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                     UiControlType.AutomationElement,
                     _parts.RootLocator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -337,7 +344,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                         button = ResolveButton(suffix, locator);
                         return button.IsEnabled;
                     }
-                    catch (InvalidOperationException)
+                    catch (UiControlResolutionException exception) when (exception.IsTransient)
                     {
                         return false;
                     }
@@ -371,7 +378,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                     UiControlType.AutomationElement,
                     _parts.PopupRootLocator!));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return false;
             }

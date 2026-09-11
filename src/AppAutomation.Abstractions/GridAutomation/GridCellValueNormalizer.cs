@@ -4,70 +4,90 @@ namespace AppAutomation.Abstractions;
 
 internal static class GridCellValueNormalizer
 {
-    public static GridCellValueSnapshot Create(
-        string displayText,
-        GridColumnDefinition column)
-    {
-        var culture = string.IsNullOrWhiteSpace(column.CultureName)
-            ? CultureInfo.CurrentUICulture
-            : CultureInfo.GetCultureInfo(column.CultureName);
-        var kind = column.ValueKind ?? InferValueKind(column.EditorKind);
-        object? rawValue = displayText;
-        switch (kind)
-        {
-            case GridCellValueKind.Date
-                when DateTime.TryParse(displayText, culture, DateTimeStyles.AllowWhiteSpaces, out var date):
-                rawValue = date;
-                break;
-            case GridCellValueKind.Time
-                when TimeSpan.TryParse(displayText, culture, out var time):
-                rawValue = time;
-                break;
-            case GridCellValueKind.Boolean
-                when bool.TryParse(displayText, out var boolean):
-                rawValue = boolean;
-                break;
-        }
-
-        var snapshot = new GridCellValueSnapshot(displayText, rawValue, kind)
-        {
-            CultureName = column.CultureName
-        };
-        if (kind == GridCellValueKind.Number
-            && GridValueConversion.TryConvertNumber(snapshot, out var number, out _))
-        {
-            snapshot = snapshot with { RawValue = number };
-        }
-
-        return snapshot;
-    }
-
     public static GridCellValueSnapshot Normalize(
         string gridPropertyName,
         GridCellValueSnapshot snapshot,
         GridColumnDefinition column)
     {
-        if (snapshot.IsNull)
+        var kind = column.ValueKind ?? (column.EditorKind.HasValue
+            ? InferValueKind(column.EditorKind)
+            : snapshot.ValueKind);
+        var cultureName = column.CultureName ?? snapshot.CultureName;
+        if (snapshot.IsDisplayOnly)
         {
-            return new GridCellValueSnapshot(
-                DisplayText: null,
-                RawValue: null,
-                column.ValueKind ?? InferValueKind(column.EditorKind))
+            return NormalizeTypedValue(snapshot with { ValueKind = kind, CultureName = cultureName });
+        }
+
+        if (snapshot.IsNull && string.IsNullOrWhiteSpace(column.DisplayValuePath))
+        {
+            return snapshot with
             {
-                CultureName = column.CultureName
+                ValueKind = kind,
+                CultureName = cultureName
             };
         }
 
         var projectedValue = ResolveProjectedValue(gridPropertyName, snapshot, column);
-        var displayText = FormatProjectedValue(projectedValue, snapshot.DisplayText, column);
-        var normalized = Create(displayText ?? string.Empty, column);
+        if (projectedValue is null && !string.IsNullOrWhiteSpace(column.DisplayValuePath))
+        {
+            return snapshot with
+            {
+                RawValue = null,
+                DisplayText = null,
+                ValueKind = kind,
+                CultureName = cultureName
+            };
+        }
+
+        var normalized = NormalizeTypedValue(snapshot with
+        {
+            DisplayText = string.IsNullOrWhiteSpace(column.DisplayValuePath)
+                ? snapshot.DisplayText
+                : Convert.ToString(projectedValue, ResolveCulture(column)),
+            RawValue = projectedValue,
+            ValueKind = kind,
+            CultureName = cultureName
+        });
         return normalized with
         {
-            RawValue = projectedValue is null or string
-                ? normalized.RawValue
-                : projectedValue,
-            ValueSource = snapshot.ValueSource
+            DisplayText = FormatProjectedValue(normalized.RawValue, snapshot.DisplayText, column)
         };
+    }
+
+    public static GridCellValueSnapshot Normalize(
+        string gridPropertyName,
+        GridCellValueSnapshot snapshot,
+        GridRuntimeColumn column)
+    {
+        var definition = GridColumnDefinition.Auto(column.SourceFieldName).AsValue(column.ValueKind);
+        if (!string.IsNullOrWhiteSpace(column.DisplayValuePath))
+        {
+            definition = definition.DisplayValueFrom(column.DisplayValuePath);
+        }
+
+        if (!string.IsNullOrWhiteSpace(column.FormatString))
+        {
+            definition = definition.FormatWith(column.FormatString, column.CultureName);
+        }
+
+        return Normalize(
+            gridPropertyName,
+            snapshot with { CultureName = column.CultureName ?? snapshot.CultureName },
+            definition);
+    }
+
+    private static GridCellValueSnapshot NormalizeTypedValue(GridCellValueSnapshot snapshot)
+    {
+        var rawValue = snapshot.ValueKind switch
+        {
+            GridCellValueKind.Number when GridValueConversion.TryConvertNumber(snapshot, out var number, out _) => number,
+            GridCellValueKind.Date when GridValueConversion.TryConvertDate(snapshot, out var date, out _) => date,
+            GridCellValueKind.Time when GridValueConversion.TryConvertTime(snapshot, out var time, out _) => time,
+            GridCellValueKind.Boolean when snapshot.RawValue is bool value => value,
+            GridCellValueKind.Boolean when bool.TryParse(snapshot.DisplayText, out var boolean) => boolean,
+            _ => snapshot.RawValue
+        };
+        return snapshot with { RawValue = rawValue };
     }
 
     public static GridCellValueKind InferValueKind(GridCellEditorKind? editorKind)
@@ -131,16 +151,19 @@ internal static class GridCellValueNormalizer
         {
             return string.IsNullOrWhiteSpace(column.DisplayValuePath)
                 ? providerDisplayText ?? Convert.ToString(value, CultureInfo.InvariantCulture)
-                : Convert.ToString(value, ResolveCulture(column));
+                : FormatValue(value, column);
         }
 
-        return value is IFormattable formattable
-            ? formattable.ToString(column.FormatString, ResolveCulture(column))
-            : Convert.ToString(value, ResolveCulture(column));
+        return FormatValue(value, column);
     }
 
-    private static CultureInfo ResolveCulture(GridColumnDefinition column) =>
-        string.IsNullOrWhiteSpace(column.CultureName)
+    public static string? FormatValue(object? value, GridColumnDefinition? column) =>
+        value is IFormattable formattable
+            ? formattable.ToString(column?.FormatString, ResolveCulture(column))
+            : Convert.ToString(value, ResolveCulture(column));
+
+    private static CultureInfo ResolveCulture(GridColumnDefinition? column) =>
+        string.IsNullOrWhiteSpace(column?.CultureName)
             ? CultureInfo.InvariantCulture
             : CultureInfo.GetCultureInfo(column.CultureName);
 }

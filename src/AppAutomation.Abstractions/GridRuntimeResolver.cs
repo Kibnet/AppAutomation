@@ -25,7 +25,7 @@ internal static class GridRuntimeResolver
 
         var metadata = RequireColumnMetadata(grid);
         var conditions = rowSelector.Conditions
-            .Select(condition => (ColumnIndex: ResolveColumnIndex(metadata, condition.ColumnName), condition.Value))
+            .Select(condition => (ColumnIndex: ResolveColumnIndex(metadata, condition.ColumnName), Condition: condition))
             .ToArray();
         var matches = new List<int>();
         var rows = grid.Rows;
@@ -33,13 +33,45 @@ internal static class GridRuntimeResolver
         {
             var cells = rows[rowIndex].Cells;
             if (conditions.All(condition => condition.ColumnIndex < cells.Count
-                    && string.Equals(cells[condition.ColumnIndex].Value, condition.Value, StringComparison.Ordinal)))
+                    && string.Equals(
+                        ReadRowConditionText(
+                            grid.AutomationId,
+                            rowSelector,
+                            condition.Condition,
+                            ReadCellSnapshot(grid, cells[condition.ColumnIndex], condition.ColumnIndex)),
+                        condition.Condition.Value,
+                        StringComparison.Ordinal)))
             {
                 matches.Add(rowIndex);
             }
         }
 
         return matches;
+    }
+
+    public static string? ReadRowConditionText(
+        string gridName,
+        GridRowSelector selector,
+        GridRowCondition condition,
+        GridCellValueSnapshot snapshot)
+    {
+        var column = selector.FindColumnDefinition(condition.ColumnName);
+        return column is null
+            ? snapshot.DisplayText
+            : GridCellValueNormalizer.Normalize(gridName, snapshot, column).DisplayText;
+    }
+
+    public static GridCellValueSnapshot ReadCellSnapshot(
+        IGridControl grid,
+        IGridCellControl cell,
+        int columnIndex)
+    {
+        var snapshot = cell is IGridCellValueControl semanticCell
+            ? semanticCell.ValueSnapshot
+            : new GridCellValueSnapshot(cell.Value, cell.Value) { IsDisplayOnly = true };
+        return grid is ConfiguredGridControl configured
+            ? configured.NormalizeValueSnapshot(snapshot, columnIndex)
+            : snapshot;
     }
 
     public static int ResolveColumnIndex(IGridControl grid, string columnName)

@@ -28,7 +28,12 @@ internal static class GridPropertyValueReader
 
         foreach (var segment in propertyPath.Split('.', StringSplitOptions.TrimEntries))
         {
-            if (value is null || !TryReadProperty(value, segment, out value))
+            if (value is null)
+            {
+                return true;
+            }
+
+            if (!TryReadProperty(value, segment, out value))
             {
                 unresolvedSegment = segment;
                 return false;

@@ -948,7 +948,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string Name => TryResolve()?.Name ?? string.Empty;
 
-        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
 
         public string? SelectedItemText => TryResolve()?.SelectedItemText;
 
@@ -969,7 +969,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             {
                 return Resolve();
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -991,7 +991,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string Name => TryResolve()?.Name ?? string.Empty;
 
-        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
 
         public void Invoke() => _resolve().Invoke();
 
@@ -1001,7 +1001,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             {
                 return _resolve();
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1184,7 +1184,7 @@ public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
                     ? null
                     : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1389,7 +1389,7 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
                     ? null
                     : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1569,7 +1569,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             {
                 return MessageText;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1696,7 +1696,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return Text;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1713,7 +1713,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return ResolveLabel(suffix, locatorValue);
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1725,7 +1725,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return _innerResolver.Resolve<IUiControl>(_rootDefinition);
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1854,7 +1854,7 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
             {
                 return ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -2156,9 +2156,9 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
                 {
                     item.Expand();
                 }
-                catch
+                catch (UiControlResolutionException exception) when (exception.IsTransient)
                 {
-                    // Tree expansion is best effort across mixed runtimes.
+                    continue;
                 }
 
                 var nested = FindTreeItem(item.Items, paneName);

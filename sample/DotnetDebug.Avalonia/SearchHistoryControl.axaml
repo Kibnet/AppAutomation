@@ -29,6 +29,7 @@
               BorderThickness="1"
               CornerRadius="4"
               Background="#111519"
+              automation:AutomationProperties.AccessibilityView="Control"
               automation:AutomationProperties.AutomationId="ArmTableSearchHistoryRoot">
         <Grid RowDefinitions="Auto,*">
           <TextBlock Text="History"

@@ -65,17 +65,18 @@ public sealed class SearchControlAdapterTests
     {
         var fixture = new SearchControlFixture(configureActionButtons: true);
         fixture.SearchButton.IsEnabled = false;
-        fixture.Input.OnEnter = _ => fixture.SearchButton.EnableAfterNextReadinessCheck();
-
-        fixture.CreatePage().EnterSearch(
-            static page => page.TableSearch,
-            "orders");
+        await ControlledStateChange.RunAsync(
+            observed =>
+            {
+                fixture.Input.OnEnter = _ => fixture.SearchButton.OnReadEnabled = observed;
+                fixture.CreatePage().EnterSearch(static page => page.TableSearch, "orders");
+            },
+            () => fixture.SearchButton.IsEnabled = true);
 
         using (Assert.Multiple())
         {
             await Assert.That(fixture.SearchButton.InvokeCount).IsEqualTo(1);
             await Assert.That(fixture.SearchButton.WasInvokedWhileDisabled).IsFalse();
-            await Assert.That(fixture.SearchButton.DisabledReadinessCheckCount).IsEqualTo(1);
         }
     }
 
@@ -85,17 +86,18 @@ public sealed class SearchControlAdapterTests
         var fixture = new SearchControlFixture(configureActionButtons: true);
         fixture.HistoryButton.IsEnabled = false;
         fixture.HistoryButton.OnInvoke = () => fixture.ShowHistory("orders");
-        fixture.HistoryButton.EnableAfterNextReadinessCheck();
-
-        fixture.CreatePage().ApplySearchFromHistory(
-            static page => page.TableSearch,
-            "orders");
+        await ControlledStateChange.RunAsync(
+            observed =>
+            {
+                fixture.HistoryButton.OnReadEnabled = observed;
+                fixture.CreatePage().ApplySearchFromHistory(static page => page.TableSearch, "orders");
+            },
+            () => fixture.HistoryButton.IsEnabled = true);
 
         using (Assert.Multiple())
         {
             await Assert.That(fixture.HistoryButton.InvokeCount).IsEqualTo(1);
             await Assert.That(fixture.HistoryButton.WasInvokedWhileDisabled).IsFalse();
-            await Assert.That(fixture.HistoryButton.DisabledReadinessCheckCount).IsEqualTo(1);
             await Assert.That(fixture.AppliedHistoryItem).IsEqualTo("orders");
         }
     }
@@ -232,6 +234,8 @@ public sealed class SearchControlAdapterTests
 
     private abstract class FakeControl : IUiControl
     {
+        private bool _isEnabled = true;
+
         protected FakeControl(string automationId)
         {
             AutomationId = automationId;
@@ -241,7 +245,11 @@ public sealed class SearchControlAdapterTests
 
         public string Name => AutomationId;
 
-        public virtual bool IsEnabled { get; set; } = true;
+        public virtual bool IsEnabled
+        {
+            get => Volatile.Read(ref _isEnabled);
+            set => Volatile.Write(ref _isEnabled, value);
+        }
     }
 
     private sealed class FakeTextBox : FakeControl, ITextBoxControl
@@ -263,8 +271,6 @@ public sealed class SearchControlAdapterTests
 
     private sealed class FakeButton : FakeControl, IButtonControl
     {
-        private bool _enableAfterNextCheck;
-
         public FakeButton(string automationId) : base(automationId)
         {
         }
@@ -273,34 +279,17 @@ public sealed class SearchControlAdapterTests
 
         public bool WasInvokedWhileDisabled { get; private set; }
 
-        public int DisabledReadinessCheckCount { get; private set; }
+        public Action? OnReadEnabled { get; set; }
 
         public override bool IsEnabled
         {
             get
             {
-                if (_enableAfterNextCheck)
-                {
-                    if (DisabledReadinessCheckCount == 0)
-                    {
-                        DisabledReadinessCheckCount++;
-                        return false;
-                    }
-
-                    base.IsEnabled = true;
-                    _enableAfterNextCheck = false;
-                }
-
-                return base.IsEnabled;
+                var value = base.IsEnabled;
+                OnReadEnabled?.Invoke();
+                return value;
             }
             set => base.IsEnabled = value;
-        }
-
-        public void EnableAfterNextReadinessCheck()
-        {
-            base.IsEnabled = false;
-            DisabledReadinessCheckCount = 0;
-            _enableAfterNextCheck = true;
         }
 
         public Action? OnInvoke { get; set; }

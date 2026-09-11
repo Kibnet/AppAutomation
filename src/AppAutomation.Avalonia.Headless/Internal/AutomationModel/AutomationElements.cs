@@ -129,7 +129,8 @@ internal class AutomationElement
             return new Spinner(numericUpDown);
         }
 
-        throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to Spinner.");
+        throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+            $"Control '{Control.GetType().Name}' cannot be converted to Spinner.");
     }
 
     public Tab AsTab() => this as Tab ?? new Tab(RequireControl<global::Avalonia.Controls.TabControl>());
@@ -168,7 +169,8 @@ internal class AutomationElement
                 return typed;
             }
 
-            throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
+            throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                $"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
         });
     }
 
@@ -187,7 +189,8 @@ internal class AutomationElement
                 return descendant;
             }
 
-            throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
+            throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                $"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
         });
     }
 
@@ -1158,9 +1161,9 @@ internal class Grid : AutomationElement
                 ? items[rowIndex]
                 : ReadPropertyPathValue(items[rowIndex], path);
             return new GridCellValueSnapshot(
-                rawValue?.ToString() ?? string.Empty,
+                rawValue?.ToString(),
                 rawValue,
-                InferValueKind(rawValue));
+                InferValueKind(rawValue)) { ValueSource = items[rowIndex] };
         });
     }
 
@@ -1365,7 +1368,7 @@ internal class GridRow
             if (ColumnPaths.Count > 0)
             {
                 return ColumnPaths
-                    .Select(path => new GridCell(ReadBoundValue(Item, path)))
+                    .Select(path => new GridCell(ReadBoundValue(Item, path), Item))
                     .ToArray();
             }
 
@@ -1385,30 +1388,30 @@ internal class GridRow
                 .Select(property =>
                 {
                     var propertyValue = property.GetValue(Item);
-                    return new GridCell(propertyValue?.ToString() ?? string.Empty);
+                    return new GridCell(propertyValue, Item);
                 })
                 .ToArray();
         }
     }
 
-    private static string ReadBoundValue(object item, string? path)
+    private static object? ReadBoundValue(object item, string? path)
     {
         if (!string.IsNullOrWhiteSpace(path))
         {
             return ReadPropertyPath(item, path);
         }
 
-        return item.ToString() ?? string.Empty;
+        return item;
     }
 
-    private static string ReadPropertyPath(object item, string path)
+    private static object? ReadPropertyPath(object item, string path)
     {
         object? current = item;
         foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (current is null)
             {
-                return string.Empty;
+                return null;
             }
 
             var matches = current.GetType()
@@ -1420,22 +1423,29 @@ internal class GridRow
                 .ToArray();
             if (matches.Length != 1)
             {
-                return string.Empty;
+                return null;
             }
 
             current = matches[0].GetValue(current);
         }
 
-        return current?.ToString() ?? string.Empty;
+        return current;
     }
 }
 
 internal class GridCell
 {
     internal GridCell(string value)
+        : this(value, null)
     {
-        Value = value;
     }
 
-    public string Value { get; }
+    internal GridCell(object? value, object? source)
+    {
+        ValueSnapshot = new GridCellValueSnapshot(value?.ToString(), value) { ValueSource = source };
+    }
+
+    public string Value => ValueSnapshot.DisplayText ?? string.Empty;
+
+    public GridCellValueSnapshot ValueSnapshot { get; }
 }

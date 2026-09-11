@@ -158,6 +158,33 @@ public sealed class GridRowSelectorTests
             page.Orders,
             GridRowSelector.ByCell("Code", "ITEM-42"),
             "Amount");
+        foreach (var cell in nativeRow.Cells.Cast<MutableCell>())
+        {
+            cell.SemanticSnapshot = new GridCellValueSnapshot(cell.Value, cell.Value)
+            {
+                ValueSource = nativeRow.ValueSource
+            };
+        }
+
+        var fallbackPage = new GridPage(new GridResolver(new ReadOnlyGrid("OrdersGrid", [nativeRow]))
+            .WithGridAutomation(catalog));
+        var projectedIdentity = GridRowSelector.ByCell("Code", "ITEM-42").AndCell("Status", "Ready");
+        var fallbackValue = GridValueReader.ReadCellValue(fallbackPage.Orders, projectedIdentity, "Amount");
+        var fallbackStatus = GridValueReader.ReadCellText(fallbackPage.Orders, projectedIdentity, "Status");
+        var indexedDisplay = GridValueReader.ReadCellText(fallbackPage.Orders, rowIndex: 0, columnIndex: 2);
+        var displayRow = Row("ITEM-42", "Ready", "20.0");
+        displayRow = displayRow with
+        {
+            Cells = displayRow.Cells.Select(static cell => (IGridCellControl)new DisplayCell(cell.Value)).ToArray()
+        };
+
+        var displayPage = new GridPage(new GridResolver(new ReadOnlyGrid("OrdersGrid", [displayRow]))
+            .WithGridAutomation(catalog));
+        var displayValue = GridValueReader.ReadCellValue(displayPage.Orders, projectedIdentity, "Amount");
+        ((MutableCell)nativeRow.Cells[1]).SemanticSnapshot = new GridCellValueSnapshot(null)
+            { ValueSource = new NativeProjection(null, 20m) };
+        var nullProjection = GridValueReader.ReadCellValue(
+            fallbackPage.Orders, GridRowSelector.ByCell("Code", "ITEM-42"), "Status");
         var invalidPathCatalog = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
                 .WithColumns(
@@ -221,6 +248,15 @@ public sealed class GridRowSelectorTests
         {
             await Assert.That(value).IsEqualTo("Ready");
             await Assert.That(amount).IsEqualTo("20.0");
+            await Assert.That(fallbackStatus).IsEqualTo(value);
+            await Assert.That(fallbackValue.DisplayText).IsEqualTo(amount);
+            await Assert.That(fallbackValue.ValueKind).IsEqualTo(GridCellValueKind.Number);
+            await Assert.That(fallbackValue.CultureName).IsEqualTo("en-US");
+            await Assert.That(fallbackValue.RawValue).IsEqualTo(20m);
+            await Assert.That(indexedDisplay).IsEqualTo(amount);
+            await Assert.That(displayValue.DisplayText).IsEqualTo(amount);
+            await Assert.That(displayValue.RawValue).IsEqualTo(20m);
+            await Assert.That(nullProjection.IsNull).IsTrue();
             await Assert.That(metadata.ColumnNames).IsEquivalentTo(["Code", "Status", "Amount"]);
             await Assert.That(statusAddress!.ColumnName).IsEqualTo("Status");
             await Assert.That(statusAddress.Row.Conditions[0].ColumnName).IsEqualTo("OrderId");
@@ -290,21 +326,23 @@ public sealed class GridRowSelectorTests
         var fixture = new GridFixture(Row("ORD-1", "Draft", "10"));
         var page = fixture.CreatePage();
         var delayedRow = GridRowSelector.ByCell("OrderId", "ORD-2");
-        var rowReadCount = 0;
-        fixture.Grid.BeforeReadRows = () =>
-        {
-            if (++rowReadCount == 2)
+        GridPage? returnedPage = null;
+        await ControlledStateChange.RunAsync(
+            observed =>
             {
-                fixture.Rows.Add(Row("ORD-2", "Ready", "20"));
-            }
-        };
-
-        var returnedPage = page.WaitUntilGridContainsRow(
-            static candidate => candidate.Orders,
-            delayedRow);
+                fixture.Grid.OnReadRows = observed;
+                returnedPage = page.WaitUntilGridContainsRow(static candidate => candidate.Orders, delayedRow);
+            },
+            () =>
+            {
+                lock (fixture.Rows)
+                {
+                    fixture.Rows.Add(Row("ORD-2", "Ready", "20"));
+                }
+            });
 
         await Assert.That(ReferenceEquals(returnedPage, page)).IsTrue();
-        await Assert.That(rowReadCount).IsGreaterThanOrEqualTo(2);
+        await Assert.That(fixture.Rows.Count).IsEqualTo(2);
     }
 
     [Test]
@@ -369,13 +407,46 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
-    public async Task GridValueReader_IndexFallbackReadsConfiguredCell()
+    [Arguments("en-US")]
+    [Arguments("ru-RU")]
+    public async Task GridValueReader_IndexFallbackReadsConfiguredCell(string cultureName)
     {
         var fixture = new GridFixture(Row("ITEM-1", "Ready", "20"));
+        var page = fixture.CreatePage();
+        var row = GridRowSelector.ByCell("OrderId", "ITEM-1");
+        var cell = (MutableCell)fixture.Rows[0].Cells[2];
+        var culture = CultureInfo.GetCultureInfo(cultureName);
+        var previousCulture = CultureInfo.CurrentCulture;
+        var previousUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
+            await Assert.That(GridValueReader.ReadCellText(page.Orders, rowIndex: 0, columnIndex: 2))
+                .IsEqualTo("20");
 
-        var value = GridValueReader.ReadCellText(fixture.CreatePage().Orders, rowIndex: 0, columnIndex: 2);
+            cell.SemanticSnapshot = new GridCellValueSnapshot(533.6m.ToString("N2", culture))
+                { CultureName = cultureName };
+            await Assert.That(GridValueReader.ReadCellNumber(page.Orders, row, "Amount")).IsEqualTo(533.6d);
 
-        await Assert.That(value).IsEqualTo("20");
+            cell.SemanticSnapshot = new GridCellValueSnapshot("03/09/2026") { CultureName = cultureName };
+            var expectedDate = cultureName == "ru-RU" ? new DateTime(2026, 9, 3) : new DateTime(2026, 3, 9);
+            await Assert.That(GridValueReader.ReadCellDate(page.Orders, row, "Amount")).IsEqualTo(expectedDate);
+
+            var expectedTime = new TimeSpan(0, 12, 34, 56, 700);
+            cell.SemanticSnapshot = new GridCellValueSnapshot(expectedTime.ToString("g", culture))
+                { CultureName = cultureName };
+            await Assert.That(GridValueReader.ReadCellTime(page.Orders, row, "Amount")).IsEqualTo(expectedTime);
+
+            cell.SemanticSnapshot = new GridCellValueSnapshot(null) { CultureName = cultureName };
+            await Assert.That(GridValueReader.ReadCellDate(page.Orders, row, "Amount")).IsNull();
+            await Assert.That(GridValueReader.ReadCellTime(page.Orders, row, "Amount")).IsNull();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
     }
 
     private static MutableRow Row(string orderId, string status, string amount)
@@ -459,14 +530,20 @@ public sealed class GridRowSelectorTests
 
         public bool IsEnabled => true;
 
-        public Action? BeforeReadRows { get; set; }
+        public Action? OnReadRows { get; set; }
 
         public IReadOnlyList<IGridRowControl> Rows
         {
             get
             {
-                BeforeReadRows?.Invoke();
-                return rows;
+                IGridRowControl[] snapshot;
+                lock (rows)
+                {
+                    snapshot = rows.ToArray();
+                }
+
+                OnReadRows?.Invoke();
+                return snapshot;
             }
         }
 
@@ -697,7 +774,7 @@ public sealed class GridRowSelectorTests
 
     private sealed record NativeStatus(string Name);
 
-    private sealed record NativeProjection(NativeStatus Status, decimal Amount);
+    private sealed record NativeProjection(NativeStatus? Status, decimal Amount);
 
     private sealed record MutableRow : IGridRowControl
     {
@@ -708,13 +785,19 @@ public sealed class GridRowSelectorTests
             .ToArray();
         }
 
-        public IReadOnlyList<IGridCellControl> Cells { get; }
+        public IReadOnlyList<IGridCellControl> Cells { get; init; }
 
         public object? ValueSource { get; init; }
     }
 
-    private sealed class MutableCell(string value) : IGridCellControl
+    private sealed class MutableCell(string value) : IGridCellControl, IGridCellValueControl
     {
         public string Value { get; set; } = value;
+
+        public GridCellValueSnapshot? SemanticSnapshot { get; set; }
+
+        public GridCellValueSnapshot ValueSnapshot => SemanticSnapshot ?? new GridCellValueSnapshot(Value, Value);
     }
+
+    private sealed record DisplayCell(string Value) : IGridCellControl;
 }

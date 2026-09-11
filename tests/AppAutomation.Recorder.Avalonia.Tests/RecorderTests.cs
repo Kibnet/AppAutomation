@@ -3261,6 +3261,76 @@ public sealed class RecorderTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task SaveAsync_RollsBackControls_WhenScenarioCannotBePublished(bool existingControls)
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario);
+        var context = project.CreateSaveContext();
+        var pagePath = Path.Combine(project.RootPath, "MainWindowPage.RecorderControls.g.cs");
+        var scenarioPath = Path.Combine(project.RootPath, "Recorded", "Scenarios.RecorderScenarios.g.cs");
+        string? originalControls = null;
+        if (existingControls)
+        {
+            var first = await project.SaveAsync(context);
+            await Assert.That(first.Success).IsTrue();
+            originalControls = await File.ReadAllTextAsync(pagePath);
+            File.Delete(scenarioPath);
+        }
+
+        // A directory at the second destination allows staging, but rejects publication.
+        Directory.CreateDirectory(scenarioPath);
+        var result = await project.SaveAsync(context, automationId: "CancelButton");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsFalse();
+            await Assert.That(result.Message).Contains("could not be saved");
+            await Assert.That(Directory.Exists(scenarioPath)).IsTrue();
+            await Assert.That(File.Exists(pagePath)).IsEqualTo(existingControls);
+            if (existingControls)
+            {
+                await Assert.That(await File.ReadAllTextAsync(pagePath)).IsEqualTo(originalControls);
+            }
+
+            await Assert.That(Directory.EnumerateFiles(project.RootPath, "*.recorder.*", SearchOption.AllDirectories))
+                .IsEmpty();
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task GeneratedFileTransaction_PreparationFailurePreservesOriginals(bool cancel)
+    {
+        using var directory = new TemporaryDirectory();
+        using var cancellation = new CancellationTokenSource();
+        var existingPath = Path.Combine(directory.Path, "Existing.g.cs");
+        await File.WriteAllTextAsync(existingPath, "original content");
+        if (cancel)
+        {
+            cancellation.Cancel();
+        }
+
+        Task SaveFiles() => RecorderGeneratedFileTransaction.WriteAsync(
+            [(existingPath, "replacement"), (Path.Combine(directory.Path, "missing", "New.g.cs"), "new content")],
+            new List<string>(), cancellation.Token);
+        if (cancel)
+        {
+            await Assert.That(SaveFiles).Throws<OperationCanceledException>();
+        }
+        else
+        {
+            await Assert.That(SaveFiles).Throws<DirectoryNotFoundException>();
+        }
+
+        await Assert.That(await File.ReadAllTextAsync(existingPath)).IsEqualTo("original content");
+        await Assert.That(Directory.EnumerateFiles(directory.Path)).IsEquivalentTo([existingPath]);
+    }
+
+    [Test]
     public async Task AutosaveAsync_ReusesRecoveryFiles_WithinGeneratorSession()
     {
         using var directory = new TemporaryDirectory();

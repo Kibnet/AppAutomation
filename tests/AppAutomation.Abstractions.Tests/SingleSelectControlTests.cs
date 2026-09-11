@@ -181,7 +181,8 @@ public sealed class SingleSelectControlTests
                 "CategorySelector" when typeof(TControl) == typeof(IUiControl) => Root,
                 "CategorySelectorOpen" when typeof(TControl) == typeof(IButtonControl) => OpenButton,
                 "CategorySelectorConfirm" when typeof(TControl) == typeof(IButtonControl) => ConfirmButton,
-                "CategorySelectorValue" when typeof(TControl) == typeof(ITextBoxControl) => CommittedValue,
+                "CategorySelectorValue" when typeof(TControl) == typeof(ITextBoxControl)
+                    || typeof(TControl) == typeof(IUiControl) => CommittedValue,
                 "CategorySelectorResults" when typeof(TControl) == typeof(ISelectableListBoxControl)
                     && Results is FakeListBox listBox => listBox,
                 "CategorySelectorResults" when typeof(TControl) == typeof(IComboBoxControl)

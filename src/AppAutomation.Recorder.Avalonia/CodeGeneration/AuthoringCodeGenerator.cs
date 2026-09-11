@@ -168,6 +168,46 @@ internal sealed class AuthoringCodeGenerator
         RecorderScenarioSaveContext? saveContext,
         CancellationToken cancellationToken)
     {
+        var previousAutosaveKeys = _autosaveTargets.Keys.ToHashSet(StringComparer.Ordinal);
+        var diagnostics = new List<string>();
+        var completed = false;
+        try
+        {
+            var result = await GenerateAndSaveAsync(
+                window, options, steps, outputDirectoryOverride, saveKind, saveContext, diagnostics, cancellationToken);
+            completed = result.Success;
+            return result;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger?.LogWarning(exception, "Recorder could not save the generated files.");
+            return RecorderSaveResult.Failed($"Recorder output could not be saved: {exception.Message}", diagnostics.ToArray());
+        }
+        finally
+        {
+            if (!completed && saveKind == AuthoringSaveKind.Autosave)
+            {
+                foreach (var key in _autosaveTargets.Keys.Except(previousAutosaveKeys).ToArray())
+                {
+                    var reservedTarget = _autosaveTargets[key].Target;
+                    TryDeleteReservedFile(reservedTarget.PageFilePath);
+                    TryDeleteReservedFile(reservedTarget.ScenarioFilePath);
+                    _autosaveTargets.Remove(key);
+                }
+            }
+        }
+    }
+
+    private async Task<RecorderSaveResult> GenerateAndSaveAsync(
+        Window window,
+        AppAutomationRecorderOptions options,
+        IReadOnlyList<RecordedStep> steps,
+        string? outputDirectoryOverride,
+        AuthoringSaveKind saveKind,
+        RecorderScenarioSaveContext? saveContext,
+        List<string> diagnostics,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(steps);
@@ -196,7 +236,6 @@ internal sealed class AuthoringCodeGenerator
             return RecorderSaveResult.Failed(validationError);
         }
 
-        var diagnostics = new List<string>();
         var activeSteps = steps.Where(static step => !step.IsIgnored).ToArray();
         var activeGraphValidation = RecorderScenarioGraphValidator.Validate(activeSteps);
         if (!activeGraphValidation.Success)
@@ -444,12 +483,10 @@ internal sealed class AuthoringCodeGenerator
             scenarioSource = mergedScenarioSource!;
         }
 
-        if (pageFilePath is not null)
-        {
-            await File.WriteAllTextAsync(pageFilePath, pageSource!, cancellationToken);
-        }
-
-        await File.WriteAllTextAsync(scenarioFilePath, scenarioSource, cancellationToken);
+        IReadOnlyList<(string Path, string Source)> sources = pageFilePath is not null
+            ? [(pageFilePath, pageSource!), (scenarioFilePath, scenarioSource)]
+            : [(scenarioFilePath, scenarioSource)];
+        await RecorderGeneratedFileTransaction.WriteAsync(sources, diagnostics, cancellationToken);
 
         if (saveKind == AuthoringSaveKind.Snapshot)
         {
@@ -721,10 +758,18 @@ internal sealed class AuthoringCodeGenerator
                 continue;
             }
 
-            if (reservePageFile && !TryReserveFile(pageFilePath))
+            try
+            {
+                if (reservePageFile && !TryReserveFile(pageFilePath))
+                {
+                    TryDeleteReservedFile(scenarioFilePath);
+                    continue;
+                }
+            }
+            catch
             {
                 TryDeleteReservedFile(scenarioFilePath);
-                continue;
+                throw;
             }
 
             var collisionSafeMethodName = suffix == 1
@@ -826,7 +871,11 @@ internal sealed class AuthoringCodeGenerator
     {
         try
         {
-            File.Delete(filePath);
+            var file = new FileInfo(filePath);
+            if (file.Exists && file.Length == 0)
+            {
+                file.Delete();
+            }
         }
         catch (IOException)
         {

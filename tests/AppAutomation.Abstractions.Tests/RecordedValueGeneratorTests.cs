@@ -5,14 +5,16 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class RecordedValueGeneratorTests
 {
     [Test]
-    public async Task Series_UsesOneTimestampAndOneBasedOrdinals()
+    public async Task Series_UsesOneRandomIdentifierAndOneBasedOrdinals()
     {
         var series = RecordedValueGenerator.Start();
 
         var first = series.Create(1);
         var second = series.Create(2);
 
-        await Assert.That(first).Matches("^Recorded_[0-9]{8}_[0-9]{9}_1$");
+        await Assert.That(first).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
+        await Assert.That(first.Length).IsEqualTo(31);
+        await Assert.That(series.Create(1)).IsEqualTo(first);
         await Assert.That(second).IsEqualTo(first[..^1] + "2");
     }
 

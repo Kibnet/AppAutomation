@@ -6,11 +6,16 @@ namespace AppAutomation.Abstractions;
 public sealed class GridRowSelector
 {
     private readonly IReadOnlyList<GridRowCondition> _conditions;
+    private readonly IReadOnlyDictionary<string, GridColumnDefinition>? _columnDefinitions;
 
-    private GridRowSelector(GridRowCondition[] conditions, bool hasDeclaredUniqueIdentity = false)
+    private GridRowSelector(
+        GridRowCondition[] conditions,
+        bool hasDeclaredUniqueIdentity = false,
+        IReadOnlyDictionary<string, GridColumnDefinition>? columnDefinitions = null)
     {
         _conditions = Array.AsReadOnly(conditions);
         HasDeclaredUniqueIdentity = hasDeclaredUniqueIdentity;
+        _columnDefinitions = columnDefinitions;
     }
 
     /// <summary>
@@ -41,15 +46,29 @@ public sealed class GridRowSelector
                 nameof(columnName));
         }
 
-        return new GridRowSelector([.. _conditions, condition], HasDeclaredUniqueIdentity);
+        return new GridRowSelector([.. _conditions, condition], HasDeclaredUniqueIdentity, _columnDefinitions);
     }
 
     internal GridRowSelector WithDeclaredUniqueIdentity()
     {
         return HasDeclaredUniqueIdentity
             ? this
-            : new GridRowSelector(_conditions.ToArray(), hasDeclaredUniqueIdentity: true);
+            : new GridRowSelector(_conditions.ToArray(), hasDeclaredUniqueIdentity: true, _columnDefinitions);
     }
+
+    internal GridRowSelector WithColumnDefinitions(IReadOnlyDictionary<string, GridColumnDefinition> definitions)
+    {
+        return new GridRowSelector(
+            _conditions.ToArray(),
+            HasDeclaredUniqueIdentity,
+            new System.Collections.ObjectModel.ReadOnlyDictionary<string, GridColumnDefinition>(
+                definitions.ToDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal)));
+    }
+
+    internal GridColumnDefinition? FindColumnDefinition(string columnName) =>
+        _columnDefinitions is not null && _columnDefinitions.TryGetValue(columnName, out var definition)
+            ? definition
+            : null;
 
     private static GridRowCondition CreateCondition(string columnName, string value)
     {

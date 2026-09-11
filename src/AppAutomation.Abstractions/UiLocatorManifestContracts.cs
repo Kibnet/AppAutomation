@@ -30,7 +30,8 @@ public sealed record UiControlScope(
     bool FallbackToName = true)
 {
     /// <summary>
-    /// Optional composite-control anchor used when a detached popup does not expose its logical root to UI Automation.
+    /// Optional composite-control anchor for providers that can prove popup ownership.
+    /// An anchor alone must not authorize an unscoped lookup of another control's popup.
     /// </summary>
     public string? AnchorLocatorValue { get; init; }
 }

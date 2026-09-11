@@ -349,6 +349,7 @@ public sealed class RecorderScenarioDestinationTests
         {
             await Assert.That(errors).IsEmpty();
             await Assert.That(CountRecordedMethods(scenarioSource)).IsEqualTo(2);
+            await Assert.That(scenarioSource).Contains("partial class Scenarios<TSession, TSetup>");
             await Assert.That(Regex.Count(scenarioSource, "\\[Test\\]", RegexOptions.CultureInvariant))
                 .IsEqualTo(2);
         }

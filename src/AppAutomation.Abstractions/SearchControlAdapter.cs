@@ -46,7 +46,7 @@ public sealed record SearchControlParts(
 /// <summary>Specifies how visible search-history items are exposed by the application.</summary>
 public enum SearchHistoryResultsKind
 {
-    /// <summary>History items are repeated buttons sharing the configured locator, as in ARM SearchControl.</summary>
+    /// <summary>History items are repeated buttons sharing the configured locator.</summary>
     Buttons = 0,
 
     /// <summary>History items are exposed by a selectable list box.</summary>
@@ -150,13 +150,9 @@ public sealed class SearchControlAdapter : IUiControlAdapter
                     : throw new NotSupportedException(
                         $"Search history root for '{_propertyName}' must expose {nameof(IUiControlAvailability)}.");
             }
-            catch (NotSupportedException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
-                throw;
-            }
-            catch
-            {
-                return CreateHistoryItems(resolver).IsAvailable;
+                return false;
             }
         };
     }
@@ -284,7 +280,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             }
 
             // Entering the existing value focuses the real editor in desktop providers.
-            // ARM SearchControl opens history from the editor's focus/pointer handlers.
+            // Applications can open history from the editor's focus/pointer handlers.
             _input.Enter(_input.Text);
             _historyOpenRequested = true;
         }
@@ -331,7 +327,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
 
         public string Name => TryResolve()?.Name ?? string.Empty;
 
-        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
 
         public bool IsAvailable => TryResolve()?.IsAvailable ?? false;
 
@@ -345,7 +341,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             {
                 return _resolve();
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -436,7 +432,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
             {
                 return _resolve();
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }

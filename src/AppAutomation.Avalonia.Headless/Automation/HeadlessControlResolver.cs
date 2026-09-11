@@ -79,7 +79,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         };
 
         return resolved as TControl
-            ?? throw new InvalidOperationException(
+            ?? throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
                 $"Resolved control '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
     }
 
@@ -144,7 +144,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         if (definition.Scope is not null)
         {
             return FindScopedElement(definition)
-                ?? throw new InvalidOperationException(
+                ?? throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
                     $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found "
                     + $"inside scope [{definition.Scope.LocatorKind}:{definition.Scope.LocatorValue}].");
         }
@@ -176,7 +176,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             return rootSearch;
         }
 
-        throw new InvalidOperationException(
+        throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
     }
 
@@ -187,14 +187,25 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             var scope = definition.Scope!;
             var roots = ControlTree.EnumerateDescendants(_window.Native)
                 .Where(candidate => MatchesLocator(candidate, scope));
-            var match = roots
+            var matches = roots
                 .SelectMany(ControlTree.EnumerateDescendants)
-                .FirstOrDefault(candidate => MatchesLocator(
+                .Where(candidate => MatchesLocator(
                     candidate,
                     new UiControlScope(
                         definition.LocatorValue,
                         definition.LocatorKind,
-                        definition.FallbackToName)));
+                        definition.FallbackToName)))
+                .Distinct()
+                .ToArray();
+            if (matches.Length > 1)
+            {
+                throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
+                    $"Locator [{definition.LocatorKind}:{definition.LocatorValue}] is ambiguous inside scope "
+                    + $"[{scope.LocatorKind}:{scope.LocatorValue}]: {matches.Length} controls. "
+                    + $"Candidates: {string.Join(", ", matches.Select(candidate => $"{candidate.GetType().Name} '{candidate.Name}'"))}.");
+            }
+
+            var match = matches.SingleOrDefault();
             return match is null ? null : AutomationElement.WrapControl(match);
         });
     }
@@ -2416,23 +2427,18 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             });
         }
 
-        private static GridCellValueSnapshot ReadCellSnapshot(
+        private GridCellValueSnapshot ReadCellSnapshot(
             IndexedHeadlessRow row,
             GridRuntimeColumn column)
         {
             if (row.Item is not null)
             {
                 var rawValue = ReadPropertyPath(row.Item, column.SourceFieldName);
-                var displayedValue = string.IsNullOrWhiteSpace(column.DisplayValuePath)
-                    ? rawValue
-                    : ReadPropertyPath(row.Item, column.DisplayValuePath);
-                return new GridCellValueSnapshot(
-                    FormatRuntimeValue(displayedValue, column),
-                    rawValue,
-                    column.ValueKind)
+                return GridCellValueNormalizer.Normalize(AutomationId, new GridCellValueSnapshot(
+                    rawValue?.ToString(), rawValue, column.ValueKind)
                 {
                     ValueSource = row.Item
-                };
+                }, column);
             }
 
             if (row.VisualRow is null)
@@ -2444,10 +2450,9 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             var displayText = column.ColumnIndex < cells.Count
                 ? cells[column.ColumnIndex].Value
                 : null;
-            return new GridCellValueSnapshot(
-                displayText,
-                ParseRuntimeValue(displayText, column),
-                column.ValueKind);
+            return GridCellValueNormalizer.Normalize(AutomationId,
+                new GridCellValueSnapshot(displayText, displayText, column.ValueKind) { IsDisplayOnly = true },
+                column);
         }
 
         private void EnsureVisualRow(IndexedHeadlessRow row)
@@ -2503,40 +2508,6 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
                 : null;
         }
 
-        private static string? FormatRuntimeValue(object? value, GridRuntimeColumn column)
-        {
-            if (value is null)
-            {
-                return null;
-            }
-
-            var culture = string.IsNullOrWhiteSpace(column.CultureName)
-                ? System.Globalization.CultureInfo.InvariantCulture
-                : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
-            return !string.IsNullOrWhiteSpace(column.FormatString) && value is IFormattable formattable
-                ? formattable.ToString(column.FormatString, culture)
-                : Convert.ToString(value, culture);
-        }
-
-        private static object? ParseRuntimeValue(string? value, GridRuntimeColumn column)
-        {
-            if (value is null)
-            {
-                return null;
-            }
-
-            var culture = string.IsNullOrWhiteSpace(column.CultureName)
-                ? System.Globalization.CultureInfo.InvariantCulture
-                : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
-            return column.ValueKind switch
-            {
-                GridCellValueKind.Number when decimal.TryParse(value, System.Globalization.NumberStyles.Number, culture, out var number) => number,
-                GridCellValueKind.Date when DateTime.TryParse(value, culture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var date) => date,
-                GridCellValueKind.Time when TimeSpan.TryParse(value, culture, out var time) => time,
-                GridCellValueKind.Boolean when bool.TryParse(value, out var boolean) => boolean,
-                _ => value
-            };
-        }
 
         private sealed record IndexedHeadlessRow(int RowIndex, object? Item, AutomationElement? VisualRow);
 
@@ -2636,7 +2607,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
             _inner.Cells.Select(cell => (IGridCellControl)new HeadlessGridCellControl(cell)).ToArray();
     }
 
-    private sealed class HeadlessGridCellControl : IGridCellControl
+    private sealed class HeadlessGridCellControl : IGridCellValueControl
     {
         private readonly GridCell _inner;
 
@@ -2646,5 +2617,7 @@ public sealed class HeadlessControlResolver : IUiControlResolver, IUiArtifactCol
         }
 
         public string Value => _inner.Value ?? string.Empty;
+
+        public GridCellValueSnapshot ValueSnapshot => _inner.ValueSnapshot;
     }
 }

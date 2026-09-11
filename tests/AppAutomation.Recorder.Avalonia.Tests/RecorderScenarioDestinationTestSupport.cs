@@ -127,7 +127,9 @@ internal static class RecorderScenarioDestinationSources
 
         namespace Sample.Authoring.Tests;
 
-        public partial class Scenarios
+        public partial class Scenarios<TSession, TSetup>
+            where TSession : class, global::System.IDisposable
+            where TSetup : new()
         {
             private const string DesktopUiConstraint = "DesktopUi";
             private MainWindowPage Page => null!;

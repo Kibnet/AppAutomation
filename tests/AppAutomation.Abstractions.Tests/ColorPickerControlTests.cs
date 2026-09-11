@@ -106,7 +106,8 @@ public sealed class ColorPickerControlTests
             object control = definition.LocatorValue switch
             {
                 "AccentColor" when typeof(TControl) == typeof(IUiControl) => ResolveRoot(),
-                "AccentColorValue" when typeof(TControl) == typeof(ITextBoxControl) => Current,
+                "AccentColorValue" when typeof(TControl) == typeof(ITextBoxControl)
+                    || typeof(TControl) == typeof(IUiControl) => Current,
                 "AccentColorCustom" when typeof(TControl) == typeof(ITextBoxControl) => Custom,
                 "AccentColorOpen" when typeof(TControl) == typeof(IButtonControl) => Open,
                 "AccentColorConfirm" when typeof(TControl) == typeof(IButtonControl) => Confirm,

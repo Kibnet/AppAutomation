@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 
 namespace AppAutomation.Abstractions;
 
@@ -7,23 +8,23 @@ namespace AppAutomation.Abstractions;
 /// </summary>
 public static class RecordedValueGenerator
 {
-    private static readonly object Sync = new();
-    private static long _lastTimestampMilliseconds;
+    private const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     /// <summary>
-    /// Starts a value series with a process-local monotonic UTC timestamp.
+    /// Starts a value series with a UTC date and cryptographically random identifier.
+    /// Random identifiers protect independent processes from collisions without coordinating them;
+    /// they do not replace a data store's uniqueness constraint.
     /// </summary>
     public static RecordedValueSeries Start()
     {
-        long timestampMilliseconds;
-        lock (Sync)
+        var identifier = new char[10];
+        for (var index = 0; index < identifier.Length; index++)
         {
-            var currentMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            timestampMilliseconds = Math.Max(currentMilliseconds, _lastTimestampMilliseconds + 1);
-            _lastTimestampMilliseconds = timestampMilliseconds;
+            identifier[index] = Alphabet[RandomNumberGenerator.GetInt32(Alphabet.Length)];
         }
 
-        return new RecordedValueSeries(DateTimeOffset.FromUnixTimeMilliseconds(timestampMilliseconds));
+        var date = DateTimeOffset.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return new RecordedValueSeries($"{date}_{new string(identifier, 0, 4)}_{new string(identifier, 4, 6)}");
     }
 }
 
@@ -32,11 +33,11 @@ public static class RecordedValueGenerator
 /// </summary>
 public sealed class RecordedValueSeries
 {
-    private readonly string _timestamp;
+    private readonly string _identifier;
 
-    internal RecordedValueSeries(DateTimeOffset timestamp)
+    internal RecordedValueSeries(string identifier)
     {
-        _timestamp = timestamp.ToString("yyyyMMdd_HHmmssfff", CultureInfo.InvariantCulture);
+        _identifier = identifier;
     }
 
     /// <summary>
@@ -45,6 +46,6 @@ public sealed class RecordedValueSeries
     public string Create(int ordinal)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(ordinal, 1);
-        return $"Recorded_{_timestamp}_{ordinal.ToString(CultureInfo.InvariantCulture)}";
+        return $"Recorded_{_identifier}_{ordinal.ToString(CultureInfo.InvariantCulture)}";
     }
 }

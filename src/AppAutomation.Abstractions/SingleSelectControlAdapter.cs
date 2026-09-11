@@ -263,7 +263,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             {
                 return _resolver.Resolve<IUiControl>(Definition("Root", UiControlType.AutomationElement, _parts.RootLocator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -282,7 +282,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                     _ => throw new NotSupportedException($"Unsupported single-selection results kind '{_parts.ResultsKind}'.")
                 };
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -312,24 +312,13 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         private string? TryReadRootSelection()
         {
-            var definition = Definition("CommittedRoot", UiControlType.ComboBox, _parts.RootLocator);
-            try
+            return TryResolveRoot() switch
             {
-                var comboBox = _resolver.Resolve<IComboBoxControl>(definition);
-                return comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name;
-            }
-            catch (InvalidOperationException)
-            {
-                try
-                {
-                    return _resolver.Resolve<IReadableTextControl>(
-                        Definition("CommittedRootText", UiControlType.Label, _parts.RootLocator)).Text;
-                }
-                catch (InvalidOperationException)
-                {
-                    return null;
-                }
-            }
+                IComboBoxControl comboBox => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name,
+                ITextBoxControl textBox => textBox.Text,
+                IReadableTextControl readable => readable.Text,
+                _ => null
+            };
         }
 
         private void WaitForCommittedSelection(string expected, TimeSpan timeout)
@@ -350,18 +339,21 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
             try
             {
-                return _resolver.Resolve<ITextBoxControl>(Definition("ValueText", UiControlType.TextBox, locator)).Text;
-            }
-            catch (InvalidOperationException)
-            {
                 try
                 {
-                    return _resolver.Resolve<IReadableTextControl>(Definition("ValueLabel", UiControlType.Label, locator)).Text;
+                    return _resolver.Resolve<ITextBoxControl>(Definition("ValueText", UiControlType.TextBox, locator)).Text;
                 }
-                catch (InvalidOperationException)
+                catch (UiControlResolutionException exception) when (exception.Failure == UiControlResolutionFailure.TypeMismatch)
                 {
-                    return null;
+                    var control = _resolver.Resolve<IUiControl>(Definition("ValueText", UiControlType.AutomationElement, locator));
+                    return control is IReadableTextControl readable
+                        ? readable.Text
+                        : throw new NotSupportedException($"Single-selection value part '{locator}' must expose readable text.");
                 }
+            }
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
+            {
+                return null;
             }
         }
 
@@ -387,7 +379,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             {
                 return _resolver.Resolve<IButtonControl>(Definition(suffix, UiControlType.Button, locator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -445,7 +437,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                     UiControlType.AutomationElement,
                     _parts.PopupRootLocator!));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return false;
             }

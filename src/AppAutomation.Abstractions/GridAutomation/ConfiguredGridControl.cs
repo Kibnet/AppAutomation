@@ -134,13 +134,7 @@ internal class ConfiguredGridControl :
                 + $"but row {rowIndex} exposes only {row.Cells.Count} cells.");
         }
 
-        var cell = row.Cells[columnIndex];
-        if (cell is IGridCellValueControl semanticCell)
-        {
-            return semanticCell.ValueSnapshot;
-        }
-
-        return GridCellValueNormalizer.Create(cell.Value, _columns[columnIndex]);
+        return GridRuntimeResolver.ReadCellSnapshot(this, row.Cells[columnIndex], columnIndex);
     }
 
     public string CopyCell(GridCellAddress address, int timeoutMs)
@@ -313,6 +307,11 @@ internal class ConfiguredGridControl :
                 condition.Value);
         }
 
+        mapped = mapped.WithColumnDefinitions(row.Conditions.ToDictionary(
+            condition => _runtimeColumnNames[ResolveColumnIndex(condition.ColumnName)],
+            condition => _columns[ResolveColumnIndex(condition.ColumnName)],
+            StringComparer.Ordinal));
+
         return IsDeclaredIdentitySelector(row)
             ? mapped.WithDeclaredUniqueIdentity()
             : mapped;
@@ -362,4 +361,7 @@ internal class ConfiguredGridControl :
             snapshot,
             column);
     }
+
+    internal GridCellValueSnapshot NormalizeValueSnapshot(GridCellValueSnapshot snapshot, int columnIndex) =>
+        NormalizeValueSnapshot(snapshot, _columns[columnIndex]);
 }

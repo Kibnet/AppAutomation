@@ -17,6 +17,13 @@ public sealed class TimePickerControlTests
             .WaitUntilTimeEquals(static candidate => candidate.StartTimePicker, expected);
 
         await Assert.That(timePicker.SelectedTime).IsEqualTo(expected);
+
+        var composite = new FakeResolver(("StartTimePicker", timePicker))
+            .WithTimePicker("StartTimePicker", TimePickerParts.ByAutomationIds("StartTimePicker", "StartTimePicker"))
+            .Resolve<ITimePickerControl>(new UiControlDefinition("StartTimePicker", UiControlType.TimePicker, "StartTimePicker"));
+        await Assert.That(composite.SelectedTime).IsEqualTo(expected);
+        timePicker.SelectedTime = null;
+        await Assert.That(composite.SelectedTime).IsNull();
     }
 
     [Test]
@@ -174,13 +181,15 @@ public sealed class TimePickerControlTests
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
-            if (_controls.TryGetValue(definition.LocatorValue, out var control)
-                && control is TControl typed)
+            if (_controls.TryGetValue(definition.LocatorValue, out var control))
             {
-                return typed;
+                return control as TControl
+                    ?? throw new UiControlResolutionException(
+                        UiControlResolutionFailure.TypeMismatch, $"Control '{definition.LocatorValue}' does not expose '{typeof(TControl).Name}'.");
             }
 
-            throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+            throw new UiControlResolutionException(
+                UiControlResolutionFailure.NotFound, $"Unknown control '{definition.LocatorValue}'.");
         }
     }
 

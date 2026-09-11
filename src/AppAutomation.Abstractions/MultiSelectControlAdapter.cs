@@ -338,7 +338,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 items = ResolveItems();
                 return true;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 items = null!;
                 return false;

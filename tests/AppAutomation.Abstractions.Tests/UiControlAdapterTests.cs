@@ -8,6 +8,79 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    public async Task DeferredAdapters_OnlySuppressTransientResolutionFailures()
+    {
+        var inner = new FakeResolver(("Input", new FakeTextBoxControl("Input")))
+        {
+            FailureLocator = "Results"
+        };
+        var multiSelect = inner.WithMultiSelect("Picker", new MultiSelectParts("Input", "Open", "Results", "Apply"))
+            .Resolve<IMultiSelectControl>(new UiControlDefinition("Picker", UiControlType.MultiSelect, "Input"));
+        var searchPicker = inner.WithSearchPicker("Picker", SearchPickerParts.ByAutomationIds("Input", "Results", applyButtonAutomationId: "Results"))
+            .Resolve<ISearchPickerControl>(new UiControlDefinition("Picker", UiControlType.SearchPicker, "Input"));
+        var search = inner.WithSearchControl("Search", SearchControlParts.ByAutomationIds("Input", "Results"))
+            .Resolve<ISearchControl>(new UiControlDefinition("Search", UiControlType.Search, "Input"));
+        var singleSelect = inner.WithSingleSelect("Picker", SingleSelectParts.ByAutomationIds("Input", "Results"))
+            .Resolve<IComboBoxControl>(new UiControlDefinition("Picker", UiControlType.ComboBox, "Input"));
+        var date = inner.WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("Input", "Results"))
+            .Resolve<IDateTimePickerControl>(new UiControlDefinition("Date", UiControlType.DateTimePicker, "Input"));
+        var time = inner.WithTimePicker("Time", TimePickerParts.ByAutomationIds("Input", "Results"))
+            .Resolve<ITimePickerControl>(new UiControlDefinition("Time", UiControlType.TimePicker, "Input"));
+        var color = inner.WithColorPicker("Color", ColorPickerParts.ByAutomationIds("Input", "Results", customValueAutomationId: "Results"))
+            .Resolve<IColorPickerControl>(new UiControlDefinition("Color", UiControlType.ColorPicker, "Input"));
+
+        await Assert.That(multiSelect.IsOpen).IsFalse();
+        await Assert.That(searchPicker.Items).IsEmpty();
+        await Assert.That(searchPicker.IsEnabled).IsFalse();
+        await Assert.That(search.HistoryItems).IsEmpty();
+        await Assert.That(singleSelect.Items).IsEmpty();
+        await Assert.That(date.SelectedDate).IsNull();
+        await Assert.That(time.SelectedTime).IsNull();
+        await Assert.That(color.IsEnabled).IsTrue();
+
+        Action[] reads =
+        [
+            () => _ = multiSelect.IsOpen,
+            () => _ = searchPicker.Items,
+            () => _ = searchPicker.IsEnabled,
+            () => _ = search.HistoryItems,
+            () => _ = singleSelect.Items,
+            () => _ = date.SelectedDate,
+            () => _ = time.SelectedTime,
+            () => _ = color.Color
+        ];
+        Exception[] failures =
+        [
+            new UiControlResolutionException(UiControlResolutionFailure.Ambiguous, "Two results containers matched."),
+            new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch, "Control does not expose the required capability."),
+            new InvalidOperationException("Provider configuration is invalid."),
+            new NotSupportedException("Provider does not support the configured surface.")
+        ];
+        foreach (var failure in failures)
+        {
+            inner.ResolutionFailure = failure;
+            foreach (var read in reads)
+            {
+                Exception actual = failure switch
+                {
+                    UiControlResolutionException => Assert.Throws<UiControlResolutionException>(read),
+                    NotSupportedException => Assert.Throws<NotSupportedException>(read),
+                    _ => Assert.Throws<InvalidOperationException>(read)
+                };
+                await Assert.That(actual).IsEqualTo(failure);
+            }
+        }
+
+        var nativeDate = new FakeDateTimePickerControl("DateValue") { SelectedDate = new DateTime(2026, 9, 11) };
+        var nativeDateProxy = new FakeResolver(("DateValue", nativeDate))
+            .WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("DateValue", "DateValue"))
+            .Resolve<IDateTimePickerControl>(new UiControlDefinition("Date", UiControlType.DateTimePicker, "DateValue"));
+        await Assert.That(nativeDateProxy.SelectedDate).IsEqualTo(nativeDate.SelectedDate);
+        nativeDate.SelectedDate = null;
+        await Assert.That(nativeDateProxy.SelectedDate).IsNull();
+    }
+
+    [Test]
     public async Task ComboBoxFilterAdapter_AppliesOneOrManyValuesAndReplaysCancel()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
@@ -1469,13 +1542,24 @@ public sealed class UiControlAdapterTests
 
         public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
 
+        public string? FailureLocator { get; init; }
+
+        public Exception? ResolutionFailure { get; set; }
+
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
+            if (definition.LocatorValue == FailureLocator && ResolutionFailure is { } failure)
+            {
+                throw failure;
+            }
+
             return _controls.TryGetValue(definition.LocatorValue, out var control)
                 ? (control as TControl
-                    ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
-                : throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+                    ?? throw new UiControlResolutionException(
+                        UiControlResolutionFailure.TypeMismatch, $"Control '{definition.LocatorValue}' is not of expected type."))
+                : throw new UiControlResolutionException(
+                    UiControlResolutionFailure.NotFound, $"Unknown control '{definition.LocatorValue}'.");
         }
     }
 
@@ -1503,13 +1587,15 @@ public sealed class UiControlAdapterTests
                 && (_expandButton.InvokeCount == 0 || !ResultsAvailable))
             {
                 ResultsResolveAttemptsBeforeExpand++;
-                throw new InvalidOperationException("Popup results are not attached before expand.");
+                throw new UiControlResolutionException(
+                    UiControlResolutionFailure.Detached, "Popup results are not attached before expand.");
             }
 
             return _controls.TryGetValue(definition.LocatorValue, out var control)
                 ? (control as TControl
                     ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
-                : throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+                : throw new UiControlResolutionException(
+                    UiControlResolutionFailure.NotFound, $"Unknown control '{definition.LocatorValue}'.");
         }
     }
 

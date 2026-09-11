@@ -10,5 +10,12 @@ public sealed record GridCellValueSnapshot(
 
     public string? CultureName { get; init; }
 
+    /// <summary>
+    /// Indicates that the provider already read the displayed UI value and has no model source.
+    /// Declarative display projection and formatting must not be applied again; typed conversion
+    /// still uses the configured value kind and culture.
+    /// </summary>
+    public bool IsDisplayOnly { get; init; }
+
     public bool IsNull => RawValue is null && DisplayText is null;
 }

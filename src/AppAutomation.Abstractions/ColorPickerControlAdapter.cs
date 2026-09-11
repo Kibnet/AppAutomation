@@ -308,7 +308,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
                     UiControlType.AutomationElement,
                     _parts.PopupRootLocator!));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return false;
             }
@@ -325,7 +325,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
             {
                 return _resolver.Resolve<IUiControl>(Definition("Root", UiControlType.AutomationElement, _parts.RootLocator));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -333,7 +333,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
 
         private IUiControl? TryResolveAvailabilityAnchor()
         {
-            var currentValue = TryResolveTextBox(_parts.CurrentValueLocator, "CurrentValue");
+            var currentValue = TryResolveCurrentValue();
             if (currentValue is not null)
             {
                 return currentValue;
@@ -354,7 +354,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
             {
                 return _resolver.Resolve<ITextBoxControl>(Definition(purpose, UiControlType.TextBox, locator));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -364,18 +364,29 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
         {
             try
             {
-                return _resolver.Resolve<ITextBoxControl>(Definition("CurrentValue", UiControlType.TextBox, locator)).Text;
+                return TryResolveTextBox(locator, "CurrentValue")?.Text;
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.Failure == UiControlResolutionFailure.TypeMismatch)
             {
-                try
+                return TryResolveCurrentValue() switch
                 {
-                    return _resolver.Resolve<IReadableTextControl>(Definition("CurrentValue", UiControlType.Label, locator)).Text;
-                }
-                catch (Exception fallbackException) when (IsResolutionFailure(fallbackException))
-                {
-                    return null;
-                }
+                    null => null,
+                    IReadableTextControl readable => readable.Text,
+                    _ => throw new NotSupportedException($"Color-picker value part '{locator}' must expose readable text.")
+                };
+            }
+        }
+
+        private IUiControl? TryResolveCurrentValue()
+        {
+            try
+            {
+                return _resolver.Resolve<IUiControl>(Definition(
+                    "CurrentValue", UiControlType.AutomationElement, _parts.CurrentValueLocator));
+            }
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
+            {
+                return null;
             }
         }
 
@@ -385,7 +396,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
             {
                 return _resolver.Resolve<IButtonControl>(Definition(purpose, UiControlType.Button, locator));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -400,7 +411,7 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
                     UiControlType.ListBox,
                     _parts.PaletteLocator!));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -415,16 +426,10 @@ public sealed class ColorPickerControlAdapter : IUiControlAdapter
                     UiControlType.ComboBox,
                     _parts.PaletteLocator!));
             }
-            catch (Exception exception) when (IsResolutionFailure(exception))
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
-        }
-
-        private static bool IsResolutionFailure(Exception exception)
-        {
-            return exception is InvalidOperationException
-                || string.Equals(exception.GetType().Name, "ElementNotAvailableException", StringComparison.Ordinal);
         }
 
         private UiControlDefinition Definition(string suffix, UiControlType type, string locator)

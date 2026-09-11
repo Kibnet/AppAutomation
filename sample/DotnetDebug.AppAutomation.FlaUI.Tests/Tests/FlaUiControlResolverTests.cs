@@ -163,6 +163,32 @@ public sealed class FlaUiControlResolverTests
 
         await Assert.That(historyItems)
             .IsEquivalentTo(["orders", "customers", "reports"]);
+
+        var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory);
+        var repeatedButton = new UiControlDefinition("HistoryItem", UiControlType.Button,
+            "ArmTableSearchHistoryItemButton")
+        {
+            Scope = new UiControlScope("ArmTableSearchHistoryRoot") { AnchorLocatorValue = "ArmTableSearchInput" }
+        };
+        UiControlResolutionException? ambiguity = null;
+        try
+        {
+            resolver.Resolve<IButtonControl>(repeatedButton);
+        }
+        catch (UiControlResolutionException exception)
+        {
+            ambiguity = exception;
+        }
+
+        await Assert.That(ambiguity?.Failure).IsEqualTo(UiControlResolutionFailure.Ambiguous);
+        await Assert.That(() => resolver.Resolve<IButtonControl>(repeatedButton with
+            { LocatorValue = "MissingHistoryButton" }))
+            .Throws<UiControlResolutionException>();
+        var otherHistory = resolver.Resolve<ISearchHistoryItemsControl>(repeatedButton with
+        {
+            Scope = new UiControlScope("AnotherHistoryRoot") { AnchorLocatorValue = "ArmTableSearchInput" }
+        });
+        await Assert.That(otherHistory.Items).IsEmpty();
     }
 
     [Test]

@@ -166,23 +166,40 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
 
         private DateTime? TryReadCommittedDate()
         {
-            if (TryResolveNativeValue()?.SelectedDate is { } selectedDate)
+            if (TryResolveNativeValue() is { } nativeValue)
             {
-                return selectedDate.Date;
+                return nativeValue.SelectedDate?.Date;
             }
 
-            var text = TryResolveTextValue()?.Text;
+            string? text;
+            try
+            {
+                text = TryResolveTextValue()?.Text;
+            }
+            catch (UiControlResolutionException exception) when (exception.Failure == UiControlResolutionFailure.TypeMismatch)
+            {
+                text = TryResolveValueControl() switch
+                {
+                    null => null,
+                    IReadableTextControl readable => readable.Text,
+                    _ => throw new NotSupportedException($"Date-picker value part '{_parts.ValueLocator}' must expose a date or readable text.")
+                };
+            }
+
             return TryParseDate(text, out var parsed) ? parsed.Date : null;
         }
 
         private IUiControl? TryResolveValueControl()
         {
-            if (TryResolveNativeValue() is { } nativeValue)
+            try
             {
-                return nativeValue;
+                return _resolver.Resolve<IUiControl>(CreateDefinition(
+                    "Value", UiControlType.AutomationElement, _parts.ValueLocator));
             }
-
-            return TryResolveTextValue();
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
+            {
+                return null;
+            }
         }
 
         private IDateTimePickerControl? TryResolveNativeValue()
@@ -194,7 +211,8 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                     UiControlType.DateTimePicker,
                     _parts.ValueLocator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (
+                exception.IsTransient || exception.Failure == UiControlResolutionFailure.TypeMismatch)
             {
                 return null;
             }
@@ -209,7 +227,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                     UiControlType.TextBox,
                     _parts.ValueLocator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -224,7 +242,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                     UiControlType.AutomationElement,
                     _parts.RootLocator));
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -259,7 +277,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                             _parts.OpenButtonLocator));
                         return button.IsEnabled;
                     }
-                    catch (InvalidOperationException)
+                    catch (UiControlResolutionException exception) when (exception.IsTransient)
                     {
                         return false;
                     }
@@ -285,7 +303,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                         return calendar.IsEnabled
                             && (calendar as IUiControlAvailability)?.IsAvailable != false;
                     }
-                    catch (InvalidOperationException)
+                    catch (UiControlResolutionException exception) when (exception.IsTransient)
                     {
                         return false;
                     }
@@ -317,7 +335,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                     ? availability.IsAvailable
                     : true;
             }
-            catch (InvalidOperationException)
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return false;
             }

@@ -32,7 +32,7 @@ public sealed class RecorderGeneratedValueTests
         {
             await Assert.That(generatedSelection).IsNotNull();
             await Assert.That(generatedSelection!.DefinesGeneratedValue).IsTrue();
-            await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[0-9]{9}_1$");
+            await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
             await Assert.That(session.StepCount).IsEqualTo(1);
             await Assert.That(session.PersistableStepCount).IsEqualTo(1);
         }

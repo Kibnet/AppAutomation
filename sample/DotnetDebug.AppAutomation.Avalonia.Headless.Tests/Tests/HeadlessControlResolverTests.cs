@@ -11,6 +11,59 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 public sealed class HeadlessControlResolverTests
 {
     [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    [NotInParallel("DesktopUi")]
+    public async Task ScopedLookup_RequiresOneMatchInsideScope(int matchCount)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var scope = new global::Avalonia.Controls.StackPanel { Name = "SelectedScope" };
+            global::Avalonia.Automation.AutomationProperties.SetName(scope, "SelectedScope");
+            for (var index = 0; index < matchCount; index++)
+            {
+                var button = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
+                global::Avalonia.Automation.AutomationProperties.SetName(button, "RepeatedItem");
+                scope.Children.Add(button);
+            }
+
+            var outside = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
+            global::Avalonia.Automation.AutomationProperties.SetName(outside, "RepeatedItem");
+            session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
+            {
+                Children = { scope, outside }
+            };
+            return true;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var definition = new UiControlDefinition("SelectedButton", UiControlType.Button,
+            "RepeatedItem", UiLocatorKind.Name)
+        {
+            Scope = new UiControlScope("SelectedScope", UiLocatorKind.Name)
+        };
+
+        if (matchCount == 1)
+        {
+            await Assert.That(resolver.Resolve<IButtonControl>(definition)).IsNotNull();
+            return;
+        }
+
+        UiControlResolutionException? failure = null;
+        try
+        {
+            resolver.Resolve<IButtonControl>(definition);
+        }
+        catch (UiControlResolutionException exception)
+        {
+            failure = exception;
+        }
+        await Assert.That(failure?.Failure).IsEqualTo(matchCount == 0
+            ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous);
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task Resolve_DoesNotFallbackToName_ForAutomationIdLocator_WhenDisabled()
     {
