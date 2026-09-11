@@ -1,6 +1,6 @@
+using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
-using AppAutomation.Abstractions;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
 using TUnit.Assertions;
@@ -10,6 +10,59 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    [NotInParallel("DesktopUi")]
+    public async Task ScopedLookup_RequiresOneMatchInsideScope(int matchCount)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var scope = new global::Avalonia.Controls.StackPanel { Name = "SelectedScope" };
+            global::Avalonia.Automation.AutomationProperties.SetName(scope, "SelectedScope");
+            for (var index = 0; index < matchCount; index++)
+            {
+                var button = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
+                global::Avalonia.Automation.AutomationProperties.SetName(button, "RepeatedItem");
+                scope.Children.Add(button);
+            }
+
+            var outside = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
+            global::Avalonia.Automation.AutomationProperties.SetName(outside, "RepeatedItem");
+            session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
+            {
+                Children = { scope, outside }
+            };
+            return true;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var definition = new UiControlDefinition("SelectedButton", UiControlType.Button,
+            "RepeatedItem", UiLocatorKind.Name)
+        {
+            Scope = new UiControlScope("SelectedScope", UiLocatorKind.Name)
+        };
+
+        if (matchCount == 1)
+        {
+            await Assert.That(resolver.Resolve<IButtonControl>(definition)).IsNotNull();
+            return;
+        }
+
+        UiControlResolutionException? failure = null;
+        try
+        {
+            resolver.Resolve<IButtonControl>(definition);
+        }
+        catch (UiControlResolutionException exception)
+        {
+            failure = exception;
+        }
+        await Assert.That(failure?.Failure).IsEqualTo(matchCount == 0
+            ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous);
+    }
+
     [Test]
     [NotInParallel("DesktopUi")]
     public async Task Resolve_DoesNotFallbackToName_ForAutomationIdLocator_WhenDisabled()
@@ -74,6 +127,28 @@ public sealed class HeadlessControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task MultiSelectItemsSurface_UsesComboBoxAsZeroOrOneValueSet()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var items = resolver.Resolve<IMultiSelectItemsControl>(new UiControlDefinition(
+            "OperationFilterItems",
+            UiControlType.ComboBox,
+            "OperationCombo"));
+
+        items.SetSelectedItems(["LCM"]);
+        var selected = items.SelectedItems;
+        items.SetSelectedItems([]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected).IsEquivalentTo(["LCM"]);
+            await Assert.That(items.SelectedItems).IsEmpty();
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task ResolveEremexDataGridBridge_ByAutomationId_ReadsRowsAndCells()
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
@@ -112,12 +187,21 @@ public sealed class HeadlessControlResolverTests
             .ClickButton(static candidate => candidate.BuildGridButton)
             .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
             .WaitUntilGridRowsAtLeast(static candidate => candidate.DemoDataGrid, 5)
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 0, "R3")
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 1, "13")
-            .WaitUntilGridCellEquals(static candidate => candidate.DemoDataGrid, 2, 2, "Odd");
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R3"),
+                "Value",
+                "13")
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R3"),
+                "Parity",
+                "Odd");
 
         using (Assert.Multiple())
         {
+            await Assert.That(page.DemoDataGrid is IAddressableGridControl).IsTrue();
+            await Assert.That(page.DemoDataGrid is IGridColumnMetadataControl).IsTrue();
             await Assert.That(page.DemoDataGrid.Rows.Count).IsGreaterThanOrEqualTo(5);
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("R3");
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("13");

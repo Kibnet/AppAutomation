@@ -275,7 +275,7 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessVisualGrid_EditGridCellDateAndCombo_CommitsTypedValues()
+    public async Task HeadlessVisualGrid_EditGridCellTypedValues_Commits()
     {
         using var headless = StartHeadlessRuntime();
         var window = HeadlessRuntime.Dispatch(CreateVisualGridWindowWithEditors);
@@ -283,21 +283,33 @@ public sealed class LaunchContractTests
 
         page
             .EditGridCellDate(
-                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                static candidate => candidate.TypedEditorsGrid,
                 0,
                 1,
                 new DateTime(2026, 4, 22))
             .SelectGridCellComboItem(
-                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                static candidate => candidate.TypedEditorsGrid,
                 0,
                 2,
-                "Ready");
+                "Ready")
+            .EditGridCellTime(
+                static candidate => candidate.TypedEditorsGrid,
+                0,
+                3,
+                new TimeSpan(13, 45, 30))
+            .EditGridCellColor(
+                static candidate => candidate.TypedEditorsGrid,
+                0,
+                4,
+                "#336699");
 
-        var cells = page.EremexDemoDataGridAutomationBridge.GetRowByIndex(0)!.Cells;
+        var cells = page.TypedEditorsGrid.GetRowByIndex(0)!.Cells;
         using (Assert.Multiple())
         {
             await Assert.That(cells[1].Value).IsEqualTo("2026-04-22");
             await Assert.That(cells[2].Value).IsEqualTo("Ready");
+            await Assert.That(cells[3].Value).IsEqualTo("13:45:30");
+            await Assert.That(cells[4].Value).IsEqualTo("#FF336699");
         }
     }
 
@@ -362,6 +374,31 @@ public sealed class LaunchContractTests
             "АЭРОСКАН ООО");
 
         await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessSearchHistory_IsExactAndScopedToItsSearchControl()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(CreateSearchHistoryWindow);
+        var page = new SearchControlPage(
+            new HeadlessControlResolver(context.Window)
+                .WithSearchControl(
+                    "TableSearch",
+                    SearchControlParts.ByAutomationIds(
+                        "TableSearchInput",
+                        "SearchHistoryItemButton",
+                        historyRootAutomationId: "TableSearchHistoryRoot")));
+
+        var historyItems = page.TableSearch.HistoryItems;
+        page.TableSearch.ApplySearchFromHistory("orders");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(historyItems).IsEquivalentTo(["Orders", "orders"]);
+            await Assert.That(context.ClickCounts).IsEquivalentTo([0, 1, 0]);
+        }
     }
 
     [Test]
@@ -694,16 +731,22 @@ Console.WriteLine("Fake desktop");
             ItemsSource = new[] { "Draft", "Ready" },
             SelectedIndex = 0
         };
-        AutomationProperties.SetAutomationId(row, "EremexDemoDataGridAutomationBridge_Row0");
-        AutomationProperties.SetAutomationId(firstCell, "EremexDemoDataGridAutomationBridge_Row0_Cell0");
-        AutomationProperties.SetAutomationId(dateCell, "EremexDemoDataGridAutomationBridge_Row0_Cell1");
-        AutomationProperties.SetAutomationId(comboCell, "EremexDemoDataGridAutomationBridge_Row0_Cell2");
+        var timeCell = new TimePicker { SelectedTime = new TimeSpan(8, 0, 0) };
+        var colorCell = new TextBox { Text = "#FF000000" };
+        AutomationProperties.SetAutomationId(row, "TypedEditorsGrid_Row0");
+        AutomationProperties.SetAutomationId(firstCell, "TypedEditorsGrid_Row0_Cell0");
+        AutomationProperties.SetAutomationId(dateCell, "TypedEditorsGrid_Row0_Cell1");
+        AutomationProperties.SetAutomationId(comboCell, "TypedEditorsGrid_Row0_Cell2");
+        AutomationProperties.SetAutomationId(timeCell, "TypedEditorsGrid_Row0_Cell3");
+        AutomationProperties.SetAutomationId(colorCell, "TypedEditorsGrid_Row0_Cell4");
         row.Children.Add(firstCell);
         row.Children.Add(dateCell);
         row.Children.Add(comboCell);
+        row.Children.Add(timeCell);
+        row.Children.Add(colorCell);
 
         var bridge = new StackPanel();
-        AutomationProperties.SetAutomationId(bridge, "EremexDemoDataGridAutomationBridge");
+        AutomationProperties.SetAutomationId(bridge, "TypedEditorsGrid");
         bridge.Children.Add(row);
 
         return new Window { Content = bridge };
@@ -756,6 +799,36 @@ Console.WriteLine("Fake desktop");
         return new Window { Content = root };
     }
 
+    private static SearchHistoryWindowContext CreateSearchHistoryWindow()
+    {
+        var clickCounts = new int[3];
+        var root = new StackPanel();
+        var searchRoot = new StackPanel();
+        var unrelatedRoot = new StackPanel();
+        AutomationProperties.SetAutomationId(searchRoot, "TableSearchHistoryRoot");
+        AutomationProperties.SetAutomationId(unrelatedRoot, "OtherSearchHistoryRoot");
+
+        var input = new TextBox();
+        AutomationProperties.SetAutomationId(input, "TableSearchInput");
+        root.Children.Add(input);
+
+        AddHistoryButton(searchRoot, "Orders", () => clickCounts[0]++);
+        AddHistoryButton(searchRoot, "orders", () => clickCounts[1]++);
+        AddHistoryButton(unrelatedRoot, "orders", () => clickCounts[2]++);
+        root.Children.Add(searchRoot);
+        root.Children.Add(unrelatedRoot);
+        return new SearchHistoryWindowContext(new Window { Content = root }, clickCounts);
+    }
+
+    private static void AddHistoryButton(Panel root, string text, Action onClick)
+    {
+        var button = new Button { Content = text };
+        AutomationProperties.SetAutomationId(button, "SearchHistoryItemButton");
+        AutomationProperties.SetName(button, text);
+        button.Click += (_, _) => onClick();
+        root.Children.Add(button);
+    }
+
     private static ShellWindowContext CreateShellWindow()
     {
         var orders = new ShellPaneModel("ordersViewModel", "Заказы") { IsActive = true };
@@ -776,6 +849,8 @@ Console.WriteLine("Fake desktop");
 
     private sealed record LaunchPayload(string UserName);
 
+    private sealed record SearchHistoryWindowContext(Window Window, int[] ClickCounts);
+
     private sealed class VisualGridPage : UiPage
     {
         public VisualGridPage(IUiControlResolver resolver)
@@ -785,6 +860,9 @@ Console.WriteLine("Fake desktop");
 
         public IGridControl EremexDemoDataGridAutomationBridge =>
             Resolve<IGridControl>(VisualGridPageDefinitions.EremexDemoDataGridAutomationBridge);
+
+        public IGridControl TypedEditorsGrid =>
+            Resolve<IGridControl>(VisualGridPageDefinitions.TypedEditorsGrid);
     }
 
     public static class VisualGridPageDefinitions
@@ -793,6 +871,11 @@ Console.WriteLine("Fake desktop");
             "EremexDemoDataGridAutomationBridge",
             UiControlType.Grid,
             "EremexDemoDataGridAutomationBridge");
+
+        public static UiControlDefinition TypedEditorsGrid { get; } = new(
+            "TypedEditorsGrid",
+            UiControlType.Grid,
+            "TypedEditorsGrid");
     }
 
     private sealed class ProxyEditorPage : UiPage
@@ -831,6 +914,25 @@ Console.WriteLine("Fake desktop");
             "OrderCustomerSearch",
             UiControlType.SearchPicker,
             "OrderCustomerSearch");
+    }
+
+    private sealed class SearchControlPage : UiPage
+    {
+        public SearchControlPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchControl TableSearch =>
+            Resolve<ISearchControl>(SearchControlPageDefinitions.TableSearch);
+    }
+
+    public static class SearchControlPageDefinitions
+    {
+        public static UiControlDefinition TableSearch { get; } = new(
+            "TableSearch",
+            UiControlType.Search,
+            "TableSearch");
     }
 
     private sealed class ShellPage : UiPage

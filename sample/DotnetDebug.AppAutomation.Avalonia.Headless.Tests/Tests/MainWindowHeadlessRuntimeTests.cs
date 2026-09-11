@@ -1,10 +1,11 @@
-using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Automation;
+using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.TUnit;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
-using AppAutomation.TUnit;
-using AppAutomation.Avalonia.Headless.Automation;
+using DotnetDebug.AppAutomation.Configuration;
 using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTests;
@@ -21,6 +22,9 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
     {
         return new MainWindowPage(
             new HeadlessControlResolver(session.Inner.MainWindow)
+                .WithAdapters(new HeadlessMultiSelectControlAdapter(session.Inner.MainWindow))
+                .WithAdapters(new HeadlessComboBoxFilterControlAdapter(session.Inner.MainWindow))
+                .WithAdapters(new HeadlessSearchControlAdapter(session.Inner.MainWindow))
                 .WithSearchPicker(
                     "HistoryOperationPicker",
                     SearchPickerParts.ByAutomationIds(
@@ -28,17 +32,31 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         "OperationCombo",
                         applyButtonAutomationId: "ApplyFilterButton"))
                 .WithSearchPicker(
-                    "ArmSearchPicker",
-                    SearchPickerParts.ByAutomationIds(
-                        "ArmSearchInput",
-                        "ArmSearchResults",
-                        applyButtonAutomationId: "ArmSearchApplyButton"))
-                .WithSearchPicker(
                     "ArmServerSearchPicker",
                     SearchPickerParts.ByAutomationIds(
-                        "ArmServerPickerInput",
-                        "ArmServerPickerResults",
-                        expandButtonAutomationId: "ArmServerPickerOpenButton"))
+                        "ArmServerSearchPicker_Input",
+                        "ArmServerSearchPicker_Results",
+                        expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
+                        resultsKind: SearchPickerResultsKind.ListBox,
+                        opensOnSearch: true))
+                .WithColorPicker(
+                    "ArmAccentColorPicker",
+                    ColorPickerParts.ByAutomationIds(
+                        "ArmAccentColorPicker",
+                        "ArmAccentColorValue",
+                        openButtonAutomationId: "ArmAccentColorOpenButton",
+                        popupRootAutomationId: "ArmAccentColorPopup",
+                        customValueAutomationId: "ArmAccentColorCustomValue",
+                        confirmButtonAutomationId: "ArmAccentColorConfirmButton",
+                        cancelButtonAutomationId: "ArmAccentColorCancelButton",
+                        commitMode: ColorPickerCommitMode.Confirm))
+                .WithGridColumns(
+                    "EremexDemoDataGridAutomationBridge",
+                    ["EremexRow", "EremexValue", "EremexParity"])
+                .WithGridColumns(
+                    "ArmGridAutomationBridge",
+                    ["Key", "Value", "Color", "State"])
+                .WithGridAutomation(SampleGridAutomation.CreateHeadlessCatalog())
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

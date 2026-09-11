@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Eremex.AvaloniaUI.Controls.Editors;
 
 namespace DotnetDebug.Avalonia;
 
@@ -16,7 +17,7 @@ public partial class ArmDesktopControl : UserControl
     {
         InitializeComponent();
         DataContext = this;
-        ArmStatusExpanderToggle.PropertyChanged += OnArmStatusExpanderPropertyChanged;
+        ArmStatusExpander.PropertyChanged += OnArmStatusExpanderPropertyChanged;
         ArmMetadataToggle.PropertyChanged += OnArmMetadataTogglePropertyChanged;
         ArmApprovalToggle.PropertyChanged += OnArmApprovalTogglePropertyChanged;
         BuildArmRows(3);
@@ -24,17 +25,24 @@ public partial class ArmDesktopControl : UserControl
         ArmDateRangeTo.SelectedDate = new DateTimeOffset(new DateTime(2026, 4, 30));
         ArmShellNavigationList.SelectedIndex = 0;
         ArmShellPaneTabs.SelectedIndex = 0;
+        SelectedArmStatusFilterItems.Add(ArmStatusFilterItems[0]);
+        SelectedArmStatusFilterItems.CollectionChanged += (_, _) => UpdateArmStatusFilterLabel();
+        UpdateArmStatusFilterLabel();
     }
 
     public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = new();
 
-    public string[] ArmSearchItems { get; } =
+    public GridComboRowViewModel GridComboRow { get; } = new();
+
+    public ObservableCollection<MultiSelectItemViewModel> ArmStatusFilterItems { get; } =
     [
-        "Customer Alpha",
-        "Customer Beta",
-        "Order 1001",
-        "Invoice 2026"
+        new("Open"),
+        new("Pending"),
+        new("Closed"),
+        new("Archived")
     ];
+
+    public ObservableCollection<MultiSelectItemViewModel> SelectedArmStatusFilterItems { get; } = [];
 
     public string[] ArmServerItems { get; } =
     [
@@ -56,46 +64,77 @@ public partial class ArmDesktopControl : UserControl
         ArmCopyResultLabel.Content = $"Copied: {ArmCopyTextBox.Text ?? string.Empty}";
     }
 
-    private void OnArmSearchApplyClick(object? sender, RoutedEventArgs e)
-    {
-        var query = ArmSearchInput.Text ?? string.Empty;
-        var selected = ArmSearchResults.SelectedItem?.ToString() ?? "<none>";
-        ArmSearchStatusLabel.Content = $"Search applied: {query}; selected={selected}";
-    }
-
-    private void OnArmSearchClearClick(object? sender, RoutedEventArgs e)
-    {
-        ArmSearchInput.Text = string.Empty;
-        ArmSearchResults.SelectedIndex = -1;
-        ArmSearchStatusLabel.Content = "Search cleared";
-    }
-
-    private void OnArmSearchResultsChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (ArmSearchResults.SelectedItem is not null)
-        {
-            ArmSearchStatusLabel.Content = $"Search selected: {ArmSearchResults.SelectedItem}";
-        }
-    }
-
-    private void OnArmServerPickerOpenClick(object? sender, RoutedEventArgs e)
-    {
-        ArmServerPickerStatusLabel.Content = "Server picker opened";
-    }
-
     private void OnArmServerPickerClearClick(object? sender, RoutedEventArgs e)
     {
-        ArmServerPickerInput.Text = string.Empty;
-        ArmServerPickerResults.SelectedIndex = -1;
+        ArmServerSearchPicker.SearchText = string.Empty;
+        ArmServerSearchPicker.CurrentSelected = null;
+        ArmServerSearchPicker.IsPopupOpen = false;
         ArmServerPickerStatusLabel.Content = "Server picker cleared";
     }
 
-    private void OnArmServerPickerResultsChanged(object? sender, SelectionChangedEventArgs e)
+    private void OnArmServerPickerSelected(object? sender, object? selected)
     {
-        if (ArmServerPickerResults.SelectedItem is not null)
+        if (selected is not null)
         {
-            ArmServerPickerStatusLabel.Content = $"Server selected: {ArmServerPickerResults.SelectedItem}";
+            ArmServerPickerStatusLabel.Content = $"Server selected: {selected}";
         }
+    }
+
+    private void OnArmAccentColorOpenClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorCustomValue.Text = ArmAccentColorValue.Text;
+        ArmAccentColorPopup.IsVisible = true;
+    }
+
+    private void OnArmAccentColorConfirmClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorValue.Text = ArmAccentColorCustomValue.Text;
+        ArmAccentColorPopup.IsVisible = false;
+    }
+
+    private void OnArmAccentColorCancelClick(object? sender, RoutedEventArgs e)
+    {
+        ArmAccentColorCustomValue.Text = ArmAccentColorValue.Text;
+        ArmAccentColorPopup.IsVisible = false;
+    }
+
+    private void OnNestedMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        MenuStatusLabel.Content = "Menu: snapshot exported";
+    }
+
+    private void OnRefreshMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        MenuStatusLabel.Content = "Menu: refreshed";
+    }
+
+    private void OnContextPinMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        ContextMenuStatusLabel.Content = "Context: pinned";
+    }
+
+    private void OnContextSummaryMenuItemClick(object? sender, RoutedEventArgs e)
+    {
+        ContextMenuStatusLabel.Content = "Context: summary exported";
+    }
+
+    private void OnArmStatusFilterLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is PopupEditor popupEditor)
+        {
+            MultiSelectEditorAutomation.Apply(popupEditor, "ArmStatusFilter");
+        }
+    }
+
+    private void UpdateArmStatusFilterLabel()
+    {
+        var selected = SelectedArmStatusFilterItems
+            .Select(static item => item.Name)
+            .OrderBy(static item => item, StringComparer.Ordinal)
+            .ToArray();
+        ArmStatusFilterStatusLabel.Content = selected.Length == 0
+            ? "Filter: none"
+            : $"Filter: {string.Join(", ", selected)}";
     }
 
     private void OnArmDateRangeOpenClick(object? sender, RoutedEventArgs e)
@@ -285,11 +324,6 @@ public partial class ArmDesktopControl : UserControl
         ArmLoadingStatusLabel.Content = "Reloaded: 100%";
     }
 
-    private void OnArmStatusExpanderClick(object? sender, RoutedEventArgs e)
-    {
-        UpdateArmStatusExpanderLabel();
-    }
-
     private void OnArmMetadataToggleClick(object? sender, RoutedEventArgs e)
     {
         UpdateArmMetadataLabel();
@@ -344,7 +378,8 @@ public partial class ArmDesktopControl : UserControl
     private static ArmDesktopGridRowViewModel CreateRow(int index)
     {
         var state = index % 2 == 0 ? "Open" : "Pending";
-        return new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state);
+        var color = index % 2 == 0 ? "#FF336699" : "#FF663399";
+        return new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state, color);
     }
 
     private void ActivatePane(string pane)
@@ -364,7 +399,7 @@ public partial class ArmDesktopControl : UserControl
 
     private void OnArmStatusExpanderPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property == ToggleButton.IsCheckedProperty)
+        if (e.Property == Expander.IsExpandedProperty)
         {
             UpdateArmStatusExpanderLabel();
         }
@@ -388,7 +423,7 @@ public partial class ArmDesktopControl : UserControl
 
     private void UpdateArmStatusExpanderLabel()
     {
-        ArmStatusLabel.Content = $"Status expanded: {ArmStatusExpanderToggle.IsChecked == true}";
+        ArmStatusLabel.Content = $"Status expanded: {ArmStatusExpander.IsExpanded}";
     }
 
     private void UpdateArmMetadataLabel()

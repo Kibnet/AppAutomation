@@ -27,5 +27,7 @@ internal enum ControlType
     HeaderItem = 22,
     Cell = 23,
     Group = 24,
-    Pane = 25
+    Pane = 25,
+    Menu = 26,
+    MenuItem = 27
 }

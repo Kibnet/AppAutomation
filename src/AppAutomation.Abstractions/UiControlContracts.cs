@@ -30,6 +30,17 @@ public interface IUiControl
 }
 
 /// <summary>
+/// Optional capability for controls whose current availability or visibility can be observed.
+/// </summary>
+public interface IUiControlAvailability : IUiControl
+{
+    /// <summary>
+    /// Gets a value indicating whether the control is currently attached and visible to the user.
+    /// </summary>
+    bool IsAvailable { get; }
+}
+
+/// <summary>
 /// Represents a control that exposes visible read-only text.
 /// </summary>
 public interface IReadableTextControl : IUiControl
@@ -126,6 +137,15 @@ public interface ISelectableListBoxControl : IListBoxControl
     /// </summary>
     /// <param name="itemText">The text of the item to select.</param>
     void SelectItem(string itemText);
+}
+
+/// <summary>
+/// Optional list-box capability for selecting one item by exact display text.
+/// </summary>
+public interface IExactSelectableListBoxControl : ISelectableListBoxControl
+{
+    /// <summary>Selects an item using ordinal, case-sensitive display-text matching.</summary>
+    void SelectItemExact(string itemText);
 }
 
 /// <summary>
@@ -243,6 +263,152 @@ public interface ISearchPickerControl : IUiControl
 }
 
 /// <summary>
+/// Represents a search input with an optional, dynamically populated history popup.
+/// </summary>
+/// <remarks>
+/// Empty history is a state of this control, not a different capability or implementation.
+/// </remarks>
+public interface ISearchControl : IUiControl
+{
+    /// <summary>Gets the current search text.</summary>
+    string Text { get; }
+
+    /// <summary>Gets the history items currently exposed by the popup.</summary>
+    IReadOnlyList<string> HistoryItems { get; }
+
+    /// <summary>Gets a value indicating whether the history popup is currently open.</summary>
+    bool IsHistoryOpen { get; }
+
+    /// <summary>Enters a non-empty search value.</summary>
+    void EnterSearch(string value);
+
+    /// <summary>Clears the current search value.</summary>
+    void ClearSearch();
+
+    /// <summary>Opens history when history is available.</summary>
+    void OpenHistory();
+
+    /// <summary>Applies an exact value from search history.</summary>
+    void ApplySearchFromHistory(string value);
+}
+
+/// <summary>
+/// Provider primitive used by <see cref="ISearchControl"/> to expose and invoke history items.
+/// </summary>
+public interface ISearchHistoryItemsControl : IUiControlAvailability
+{
+    /// <summary>Gets the currently visible history item texts.</summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>Invokes the history item with the requested display text.</summary>
+    void Apply(string itemText);
+}
+
+/// <summary>
+/// Represents the checkbox-items surface inside a multi-select popup.
+/// </summary>
+public interface IMultiSelectItemsControl : IUiControl
+{
+    /// <summary>
+    /// Gets all available item texts.
+    /// </summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>
+    /// Gets the currently selected item texts.
+    /// </summary>
+    IReadOnlyList<string> SelectedItems { get; }
+
+    /// <summary>
+    /// Sets the exact selected item set.
+    /// </summary>
+    /// <param name="values">The item texts that should remain selected.</param>
+    void SetSelectedItems(IReadOnlyCollection<string> values);
+
+    /// <summary>
+    /// Validates and sets the exact selected item set, returning the available-item snapshot used for validation.
+    /// </summary>
+    /// <remarks>
+    /// Virtualized providers can override this operation to avoid enumerating the same popup twice.
+    /// </remarks>
+    /// <param name="values">The item texts that should remain selected.</param>
+    /// <returns>All item texts that were available when the selection was validated.</returns>
+    IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        var availableItems = Items;
+        if (availableItems.Distinct(StringComparer.OrdinalIgnoreCase).Count() != availableItems.Count)
+        {
+            throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+        }
+
+        var missingItems = values
+            .Where(requested => !availableItems.Contains(requested, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missingItems.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Multi-select items were not found: [{string.Join(", ", missingItems)}].");
+        }
+
+        SetSelectedItems(values);
+        return availableItems;
+    }
+}
+
+/// <summary>
+/// Represents a composite multi-select popup with explicit apply and cancel actions.
+/// </summary>
+public interface IMultiSelectControl : IUiControl
+{
+    /// <summary>
+    /// Gets all available item texts.
+    /// </summary>
+    IReadOnlyList<string> Items { get; }
+
+    /// <summary>
+    /// Gets the committed or currently pending selected item texts.
+    /// </summary>
+    IReadOnlyList<string> SelectedItems { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the popup is currently open.
+    /// </summary>
+    bool IsOpen { get; }
+
+    /// <summary>
+    /// Opens the popup.
+    /// </summary>
+    void Open();
+
+    /// <summary>
+    /// Sets the exact pending selected item set.
+    /// </summary>
+    /// <param name="values">The item texts that should remain selected.</param>
+    void SetSelectedItems(IReadOnlyCollection<string> values);
+
+    /// <summary>
+    /// Applies the pending selection and closes the popup.
+    /// </summary>
+    void Apply();
+
+    /// <summary>
+    /// Cancels the pending selection and closes the popup.
+    /// </summary>
+    void Cancel();
+}
+
+/// <summary>
+/// Represents a logical ComboBoxEditor-style filter whose selected value set may contain zero, one, or many items.
+/// </summary>
+/// <remarks>
+/// The selected item count is action data. It does not select a different control contract or execution path.
+/// </remarks>
+public interface IComboBoxFilterControl : IMultiSelectControl
+{
+}
+
+/// <summary>
 /// Represents a radio button control within a mutually exclusive group.
 /// </summary>
 public interface IRadioButtonControl : IUiControl
@@ -272,6 +438,71 @@ public interface IToggleButtonControl : IUiControl
     /// Toggles the button to the opposite state.
     /// </summary>
     void Toggle();
+}
+
+/// <summary>
+/// Represents a content container with an expanded or collapsed state.
+/// </summary>
+public interface IExpanderControl : IUiControl
+{
+    /// <summary>
+    /// Gets a value indicating whether the content is expanded.
+    /// </summary>
+    bool IsExpanded { get; }
+
+    /// <summary>
+    /// Expands the content container.
+    /// </summary>
+    void Expand();
+
+    /// <summary>
+    /// Collapses the content container.
+    /// </summary>
+    void Collapse();
+}
+
+/// <summary>
+/// Represents a control that selects a color without exposing a provider-specific color type.
+/// </summary>
+public interface IColorPickerControl : IUiControl
+{
+    /// <summary>
+    /// Gets or sets the selected color as canonical <c>#AARRGGBB</c> text.
+    /// </summary>
+    string Color { get; set; }
+}
+
+/// <summary>
+/// Represents a menu whose items are addressed by an exact root-to-leaf caption path.
+/// </summary>
+public interface IMenuControl : IUiControl
+{
+    /// <summary>
+    /// Opens the menu hierarchy and invokes one unambiguous leaf item.
+    /// </summary>
+    void InvokeItem(IReadOnlyList<string> path, int timeoutMs);
+}
+
+/// <summary>
+/// Represents a stable, directly addressable menu item.
+/// </summary>
+public interface IMenuItemControl : IUiControl
+{
+    /// <summary>
+    /// Invokes the item through the provider's native menu gesture.
+    /// </summary>
+    void Invoke(int timeoutMs);
+}
+
+/// <summary>
+/// Optional runtime capability implemented by controls that can own a context menu.
+/// </summary>
+public interface IContextMenuOwnerControl : IUiControl
+{
+    /// <summary>
+    /// Opens the owner's context menu and invokes one exact root-to-leaf item path.
+    /// </summary>
+    void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs);
 }
 
 /// <summary>
@@ -326,6 +557,17 @@ public interface IDateTimePickerControl : IUiControl
     /// </summary>
     /// <value>The selected <see cref="DateTime"/>, or <see langword="null"/> if no date is selected.</value>
     DateTime? SelectedDate { get; set; }
+}
+
+/// <summary>
+/// Represents a time-of-day picker control.
+/// </summary>
+public interface ITimePickerControl : IUiControl
+{
+    /// <summary>
+    /// Gets or sets the selected time of day.
+    /// </summary>
+    TimeSpan? SelectedTime { get; set; }
 }
 
 /// <summary>
@@ -818,7 +1060,22 @@ public enum GridCellEditorKind
     /// <summary>
     /// A composite search picker editor.
     /// </summary>
-    SearchPicker = 4
+    SearchPicker = 4,
+
+    /// <summary>
+    /// A time-of-day picker editor.
+    /// </summary>
+    Time = 5,
+
+    /// <summary>
+    /// A color picker editor.
+    /// </summary>
+    Color = 6,
+
+    /// <summary>
+    /// A boolean check-box editor.
+    /// </summary>
+    CheckBox = 7
 }
 
 /// <summary>
@@ -852,7 +1109,18 @@ public sealed record GridCellEditRequest(
     string Value,
     GridCellEditorKind EditorKind = GridCellEditorKind.Text,
     GridCellEditCommitMode CommitMode = GridCellEditCommitMode.Commit,
-    string? SearchText = null);
+    string? SearchText = null)
+{
+    /// <summary>
+    /// Maximum time available to provider-specific editor discovery and selection.
+    /// </summary>
+    public int TimeoutMs { get; init; } = 5000;
+
+    /// <summary>
+    /// Optional cell-scoped parts for composite or templated editors.
+    /// </summary>
+    public GridCellEditorParts? EditorParts { get; init; }
+}
 
 /// <summary>
 /// Represents a grid control that can activate and edit cells.

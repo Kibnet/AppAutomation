@@ -13,7 +13,28 @@ public sealed record UiControlDefinition(
     UiControlType ControlType,
     string LocatorValue,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = true);
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Optional ancestor scope used when repeated child locators belong to a composite control.
+    /// </summary>
+    public UiControlScope? Scope { get; init; }
+}
+
+/// <summary>
+/// Restricts a control lookup to one composite-control scope.
+/// </summary>
+public sealed record UiControlScope(
+    string LocatorValue,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = true)
+{
+    /// <summary>
+    /// Optional composite-control anchor for providers that can prove popup ownership.
+    /// An anchor alone must not authorize an unscoped lookup of another control's popup.
+    /// </summary>
+    public string? AnchorLocatorValue { get; init; }
+}
 
 /// <summary>
 /// Defines a page's control manifest for discovery and documentation.

@@ -183,12 +183,34 @@ If you want to reduce the first manual authoring pass, attach `AppAutomation.Rec
 - Keep page classes `partial`.
 - Keep the shared scenario base class `partial` too, because recorder output is emitted as an extra partial with `[Test]` methods.
 - Prefer stable `AutomationId`; `Name` locators are opt-in and intentionally treated as a weaker fallback.
-- `Save` writes into the canonical `Authoring` target, while `Export...` writes the same generated pair into a folder you pick from the overlay.
+- Recorder keeps one `<Page>.RecorderControls.g.cs` beside the Page source and appends tests to one `<ScenarioClass>.RecorderScenarios.g.cs` per destination; the source generator merges all Page partials into one `<Page>.UiControls.g.cs`, while `Export...` changes only the scenario destination.
 - Invalid or ambiguous steps can stay visible in overlay preview for debugging, but they are skipped on save and reported as `persisted/skipped`.
 - The overlay keeps a step journal with `Remove`, `Ignore`, `Retry`, and `Copy` actions, so you can clean up a recording session without restarting it.
 - Save and export are single-flight operations: while a save/export is running, the overlay shows a busy summary and blocks duplicate save/export clicks.
 - The recorder UI is hosted in a separate opaque window, so it no longer follows or overlays the AUT window.
+- `Check` records typed TUnit assertions for equality/inequality and empty/non-empty values, or compares with a replay-time checkpoint; configured composite and grid parts resolve to their logical control.
+- Date steps can remain exact or be changed in the journal to `DateTime.Today ± days`; range boundaries are configured independently.
 - Hotkeys, overlay behavior, selector validation, and custom assertion capture are configurable through `AppAutomationRecorderOptions`.
+
+To choose an existing scenario class at runtime, opt in to project discovery:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions
+{
+    AuthoringProjectDirectory = authoringProjectDirectory,
+    PageNamespace = "MyApp.UiTests.Authoring.Pages",
+    PageClassName = "MainWindowPage",
+    ScenarioName = "RecordedSmoke",
+    ScenarioSelection = new RecorderScenarioSelectionOptions
+    {
+        IsEnabled = true,
+        ScenarioNamespaceRoot = "MyApp.UiTests.Authoring.Tests",
+        OutputSubdirectoryRoot = "Recorded"
+    }
+};
+```
+
+The overlay scans source `partial` classes under the namespace root, including generic classes, and keeps `Record` disabled until a destination and valid scenario name are selected. It never silently falls back to another class: save/autosave revalidate the selected source class, and later saves to the same destination append another unique `[Test]` method to its recorder-owned canonical partial. A relative output root is resolved below the authoring project; an absolute root remains absolute. `Export...` still writes directly to the explicitly chosen folder. Existing preset `ScenarioNamespace`, `ScenarioClassName`, `ScenarioName`, and `OutputSubdirectory` configuration remains supported when interactive selection is disabled.
 
 Reference smoke path in this repository:
 
@@ -198,7 +220,7 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-The sample writes generated files to `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. The overlay can start or stop capture, save canonical partials, export the same output to another folder, keep a review-first step journal, and show either the latest AppAutomation DSL statement or the diagnostics that explain why a step is warning-only or invalid.
+The sample writes scenario methods to `sample/DotnetDebug.AppAutomation.Authoring/Recorded` and keeps generated Page controls beside the Page source. The overlay can start or stop capture, save canonical partials, export scenarios to another folder, keep a review-first step journal, and show either the latest AppAutomation DSL statement or the diagnostics that explain why a step is warning-only or invalid.
 
 Custom assertion capture can be extended without forking the recorder:
 
@@ -275,8 +297,105 @@ If you see `Headless session is not initialized. Call HeadlessRuntime.SetSession
 - desktop launch helpers with repo-root / project-path / build-before-launch;
 - headless launch helpers on top of `BeforeLaunchAsync`, `CreateMainWindow`, `CreateMainWindowAsync`;
 - adapter registration API via `WithAdapters(...)`;
-- built-in composite abstraction `ISearchPickerControl` and `WithSearchPicker(...)`;
+- built-in composite abstraction `ISearchPickerControl` and `WithSearchPicker(...)`, with a confirmed-selection Recorder hook for custom popup roots;
+- provider-neutral multi-select popup abstraction `IMultiSelectControl` with `WithMultiSelect(...)`;
+- cardinality-neutral combo-box filter abstraction `IComboBoxFilterControl` with `WithComboBoxFilter(...)`;
+- logical spinner actions through `ISpinnerControl`; custom text-backed wrappers can use `WithSpinnerTextBoxProxy(...)`;
+- lossless time-of-day actions through `ITimePickerControl`; composite popup wrappers register stable parts with `WithTimePicker(...)`;
+- idempotent expanded-state actions through `IExpanderControl` and `SetExpanded(...)`;
+- popup color selection through `IColorPickerControl`, `WithColorPicker(...)`, and canonical `SetColor(...)` values;
+- menu leaf invocation through `InvokeMenuItem(...)`, using either a stable direct item or an exact root-to-leaf path;
+- owner-scoped context-menu invocation through `InvokeContextMenuItem(...)` with an exact nested path;
+- ordinary single-selection editors keep `IComboBoxControl`/`SelectComboItem(...)`; composite wrappers register their input/results/commit parts with `WithSingleSelect(...)` and `RecorderSingleSelectHint`;
+- provider-neutral search abstraction `ISearchControl` with `WithSearchControl(...)` and optional history;
+- stable grid row selectors through `GridRowSelector` and `WithGridColumns(...)`;
 - package-based smoke path via `eng/smoke-consumer.ps1`.
+
+Register a multi-select popup from stable primitive parts, then use one authoring command in both runtimes:
+
+```csharp
+var resolver = innerResolver.WithMultiSelect(
+    "Categories",
+    MultiSelectParts.ByAutomationIds(
+        "CategoriesEditor",
+        "CategoriesEditor_OpenButton",
+        "CategoriesEditor_Results",
+        "CategoriesEditor_ApplyButton",
+        "CategoriesEditor_CancelButton"));
+
+Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
+Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
+```
+
+Registration is opt-in. `RootLocator` identifies the real multi-select editor (for example, an Eremex `ComboBoxEditor` with `SelectionMode="Multiple"`); popup state is observed through the real selectable-items container. Open/results/Apply IDs can be assigned by consumer-side template instrumentation. The cancel locator is optional when the control exposes confirmation only. Recorder persists Apply as `SelectMultiItems` and Cancel as `CancelMultiSelection`, including pending items outside the current viewport: Avalonia containers are realized by index from the nearest current edge during capture, while FlaUI replay uses bounded, position-aware passes through standard UIA Scroll/RangeValue patterns. Provider-neutral projects do not require Eremex template-part names. Existing search-picker and index-based grid APIs keep their current behavior.
+
+Register a logical combo-box filter with the same stable popup parts. The values are always one set (`0..N`), regardless of the physical editor's selection mode:
+
+```csharp
+var resolver = innerResolver.WithComboBoxFilter(
+    "StatusFilter",
+    ComboBoxFilterParts.ByAutomationIds(
+        "StatusFilter",
+        "StatusFilter_OpenButton",
+        "StatusFilter_Results",
+        "StatusFilter_ApplyButton",
+        "StatusFilter_CancelButton"));
+
+Page.ApplyFilterSelection(static page => page.StatusFilter, ["Open", "Pending"]);
+Page.CancelFilterSelection(static page => page.StatusFilter, []);
+```
+
+`Classes="filterComboBox"` may remain a visual style marker, but it is not a locator. Recorder recognition is opt-in through `RecorderComboBoxFilterHint`, and generated code always targets the logical filter property. Apply/OK and Cancel are preserved; internal popup controls do not leak into the scenario.
+
+If the selectable-items surface is a single-selection `ComboBox`, pass `itemsKind: MultiSelectItemsKind.ComboBox`; the same filter contract then carries a set of `0..1` values.
+
+Register a search field once, regardless of whether its history is currently empty or populated:
+
+```csharp
+var searchParts = SearchControlParts.ByAutomationIds(
+    "TableSearchInput",
+    "TableSearchHistoryItemButton",
+    historyRootAutomationId: "TableSearchHistoryRoot");
+
+var resolver = innerResolver.WithSearchControl("TableSearch", searchParts);
+var options = new AppAutomationRecorderOptions();
+options.SearchControlHints.Add(new RecorderSearchControlHint("TableSearch", searchParts));
+
+Page.EnterSearch(static page => page.TableSearch, "orders");
+Page.ClearSearch(static page => page.TableSearch);
+Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
+```
+
+`EnterSearch`, `ClearSearch`, and `ApplySearchFromHistory` cover input, clearing, and history selection. History remains optional state of the same control; use `SearchHistoryResultsKind.ListBox` only when its results are a `ListBox`. `ISearchPickerControl` remains the separate abstraction for relation pickers such as `ServerSearchComboBox`.
+
+Use one catalog for Recorder, Headless, and FlaUI. Native grids can supply their own metadata; a templated grid needs only declarative columns, editor kinds, and a stable row identity:
+
+```csharp
+var grids = new GridAutomationCatalog().Add(
+    GridAutomationDefinition.ByAutomationIds(
+            "ItemsGrid",
+            "ItemsGridVisual",
+            "ItemsGrid")
+        .WithColumns(
+            GridColumnDefinition.Auto("Code"),
+            GridColumnDefinition.Map("Item")
+                .FromField("ItemReference")
+                .DisplayValueFrom("ItemReference.Name"),
+            GridColumnDefinition.Auto("Quantity")
+                .AsValue(GridCellValueKind.Number)
+                .EditWith(GridCellEditorKind.Number),
+            GridColumnDefinition.Auto("State")
+                .EditWith(GridCellEditorKind.ComboBox))
+        .IdentifyRowsBy("Code"));
+
+var recorderOptions = new AppAutomationRecorderOptions { GridAutomation = grids };
+var resolver = innerResolver.WithGridAutomation(grids);
+var row = GridRowSelector.ByCell("Code", "ITEM-42");
+
+Page.WaitUntilGridCellEquals(static page => page.ItemsGrid, row, "State", "Ready");
+```
+
+Stable addresses are re-resolved for the action and its postcondition, so sorting, filtering, insertion, and virtualization do not turn a row into a stale index. Ambiguous or missing identity blocks new catalog capture. Legacy `WithGridColumns(...)` and public index overloads remain available.
 
 ## What remains consumer responsibility
 
@@ -499,12 +618,38 @@ tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 - Классы страниц должны оставаться `partial`.
 - Общий scenario base class тоже должен быть `partial`, потому что recorder добавляет новые `[Test]`-методы в отдельный partial.
 - Основной контракт селекторов для recorder-а это `AutomationId`; `Name` включается только осознанно и считается более слабым fallback.
-- `Save` пишет в каноническую директорию `Authoring`, а `Export...` сохраняет ту же пару generated partials в выбранную папку.
+- Recorder хранит один `<Page>.RecorderControls.g.cs` рядом с исходным Page и добавляет тесты в один `<ScenarioClass>.RecorderScenarios.g.cs` для каждого назначения; source generator объединяет все partial-файлы Page в один `<Page>.UiControls.g.cs`, а `Export...` меняет только назначение сценария.
 - Невалидные или неоднозначные шаги можно оставить в preview для отладки, но при сохранении они пропускаются и попадают в статус как `persisted/skipped`.
 - Overlay держит step journal с действиями `Remove`, `Ignore`, `Retry` и `Copy`, так что плохой шаг можно выкинуть или отложить без полного перезапуска записи.
 - `Save` и `Export...` теперь single-flight: пока идёт запись файлов, overlay показывает busy summary и не даёт запустить второй save/export поверх первого.
 - Recorder UI теперь живёт в отдельном непрозрачном окне и больше не привязан к позиции или состоянию окна AUT.
+- `Check` записывает типизированные TUnit-проверки равенства/неравенства и пустого/непустого значения либо сравнение с checkpoint; части составных контролов и таблиц разрешаются в логический элемент.
+- Шаг с датой можно оставить фиксированным либо переключить в journal на `DateTime.Today ± days`; границы диапазона настраиваются независимо.
 - Hotkeys, поведение overlay, selector validation и кастомный assertion capture настраиваются через `AppAutomationRecorderOptions`.
+
+Чтобы выбирать существующий класс сценариев при запуске, включите сканирование authoring-проекта:
+
+```csharp
+var recorderOptions = new AppAutomationRecorderOptions
+{
+    AuthoringProjectDirectory = authoringProjectDirectory,
+    PageNamespace = "MyApp.UiTests.Authoring.Pages",
+    PageClassName = "MainWindowPage",
+    ScenarioName = "RecordedSmoke",
+    ScenarioSelection = new RecorderScenarioSelectionOptions
+    {
+        IsEnabled = true,
+        ScenarioNamespaceRoot = "MyApp.UiTests.Authoring.Tests",
+        OutputSubdirectoryRoot = "Recorded"
+    }
+};
+```
+
+Overlay асинхронно находит исходные `partial`-классы внутри корневого namespace, включая generic-классы, и не активирует `Record`, пока назначение и корректное имя сценария не выбраны. Silent fallback на другой класс отсутствует: перед save/autosave выбранный исходный класс проверяется повторно, а следующие сохранения в то же назначение добавляют новый уникальный `[Test]`-метод в принадлежащий Recorder canonical partial. Относительный output root считается от authoring-проекта, абсолютный остаётся абсолютным; `Export...` по-прежнему пишет прямо в явно выбранную папку. Старый режим с заранее заданными `ScenarioNamespace`, `ScenarioClassName`, `ScenarioName` и `OutputSubdirectory` сохраняется, если интерактивный выбор выключен.
+
+`Generate value` создаёт переиспользуемые значения вида `Recorded_20260911_K8m2_a7K3m2_1`: дата UTC, два криптографически случайных блока (4 + 6 символов) и номер значения. При каждом запуске теста серия новая; абсолютную уникальность между машинами без общего хранилища этот короткий формат не гарантирует.
+
+Для scoped popup его настроенный корень должен быть доступен провайдеру. В Avalonia декоративному контейнеру может потребоваться `AutomationProperties.AccessibilityView="Control"`; при отсутствии корня FlaUI не подставляет список из другого поля.
 
 Референсный smoke path в этом репозитории:
 
@@ -514,7 +659,7 @@ $env:APPAUTOMATION_RECORDER_SCENARIO='SmokeFlow'
 dotnet run --project sample/DotnetDebug.Avalonia/DotnetDebug.Avalonia.csproj -c Debug
 ```
 
-Sample сохраняет generated partials в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`. Overlay позволяет запускать и останавливать запись, сохранять канонические partials, экспортировать тот же output в другую директорию, просматривать и править session-level step journal и сразу видеть либо последний AppAutomation DSL-вызов, либо диагностику, почему конкретный шаг остался warning-only или invalid.
+Sample сохраняет scenario-методы в `sample/DotnetDebug.AppAutomation.Authoring/Recorded`, а generated Page controls — рядом с исходным Page. Overlay позволяет запускать и останавливать запись, сохранять канонические partials, экспортировать сценарии в другую директорию, просматривать и править session-level step journal и сразу видеть либо последний AppAutomation DSL-вызов, либо диагностику, почему конкретный шаг остался warning-only или invalid.
 
 Кастомный assertion capture можно подключить без форка recorder-а:
 
@@ -592,7 +737,104 @@ dotnet test --solution MyApp.sln -c Debug
 - вспомогательные средства запуска `Headless` поверх `BeforeLaunchAsync`, `CreateMainWindow`, `CreateMainWindowAsync`;
 - API регистрации адаптеров через `WithAdapters(...)`;
 - встроенная составная абстракция `ISearchPickerControl` и `WithSearchPicker(...)`;
+- provider-neutral абстракция popup-мультиселектора `IMultiSelectControl` с `WithMultiSelect(...)`;
+- cardinality-neutral абстракция combo-box фильтра `IComboBoxFilterControl` с `WithComboBoxFilter(...)`;
+- логические действия Spinner через `ISpinnerControl`; для custom wrapper с текстовой частью есть `WithSpinnerTextBoxProxy(...)`;
+- точные действия со временем через `ITimePickerControl`; составной popup-wrapper регистрируется по stable parts через `WithTimePicker(...)`;
+- идемпотентные действия раскрытия через `IExpanderControl` и `SetExpanded(...)`;
+- выбор цвета в popup через `IColorPickerControl`, `WithColorPicker(...)` и канонические значения `SetColor(...)`;
+- вызов конечного пункта меню через `InvokeMenuItem(...)` по стабильному прямому элементу или точному пути от корня;
+- вызов пункта контекстного меню через `InvokeContextMenuItem(...)` по владельцу и точному вложенному пути;
+- обычные одиночные селекторы сохраняют `IComboBoxControl`/`SelectComboItem(...)`; составной wrapper регистрирует input/results/commit parts через `WithSingleSelect(...)` и `RecorderSingleSelectHint`;
+- provider-neutral абстракция поиска `ISearchControl` с `WithSearchControl(...)` и необязательной историей;
+- стабильные селекторы строк таблиц через `GridRowSelector` и `WithGridColumns(...)`;
 - готовый сценарий быстрой проверки через `eng/smoke-consumer.ps1`.
+
+Мультиселектор регистрируется по стабильным primitive parts, после чего в обоих runtime используется одна authoring-команда:
+
+```csharp
+var resolver = innerResolver.WithMultiSelect(
+    "Categories",
+    MultiSelectParts.ByAutomationIds(
+        "CategoriesEditor",
+        "CategoriesEditor_OpenButton",
+        "CategoriesEditor_Results",
+        "CategoriesEditor_ApplyButton",
+        "CategoriesEditor_CancelButton"));
+
+Page.SelectMultiItems(static page => page.Categories, ["Alpha", "Gamma"]);
+Page.CancelMultiSelection(static page => page.Categories, ["Beta"]);
+```
+
+Регистрация выполняется явно. `RootLocator` указывает на настоящий редактор-мультиселектор (например, Eremex `ComboBoxEditor` с `SelectionMode="Multiple"`), а состояние popup определяется по настоящему контейнеру выбираемых элементов. ID для open/results/Apply могут назначаться consumer-side инструментированием шаблона. Cancel locator необязателен для контрола только с подтверждением. Recorder сохраняет Apply как `SelectMultiItems`, а Cancel как `CancelMultiSelection`, включая отмеченные пункты вне текущей видимой области: при записи Avalonia-контейнеры последовательно реализуются по индексам от ближайшего края текущей позиции, а FlaUI-replay выполняет ограниченные позиционные проходы через стандартные UIA Scroll/RangeValue patterns. Provider-neutral проекты не зависят от имён template parts Eremex. Поведение существующих SearchPicker API и index-based grid API не меняется.
+
+Логический combo-box фильтр регистрируется по тем же стабильным popup parts. Значения всегда представляют один набор `0..N`, независимо от физического режима editor:
+
+```csharp
+var resolver = innerResolver.WithComboBoxFilter(
+    "StatusFilter",
+    ComboBoxFilterParts.ByAutomationIds(
+        "StatusFilter",
+        "StatusFilter_OpenButton",
+        "StatusFilter_Results",
+        "StatusFilter_ApplyButton",
+        "StatusFilter_CancelButton"));
+
+Page.ApplyFilterSelection(static page => page.StatusFilter, ["Open", "Pending"]);
+Page.CancelFilterSelection(static page => page.StatusFilter, []);
+```
+
+`Classes="filterComboBox"` может оставаться визуальным маркером стиля, но не является locator. Recorder распознаёт фильтр через явный `RecorderComboBoxFilterHint`, а generated code всегда указывает на логическое свойство фильтра. Apply/OK и Cancel сохраняются, внутренние popup controls в сценарий не попадают.
+
+Если элементы представлены одиночным `ComboBox`, передайте `itemsKind: MultiSelectItemsKind.ComboBox`; тот же контракт фильтра будет работать с набором `0..1` значений.
+
+Поле поиска регистрируется один раз независимо от того, пуста ли его история сейчас:
+
+```csharp
+var searchParts = SearchControlParts.ByAutomationIds(
+    "TableSearchInput",
+    "TableSearchHistoryItemButton",
+    historyRootAutomationId: "TableSearchHistoryRoot");
+
+var resolver = innerResolver.WithSearchControl("TableSearch", searchParts);
+var options = new AppAutomationRecorderOptions();
+options.SearchControlHints.Add(new RecorderSearchControlHint("TableSearch", searchParts));
+
+Page.EnterSearch(static page => page.TableSearch, "orders");
+Page.ClearSearch(static page => page.TableSearch);
+Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
+```
+
+`EnterSearch`, `ClearSearch` и `ApplySearchFromHistory` покрывают ввод, очистку и выбор из истории. История остаётся необязательным состоянием того же контрола; `SearchHistoryResultsKind.ListBox` нужен только для результатов в `ListBox`. `ISearchPickerControl` остаётся отдельной абстракцией для relation picker, например `ServerSearchComboBox`.
+
+Один catalog передаётся Recorder, Headless и FlaUI. Native grid может отдать metadata автоматически; для templated grid достаточно декларативно указать колонки, типы редакторов и стабильный ключ строки:
+
+```csharp
+var grids = new GridAutomationCatalog().Add(
+    GridAutomationDefinition.ByAutomationIds(
+            "ItemsGrid",
+            "ItemsGridVisual",
+            "ItemsGrid")
+        .WithColumns(
+            GridColumnDefinition.Auto("Code"),
+            GridColumnDefinition.Map("Item")
+                .FromField("ItemReference")
+                .DisplayValueFrom("ItemReference.Name"),
+            GridColumnDefinition.Auto("Quantity")
+                .AsValue(GridCellValueKind.Number)
+                .EditWith(GridCellEditorKind.Number),
+            GridColumnDefinition.Auto("State")
+                .EditWith(GridCellEditorKind.ComboBox))
+        .IdentifyRowsBy("Code"));
+
+var recorderOptions = new AppAutomationRecorderOptions { GridAutomation = grids };
+var resolver = innerResolver.WithGridAutomation(grids);
+var row = GridRowSelector.ByCell("Code", "ITEM-42");
+
+Page.WaitUntilGridCellEquals(static page => page.ItemsGrid, row, "State", "Ready");
+```
+
+Стабильный адрес заново разрешается для действия и postcondition, поэтому сортировка, фильтрация, вставка и виртуализация не превращают строку в устаревший индекс. При неоднозначном или отсутствующем ключе новый catalog capture не сохраняется. Legacy `WithGridColumns(...)` и публичные index overloads остаются доступны.
 
 ## Что остаётся на стороне потребителя
 

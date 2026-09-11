@@ -1,5 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             xmlns:recorder="clr-namespace:AppAutomation.Recorder.Avalonia"
              x:Class="AppAutomation.Recorder.Avalonia.UI.RecorderOverlay">
     <UserControl.Resources>
         <SolidColorBrush x:Key="RecorderOverlayBackground">#F4F6F8</SolidColorBrush>
@@ -18,16 +20,83 @@
             BorderThickness="1">
         <Grid>
             <Grid x:Name="ExpandedPanel"
-                  RowDefinitions="Auto,Auto,Auto,*,Auto"
+                  RowDefinitions="Auto,Auto,Auto,Auto,*,Auto"
                   RowSpacing="8">
-                <Grid Grid.Row="0"
-                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
+                <Border x:Name="ScenarioSelectionPanel"
+                        Grid.Row="0"
+                        Padding="8,0,8,6"
+                        Background="{DynamicResource RecorderSurfaceBackground}"
+                        BorderBrush="{DynamicResource RecorderOverlayBorder}"
+                        BorderThickness="1"
+                        IsVisible="False">
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto"
+                          RowSpacing="5">
+                        <ProgressBar x:Name="ScenarioScanProgress"
+                                     Grid.Row="0"
+                                     Height="3"
+                                     Margin="-8,0,-8,0"
+                                     IsIndeterminate="True"
+                                     automation:AutomationProperties.AutomationId="RecorderScenarioScanProgress" />
+                        <TextBlock x:Name="ScenarioScanStatus"
+                                   Grid.Row="1"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource RecorderMuted}"
+                                   Text="Идет сканирование…"
+                                   automation:AutomationProperties.AutomationId="RecorderScenarioScanStatus" />
+                        <Grid Grid.Row="2"
+                              ColumnDefinitions="2*,*"
+                              ColumnSpacing="8">
+                            <StackPanel Grid.Column="0"
+                                        Spacing="3">
+                                <TextBlock Text="Scenario destination"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource RecorderText}" />
+                                <ComboBox x:Name="ScenarioDestinationComboBox"
+                                          MinWidth="280"
+                                          automation:AutomationProperties.AutomationId="RecorderScenarioDestination">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="recorder:RecordedScenarioDestination">
+                                            <TextBlock Text="{Binding DisplayName}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Spacing="3">
+                                <TextBlock Text="Scenario name"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource RecorderText}" />
+                                <TextBox x:Name="ScenarioNameTextBox"
+                                         automation:AutomationProperties.AutomationId="RecorderScenarioName" />
+                            </StackPanel>
+                        </Grid>
+                        <Grid Grid.Row="3"
+                              ColumnDefinitions="Auto,*"
+                              ColumnSpacing="8">
+                            <Button x:Name="RestoreAutosaveButton"
+                                    Grid.Column="0"
+                                    Padding="8,3"
+                                    Content="Restore draft"
+                                    automation:AutomationProperties.AutomationId="RecorderRestoreAutosave" />
+                            <TextBlock x:Name="ScenarioSelectionErrorText"
+                                       Grid.Column="1"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource RecorderDanger}"
+                                       TextWrapping="Wrap"
+                                       automation:AutomationProperties.AutomationId="RecorderScenarioSelectionError" />
+                        </Grid>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="1"
+                      ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"
                       ColumnSpacing="8">
                     <Button x:Name="RecordButton"
                             Grid.Column="0"
                             Padding="10,4"
                             MinWidth="72"
-                            Content="Record" />
+                            Content="Record"
+                            automation:AutomationProperties.AutomationId="RecordButton" />
                     <Button x:Name="ClearButton"
                             Grid.Column="1"
                             Padding="10,4"
@@ -35,7 +104,8 @@
                     <Button x:Name="SaveButton"
                             Grid.Column="2"
                             Padding="10,4"
-                            Content="Save" />
+                            Content="Save"
+                            automation:AutomationProperties.AutomationId="SaveButton" />
                     <Button x:Name="ExportButton"
                             Grid.Column="3"
                             Padding="10,4"
@@ -44,21 +114,31 @@
                             Grid.Column="4"
                             Padding="10,4"
                             Content="Settings" />
+                    <Button x:Name="CheckButton"
+                            Grid.Column="5"
+                            Padding="10,4"
+                            Content="Check"
+                            automation:AutomationProperties.AutomationId="RecorderCheckButton" />
+                    <Button x:Name="GenerateValueButton"
+                            Grid.Column="6"
+                            Padding="10,4"
+                            Content="Generate value"
+                            automation:AutomationProperties.AutomationId="RecorderGenerateValueButton" />
                     <TextBlock x:Name="StepCounter"
-                               Grid.Column="5"
+                               Grid.Column="7"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderAccent}"
                                FontWeight="SemiBold"
                                Text="0 steps" />
                     <TextBlock x:Name="ValidationBadgeText"
-                               Grid.Column="6"
+                               Grid.Column="8"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                FontWeight="SemiBold"
                                Text="VALID" />
                     <TextBlock x:Name="StatusText"
-                               Grid.Column="7"
+                               Grid.Column="9"
                                Margin="4,0,0,0"
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource RecorderMuted}"
@@ -66,12 +146,12 @@
                 </Grid>
 
                 <TextBlock x:Name="PreviewText"
-                           Grid.Row="1"
+                           Grid.Row="2"
                            FontFamily="Cascadia Mono, Consolas"
                            Foreground="{DynamicResource RecorderText}"
                            TextWrapping="Wrap" />
 
-                <StackPanel Grid.Row="2"
+                <StackPanel Grid.Row="3"
                             Spacing="4">
                     <TextBlock x:Name="SessionSummaryText"
                                Foreground="{DynamicResource RecorderMuted}"
@@ -105,7 +185,7 @@
                     </Grid>
                 </StackPanel>
 
-                <Border Grid.Row="3"
+                <Border Grid.Row="4"
                         Padding="8"
                         Background="{DynamicResource RecorderSurfaceBackground}"
                         BorderBrush="{DynamicResource RecorderOverlayBorder}"
@@ -131,7 +211,7 @@
                 </Border>
 
                 <TextBlock x:Name="ShortcutText"
-                           Grid.Row="4"
+                           Grid.Row="5"
                            Foreground="{DynamicResource RecorderMuted}"
                            TextWrapping="Wrap" />
             </Grid>

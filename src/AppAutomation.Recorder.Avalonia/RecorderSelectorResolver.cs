@@ -1,6 +1,7 @@
 using AppAutomation.Abstractions;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
@@ -34,6 +35,19 @@ internal sealed class RecorderSelectorResolver
 
     public ResolvedControlResult Resolve(Control? source, UiControlType controlType)
     {
+        return Resolve(source, controlType, includeSingleSelectAlias: true);
+    }
+
+    internal ResolvedControlResult ResolvePrimitiveSelection(Control? source, UiControlType controlType)
+    {
+        return Resolve(source, controlType, includeSingleSelectAlias: false);
+    }
+
+    private ResolvedControlResult Resolve(
+        Control? source,
+        UiControlType controlType,
+        bool includeSingleSelectAlias)
+    {
         if (source is null)
         {
             return ResolvedControlResult.Unsupported("Event source control was not found.");
@@ -51,7 +65,13 @@ internal sealed class RecorderSelectorResolver
             var automationId = AutomationProperties.GetAutomationId(current);
             if (!string.IsNullOrWhiteSpace(automationId))
             {
-                return CreateResolvedControl(current, controlType, automationId.Trim(), UiLocatorKind.AutomationId, warning: null);
+                return CreateResolvedControl(
+                    current,
+                    controlType,
+                    automationId.Trim(),
+                    UiLocatorKind.AutomationId,
+                    warning: null,
+                    includeSingleSelectAlias);
             }
 
             if (nameFallback is null && _options.AllowNameLocators && TryGetNameLocator(current, out _))
@@ -67,7 +87,8 @@ internal sealed class RecorderSelectorResolver
                 controlType,
                 locatorName,
                 UiLocatorKind.Name,
-                warning: "Using Name locator; prefer AutomationId for long-term stability.");
+                warning: "Using Name locator; prefer AutomationId for long-term stability.",
+                includeSingleSelectAlias);
         }
 
         return ResolvedControlResult.Unsupported(
@@ -81,9 +102,10 @@ internal sealed class RecorderSelectorResolver
         UiControlType controlType,
         string locatorValue,
         UiLocatorKind locatorKind,
-        string? warning)
+        string? warning,
+        bool includeSingleSelectAlias = true)
     {
-        if (TryResolveLocatorAlias(locatorValue, locatorKind, out var alias))
+        if (TryResolveLocatorAlias(locatorValue, locatorKind, includeSingleSelectAlias, out var alias))
         {
             return CreateAliasedResolvedControl(control, locatorValue, locatorKind, warning, alias);
         }
@@ -107,7 +129,11 @@ internal sealed class RecorderSelectorResolver
             }
         }
 
-        var validation = ValidateSelector(control, locatorValue, locatorKind);
+        var validation = ValidateSelector(
+            control,
+            locatorValue,
+            locatorKind,
+            includeLogicalDescendants: effectiveControlType is UiControlType.Menu or UiControlType.MenuItem);
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
                 RecorderNaming.CreateControlPropertyName(locatorValue, effectiveControlType),
@@ -134,6 +160,20 @@ internal sealed class RecorderSelectorResolver
         var validation = ValidateSelector(targetLocatorValue, alias.TargetLocatorKind);
         var aliasMessage =
             $"Mapped recorder locator '{sourceLocatorKind}:{sourceLocatorValue}' to stable locator '{alias.TargetLocatorKind}:{targetLocatorValue}'.";
+        var isConfiguredSpinnerProxy = RecorderSpinnerProxyConfiguration.IsConfigured(
+            _options,
+            targetLocatorValue,
+            alias.TargetLocatorKind);
+        var isConfiguredTimePicker = _options.TimePickerHints.Any(hint =>
+            hint.LocatorKind == alias.TargetLocatorKind
+            && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
+        var isConfiguredDatePicker = _options.DatePickerHints.Any(hint =>
+            hint.LocatorKind == alias.TargetLocatorKind
+            && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
+        var isConfiguredSingleSelect = _options.SingleSelectHints.Any(hint =>
+            hint.LocatorKind == alias.TargetLocatorKind
+            && string.Equals(hint.LocatorValue.Trim(), targetLocatorValue, StringComparison.Ordinal));
+        var isConfiguredTextBoxProxy = alias.TargetControlType == UiControlType.TextBox;
 
         return ResolvedControlResult.Created(
             new RecordedControlDescriptor(
@@ -143,7 +183,13 @@ internal sealed class RecorderSelectorResolver
                 alias.TargetLocatorKind,
                 alias.FallbackToName,
                 control.GetType().FullName ?? control.GetType().Name,
-                CombineMessage(warning, aliasMessage)),
+                isConfiguredSpinnerProxy
+                    || isConfiguredTimePicker
+                    || isConfiguredDatePicker
+                    || isConfiguredSingleSelect
+                    || isConfiguredTextBoxProxy
+                    ? warning
+                    : CombineMessage(warning, aliasMessage)),
             message: validation.Message ?? aliasMessage,
             validationStatus: validation.Status,
             validationMessage: validation.Message,
@@ -154,7 +200,10 @@ internal sealed class RecorderSelectorResolver
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
-        var validation = ValidateSelector(descriptor.LocatorValue, descriptor.LocatorKind);
+        var validation = ValidateSelector(
+            descriptor.LocatorValue,
+            descriptor.LocatorKind,
+            includeLogicalDescendants: descriptor.ControlType is UiControlType.Menu or UiControlType.MenuItem);
         return new ExistingControlResolutionResult(
             validation.MatchedControl is not null,
             validation.MatchedControl,
@@ -163,9 +212,260 @@ internal sealed class RecorderSelectorResolver
             validation.CanPersist);
     }
 
-    private SelectorValidationResult ValidateSelector(Control expectedControl, string locatorValue, UiLocatorKind locatorKind)
+    internal ExistingControlResolutionResult ResolveExisting(RecordedStep step)
     {
-        var validation = ValidateSelector(locatorValue, locatorKind);
+        ArgumentNullException.ThrowIfNull(step);
+
+        if (step.ActionKind is RecordedActionKind.WaitUntilNotificationContains or RecordedActionKind.WaitUntilExists
+            && step.Control.ControlType == UiControlType.Notification)
+        {
+            var notificationHints = FindNotificationHints(step.Control);
+            if (notificationHints.Length > 1)
+            {
+                return InvalidExistingControl(
+                    $"Notification locator '{step.Control.LocatorKind}:{step.Control.LocatorValue}' matches {notificationHints.Length} configured hints.");
+            }
+
+            if (notificationHints.Length == 1)
+            {
+                return step.ActionKind == RecordedActionKind.WaitUntilExists
+                    ? ResolveNotificationExists(step)
+                    : ResolveNotificationAssertion(step, notificationHints[0]);
+            }
+        }
+
+        var logicalResolution = ResolveExisting(step.Control);
+        if (!logicalResolution.CanPersist)
+        {
+            return logicalResolution;
+        }
+
+        if (step.ActionKind == RecordedActionKind.SelectComboItem
+            && TryResolveSingleSelectPart(step.Control, out var singleSelectHint))
+        {
+            var resultsMatches = FindMatches(
+                singleSelectHint.Parts.ResultsLocator,
+                singleSelectHint.Parts.LocatorKind);
+            if (resultsMatches.Length == 0)
+            {
+                return new ExistingControlResolutionResult(
+                    true,
+                    null,
+                    logicalResolution.ValidationStatus,
+                    logicalResolution.ValidationMessage,
+                    logicalResolution.CanPersist);
+            }
+
+            var resultsValidation = ValidateSelector(
+                singleSelectHint.Parts.ResultsLocator,
+                singleSelectHint.Parts.LocatorKind);
+            return new ExistingControlResolutionResult(
+                resultsValidation.MatchedControl is not null,
+                resultsValidation.MatchedControl,
+                MaxStatus(logicalResolution.ValidationStatus, resultsValidation.Status),
+                CombineMessage(logicalResolution.ValidationMessage, resultsValidation.Message),
+                resultsValidation.CanPersist);
+        }
+
+        if (RequiresTimePickerPartValidation(step.ActionKind)
+            && TryResolveTimePickerPart(step.Control, out var timePickerLocator, out var timePickerLocatorKind))
+        {
+            var timePickerMatches = FindMatches(timePickerLocator, timePickerLocatorKind);
+            if (timePickerMatches.Length == 0)
+            {
+                return new ExistingControlResolutionResult(
+                    true,
+                    null,
+                    logicalResolution.ValidationStatus,
+                    logicalResolution.ValidationMessage,
+                    logicalResolution.CanPersist);
+            }
+
+            var timeValidation = ValidateSelector(timePickerLocator, timePickerLocatorKind);
+            if (timeValidation.MatchedControl is null && timeValidation.CanPersist)
+            {
+                return logicalResolution;
+            }
+
+            return new ExistingControlResolutionResult(
+                timeValidation.MatchedControl is not null,
+                timeValidation.MatchedControl,
+                MaxStatus(logicalResolution.ValidationStatus, timeValidation.Status),
+                CombineMessage(logicalResolution.ValidationMessage, timeValidation.Message),
+                timeValidation.CanPersist);
+        }
+
+        if (step.ActionKind == RecordedActionKind.EnterText
+            && TryResolveTextBoxProxyAlias(step.Control, out var textBoxProxyAlias))
+        {
+            return ResolveInteractiveProxy(logicalResolution, textBoxProxyAlias);
+        }
+
+        if (!RequiresSpinnerProxyValidation(step)
+            || !TryResolveSpinnerProxyAlias(step.Control, out var spinnerProxyAlias))
+        {
+            return logicalResolution;
+        }
+
+        return ResolveInteractiveProxy(logicalResolution, spinnerProxyAlias);
+    }
+
+    private ExistingControlResolutionResult ResolveNotificationAssertion(
+        RecordedStep step,
+        RecorderNotificationHint hint)
+    {
+        var baseStatus = step.Control.LocatorKind == UiLocatorKind.Name
+            ? RecorderValidationStatus.Warning
+            : RecorderValidationStatus.Valid;
+        var baseMessage = step.Control.LocatorKind == UiLocatorKind.Name
+            ? "Using Name locator; prefer AutomationId for long-term stability."
+            : null;
+
+        var validationRoot = _validationRootProvider?.Invoke();
+        if (!_options.Validation.ValidateSelectors || validationRoot is not Control)
+        {
+            return new ExistingControlResolutionResult(true, null, baseStatus, baseMessage, true);
+        }
+
+        var notificationRoots = FindMatches(step.Control.LocatorValue, step.Control.LocatorKind);
+        if (notificationRoots.Length == 0)
+        {
+            return InvalidExistingControl(
+                $"Selector '{step.Control.LocatorKind}:{step.Control.LocatorValue}' could not be re-resolved in the current visual tree.");
+        }
+
+        var expectedText = step.StringValue?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedText))
+        {
+            return InvalidExistingControl("Notification assertion does not contain expected text.");
+        }
+
+        var foundScopedTextPart = false;
+        var foundAmbiguousScopedTextPart = false;
+        foreach (var notificationRoot in notificationRoots)
+        {
+            var textParts = notificationRoot
+                .GetVisualDescendants()
+                .OfType<Control>()
+                .Where(control => MatchesLocator(control, hint.Parts.TextLocator, hint.Parts.LocatorKind))
+                .ToArray();
+            if (textParts.Length > 1)
+            {
+                foundAmbiguousScopedTextPart = true;
+                continue;
+            }
+
+            if (textParts.Length == 0)
+            {
+                continue;
+            }
+
+            foundScopedTextPart = true;
+            var actualText = ReadText(textParts[0]);
+            if (actualText?.Contains(expectedText, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return new ExistingControlResolutionResult(
+                    true,
+                    notificationRoot,
+                    baseStatus,
+                    baseMessage,
+                    true);
+            }
+        }
+
+        if (foundAmbiguousScopedTextPart)
+        {
+            return InvalidExistingControl(
+                $"Notification text locator '{hint.Parts.LocatorKind}:{hint.Parts.TextLocator}' matched multiple controls inside one notification root.");
+        }
+
+        return InvalidExistingControl(
+            foundScopedTextPart
+                ? $"No matching notification contains expected text '{expectedText}'."
+                : $"Notification text locator '{hint.Parts.LocatorKind}:{hint.Parts.TextLocator}' could not be resolved inside a matching notification root.");
+    }
+
+    private ExistingControlResolutionResult ResolveNotificationExists(RecordedStep step)
+    {
+        var baseStatus = step.Control.LocatorKind == UiLocatorKind.Name
+            ? RecorderValidationStatus.Warning
+            : RecorderValidationStatus.Valid;
+        var baseMessage = step.Control.LocatorKind == UiLocatorKind.Name
+            ? "Using Name locator; prefer AutomationId for long-term stability."
+            : null;
+
+        var validationRoot = _validationRootProvider?.Invoke();
+        if (!_options.Validation.ValidateSelectors || validationRoot is not Control)
+        {
+            return new ExistingControlResolutionResult(true, null, baseStatus, baseMessage, true);
+        }
+
+        var notificationRoots = FindMatches(step.Control.LocatorValue, step.Control.LocatorKind);
+        return notificationRoots.Length == 0
+            ? InvalidExistingControl(
+                $"Selector '{step.Control.LocatorKind}:{step.Control.LocatorValue}' could not be re-resolved in the current visual tree.")
+            : new ExistingControlResolutionResult(
+                true,
+                notificationRoots[0],
+                baseStatus,
+                baseMessage,
+                true);
+    }
+
+    private RecorderNotificationHint[] FindNotificationHints(RecordedControlDescriptor descriptor)
+    {
+        return _options.NotificationHints
+            .Where(candidate => candidate.LocatorKind == descriptor.LocatorKind
+                && string.Equals(
+                    candidate.LocatorValue.Trim(),
+                    descriptor.LocatorValue.Trim(),
+                    StringComparison.Ordinal))
+            .ToArray();
+    }
+
+    private static ExistingControlResolutionResult InvalidExistingControl(string message)
+    {
+        return new ExistingControlResolutionResult(
+            false,
+            null,
+            RecorderValidationStatus.Invalid,
+            message,
+            false);
+    }
+
+    private static string? ReadText(Control control)
+    {
+        return control switch
+        {
+            TextBox textBox => textBox.Text,
+            TextBlock textBlock => textBlock.Text,
+            Label label => label.Content?.ToString(),
+            _ => AutomationProperties.GetName(control)
+        };
+    }
+
+    private ExistingControlResolutionResult ResolveInteractiveProxy(
+        ExistingControlResolutionResult logicalResolution,
+        RecorderLocatorAlias proxyAlias)
+    {
+        var interactiveValidation = ValidateSelector(
+            proxyAlias.SourceLocatorValue.Trim(),
+            proxyAlias.SourceLocatorKind);
+        return new ExistingControlResolutionResult(
+            interactiveValidation.MatchedControl is not null,
+            interactiveValidation.MatchedControl,
+            MaxStatus(logicalResolution.ValidationStatus, interactiveValidation.Status),
+            CombineMessage(logicalResolution.ValidationMessage, interactiveValidation.Message),
+            interactiveValidation.CanPersist);
+    }
+
+    private SelectorValidationResult ValidateSelector(
+        Control expectedControl,
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
+    {
+        var validation = ValidateSelector(locatorValue, locatorKind, includeLogicalDescendants);
         if (!validation.Success)
         {
             return validation;
@@ -183,7 +483,10 @@ internal sealed class RecorderSelectorResolver
         return validation;
     }
 
-    private SelectorValidationResult ValidateSelector(string locatorValue, UiLocatorKind locatorKind)
+    private SelectorValidationResult ValidateSelector(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
     {
         var baseStatus = locatorKind == UiLocatorKind.Name
             ? RecorderValidationStatus.Warning
@@ -198,12 +501,7 @@ internal sealed class RecorderSelectorResolver
             return new SelectorValidationResult(baseStatus, baseMessage, true, null);
         }
 
-        var matches = root
-            .GetVisualDescendants()
-            .OfType<Control>()
-            .Prepend(root)
-            .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
-            .ToArray();
+        var matches = FindMatches(locatorValue, locatorKind, includeLogicalDescendants);
 
         if (matches.Length == 0)
         {
@@ -226,6 +524,76 @@ internal sealed class RecorderSelectorResolver
         return new SelectorValidationResult(baseStatus, baseMessage, true, matches[0]);
     }
 
+    private Control[] FindMatches(
+        string locatorValue,
+        UiLocatorKind locatorKind,
+        bool includeLogicalDescendants = false)
+    {
+        var root = _validationRootProvider?.Invoke();
+        if (root is null)
+        {
+            return [];
+        }
+
+        IEnumerable<Control> candidates = root.GetVisualDescendants().OfType<Control>().Prepend(root);
+        if (includeLogicalDescendants)
+        {
+            var attachedControls = candidates
+                .Concat(root.GetLogicalDescendants().OfType<Control>())
+                .Distinct()
+                .ToArray();
+            candidates = attachedControls
+                .Concat(EnumerateDetachedMenuItems(attachedControls))
+                .Distinct();
+        }
+
+        return candidates
+            .Where(candidate => MatchesLocator(candidate, locatorValue, locatorKind))
+            .ToArray();
+    }
+
+    private static IEnumerable<MenuItem> EnumerateDetachedMenuItems(IEnumerable<Control> controls)
+    {
+        foreach (var control in controls)
+        {
+            if (control is Menu menu)
+            {
+                foreach (var item in EnumerateMenuItems(menu.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+
+            if (control.ContextMenu is { } contextMenu)
+            {
+                foreach (var item in EnumerateMenuItems(contextMenu.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+
+            if (control.ContextFlyout is MenuFlyout menuFlyout)
+            {
+                foreach (var item in EnumerateMenuItems(menuFlyout.Items.OfType<MenuItem>()))
+                {
+                    yield return item;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<MenuItem> EnumerateMenuItems(IEnumerable<MenuItem> items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+            foreach (var descendant in EnumerateMenuItems(item.Items.OfType<MenuItem>()))
+            {
+                yield return descendant;
+            }
+        }
+    }
+
     private static bool MatchesLocator(Control candidate, string locatorValue, UiLocatorKind locatorKind)
     {
         return locatorKind switch
@@ -243,6 +611,7 @@ internal sealed class RecorderSelectorResolver
     private bool TryResolveLocatorAlias(
         string locatorValue,
         UiLocatorKind locatorKind,
+        bool includeSingleSelectAlias,
         out RecorderLocatorAlias alias)
     {
         alias = _options.LocatorAliases.FirstOrDefault(candidate =>
@@ -253,7 +622,59 @@ internal sealed class RecorderSelectorResolver
             return true;
         }
 
-        var gridHint = _options.GridHints.FirstOrDefault(candidate =>
+        var timePickerHint = _options.TimePickerHints.FirstOrDefault(candidate =>
+            candidate.Parts.LocatorKind == locatorKind
+            && (string.Equals(candidate.Parts.TimePickerLocator.Trim(), locatorValue, StringComparison.Ordinal)
+                || (!string.IsNullOrWhiteSpace(candidate.Parts.InputLocator)
+                    && string.Equals(candidate.Parts.InputLocator.Trim(), locatorValue, StringComparison.Ordinal))));
+        if (timePickerHint is not null)
+        {
+            alias = new RecorderLocatorAlias(
+                locatorValue,
+                timePickerHint.LocatorValue,
+                UiControlType.TimePicker,
+                timePickerHint.Parts.LocatorKind,
+                timePickerHint.LocatorKind,
+                timePickerHint.FallbackToName);
+            return true;
+        }
+
+        var datePickerHint = _options.DatePickerHints.FirstOrDefault(candidate =>
+            candidate.Parts.LocatorKind == locatorKind
+            && (string.Equals(candidate.Parts.ValueLocator.Trim(), locatorValue, StringComparison.Ordinal)
+                || (!string.IsNullOrWhiteSpace(candidate.Parts.CalendarLocator)
+                    && string.Equals(candidate.Parts.CalendarLocator.Trim(), locatorValue, StringComparison.Ordinal))));
+        if (datePickerHint is not null)
+        {
+            alias = new RecorderLocatorAlias(
+                locatorValue,
+                datePickerHint.LocatorValue,
+                UiControlType.DateTimePicker,
+                datePickerHint.Parts.LocatorKind,
+                datePickerHint.LocatorKind,
+                datePickerHint.FallbackToName);
+            return true;
+        }
+
+        if (includeSingleSelectAlias)
+        {
+            var singleSelectHint = _options.SingleSelectHints.FirstOrDefault(candidate =>
+                candidate.Parts.LocatorKind == locatorKind
+                && string.Equals(candidate.Parts.ResultsLocator.Trim(), locatorValue, StringComparison.Ordinal));
+            if (singleSelectHint is not null)
+            {
+                alias = new RecorderLocatorAlias(
+                    locatorValue,
+                    singleSelectHint.LocatorValue,
+                    UiControlType.ComboBox,
+                    singleSelectHint.Parts.LocatorKind,
+                    singleSelectHint.LocatorKind,
+                    singleSelectHint.FallbackToName);
+                return true;
+            }
+        }
+
+        var gridHint = _options.EnumerateGridHints().FirstOrDefault(candidate =>
             candidate.SourceLocatorKind == locatorKind
             && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal));
         if (gridHint is null || string.IsNullOrWhiteSpace(gridHint.TargetLocatorValue))
@@ -280,6 +701,78 @@ internal sealed class RecorderSelectorResolver
             candidate.LocatorKind == locatorKind
             && string.Equals(candidate.LocatorValue.Trim(), locatorValue, StringComparison.Ordinal))!;
         return hint is not null;
+    }
+
+    private bool TryResolveSpinnerProxyAlias(
+        RecordedControlDescriptor descriptor,
+        out RecorderLocatorAlias alias)
+    {
+        alias = null!;
+        return descriptor.ControlType == UiControlType.Spinner
+            && RecorderSpinnerProxyConfiguration.TryResolveAlias(
+                _options,
+                descriptor.LocatorValue,
+                descriptor.LocatorKind,
+                out alias);
+    }
+
+    private bool TryResolveTextBoxProxyAlias(
+        RecordedControlDescriptor descriptor,
+        out RecorderLocatorAlias alias)
+    {
+        alias = _options.LocatorAliases.FirstOrDefault(candidate =>
+            descriptor.ControlType == UiControlType.TextBox
+            && candidate.TargetControlType == UiControlType.TextBox
+            && candidate.TargetLocatorKind == descriptor.LocatorKind
+            && string.Equals(
+                candidate.TargetLocatorValue.Trim(),
+                descriptor.LocatorValue.Trim(),
+                StringComparison.Ordinal))!;
+        return alias is not null && !string.IsNullOrWhiteSpace(alias.SourceLocatorValue);
+    }
+
+    private static bool RequiresSpinnerProxyValidation(RecordedStep step)
+    {
+        return step.ActionKind is RecordedActionKind.SetSpinnerValue
+            or RecordedActionKind.WaitUntilValueEquals
+            or RecordedActionKind.WaitUntilTextEquals
+            or RecordedActionKind.WaitUntilTextContains
+            || step.ValueAccessorKind == RecorderValueAccessorKind.NumericValue;
+    }
+
+    private bool TryResolveTimePickerPart(
+        RecordedControlDescriptor descriptor,
+        out string locatorValue,
+        out UiLocatorKind locatorKind)
+    {
+        var hint = _options.TimePickerHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == descriptor.LocatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), descriptor.LocatorValue.Trim(), StringComparison.Ordinal));
+        locatorValue = hint?.Parts.TimePickerLocator ?? string.Empty;
+        locatorKind = hint?.Parts.LocatorKind ?? UiLocatorKind.AutomationId;
+        return hint is not null && !string.IsNullOrWhiteSpace(locatorValue);
+    }
+
+    private bool TryResolveSingleSelectPart(
+        RecordedControlDescriptor descriptor,
+        out RecorderSingleSelectHint hint)
+    {
+        hint = _options.SingleSelectHints.FirstOrDefault(candidate =>
+            candidate.LocatorKind == descriptor.LocatorKind
+            && string.Equals(candidate.LocatorValue.Trim(), descriptor.LocatorValue.Trim(), StringComparison.Ordinal))!;
+        return hint is not null;
+    }
+
+    private static bool RequiresTimePickerPartValidation(RecordedActionKind actionKind)
+    {
+        return actionKind is RecordedActionKind.SetTime or RecordedActionKind.WaitUntilTimeEquals;
+    }
+
+    private static RecorderValidationStatus MaxStatus(
+        RecorderValidationStatus left,
+        RecorderValidationStatus right)
+    {
+        return (RecorderValidationStatus)Math.Max((int)left, (int)right);
     }
 
     private static bool TryGetNameLocator(Control control, out string locator)

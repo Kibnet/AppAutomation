@@ -162,5 +162,45 @@ public enum UiControlType
     /// <summary>
     /// A shell/docking navigation control. Maps to <see cref="IShellNavigationControl"/>.
     /// </summary>
-    ShellNavigation = 30
+    ShellNavigation = 30,
+
+    /// <summary>
+    /// A composite multi-select popup. Maps to <see cref="IMultiSelectControl"/>.
+    /// </summary>
+    MultiSelect = 31,
+
+    /// <summary>
+    /// A logical ComboBoxEditor-style filter with an exact selected item set. Maps to <see cref="IComboBoxFilterControl"/>.
+    /// </summary>
+    ComboBoxFilter = 32,
+
+    /// <summary>
+    /// A search input with optional history. Maps to <see cref="ISearchControl"/>.
+    /// </summary>
+    Search = 33,
+
+    /// <summary>
+    /// A time picker control. Maps to <see cref="ITimePickerControl"/>.
+    /// </summary>
+    TimePicker = 34,
+
+    /// <summary>
+    /// An expandable content container. Maps to <see cref="IExpanderControl"/>.
+    /// </summary>
+    Expander = 35,
+
+    /// <summary>
+    /// A popup or inline color selection control. Maps to <see cref="IColorPickerControl"/>.
+    /// </summary>
+    ColorPicker = 36,
+
+    /// <summary>
+    /// A menu that owns one or more menu-item paths. Maps to <see cref="IMenuControl"/>.
+    /// </summary>
+    Menu = 37,
+
+    /// <summary>
+    /// A directly addressable menu item. Maps to <see cref="IMenuItemControl"/>.
+    /// </summary>
+    MenuItem = 38
 }

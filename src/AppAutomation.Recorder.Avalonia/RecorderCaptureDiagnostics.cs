@@ -232,12 +232,14 @@ internal static class RecorderCaptureDiagnostics
         return step?.Control.ControlType switch
         {
             UiControlType.SearchPicker
+                or UiControlType.Search
                 or UiControlType.DateRangeFilter
                 or UiControlType.NumericRangeFilter
                 or UiControlType.Dialog
                 or UiControlType.Notification
                 or UiControlType.FolderExport
-                or UiControlType.ShellNavigation => "composed adapter configuration",
+                or UiControlType.ShellNavigation
+                or UiControlType.MultiSelect => "composed adapter configuration",
             _ => "provider resolver or recorder action mapping"
         };
     }

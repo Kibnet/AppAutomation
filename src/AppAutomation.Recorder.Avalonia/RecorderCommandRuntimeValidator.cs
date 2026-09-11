@@ -4,11 +4,13 @@ namespace AppAutomation.Recorder.Avalonia;
 
 internal sealed class RecorderCommandRuntimeValidator
 {
+    private readonly AppAutomationRecorderOptions _recorderOptions;
     private readonly RecorderValidationOptions _options;
 
     public RecorderCommandRuntimeValidator(AppAutomationRecorderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        _recorderOptions = options;
         _options = options.Validation;
     }
 
@@ -76,7 +78,7 @@ internal sealed class RecorderCommandRuntimeValidator
         return targets;
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateTarget(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateTarget(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -102,12 +104,14 @@ internal sealed class RecorderCommandRuntimeValidator
         }
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
         return step.ActionKind switch
         {
+            RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue =>
+                ValidateSemanticValue(step, target),
             RecordedActionKind.EnterText => ValidateTextAction(step, target),
             RecordedActionKind.ClickButton => ValidateControlType(step, target, UiControlType.Button),
             RecordedActionKind.SetChecked => ValidateControlType(step, target, [UiControlType.CheckBox, UiControlType.RadioButton])
@@ -121,12 +125,27 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetSliderValue => ValidateControlType(step, target, UiControlType.Slider)
                 .Concat(RequireDouble(step, target)),
             RecordedActionKind.SetSpinnerValue => ValidateSpinnerAction(step, target),
+            RecordedActionKind.SetTime => ValidateControlType(step, target, UiControlType.TimePicker)
+                .Concat(RequireTime(step, target)),
+            RecordedActionKind.SetExpanded => ValidateControlType(step, target, UiControlType.Expander)
+                .Concat(RequireBool(step, target)),
+            RecordedActionKind.SetColor => ValidateControlType(step, target, UiControlType.ColorPicker)
+                .Concat(RequireColor(step, target)),
+            RecordedActionKind.InvokeMenuItem => ValidateMenuItemInvocation(step, target),
+            RecordedActionKind.InvokeContextMenuItem => ValidateContextMenuInvocation(step, target),
             RecordedActionKind.SelectTabItem => ValidateControlType(step, target, UiControlType.TabItem),
             RecordedActionKind.SelectTreeItem => ValidateControlType(step, target, UiControlType.Tree)
                 .Concat(RequireString(step, target, allowEmpty: false, "tree item text")),
             RecordedActionKind.SetDate => ValidateControlType(step, target, [UiControlType.DateTimePicker, UiControlType.Calendar])
                 .Concat(RequireDate(step, target)),
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains => ValidateTextReadableAssertion(step, target),
+            RecordedActionKind.WaitUntilValueEquals => ValidateSpinnerValueAssertion(step, target),
+            RecordedActionKind.WaitUntilTimeEquals => ValidateControlType(step, target, UiControlType.TimePicker)
+                .Concat(RequireTime(step, target)),
+            RecordedActionKind.WaitUntilIsExpanded => ValidateControlType(step, target, UiControlType.Expander)
+                .Concat(RequireBool(step, target)),
+            RecordedActionKind.WaitUntilColorEquals => ValidateControlType(step, target, UiControlType.ColorPicker)
+                .Concat(RequireColor(step, target)),
             RecordedActionKind.WaitUntilIsChecked => ValidateControlType(step, target, UiControlType.CheckBox)
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.WaitUntilIsToggled => ValidateControlType(step, target, UiControlType.ToggleButton)
@@ -137,9 +156,10 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.WaitUntilExists => Enumerable.Empty<RecorderRuntimeValidationFinding>(),
             RecordedActionKind.WaitUntilGridRowsAtLeast => ValidateGridAction(step, target)
                 .Concat(RequireNonNegativeInt(step.IntValue, target, "grid row count")),
+            RecordedActionKind.WaitUntilGridContainsRow => ValidateGridAction(step, target)
+                .Concat(RequireNamedGridRow(step, target)),
             RecordedActionKind.WaitUntilGridCellEquals => ValidateGridAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
                 .Concat(RequireString(step, target, allowEmpty: true, "grid cell value")),
             RecordedActionKind.WaitUntilProgressAtLeast => ValidateControlType(step, target, UiControlType.ProgressBar)
                 .Concat(RequireDouble(step, target)),
@@ -152,19 +172,25 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SearchAndSelect => ValidateControlType(step, target, UiControlType.SearchPicker)
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
+            RecordedActionKind.EnterSearch => ValidateControlType(step, target, UiControlType.Search)
+                .Concat(RequireString(step, target, allowEmpty: false, "search text")),
+            RecordedActionKind.ClearSearch => ValidateControlType(step, target, UiControlType.Search),
+            RecordedActionKind.ApplySearchFromHistory => ValidateControlType(step, target, UiControlType.Search)
+                .Concat(RequireString(step, target, allowEmpty: false, "search history item")),
             RecordedActionKind.SearchAndSelectGridCell => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
                 .Concat(RequireString(step, target, allowEmpty: false, "search text"))
                 .Concat(RequireItemValue(step, target)),
+            RecordedActionKind.SetGridCellChecked => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true))
+                .Concat(RequireBool(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index")),
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: false)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
                 .Concat(RequireString(step, target, allowEmpty: false, "grid column name")),
             RecordedActionKind.ScrollGridToEnd => ValidateGridUserAction(step, target),
             RecordedActionKind.CopyGridCell => ValidateGridUserAction(step, target)
-                .Concat(RequireNonNegativeInt(step.RowIndex, target, "grid row index"))
-                .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index")),
+                .Concat(RequireGridCoordinates(step, target, requireTargetColumn: true)),
             RecordedActionKind.ExportGrid => ValidateGridUserAction(step, target),
             RecordedActionKind.SetDateRangeFilter => ValidateControlType(step, target, UiControlType.DateRangeFilter)
                 .Concat(RequireAtLeastOneDateBound(step, target)),
@@ -181,9 +207,19 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.EditGridCellDate => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireDate(step, target)),
-            RecordedActionKind.SelectGridCellComboItem => ValidateGridUserAction(step, target)
+            RecordedActionKind.EditGridCellTime => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireTime(step, target)),
+            RecordedActionKind.EditGridCellColor => ValidateGridUserAction(step, target)
+                .Concat(RequireGridCellEditIndexes(step, target))
+                .Concat(RequireColor(step, target)),
+            RecordedActionKind.SelectGridCellComboItem => ValidateControlType(step, target, UiControlType.Grid)
                 .Concat(RequireGridCellEditIndexes(step, target))
                 .Concat(RequireString(step, target, allowEmpty: false, "grid combo item text")),
+            RecordedActionKind.SelectMultiItems
+                or RecordedActionKind.CancelMultiSelection => ValidateMultiSelectAction(step, target),
+            RecordedActionKind.ApplyFilterSelection
+                or RecordedActionKind.CancelFilterSelection => ValidateComboBoxFilterAction(step, target),
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
@@ -192,6 +228,130 @@ internal sealed class RecorderCommandRuntimeValidator
                 or RecordedActionKind.ActivateShellPane => ValidateControlType(step, target, UiControlType.ShellNavigation)
                     .Concat(RequireString(step, target, allowEmpty: false, "shell pane name")),
             _ => [Invalid(target, "action-unsupported", $"Recorded action '{step.ActionKind}' is not supported by {target}.")]
+        };
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSemanticValue(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        if (step.ValueKind is null || step.ValueAccessorKind is null)
+        {
+            yield return Invalid(
+                target,
+                "semantic-value-missing",
+                $"Recorded action '{step.ActionKind}' does not define a semantic value accessor.");
+            yield break;
+        }
+
+        if (!SupportsSemanticAccessor(step.Control.ControlType, step.ValueKind.Value, step.ValueAccessorKind.Value))
+        {
+            yield return Invalid(
+                target,
+                "semantic-value-incompatible",
+                $"UiControlType.{step.Control.ControlType} does not expose {step.ValueAccessorKind} as {step.ValueKind}.");
+        }
+
+        if (step.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
+            or RecorderValueAccessorKind.GridCellValue)
+        {
+            foreach (var finding in RequireGridCoordinates(step, target, requireTargetColumn: true))
+            {
+                yield return finding;
+            }
+        }
+
+        if (step.ActionKind != RecordedActionKind.AssertValue || !step.HasExpectedLiteral)
+        {
+            yield break;
+        }
+
+        foreach (var finding in ValidateLiteralPayload(step, target))
+        {
+            yield return finding;
+        }
+    }
+
+    private static bool SupportsSemanticAccessor(
+        UiControlType controlType,
+        RecorderValueKind valueKind,
+        RecorderValueAccessorKind accessorKind)
+    {
+        return (controlType, valueKind, accessorKind) switch
+        {
+            (UiControlType.TextBox or UiControlType.Label or UiControlType.Search,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text) => true,
+            (UiControlType.SearchPicker or UiControlType.ComboBox or UiControlType.ListBox,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.SelectedItemText) => true,
+            (UiControlType.MultiSelect or UiControlType.ComboBoxFilter,
+                RecorderValueKind.StringSet,
+                RecorderValueAccessorKind.SelectedItems) => true,
+            (UiControlType.Spinner or UiControlType.Slider or UiControlType.ProgressBar,
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericValue) => true,
+            (UiControlType.DateTimePicker,
+                RecorderValueKind.Date,
+                RecorderValueAccessorKind.SelectedDate) => true,
+            (UiControlType.TimePicker,
+                RecorderValueKind.Time,
+                RecorderValueAccessorKind.SelectedTime) => true,
+            (UiControlType.ColorPicker,
+                RecorderValueKind.Color,
+                RecorderValueAccessorKind.Color) => true,
+            (UiControlType.CheckBox,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsChecked) => true,
+            (UiControlType.RadioButton,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected) => true,
+            (UiControlType.ToggleButton,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsToggled) => true,
+            (UiControlType.TabItem,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsSelected) => true,
+            (UiControlType.Expander,
+                RecorderValueKind.Boolean,
+                RecorderValueAccessorKind.IsExpanded) => true,
+            (_, RecorderValueKind.Boolean, RecorderValueAccessorKind.IsEnabled) => true,
+            (UiControlType.Grid or UiControlType.DataGridView,
+                RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellText) => true,
+            (UiControlType.Grid or UiControlType.DataGridView,
+                RecorderValueKind.Text or RecorderValueKind.Number or RecorderValueKind.Boolean
+                    or RecorderValueKind.Date or RecorderValueKind.Time or RecorderValueKind.Color
+                    or RecorderValueKind.GridCellText,
+                RecorderValueAccessorKind.GridCellValue) => true,
+            _ => false
+        };
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateLiteralPayload(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.ValueKind switch
+        {
+            RecorderValueKind.Text or RecorderValueKind.GridCellText =>
+                step.StringValue is null
+                    ? [Invalid(target, "literal-missing-string", "Text assertion requires an expected string, including an explicit empty string when intended.")]
+                    : [],
+            RecorderValueKind.Color => ColorValue.TryNormalize(step.StringValue, out _)
+                ? []
+                : [Invalid(target, "literal-invalid-color", "Color assertion requires #RRGGBB or #AARRGGBB expected text.")],
+            RecorderValueKind.Number => step.DoubleValue.HasValue
+                ? []
+                : [Invalid(target, "literal-missing-number", "Numeric assertion requires an expected number.")],
+            RecorderValueKind.Boolean => step.BoolValue.HasValue
+                ? []
+                : [Invalid(target, "literal-missing-boolean", "Boolean assertion requires an expected value.")],
+            RecorderValueKind.Date or RecorderValueKind.Time => [],
+            RecorderValueKind.StringSet => step.StringValues is null
+                ? [Invalid(target, "literal-missing-string-set", "Collection assertion requires an expected string set.")]
+                : [],
+            _ => [Invalid(target, "literal-kind-unsupported", $"Literal kind '{step.ValueKind}' is not supported.")]
         };
     }
 
@@ -210,11 +370,11 @@ internal sealed class RecorderCommandRuntimeValidator
         }
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        foreach (var finding in ValidateControlType(step, target, UiControlType.TextBox))
+        foreach (var finding in ValidateControlType(step, target, [UiControlType.Spinner, UiControlType.TextBox]))
         {
             yield return finding;
         }
@@ -224,10 +384,17 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return finding;
         }
 
-        yield return Warning(
-            target,
-            "spinner-textbox-fallback",
-            "Spinner action is generated through a text-box fallback; verify the application exposes a writable spinner text part.");
+        if (step.Control.ControlType == UiControlType.TextBox
+            && !RecorderSpinnerProxyConfiguration.IsConfigured(
+                _recorderOptions,
+                step.Control.LocatorValue,
+                step.Control.LocatorKind))
+        {
+            yield return Warning(
+                target,
+                "spinner-textbox-fallback",
+                "Spinner action is generated through a text-box fallback; verify the application exposes a writable spinner text part.");
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateTextReadableAssertion(
@@ -254,6 +421,7 @@ internal sealed class RecorderCommandRuntimeValidator
                          UiControlType.TabItem,
                          UiControlType.Grid,
                          UiControlType.SearchPicker,
+                         UiControlType.Search,
                          UiControlType.Dialog,
                          UiControlType.Notification,
                          UiControlType.FolderExport,
@@ -276,7 +444,100 @@ internal sealed class RecorderCommandRuntimeValidator
         return ValidateControlType(step, target, [UiControlType.Grid, UiControlType.DataGridView]);
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiSelectAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return ValidateSelectionSetAction(
+            step,
+            target,
+            UiControlType.MultiSelect,
+            "payload-invalid-multi-select-values",
+            "Multi-select action requires distinct non-empty item texts.",
+            "multi-select-adapter-required",
+            "Multi-select action requires registered composite parts or a consumer IMultiSelectControl adapter.",
+            includeAdapterWarning: !IsConfiguredMultiSelect(step));
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateComboBoxFilterAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return ValidateSelectionSetAction(
+            step,
+            target,
+            UiControlType.ComboBoxFilter,
+            "payload-invalid-combo-box-filter-values",
+            "Combo-box filter action requires distinct non-empty item texts.",
+            "combo-box-filter-adapter-required",
+            "Combo-box filter action requires registered composite parts or a consumer IComboBoxFilterControl adapter.",
+            includeAdapterWarning: !IsConfiguredComboBoxFilter(step));
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateSelectionSetAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target,
+        UiControlType controlType,
+        string invalidPayloadCode,
+        string invalidPayloadMessage,
+        string adapterWarningCode,
+        string adapterWarningMessage,
+        bool includeAdapterWarning = true)
+    {
+        foreach (var finding in ValidateControlType(step, target, controlType))
+        {
+            yield return finding;
+        }
+
+        var values = step.StringValues?.Select(static value => value?.Trim() ?? string.Empty).ToArray() ?? [];
+        if (values.Any(string.IsNullOrWhiteSpace)
+            || values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != values.Length)
+        {
+            yield return Invalid(target, invalidPayloadCode, invalidPayloadMessage);
+        }
+
+        if (includeAdapterWarning)
+        {
+            yield return Warning(target, adapterWarningCode, adapterWarningMessage);
+        }
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateSpinnerValueAssertion(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(step, target, UiControlType.Spinner))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in RequireDouble(step, target))
+        {
+            yield return finding;
+        }
+    }
+
+    private bool IsConfiguredComboBoxFilter(RecordedStep step)
+    {
+        return _recorderOptions.ComboBoxFilterHints.Any(hint =>
+            hint.LocatorKind == step.Control.LocatorKind
+            && string.Equals(
+                hint.LocatorValue.Trim(),
+                step.Control.LocatorValue.Trim(),
+                StringComparison.Ordinal));
+    }
+
+    private bool IsConfiguredMultiSelect(RecordedStep step)
+    {
+        return _recorderOptions.MultiSelectHints.Any(hint =>
+            hint.LocatorKind == step.Control.LocatorKind
+            && string.Equals(
+                hint.LocatorValue.Trim(),
+                step.Control.LocatorValue.Trim(),
+                StringComparison.Ordinal));
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateGridUserAction(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
@@ -285,10 +546,73 @@ internal sealed class RecorderCommandRuntimeValidator
             yield return finding;
         }
 
-        yield return Warning(
-            target,
-            "grid-user-action-adapter-required",
-            "Grid user action requires a runtime grid action adapter; plain grid row/cell access is not enough.");
+        if (!IsConfiguredGridAction(step))
+        {
+            yield return Warning(
+                target,
+                "grid-user-action-adapter-required",
+                "Grid user action requires a runtime grid action adapter; plain grid row/cell access is not enough.");
+        }
+    }
+
+    private bool IsConfiguredGridAction(RecordedStep step)
+    {
+        return _recorderOptions.GridAutomation.Any(definition =>
+                MatchesGridTarget(
+                    step.Control,
+                    definition.RuntimeLocatorValue,
+                    definition.RuntimeLocatorKind))
+            || _recorderOptions.GridActionHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
+            || _recorderOptions.GridSearchPickerHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind))
+            || _recorderOptions.GridEditHints.Any(hint =>
+                MatchesGridTarget(step.Control, hint.TargetGridLocatorValue, hint.TargetGridLocatorKind));
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateMenuItemInvocation(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(
+                     step,
+                     target,
+                     [UiControlType.Menu, UiControlType.MenuItem]))
+        {
+            yield return finding;
+        }
+
+        var path = step.StringValues ?? [];
+        if (step.Control.ControlType == UiControlType.Menu &&
+            (path.Count == 0 || path.Any(string.IsNullOrWhiteSpace)))
+        {
+            yield return Invalid(
+                target,
+                "payload-invalid-menu-path",
+                "Menu invocation requires a non-empty exact root-to-leaf caption path.");
+        }
+
+        if (step.Control.ControlType == UiControlType.MenuItem && path.Count > 0)
+        {
+            yield return Invalid(
+                target,
+                "payload-unexpected-menu-path",
+                "A directly addressable menu item must not include a menu path payload.");
+        }
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> ValidateContextMenuInvocation(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        var path = step.StringValues ?? [];
+        if (path.Count == 0 || path.Any(string.IsNullOrWhiteSpace))
+        {
+            yield return Invalid(
+                target,
+                "payload-invalid-context-menu-path",
+                "Context-menu invocation requires a non-empty exact root-to-leaf caption path.");
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateControlType(
@@ -346,6 +670,27 @@ internal sealed class RecorderCommandRuntimeValidator
             : [Invalid(target, "payload-missing-date", $"Recorded action '{step.ActionKind}' requires a date payload.")];
     }
 
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireTime(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return step.TimeValue is { } time && time >= TimeSpan.Zero && time < TimeSpan.FromDays(1)
+            ? []
+            : [Invalid(target, "payload-missing-time", $"Recorded action '{step.ActionKind}' requires a time-of-day payload.")];
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireColor(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return ColorValue.TryNormalize(step.StringValue, out _)
+            ? []
+            : [Invalid(
+                target,
+                "payload-invalid-color",
+                $"Recorded action '{step.ActionKind}' requires #RRGGBB or #AARRGGBB color text.")];
+    }
+
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireAtLeastOneDateBound(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
@@ -364,12 +709,92 @@ internal sealed class RecorderCommandRuntimeValidator
             : [Invalid(target, "payload-missing-double", $"Recorded action '{step.ActionKind}' requires at least one numeric bound.")];
     }
 
-    private static IEnumerable<RecorderRuntimeValidationFinding> RequireGridCellEditIndexes(
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCellEditIndexes(
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        return RequireNonNegativeInt(step.RowIndex, target, "grid row index")
-            .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"));
+        return RequireGridCoordinates(step, target, requireTargetColumn: true);
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target,
+        bool requireTargetColumn)
+    {
+        if (step.GridRowConditions is null)
+        {
+            return requireTargetColumn
+                ? RequireNonNegativeInt(step.RowIndex, target, "grid row index")
+                    .Concat(RequireNonNegativeInt(step.ColumnIndex, target, "grid column index"))
+                : RequireNonNegativeInt(step.RowIndex, target, "grid row index");
+        }
+
+        var findings = new List<RecorderRuntimeValidationFinding>();
+        if (step.GridRowConditions.Count == 0
+            || step.GridRowConditions.Any(static condition => string.IsNullOrWhiteSpace(condition.ColumnName)))
+        {
+            findings.Add(Invalid(target, "payload-missing-grid-row-selector", "Named grid action requires at least one row condition with a column name."));
+        }
+
+        if (step.GridRowConditions
+            .Select(static condition => condition.ColumnName)
+            .Distinct(StringComparer.Ordinal)
+            .Count() != step.GridRowConditions.Count)
+        {
+            findings.Add(Invalid(target, "payload-duplicate-grid-row-column", "Named grid row selector contains duplicate column names."));
+        }
+
+        if (requireTargetColumn && string.IsNullOrWhiteSpace(step.GridTargetColumnName))
+        {
+            findings.Add(Invalid(target, "payload-missing-grid-target-column", "Named grid cell action requires a target column name."));
+        }
+
+        if (!IsConfiguredGridMetadata(step))
+        {
+            findings.Add(Warning(
+                target,
+                "grid-column-metadata-adapter-required",
+                "Named grid action requires stable runtime column metadata registered with WithGridColumns or supplied by the grid control."));
+        }
+
+        return findings;
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireNamedGridRow(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        if (step.GridRowConditions is null)
+        {
+            return
+            [
+                Invalid(
+                    target,
+                    "payload-missing-grid-row-selector",
+                    "Named grid row assertion requires at least one row condition.")
+            ];
+        }
+
+        return RequireGridCoordinates(step, target, requireTargetColumn: false);
+    }
+
+    private bool IsConfiguredGridMetadata(RecordedStep step)
+    {
+        return _recorderOptions.EnumerateGridHints().Any(hint =>
+            hint.ColumnPropertyNames.Count > 0
+            && MatchesGridTarget(step.Control, hint.TargetLocatorValue, hint.TargetLocatorKind));
+    }
+
+    private static bool MatchesGridTarget(
+        RecordedControlDescriptor descriptor,
+        string locatorValue,
+        UiLocatorKind locatorKind)
+    {
+        return descriptor.LocatorKind == locatorKind
+            && string.Equals(
+                descriptor.LocatorValue.Trim(),
+                locatorValue.Trim(),
+                StringComparison.Ordinal);
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireString(

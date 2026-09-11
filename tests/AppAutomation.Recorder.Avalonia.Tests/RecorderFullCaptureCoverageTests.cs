@@ -4,7 +4,6 @@ using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -32,7 +31,13 @@ public sealed class RecorderFullCaptureCoverageTests
 
             using (Assert.Multiple())
             {
-                await Assert.That(preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)).IsEqualTo(true);
+                var rendersExpectedShape = step.ActionKind switch
+                {
+                    RecordedActionKind.CaptureCheckpoint => preview.Contains("var ", StringComparison.Ordinal),
+                    RecordedActionKind.AssertValue => preview.Contains("Assert.That", StringComparison.Ordinal),
+                    _ => preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)
+                };
+                await Assert.That(rendersExpectedShape).IsEqualTo(true);
                 await Assert.That(preview.Contains("Unsupported recorded action", StringComparison.Ordinal)).IsEqualTo(false);
                 await Assert.That(validated.CanPersist).IsEqualTo(true);
                 await Assert.That(validated.ValidationStatus == RecorderValidationStatus.Invalid).IsEqualTo(false);
@@ -85,11 +90,33 @@ public sealed class RecorderFullCaptureCoverageTests
                 RowIndex: 0,
                 ColumnIndex: 3),
             new RecordedStep(
+                RecordedActionKind.EditGridCellTime,
+                Descriptor("EditableGrid", UiControlType.Grid),
+                RowIndex: 0,
+                ColumnIndex: 4,
+                TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(
                 RecordedActionKind.SelectGridCellComboItem,
                 Descriptor("EditableGrid", UiControlType.Grid),
                 StringValue: "Approved",
                 RowIndex: 0,
-                ColumnIndex: 4)
+                ColumnIndex: 5),
+            new RecordedStep(
+                RecordedActionKind.SelectMultiItems,
+                Descriptor("Categories", UiControlType.MultiSelect),
+                StringValues: ["Gamma", "Alpha"]),
+            new RecordedStep(
+                RecordedActionKind.CancelMultiSelection,
+                Descriptor("Categories", UiControlType.MultiSelect),
+                StringValues: ["Gamma", "Alpha"]),
+            new RecordedStep(
+                RecordedActionKind.ApplyFilterSelection,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                StringValues: ["Closed", "Open"]),
+            new RecordedStep(
+                RecordedActionKind.CancelFilterSelection,
+                Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                StringValues: [])
         ]);
 
         using (Assert.Multiple())
@@ -113,7 +140,22 @@ public sealed class RecorderFullCaptureCoverageTests
                 "Page.EditGridCellDate(static page => page.EditableGrid, 0, 3, new global::System.DateTime(2026, 4, 28));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
-                "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 4, \"Approved\");",
+                "Page.EditGridCellTime(static page => page.EditableGrid, 0, 4, new global::System.TimeSpan(351300000000L));",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 5, \"Approved\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.SelectMultiItems(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.CancelMultiSelection(static page => page.Categories, new[] { \"Alpha\", \"Gamma\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"Closed\", \"Open\" });",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(preview.Contains(
+                "Page.CancelFilterSelection(static page => page.StatusFilter, global::System.Array.Empty<string>());",
                 StringComparison.Ordinal)).IsEqualTo(true);
         }
     }
@@ -136,15 +178,18 @@ public sealed class RecorderFullCaptureCoverageTests
         {
             ItemsSource = new[] { "One", "Two", "Three" }
         };
+        var notification = new Border();
         var notificationText = new Label { Content = "Export completed" };
         AutomationProperties.SetAutomationId(progress, "ReloadProgress");
         AutomationProperties.SetAutomationId(selectedList, "StatusList");
         AutomationProperties.SetAutomationId(countedList, "HistoryList");
+        AutomationProperties.SetAutomationId(notification, "ExportToast");
         AutomationProperties.SetAutomationId(notificationText, "ExportToastText");
         root.Children.Add(progress);
         root.Children.Add(selectedList);
         root.Children.Add(countedList);
-        root.Children.Add(notificationText);
+        notification.Child = notificationText;
+        root.Children.Add(notification);
         var factory = new RecorderStepFactory(options, () => root);
 
         var progressResult = factory.TryCreateAssertionStep(progress, RecorderAssertionMode.Auto);
@@ -306,12 +351,21 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.SetToggled, Descriptor("PinToggleButton", UiControlType.ToggleButton), BoolValue: true),
             new RecordedStep(RecordedActionKind.SelectComboItem, Descriptor("OperationCombo", UiControlType.ComboBox), StringValue: "GCD"),
             new RecordedStep(RecordedActionKind.SetSliderValue, Descriptor("ScaleSlider", UiControlType.Slider), DoubleValue: 2.5),
-            new RecordedStep(RecordedActionKind.SetSpinnerValue, Descriptor("CountSpinner", UiControlType.TextBox), DoubleValue: 7),
+            new RecordedStep(RecordedActionKind.SetSpinnerValue, Descriptor("CountSpinner", UiControlType.Spinner), DoubleValue: 7),
             new RecordedStep(RecordedActionKind.SelectTabItem, Descriptor("ControlMixTabItem", UiControlType.TabItem)),
             new RecordedStep(RecordedActionKind.SelectTreeItem, Descriptor("NavigationTree", UiControlType.Tree), StringValue: "Orders"),
             new RecordedStep(RecordedActionKind.SetDate, Descriptor("StartDatePicker", UiControlType.DateTimePicker), DateValue: date),
+            new RecordedStep(RecordedActionKind.SetTime, Descriptor("StartTimePicker", UiControlType.TimePicker), TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(RecordedActionKind.SetExpanded, Descriptor("DetailsExpander", UiControlType.Expander), BoolValue: true),
+            new RecordedStep(RecordedActionKind.SetColor, Descriptor("AccentColor", UiControlType.ColorPicker), StringValue: "#FF336699"),
+            new RecordedStep(RecordedActionKind.InvokeMenuItem, Descriptor("MainMenu", UiControlType.Menu), StringValues: ["Actions", "Export"]),
+            new RecordedStep(RecordedActionKind.InvokeContextMenuItem, Descriptor("ItemSurface", UiControlType.AutomationElement), StringValues: ["Actions", "Pin"]),
             new RecordedStep(RecordedActionKind.WaitUntilTextEquals, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
             new RecordedStep(RecordedActionKind.WaitUntilTextContains, Descriptor("StatusLabel", UiControlType.Label), StringValue: "Ready"),
+            new RecordedStep(RecordedActionKind.WaitUntilValueEquals, Descriptor("CountSpinner", UiControlType.Spinner), DoubleValue: 7),
+            new RecordedStep(RecordedActionKind.WaitUntilTimeEquals, Descriptor("StartTimePicker", UiControlType.TimePicker), TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(RecordedActionKind.WaitUntilIsExpanded, Descriptor("DetailsExpander", UiControlType.Expander), BoolValue: true),
+            new RecordedStep(RecordedActionKind.WaitUntilColorEquals, Descriptor("AccentColor", UiControlType.ColorPicker), StringValue: "#FF336699"),
             new RecordedStep(RecordedActionKind.WaitUntilIsChecked, Descriptor("AgreeCheckBox", UiControlType.CheckBox), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsToggled, Descriptor("PinToggleButton", UiControlType.ToggleButton), BoolValue: true),
             new RecordedStep(RecordedActionKind.WaitUntilIsSelected, Descriptor("PrimaryRadioButton", UiControlType.RadioButton), BoolValue: true),
@@ -319,6 +373,10 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.WaitUntilExists, Descriptor("LatePanel", UiControlType.AutomationElement)),
             new RecordedStep(RecordedActionKind.SelectListBoxItem, Descriptor("HistoryList", UiControlType.ListBox), StringValue: "Fibonacci"),
             new RecordedStep(RecordedActionKind.WaitUntilGridRowsAtLeast, Descriptor("OrdersGrid", UiControlType.Grid), IntValue: 3),
+            new RecordedStep(RecordedActionKind.WaitUntilGridContainsRow, Descriptor("OrdersGrid", UiControlType.Grid))
+            {
+                GridRowConditions = [new RecordedGridRowCondition("OrderId", "ORD-42")]
+            },
             new RecordedStep(RecordedActionKind.WaitUntilGridCellEquals, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "EX-13"),
             new RecordedStep(RecordedActionKind.SearchAndSelect, Descriptor("HistoryOperationPicker", UiControlType.SearchPicker), StringValue: "least", ItemValue: "Least Common Multiple"),
             new RecordedStep(RecordedActionKind.OpenGridRow, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0),
@@ -343,7 +401,32 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.EditGridCellText, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "Edited"),
             new RecordedStep(RecordedActionKind.EditGridCellNumber, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 2, DoubleValue: 42.5),
             new RecordedStep(RecordedActionKind.EditGridCellDate, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 3, DateValue: date),
-            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "Approved")
+            new RecordedStep(RecordedActionKind.EditGridCellTime, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, TimeValue: new TimeSpan(9, 45, 30)),
+            new RecordedStep(RecordedActionKind.EditGridCellColor, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 4, StringValue: "#FF336699"),
+            new RecordedStep(RecordedActionKind.SetGridCellChecked, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 5, BoolValue: true),
+            new RecordedStep(RecordedActionKind.SelectGridCellComboItem, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 5, StringValue: "Approved"),
+            new RecordedStep(RecordedActionKind.SelectMultiItems, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Alpha", "Gamma"]),
+            new RecordedStep(RecordedActionKind.CancelMultiSelection, Descriptor("Categories", UiControlType.MultiSelect), StringValues: ["Beta"]),
+            new RecordedStep(RecordedActionKind.ApplyFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: ["Open"]),
+            new RecordedStep(RecordedActionKind.CancelFilterSelection, Descriptor("StatusFilter", UiControlType.ComboBoxFilter), StringValues: []),
+            new RecordedStep(RecordedActionKind.EnterSearch, Descriptor("TableSearch", UiControlType.Search), StringValue: "orders"),
+            new RecordedStep(RecordedActionKind.ClearSearch, Descriptor("TableSearch", UiControlType.Search)),
+            new RecordedStep(RecordedActionKind.ApplySearchFromHistory, Descriptor("TableSearch", UiControlType.Search), StringValue: "customers"),
+            new RecordedStep(
+                RecordedActionKind.CaptureCheckpoint,
+                Descriptor("ValueLabel", UiControlType.Label),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CheckpointId: Guid.NewGuid(),
+                CheckpointVariableName: "valueBeforeAction"),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ValueLabel", UiControlType.Label),
+                StringValue: "Expected value",
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true)
         ];
     }
 

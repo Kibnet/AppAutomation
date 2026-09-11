@@ -1,12 +1,14 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
+using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
+using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Interactivity;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
-using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
+using Avalonia.LogicalTree;
 
 namespace AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 
@@ -102,6 +104,14 @@ internal class AutomationElement
 
     public DateTimePicker AsDateTimePicker() => this as DateTimePicker ?? new DateTimePicker(RequireControl<global::Avalonia.Controls.DatePicker>());
 
+    public TimePicker AsTimePicker() => this as TimePicker ?? new TimePicker(RequireControl<global::Avalonia.Controls.TimePicker>());
+
+    public Expander AsExpander() => this as Expander ?? new Expander(RequireControl<global::Avalonia.Controls.Expander>());
+
+    public Menu AsMenu() => this as Menu ?? new Menu(RequireControl<global::Avalonia.Controls.Menu>());
+
+    public MenuItem AsMenuItem() => this as MenuItem ?? new MenuItem(RequireControl<global::Avalonia.Controls.MenuItem>());
+
     public Spinner AsSpinner()
     {
         if (this is Spinner spinner)
@@ -114,7 +124,13 @@ internal class AutomationElement
             return new Spinner(textBox);
         }
 
-        throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to Spinner.");
+        if (Control is global::Avalonia.Controls.NumericUpDown numericUpDown)
+        {
+            return new Spinner(numericUpDown);
+        }
+
+        throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+            $"Control '{Control.GetType().Name}' cannot be converted to Spinner.");
     }
 
     public Tab AsTab() => this as Tab ?? new Tab(RequireControl<global::Avalonia.Controls.TabControl>());
@@ -153,7 +169,8 @@ internal class AutomationElement
                 return typed;
             }
 
-            throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
+            throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                $"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
         });
     }
 
@@ -172,7 +189,8 @@ internal class AutomationElement
                 return descendant;
             }
 
-            throw new InvalidOperationException($"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
+            throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                $"Control '{Control.GetType().Name}' cannot be converted to '{typeof(T).Name}'.");
         });
     }
 
@@ -188,8 +206,13 @@ internal class AutomationElement
             global::Avalonia.Controls.ComboBox comboBox => new ComboBox(comboBox),
             global::Avalonia.Controls.ListBox listBox => new ListBox(listBox),
             global::Avalonia.Controls.Slider slider => new Slider(slider),
+            global::Avalonia.Controls.NumericUpDown numericUpDown => new Spinner(numericUpDown),
             global::Avalonia.Controls.ProgressBar progressBar => new ProgressBar(progressBar),
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
+            global::Avalonia.Controls.TimePicker timePicker => new TimePicker(timePicker),
+            global::Avalonia.Controls.Expander expander => new Expander(expander),
+            global::Avalonia.Controls.Menu menu => new Menu(menu),
+            global::Avalonia.Controls.MenuItem menuItem => new MenuItem(menuItem),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
             global::Avalonia.Controls.TabControl tabControl => new Tab(tabControl),
             global::Avalonia.Controls.TabItem tabItem => new TabItem(tabItem),
@@ -213,6 +236,10 @@ internal class AutomationElement
                 return tabItem.Header?.ToString() ?? string.Empty;
             case global::Avalonia.Controls.TreeViewItem treeViewItem:
                 return treeViewItem.Header?.ToString() ?? string.Empty;
+            case global::Avalonia.Controls.MenuItem menuItem:
+                return AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(
+                    menuItem.Header,
+                    AutomationProperties.GetName(menuItem)) ?? string.Empty;
         }
 
         var automationName = AutomationProperties.GetName(control);
@@ -247,6 +274,8 @@ internal class AutomationElement
             global::Avalonia.Controls.Label => ControlType.Text,
             global::Avalonia.Controls.ListBox => ControlType.List,
             global::Avalonia.Controls.ComboBox => ControlType.ComboBox,
+            global::Avalonia.Controls.Menu => ControlType.Menu,
+            global::Avalonia.Controls.MenuItem => ControlType.MenuItem,
             global::Avalonia.Controls.Slider => ControlType.Slider,
             global::Avalonia.Controls.ProgressBar => ControlType.ProgressBar,
             global::Avalonia.Controls.Calendar => ControlType.Calendar,
@@ -307,7 +336,13 @@ internal class TextBox : AutomationElement
 
     public void Enter(string value)
     {
-        Text = value;
+        Ui(() =>
+        {
+            Native.Focus();
+            Native.Text = value;
+            Control.Dispatcher.RunJobs();
+            return true;
+        });
     }
 }
 
@@ -403,6 +438,33 @@ internal class ListBox : AutomationElement
             }
 
             Native.SelectedItem = match;
+            Control.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
+    public void SelectItemExact(string itemText)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        Ui(() =>
+        {
+            Control.Dispatcher.RunJobs();
+            var values = ReadItems(Native.Items);
+            var matches = values
+                .Where(candidate => string.Equals(candidate?.ToString(), itemText, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
+            }
+
+            if (matches.Length > 1)
+            {
+                throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous.");
+            }
+
+            Native.SelectedItem = matches[0];
             Control.Dispatcher.RunJobs();
             return true;
         });
@@ -628,28 +690,194 @@ internal class DateTimePicker : AutomationElement
     }
 }
 
+internal class TimePicker : AutomationElement
+{
+    internal TimePicker(global::Avalonia.Controls.TimePicker timePicker) : base(timePicker)
+    {
+    }
+
+    private global::Avalonia.Controls.TimePicker Native => (global::Avalonia.Controls.TimePicker)Control;
+
+    public TimeSpan? SelectedTime
+    {
+        get => Ui(() => Native.SelectedTime);
+        set => Ui(() =>
+        {
+            Native.SelectedTime = value;
+            return true;
+        });
+    }
+}
+
+internal sealed class Expander : AutomationElement
+{
+    internal Expander(global::Avalonia.Controls.Expander expander) : base(expander)
+    {
+    }
+
+    private global::Avalonia.Controls.Expander Native => (global::Avalonia.Controls.Expander)Control;
+
+    public bool IsExpanded => Ui(() => Native.IsExpanded);
+
+    public void Expand()
+    {
+        Ui(() =>
+        {
+            Native.IsExpanded = true;
+            return true;
+        });
+    }
+
+    public void Collapse()
+    {
+        Ui(() =>
+        {
+            Native.IsExpanded = false;
+            return true;
+        });
+    }
+}
+
+internal sealed class Menu : AutomationElement
+{
+    internal Menu(global::Avalonia.Controls.Menu menu) : base(menu)
+    {
+    }
+
+    private global::Avalonia.Controls.Menu Native => (global::Avalonia.Controls.Menu)Control;
+
+    public MenuItem[] Items => Ui(() => Native.Items
+        .OfType<global::Avalonia.Controls.MenuItem>()
+        .Select(static item => new MenuItem(item))
+        .ToArray());
+
+}
+
+internal sealed class MenuItem : AutomationElement
+{
+    internal MenuItem(global::Avalonia.Controls.MenuItem menuItem) : base(menuItem)
+    {
+    }
+
+    private global::Avalonia.Controls.MenuItem Native => (global::Avalonia.Controls.MenuItem)Control;
+
+    public override string Name => Ui(() =>
+    {
+        return AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(
+            Native.Header,
+            AutomationProperties.GetName(Native)) ?? string.Empty;
+    });
+
+    public MenuItem[] Items => Ui(() => Native.Items
+        .OfType<global::Avalonia.Controls.MenuItem>()
+        .Select(static item => new MenuItem(item))
+        .ToArray());
+
+    public bool IsExpanded => Ui(() => Native.IsSubMenuOpen);
+
+    public void Expand()
+    {
+        Ui(() =>
+        {
+            Native.IsSubMenuOpen = true;
+            Native.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
+    public void Collapse()
+    {
+        Ui(() =>
+        {
+            Native.IsSubMenuOpen = false;
+            Native.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+
+    public void Invoke()
+    {
+        if (!IsEnabled)
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' is disabled.");
+        }
+
+        if (Items.Length > 0)
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' is not a leaf item.");
+        }
+
+        var commandState = Ui(() => (Native.Command, Native.CommandParameter));
+        if (commandState.Command is not null
+            && !commandState.Command.CanExecute(commandState.CommandParameter))
+        {
+            throw new InvalidOperationException($"Menu item '{Name}' command cannot execute.");
+        }
+
+        Ui(() =>
+        {
+            if (commandState.Command is { } command)
+            {
+                command.Execute(commandState.CommandParameter);
+            }
+
+            Native.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.MenuItem.ClickEvent));
+            foreach (var parent in Native.GetLogicalAncestors().OfType<global::Avalonia.Controls.MenuItem>())
+            {
+                parent.IsSubMenuOpen = false;
+            }
+
+            Native.Dispatcher.RunJobs();
+            return true;
+        });
+    }
+}
+
 internal class Spinner : AutomationElement
 {
     internal Spinner(global::Avalonia.Controls.TextBox textBox) : base(textBox)
     {
     }
 
-    private global::Avalonia.Controls.TextBox Native => (global::Avalonia.Controls.TextBox)Control;
+    internal Spinner(global::Avalonia.Controls.NumericUpDown numericUpDown) : base(numericUpDown)
+    {
+    }
 
     public double Value
     {
         get => Ui(() =>
         {
-            var text = Native.Text ?? string.Empty;
-            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-                ? value
-                : 0;
+            return Control switch
+            {
+                global::Avalonia.Controls.NumericUpDown numericUpDown => decimal.ToDouble(numericUpDown.Value ?? 0),
+                global::Avalonia.Controls.TextBox textBox => ParseTextValue(textBox),
+                _ => throw new InvalidOperationException($"Control '{Control.GetType().Name}' is not a spinner.")
+            };
         });
         set => Ui(() =>
         {
-            Native.Text = value.ToString(CultureInfo.InvariantCulture);
+            switch (Control)
+            {
+                case global::Avalonia.Controls.NumericUpDown numericUpDown:
+                    numericUpDown.Value = checked((decimal)value);
+                    break;
+                case global::Avalonia.Controls.TextBox textBox:
+                    textBox.Text = value.ToString("R", CultureInfo.InvariantCulture);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Control '{Control.GetType().Name}' is not a spinner.");
+            }
+
             return true;
         });
+    }
+
+    private static double ParseTextValue(global::Avalonia.Controls.TextBox textBox)
+    {
+        var text = textBox.Text ?? string.Empty;
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
     }
 }
 
@@ -820,6 +1048,125 @@ internal class Grid : AutomationElement
 
     public GridRow[] Rows => Ui(() => ReadRows(Native));
 
+    public string[] ColumnNames => Ui(() => Native.Columns
+        .Select(static column =>
+            AppAutomation.Abstractions.MenuPathValue.TryGetVisibleCaption(column.Header)
+            ?? column.SortMemberPath
+            ?? string.Empty)
+        .ToArray());
+
+    public void SelectRow(int index)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (index < 0 || index >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {index} was not found.");
+            }
+
+            Native.SelectedItem = items[index];
+            Native.ScrollIntoView(items[index], null);
+            return true;
+        });
+    }
+
+    public void SetCellValue(int rowIndex, int columnIndex, string value)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
+            }
+
+            WritePropertyPath(items[rowIndex], path, value);
+            return true;
+        });
+    }
+
+    public void ValidateCellValue(int rowIndex, int columnIndex, string value)
+    {
+        Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
+            }
+
+            object? owner = items[rowIndex];
+            var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (var index = 0; index < segments.Length - 1; index++)
+            {
+                owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
+            }
+
+            if (owner is null || segments.Length == 0)
+            {
+                throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
+            }
+
+            var property = ReadProperty(owner, segments[^1]);
+            if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
+            {
+                throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
+            }
+
+            _ = ConvertText(value, property.PropertyType);
+            return true;
+        });
+    }
+
+    public GridCellValueSnapshot ReadCellValue(int rowIndex, int columnIndex)
+    {
+        return Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
+            {
+                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
+            }
+
+            var path = ReadColumnPath(Native.Columns[columnIndex]);
+            var rawValue = string.IsNullOrWhiteSpace(path)
+                ? items[rowIndex]
+                : ReadPropertyPathValue(items[rowIndex], path);
+            return new GridCellValueSnapshot(
+                rawValue?.ToString(),
+                rawValue,
+                InferValueKind(rawValue)) { ValueSource = items[rowIndex] };
+        });
+    }
+
     public GridRow? GetRowByIndex(int index)
     {
         return Ui(() =>
@@ -836,23 +1183,152 @@ internal class Grid : AutomationElement
 
     private static GridRow[] ReadRows(global::Avalonia.Controls.DataGrid dataGrid)
     {
-        if (dataGrid.ItemsSource is not IEnumerable source)
-        {
-            return Array.Empty<GridRow>();
-        }
-
-        var columnBindings = dataGrid.Columns
-            .OfType<DataGridBoundColumn>()
-            .Select(static column => column.Binding)
+        var columnPaths = dataGrid.Columns
+            .Select(static column => ReadColumnPath(column))
             .ToArray();
 
-        var rows = new List<GridRow>();
-        foreach (var item in source)
+        return ReadItems(dataGrid)
+            .Select(item => new GridRow(item, columnPaths))
+            .ToArray();
+    }
+
+    private static object?[] ReadItems(global::Avalonia.Controls.DataGrid dataGrid)
+    {
+        return dataGrid.ItemsSource is IEnumerable source
+            ? source.Cast<object?>().ToArray()
+            : Array.Empty<object?>();
+    }
+
+    private static string? ReadColumnPath(DataGridColumn column)
+    {
+        if (!string.IsNullOrWhiteSpace(column.SortMemberPath))
         {
-            rows.Add(new GridRow(item, columnBindings));
+            return column.SortMemberPath;
         }
 
-        return rows.ToArray();
+        return column is DataGridBoundColumn boundColumn
+            ? boundColumn.Binding switch
+            {
+                ReflectionBinding { Path: { } reflectionPath } => reflectionPath,
+                CompiledBinding { Path: { } compiledPath } => compiledPath.ToString(),
+                _ => null
+            }
+            : null;
+    }
+
+    private static void WritePropertyPath(object? item, string path, string value)
+    {
+        object? owner = item;
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var index = 0; index < segments.Length - 1; index++)
+        {
+            owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
+        }
+
+        if (owner is null || segments.Length == 0)
+        {
+            throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
+        }
+
+        var property = ReadProperty(owner, segments[^1]);
+        if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
+        {
+            throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
+        }
+
+        property.SetValue(owner, ConvertText(value, property.PropertyType));
+    }
+
+    private static PropertyInfo? ReadProperty(object owner, string name)
+    {
+        var matches = owner.GetType()
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property =>
+                property.CanRead
+                && property.GetIndexParameters().Length == 0
+                && string.Equals(property.Name, name, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static object? ReadPropertyPathValue(object? item, string path)
+    {
+        var current = item;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is null)
+            {
+                return null;
+            }
+
+            var property = ReadProperty(current, segment);
+            if (property is null)
+            {
+                return null;
+            }
+
+            current = property.GetValue(current);
+        }
+
+        return current;
+    }
+
+    private static GridCellValueKind InferValueKind(object? value)
+    {
+        return value switch
+        {
+            null => GridCellValueKind.Text,
+            bool => GridCellValueKind.Boolean,
+            DateTime or DateTimeOffset or DateOnly => GridCellValueKind.Date,
+            TimeSpan or TimeOnly => GridCellValueKind.Time,
+            byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal =>
+                GridCellValueKind.Number,
+            Enum => GridCellValueKind.Selection,
+            _ => GridCellValueKind.Text
+        };
+    }
+
+    private static object? ConvertText(string value, Type targetType)
+    {
+        var nullableType = Nullable.GetUnderlyingType(targetType);
+        var effectiveType = nullableType ?? targetType;
+        if (nullableType is not null && string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
+        if (effectiveType == typeof(string))
+        {
+            return value;
+        }
+
+        if (effectiveType.IsEnum)
+        {
+            return Enum.Parse(effectiveType, value, ignoreCase: false);
+        }
+
+        if (effectiveType == typeof(DateTime))
+        {
+            return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
+        }
+
+        if (effectiveType == typeof(DateTimeOffset))
+        {
+            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
+        }
+
+        if (effectiveType == typeof(TimeSpan))
+        {
+            return TimeSpan.Parse(value, CultureInfo.InvariantCulture);
+        }
+
+        if (effectiveType == typeof(Guid))
+        {
+            return Guid.Parse(value);
+        }
+
+        return Convert.ChangeType(value, effectiveType, CultureInfo.InvariantCulture);
     }
 }
 
@@ -865,15 +1341,15 @@ internal class DataGridView : Grid
 
 internal class GridRow
 {
-    internal GridRow(object? item, IReadOnlyList<BindingBase?> columnBindings)
+    internal GridRow(object? item, IReadOnlyList<string?> columnPaths)
     {
         Item = item;
-        ColumnBindings = columnBindings;
+        ColumnPaths = columnPaths;
     }
 
     private object? Item { get; }
 
-    private IReadOnlyList<BindingBase?> ColumnBindings { get; }
+    private IReadOnlyList<string?> ColumnPaths { get; }
 
     public GridCell[] Cells
     {
@@ -889,10 +1365,10 @@ internal class GridRow
                 return [new GridCell(value)];
             }
 
-            if (ColumnBindings.Count > 0)
+            if (ColumnPaths.Count > 0)
             {
-                return ColumnBindings
-                    .Select(binding => new GridCell(ReadBoundValue(Item, binding)))
+                return ColumnPaths
+                    .Select(path => new GridCell(ReadBoundValue(Item, path), Item))
                     .ToArray();
             }
 
@@ -912,60 +1388,64 @@ internal class GridRow
                 .Select(property =>
                 {
                     var propertyValue = property.GetValue(Item);
-                    return new GridCell(propertyValue?.ToString() ?? string.Empty);
+                    return new GridCell(propertyValue, Item);
                 })
                 .ToArray();
         }
     }
 
-    private static string ReadBoundValue(object item, BindingBase? binding)
+    private static object? ReadBoundValue(object item, string? path)
     {
-        var path = binding switch
-        {
-            ReflectionBinding { Path: { } reflectionPath } => reflectionPath,
-            CompiledBinding { Path: { } compiledPath } => compiledPath.ToString(),
-            _ => null
-        };
-
         if (!string.IsNullOrWhiteSpace(path))
         {
             return ReadPropertyPath(item, path);
         }
 
-        return item.ToString() ?? string.Empty;
+        return item;
     }
 
-    private static string ReadPropertyPath(object item, string path)
+    private static object? ReadPropertyPath(object item, string path)
     {
         object? current = item;
         foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (current is null)
             {
-                return string.Empty;
+                return null;
             }
 
-            var property = current
-                .GetType()
-                .GetProperty(segment, BindingFlags.Public | BindingFlags.Instance);
-            if (property is null || !property.CanRead)
+            var matches = current.GetType()
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(property => property.CanRead
+                                   && property.GetIndexParameters().Length == 0
+                                   && string.Equals(property.Name, segment, StringComparison.Ordinal))
+                .Take(2)
+                .ToArray();
+            if (matches.Length != 1)
             {
-                return string.Empty;
+                return null;
             }
 
-            current = property.GetValue(current);
+            current = matches[0].GetValue(current);
         }
 
-        return current?.ToString() ?? string.Empty;
+        return current;
     }
 }
 
 internal class GridCell
 {
     internal GridCell(string value)
+        : this(value, null)
     {
-        Value = value;
     }
 
-    public string Value { get; }
+    internal GridCell(object? value, object? source)
+    {
+        ValueSnapshot = new GridCellValueSnapshot(value?.ToString(), value) { ValueSource = source };
+    }
+
+    public string Value => ValueSnapshot.DisplayText ?? string.Empty;
+
+    public GridCellValueSnapshot ValueSnapshot { get; }
 }

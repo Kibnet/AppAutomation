@@ -50,6 +50,7 @@ public interface IUiControlAdapter
 /// <param name="ExpandButtonLocator">Optional locator for an expand/dropdown button.</param>
 /// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
 /// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+/// <param name="OpensOnSearch">Whether entering search text opens the results popup without invoking the expand button.</param>
 public sealed record SearchPickerParts(
     string SearchInputLocator,
     string ResultsLocator,
@@ -57,8 +58,55 @@ public sealed record SearchPickerParts(
     string? ExpandButtonLocator = null,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = true,
-    SearchPickerResultsKind ResultsKind = SearchPickerResultsKind.ComboBox)
+    SearchPickerResultsKind ResultsKind = SearchPickerResultsKind.ComboBox,
+    bool OpensOnSearch = false)
 {
+    /// <summary>
+    /// Initializes a configuration using the constructor signature published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public SearchPickerParts(
+        string searchInputLocator,
+        string resultsLocator,
+        string? applyButtonLocator,
+        string? expandButtonLocator,
+        UiLocatorKind locatorKind,
+        bool fallbackToName,
+        SearchPickerResultsKind resultsKind)
+        : this(
+            searchInputLocator,
+            resultsLocator,
+            applyButtonLocator,
+            expandButtonLocator,
+            locatorKind,
+            fallbackToName,
+            resultsKind,
+            OpensOnSearch: false)
+    {
+    }
+
+    /// <summary>
+    /// Deconstructs the configuration using the shape published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public void Deconstruct(
+        out string searchInputLocator,
+        out string resultsLocator,
+        out string? applyButtonLocator,
+        out string? expandButtonLocator,
+        out UiLocatorKind locatorKind,
+        out bool fallbackToName,
+        out SearchPickerResultsKind resultsKind)
+    {
+        searchInputLocator = SearchInputLocator;
+        resultsLocator = ResultsLocator;
+        applyButtonLocator = ApplyButtonLocator;
+        expandButtonLocator = ExpandButtonLocator;
+        locatorKind = LocatorKind;
+        fallbackToName = FallbackToName;
+        resultsKind = ResultsKind;
+    }
+
     /// <summary>
     /// Creates a <see cref="SearchPickerParts"/> configuration using automation IDs.
     /// </summary>
@@ -67,20 +115,43 @@ public sealed record SearchPickerParts(
     /// <param name="applyButtonAutomationId">Optional automation ID of the apply button.</param>
     /// <param name="expandButtonAutomationId">Optional automation ID of the expand button.</param>
     /// <param name="resultsKind">The primitive results control kind.</param>
+    /// <param name="opensOnSearch">Whether entering search text opens the results popup.</param>
     /// <returns>A configured <see cref="SearchPickerParts"/> instance.</returns>
     public static SearchPickerParts ByAutomationIds(
         string searchInputAutomationId,
         string resultsAutomationId,
         string? applyButtonAutomationId = null,
         string? expandButtonAutomationId = null,
-        SearchPickerResultsKind resultsKind = SearchPickerResultsKind.ComboBox)
+        SearchPickerResultsKind resultsKind = SearchPickerResultsKind.ComboBox,
+        bool opensOnSearch = false)
     {
         return new SearchPickerParts(
             searchInputAutomationId,
             resultsAutomationId,
             applyButtonAutomationId,
             expandButtonAutomationId,
-            ResultsKind: resultsKind);
+            ResultsKind: resultsKind,
+            OpensOnSearch: opensOnSearch);
+    }
+
+    /// <summary>
+    /// Creates a configuration using the factory signature published before
+    /// <see cref="OpensOnSearch"/> was introduced.
+    /// </summary>
+    public static SearchPickerParts ByAutomationIds(
+        string searchInputAutomationId,
+        string resultsAutomationId,
+        string? applyButtonAutomationId,
+        string? expandButtonAutomationId,
+        SearchPickerResultsKind resultsKind)
+    {
+        return ByAutomationIds(
+            searchInputAutomationId,
+            resultsAutomationId,
+            applyButtonAutomationId,
+            expandButtonAutomationId,
+            resultsKind,
+            opensOnSearch: false);
     }
 }
 
@@ -546,6 +617,23 @@ public static partial class UiControlResolverExtensions
     }
 }
 
+internal interface ISearchPickerExecutionPhases
+{
+    bool IsSearchInputEnabled { get; }
+
+    bool IsApplyActionEnabled { get; }
+
+    bool RequiresExpandAction { get; }
+
+    bool IsExpandActionEnabled { get; }
+
+    void EnterSearchInput(string value);
+
+    void InvokeApplyAction();
+
+    void ExpandResults();
+}
+
 /// <summary>
 /// An adapter that creates composite <see cref="ISearchPickerControl"/> instances from primitive controls.
 /// </summary>
@@ -557,6 +645,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 {
     private readonly string _propertyName;
     private readonly SearchPickerParts _parts;
+    private readonly SearchPickerSelectionState _selectionState = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SearchPickerControlAdapter"/> class.
@@ -598,12 +687,25 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         var results = new DeferredResultsSurface(ResolveResults, innerResolver);
         var applyButton = string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator)
             ? null
-            : innerResolver.Resolve<IButtonControl>(CreateDefinition("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator));
+            : new DeferredButtonControl(
+                () => innerResolver.Resolve<IButtonControl>(
+                    CreateDefinition("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator)),
+                _parts.ApplyButtonLocator);
         var expandButton = string.IsNullOrWhiteSpace(_parts.ExpandButtonLocator)
             ? null
-            : innerResolver.Resolve<IButtonControl>(CreateDefinition("ExpandButton", UiControlType.Button, _parts.ExpandButtonLocator));
+            : new DeferredButtonControl(
+                () => innerResolver.Resolve<IButtonControl>(
+                    CreateDefinition("ExpandButton", UiControlType.Button, _parts.ExpandButtonLocator)),
+                _parts.ExpandButtonLocator);
 
-        return new SearchPickerControl(definition.PropertyName, searchInput, results, applyButton, expandButton);
+        return new SearchPickerControl(
+            definition.PropertyName,
+            searchInput,
+            results,
+            applyButton,
+            expandButton,
+            _parts.OpensOnSearch,
+            _selectionState);
     }
 
     private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver)
@@ -637,13 +739,14 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
                 StringComparison.Ordinal);
     }
 
-    private sealed class SearchPickerControl : ISearchPickerControl, IReadableTextControl
+    private sealed class SearchPickerControl : ISearchPickerControl, IReadableTextControl, ISearchPickerExecutionPhases
     {
         private readonly ITextBoxControl _searchInput;
         private readonly ISearchPickerResultsSurface _results;
         private readonly IButtonControl? _applyButton;
         private readonly IButtonControl? _expandButton;
-        private string? _lastSelectedItemText;
+        private readonly bool _opensOnSearch;
+        private readonly SearchPickerSelectionState _selectionState;
         private bool _isExpanded;
 
         public SearchPickerControl(
@@ -651,13 +754,17 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             ITextBoxControl searchInput,
             ISearchPickerResultsSurface results,
             IButtonControl? applyButton,
-            IButtonControl? expandButton)
+            IButtonControl? expandButton,
+            bool opensOnSearch,
+            SearchPickerSelectionState selectionState)
         {
             AutomationId = automationId;
             _searchInput = searchInput;
             _results = results;
             _applyButton = applyButton;
             _expandButton = expandButton;
+            _opensOnSearch = opensOnSearch;
+            _selectionState = selectionState;
         }
 
         public string AutomationId { get; }
@@ -667,11 +774,33 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         public bool IsEnabled =>
             _searchInput.IsEnabled
             && (_applyButton?.IsEnabled ?? true)
-            && (_expandButton?.IsEnabled ?? true);
+            && (_opensOnSearch || (_expandButton?.IsEnabled ?? true));
+
+        bool ISearchPickerExecutionPhases.IsSearchInputEnabled => _searchInput.IsEnabled;
+
+        bool ISearchPickerExecutionPhases.IsApplyActionEnabled => _applyButton?.IsEnabled ?? true;
+
+        bool ISearchPickerExecutionPhases.RequiresExpandAction => !_isExpanded;
+
+        bool ISearchPickerExecutionPhases.IsExpandActionEnabled =>
+            _isExpanded
+            || (_expandButton?.IsEnabled ?? _results.IsEnabled);
 
         public string SearchText => _searchInput.Text;
 
-        public string? SelectedItemText => _results.SelectedItemText ?? _lastSelectedItemText;
+        public string? SelectedItemText
+        {
+            get
+            {
+                if (_results.SelectedItemText is { } selectedItemText)
+                {
+                    _selectionState.Record(selectedItemText, SearchText);
+                    return selectedItemText;
+                }
+
+                return _selectionState.Read(SearchText);
+            }
+        }
 
         public IReadOnlyList<string> Items => _results.Items;
 
@@ -695,11 +824,15 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Search(string value)
         {
-            _searchInput.Enter(value);
-            _applyButton?.Invoke();
-            _lastSelectedItemText = null;
-            _isExpanded = false;
+            EnterSearchInput(value);
+            InvokeApplyAction();
         }
+
+        void ISearchPickerExecutionPhases.EnterSearchInput(string value) => EnterSearchInput(value);
+
+        void ISearchPickerExecutionPhases.InvokeApplyAction() => InvokeApplyAction();
+
+        void ISearchPickerExecutionPhases.ExpandResults() => Expand();
 
         public void Expand()
         {
@@ -727,7 +860,61 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
             Expand();
             _results.SelectItem(itemText);
-            _lastSelectedItemText = itemText;
+            _selectionState.Record(itemText, SearchText);
+        }
+
+        private void EnterSearchInput(string value)
+        {
+            _selectionState.Clear();
+            _isExpanded = false;
+            _searchInput.Enter(value);
+        }
+
+        private void InvokeApplyAction()
+        {
+            _applyButton?.Invoke();
+            _isExpanded = _opensOnSearch;
+        }
+    }
+
+    private sealed class SearchPickerSelectionState
+    {
+        private readonly object _sync = new();
+        private string? _selectedItemText;
+        private string? _searchTextAtSelection;
+
+        public void Clear()
+        {
+            lock (_sync)
+            {
+                _selectedItemText = null;
+                _searchTextAtSelection = null;
+            }
+        }
+
+        public void Record(string selectedItemText, string searchText)
+        {
+            lock (_sync)
+            {
+                _selectedItemText = selectedItemText;
+                _searchTextAtSelection = searchText;
+            }
+        }
+
+        public string? Read(string currentSearchText)
+        {
+            lock (_sync)
+            {
+                if (string.Equals(currentSearchText, _searchTextAtSelection, StringComparison.Ordinal)
+                    || string.Equals(currentSearchText, _selectedItemText, StringComparison.OrdinalIgnoreCase))
+                {
+                    return _selectedItemText;
+                }
+
+                _selectedItemText = null;
+                _searchTextAtSelection = null;
+                return null;
+            }
         }
     }
 
@@ -761,7 +948,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public string Name => TryResolve()?.Name ?? string.Empty;
 
-        public bool IsEnabled => TryResolve()?.IsEnabled ?? true;
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
 
         public string? SelectedItemText => TryResolve()?.SelectedItemText;
 
@@ -782,7 +969,39 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             {
                 return Resolve();
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
+            {
+                return null;
+            }
+        }
+    }
+
+    private sealed class DeferredButtonControl : IButtonControl
+    {
+        private readonly Func<IButtonControl> _resolve;
+        private readonly string _locator;
+
+        public DeferredButtonControl(Func<IButtonControl> resolve, string locator)
+        {
+            _resolve = resolve;
+            _locator = locator;
+        }
+
+        public string AutomationId => _locator;
+
+        public string Name => TryResolve()?.Name ?? string.Empty;
+
+        public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
+
+        public void Invoke() => _resolve().Invoke();
+
+        private IButtonControl? TryResolve()
+        {
+            try
+            {
+                return _resolve();
+            }
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -965,7 +1184,7 @@ public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
                     ? null
                     : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1170,7 +1389,7 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
                     ? null
                     : ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1350,7 +1569,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             {
                 return MessageText;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1477,7 +1696,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return Text;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1494,7 +1713,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return ResolveLabel(suffix, locatorValue);
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1506,7 +1725,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
             {
                 return _innerResolver.Resolve<IUiControl>(_rootDefinition);
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1635,7 +1854,7 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
             {
                 return ResolveButton("OpenButton", _parts.OpenButtonLocator).Name;
             }
-            catch
+            catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
                 return null;
             }
@@ -1937,9 +2156,9 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
                 {
                     item.Expand();
                 }
-                catch
+                catch (UiControlResolutionException exception) when (exception.IsTransient)
                 {
-                    // Tree expansion is best effort across mixed runtimes.
+                    continue;
                 }
 
                 var nested = FindTreeItem(item.Items, paneName);

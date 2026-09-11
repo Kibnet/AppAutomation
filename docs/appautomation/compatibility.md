@@ -40,6 +40,7 @@
 
 - `FlaUI` runtime always requires Windows.
 - `AppAutomation.Authoring` stays `netstandard2.0`, because it is consumed as analyzer/source-generator package.
+- Recorder-generated checkpoint assertions require the Authoring test project to reference TUnit assertions, as the repository templates already do; Headless and FlaUI providers need no assertion-specific configuration.
 - If your repo is not yet on `net8.0+`, treat migration as a prerequisite before framework adoption.
 
 ---
@@ -88,4 +89,5 @@
 
 - `FlaUI` всегда требует Windows.
 - `AppAutomation.Authoring` остаётся на `netstandard2.0`, так как потребляется как пакет с анализатором и генератором исходного кода.
+- Для checkpoint assertions, созданных Recorder, Authoring-проект должен ссылаться на TUnit assertions, как уже делают шаблоны репозитория; отдельная настройка Headless или FlaUI не нужна.
 - Если ваш репозиторий ещё не на `net8.0+`, рассматривайте миграцию как обязательную предпосылку перед подключением фреймворка.

@@ -27,7 +27,7 @@ namespace AppAutomation.Abstractions;
 ///     .WaitUntilNameContains(p => p.StatusLabel, "Welcome");
 /// </code>
 /// </example>
-public static class UiPageExtensions
+public static partial class UiPageExtensions
 {
     /// <summary>
     /// Enters text into a text box control.
@@ -206,6 +206,202 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Idempotently sets the expanded state of an expander.
+    /// </summary>
+    public static TSelf SetExpanded<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IExpanderControl>> selector,
+        bool isExpanded,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "expander");
+        var expander = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Expander '{expander.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={expander.IsEnabled}");
+
+        if (expander.IsExpanded != isExpanded)
+        {
+            if (isExpanded)
+            {
+                expander.Expand();
+            }
+            else
+            {
+                expander.Collapse();
+            }
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsExpanded == isExpanded,
+            budget.RemainingMilliseconds,
+            $"Expander '{expander.AutomationId}' did not reach the expected expanded state.",
+            expectedValue: $"IsExpanded={isExpanded}",
+            lastObservedValueFactory: () => $"IsExpanded={expander.IsExpanded}");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until an expander reaches the requested state.
+    /// </summary>
+    public static TSelf WaitUntilIsExpanded<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IExpanderControl>> selector,
+        bool isExpanded,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var expander = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => expander.IsExpanded == isExpanded,
+            timeoutMs,
+            $"Expander '{expander.AutomationId}' did not reach the expected expanded state.",
+            expectedValue: $"IsExpanded={isExpanded}",
+            lastObservedValueFactory: () => $"IsExpanded={expander.IsExpanded}");
+        return page;
+    }
+
+    /// <summary>
+    /// Sets a color picker to a canonical provider-neutral color value.
+    /// </summary>
+    public static TSelf SetColor<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IColorPickerControl>> selector,
+        string color,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var expected = ColorValue.Normalize(color);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "color-picker");
+        var picker = Resolve(selector, page);
+
+        if (picker is IColorPickerOperationControl operationControl)
+        {
+            operationControl.SetColor(expected, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => picker.IsEnabled,
+                budget.RemainingMilliseconds,
+                $"Color picker '{picker.AutomationId}' is not enabled.",
+                expectedValue: "IsEnabled=true",
+                lastObservedValueFactory: () => $"IsEnabled={picker.IsEnabled}");
+            picker.Color = expected;
+        }
+
+        if (ColorValue.TryNormalize(picker.Color, out var appliedColor)
+            && string.Equals(appliedColor, expected, StringComparison.Ordinal))
+        {
+            return page;
+        }
+
+        WaitUntil(
+            page,
+            selector,
+            () => ColorValue.TryNormalize(picker.Color, out var actual)
+                && string.Equals(actual, expected, StringComparison.Ordinal),
+            budget.RemainingMilliseconds,
+            $"Color picker '{picker.AutomationId}' did not reach the expected color.",
+            expectedValue: expected,
+            lastObservedValueFactory: () => picker.Color);
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a color picker exposes the expected canonical color.
+    /// </summary>
+    public static TSelf WaitUntilColorEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IColorPickerControl>> selector,
+        string expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        var canonical = ColorValue.Normalize(expected);
+        var picker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => ColorValue.TryNormalize(picker.Color, out var actual)
+                && string.Equals(actual, canonical, StringComparison.Ordinal),
+            timeoutMs,
+            $"Color picker '{picker.AutomationId}' did not reach the expected color.",
+            expectedValue: canonical,
+            lastObservedValueFactory: () => picker.Color);
+        return page;
+    }
+
+    /// <summary>
+    /// Invokes a stable, directly addressable menu item.
+    /// </summary>
+    public static TSelf InvokeMenuItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IMenuItemControl>> selector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var item = Resolve(selector, page);
+        item.Invoke(timeoutMs);
+        return page;
+    }
+
+    /// <summary>
+    /// Opens a control's context menu and invokes one exact root-to-leaf item path.
+    /// </summary>
+    public static TSelf InvokeContextMenuItem<TSelf, TControl>(
+        this TSelf page,
+        Expression<Func<TSelf, TControl>> selector,
+        IReadOnlyList<string> path,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+        where TControl : class, IUiControl
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var exactPath = MenuPathValue.Normalize(path);
+        var owner = Resolve(selector, page);
+        if (owner is not IContextMenuOwnerControl contextMenuOwner)
+        {
+            throw new NotSupportedException(
+                $"Runtime '{page.Capabilities.AdapterId}' does not expose context-menu invocation for " +
+                $"control '{owner.AutomationId}'.");
+        }
+
+        contextMenuOwner.InvokeContextMenuItem(exactPath, timeoutMs);
+        return page;
+    }
+
+    /// <summary>
+    /// Invokes one leaf item through an exact root-to-leaf menu path.
+    /// </summary>
+    public static TSelf InvokeMenuItem<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IMenuControl>> selector,
+        IReadOnlyList<string> path,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var exactPath = MenuPathValue.Normalize(path);
+        var menu = Resolve(selector, page);
+        menu.InvokeItem(exactPath, timeoutMs);
+        return page;
+    }
+
+    /// <summary>
     /// Selects an item in a combo box by its display text.
     /// </summary>
     /// <typeparam name="TSelf">The page type.</typeparam>
@@ -225,13 +421,20 @@ public static class UiPageExtensions
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "combo-box selection");
 
         var comboBox = Resolve(selector, page);
+        if (comboBox is ISingleSelectOperationControl operationControl)
+        {
+            operationControl.SelectItem(itemText, budget.RemainingMilliseconds);
+            return page;
+        }
+
         WaitUntil(
             page,
             selector,
             () => comboBox.IsEnabled,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"ComboBox '{comboBox.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={comboBox.IsEnabled}");
@@ -258,7 +461,7 @@ public static class UiPageExtensions
             () => comboBox.SelectedIndex == index.Value
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Text), target, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(NormalizeLookupText(comboBox.SelectedItem?.Name), target, StringComparison.OrdinalIgnoreCase),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"ComboBox '{comboBox.AutomationId}' failed to select item.",
             expectedValue: itemText,
             lastObservedValueFactory: () => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name ?? $"SelectedIndex={comboBox.SelectedIndex}");
@@ -315,11 +518,49 @@ public static class UiPageExtensions
     /// <exception cref="UiOperationException">Thrown when the control is not enabled or the value was not set successfully.</exception>
     public static TSelf SetSpinnerValue<TSelf>(
         this TSelf page,
+        Expression<Func<TSelf, ISpinnerControl>> selector,
+        double value,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Spinner value must be finite.");
+        }
+
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
+        var spinner = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => spinner.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Spinner '{spinner.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={spinner.IsEnabled}");
+        spinner.Value = value;
+        WaitUntil(
+            page,
+            selector,
+            () => SpinnerValuesEqual(spinner.Value, value),
+            budget.RemainingMilliseconds,
+            $"Spinner '{spinner.AutomationId}' did not reach expected value.",
+            expectedValue: value.ToString(CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => spinner.Value.ToString(CultureInfo.InvariantCulture));
+        return page;
+    }
+
+    /// <summary>
+    /// Sets a numeric value in a legacy spinner-like text box control.
+    /// </summary>
+    public static TSelf SetSpinnerValue<TSelf>(
+        this TSelf page,
         Expression<Func<TSelf, ITextBoxControl>> selector,
         double value,
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
         var textBox = Resolve(selector, page);
         var expected = value.ToString(CultureInfo.InvariantCulture);
         textBox.Enter(expected);
@@ -327,10 +568,37 @@ public static class UiPageExtensions
             page,
             selector,
             () => string.Equals(textBox.Text?.Trim(), expected, StringComparison.Ordinal),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Spinner-like text box '{textBox.AutomationId}' did not reach expected value.",
             expectedValue: expected,
             lastObservedValueFactory: () => textBox.Text);
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a spinner reaches the expected numeric value.
+    /// </summary>
+    public static TSelf WaitUntilValueEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ISpinnerControl>> selector,
+        double expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        if (!double.IsFinite(expected))
+        {
+            throw new ArgumentOutOfRangeException(nameof(expected), expected, "Spinner value must be finite.");
+        }
+
+        var spinner = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => SpinnerValuesEqual(spinner.Value, expected),
+            timeoutMs,
+            $"Spinner '{spinner.AutomationId}' did not reach expected value.",
+            expectedValue: expected.ToString(CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => spinner.Value.ToString(CultureInfo.InvariantCulture));
         return page;
     }
 
@@ -402,16 +670,34 @@ public static class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
         var searchPicker = Resolve(selector, page);
+        var executionPhases = searchPicker as ISearchPickerExecutionPhases;
         WaitUntil(
             page,
             selector,
-            () => searchPicker.IsEnabled,
+            () => executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled,
             timeoutMs,
-            $"Search picker '{searchPicker.AutomationId}' is not enabled.",
-            expectedValue: "IsEnabled=true",
-            lastObservedValueFactory: () => $"IsEnabled={searchPicker.IsEnabled}");
+            $"Search picker '{searchPicker.AutomationId}' input is not enabled.",
+            expectedValue: "SearchInputEnabled=true",
+            lastObservedValueFactory: () => $"SearchInputEnabled={executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled}");
 
-        searchPicker.Search(searchText);
+        if (executionPhases is null)
+        {
+            searchPicker.Search(searchText);
+        }
+        else
+        {
+            executionPhases.EnterSearchInput(searchText);
+            WaitUntil(
+                page,
+                selector,
+                () => executionPhases.IsApplyActionEnabled,
+                timeoutMs,
+                $"Search picker '{searchPicker.AutomationId}' apply action is not enabled.",
+                expectedValue: "ApplyActionEnabled=true",
+                lastObservedValueFactory: () => $"ApplyActionEnabled={executionPhases.IsApplyActionEnabled}");
+            executionPhases.InvokeApplyAction();
+        }
+
         WaitUntil(
             page,
             selector,
@@ -421,7 +707,23 @@ public static class UiPageExtensions
             expectedValue: searchText,
             lastObservedValueFactory: () => searchPicker.SearchText);
 
-        searchPicker.Expand();
+        if (executionPhases is null)
+        {
+            searchPicker.Expand();
+        }
+        else if (executionPhases.RequiresExpandAction)
+        {
+            WaitUntil(
+                page,
+                selector,
+                () => executionPhases.IsExpandActionEnabled,
+                timeoutMs,
+                $"Search picker '{searchPicker.AutomationId}' expand action is not enabled.",
+                expectedValue: "ExpandActionEnabled=true",
+                lastObservedValueFactory: () => $"ExpandActionEnabled={executionPhases.IsExpandActionEnabled}");
+            executionPhases.ExpandResults();
+        }
+
         var expectedItem = NormalizeLookupText(itemText);
         WaitUntil(
             page,
@@ -849,27 +1151,99 @@ public static class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IDateTimePickerControl>> selector,
         DateTime date,
-        int timeoutMs = 5000)
+        int timeoutMs = 60_000)
         where TSelf : UiPage
     {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "date-picker");
         var datePicker = Resolve(selector, page);
         WaitUntil(
             page,
             selector,
             () => datePicker.IsEnabled,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Date picker '{datePicker.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={datePicker.IsEnabled}");
-        datePicker.SelectedDate = date.Date;
+        if (datePicker is IDateTimePickerOperationControl operationControl)
+        {
+            operationControl.SetSelectedDate(date.Date, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            datePicker.SelectedDate = date.Date;
+        }
+
         WaitUntil(
             page,
             selector,
             () => datePicker.SelectedDate?.Date == date.Date,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Date picker '{datePicker.AutomationId}' did not reach expected date.",
             expectedValue: date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             lastObservedValueFactory: () => datePicker.SelectedDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "<null>");
+        return page;
+    }
+
+    /// <summary>
+    /// Sets the selected time of day on a time picker.
+    /// </summary>
+    public static TSelf SetTime<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITimePickerControl>> selector,
+        TimeSpan time,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(time, nameof(time));
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "time-picker");
+        var timePicker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.IsEnabled,
+            budget.RemainingMilliseconds,
+            $"Time picker '{timePicker.AutomationId}' is not enabled.",
+            expectedValue: "IsEnabled=true",
+            lastObservedValueFactory: () => $"IsEnabled={timePicker.IsEnabled}");
+        if (timePicker is ITimePickerOperationControl operationControl)
+        {
+            operationControl.SetSelectedTime(time, budget.RemainingMilliseconds);
+        }
+        else
+        {
+            timePicker.SelectedTime = time;
+        }
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.SelectedTime == time,
+            budget.RemainingMilliseconds,
+            $"Time picker '{timePicker.AutomationId}' did not reach expected time.",
+            expectedValue: time.ToString("c", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => timePicker.SelectedTime?.ToString("c", CultureInfo.InvariantCulture) ?? "<null>");
+        return page;
+    }
+
+    /// <summary>
+    /// Waits until a time picker reaches the expected time of day.
+    /// </summary>
+    public static TSelf WaitUntilTimeEquals<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, ITimePickerControl>> selector,
+        TimeSpan expected,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(expected, nameof(expected));
+        var timePicker = Resolve(selector, page);
+        WaitUntil(
+            page,
+            selector,
+            () => timePicker.SelectedTime == expected,
+            timeoutMs,
+            $"Time picker '{timePicker.AutomationId}' did not reach expected time.",
+            expectedValue: expected.ToString("c", CultureInfo.InvariantCulture),
+            lastObservedValueFactory: () => timePicker.SelectedTime?.ToString("c", CultureInfo.InvariantCulture) ?? "<null>");
         return page;
     }
 
@@ -1697,7 +2071,10 @@ public static class UiPageExtensions
             value,
             editorKind,
             commitMode,
-            searchText);
+            searchText)
+        {
+            TimeoutMs = timeoutMs
+        };
 
         return ExecuteGridCellEdit(page, selector, request, timeoutMs, nameof(EditGridCell));
     }
@@ -1775,6 +2152,55 @@ public static class UiPageExtensions
     }
 
     /// <summary>
+    /// Edits a grid cell with an invariant, lossless time-of-day value.
+    /// </summary>
+    public static TSelf EditGridCellTime<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        TimeSpan value,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ValidateTimeOfDay(value, nameof(value));
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("c", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Time,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Selects a color in a grid-cell color editor addressed by zero-based indexes.
+    /// </summary>
+    public static TSelf EditGridCellColor<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string color,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            ColorValue.Normalize(color),
+            GridCellEditorKind.Color,
+            commitMode,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
     /// Selects a combo-box item inside a grid cell.
     /// </summary>
     public static TSelf SelectGridCellComboItem<TSelf>(
@@ -1827,6 +2253,30 @@ public static class UiPageExtensions
             commitMode,
             searchText,
             timeoutMs);
+    }
+
+    /// <summary>
+    /// Sets a boolean value in a check-box grid cell addressed by zero-based indexes.
+    /// </summary>
+    public static TSelf SetGridCellChecked<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        bool isChecked,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCell(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            isChecked.ToString(CultureInfo.InvariantCulture),
+            GridCellEditorKind.CheckBox,
+            commitMode,
+            timeoutMs: timeoutMs);
     }
 
     private static TControl Resolve<TSelf, TControl>(Expression<Func<TSelf, TControl>> selector, TSelf page)
@@ -2293,7 +2743,8 @@ public static class UiPageExtensions
         Expression<Func<TSelf, IGridControl>> selector,
         GridCellEditRequest request,
         int timeoutMs,
-        string actionName)
+        string actionName,
+        Func<IGridControl, string?>? observedValueFactory = null)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2301,7 +2752,9 @@ public static class UiPageExtensions
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
         var grid = Resolve(selector, page);
-        var originalValue = TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex);
+        observedValueFactory ??= candidate =>
+            TryReadGridCellValue(candidate, request.RowIndex, request.ColumnIndex);
+        var originalValue = observedValueFactory(grid);
         try
         {
             if (grid is not IEditableGridControl editableGrid)
@@ -2321,7 +2774,7 @@ public static class UiPageExtensions
                 startedAtUtc,
                 $"Grid '{grid.AutomationId}' failed to edit cell [{request.RowIndex},{request.ColumnIndex}].",
                 expectedValue: DescribeGridCellEditRequest(request),
-                lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                lastObservedValueFactory: () => observedValueFactory(grid),
                 actionName,
                 ex);
         }
@@ -2333,13 +2786,13 @@ public static class UiPageExtensions
             page,
             selector,
             () => string.Equals(
-                TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+                observedValueFactory(grid),
                 expectedValue,
                 StringComparison.Ordinal),
             timeoutMs,
             $"Grid '{grid.AutomationId}' cell [{request.RowIndex},{request.ColumnIndex}] did not reach expected edit result.",
             expectedValue: expectedValue,
-            lastObservedValueFactory: () => TryReadGridCellValue(grid, request.RowIndex, request.ColumnIndex),
+            lastObservedValueFactory: () => observedValueFactory(grid),
             actionName);
         return page;
     }
@@ -2742,6 +3195,19 @@ public static class UiPageExtensions
     private static string? FirstNonWhiteSpace(params string?[] values)
     {
         return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static bool SpinnerValuesEqual(double actual, double expected)
+    {
+        return Math.Abs(actual - expected) < 0.001;
+    }
+
+    private static void ValidateTimeOfDay(TimeSpan value, string parameterName)
+    {
+        if (value < TimeSpan.Zero || value >= TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(parameterName, value, "Time picker value must be within one day.");
+        }
     }
 
     private static bool TextMatches(string? actual, string expected)

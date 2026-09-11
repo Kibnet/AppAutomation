@@ -20,13 +20,15 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ResultText", UiControlType.Label, "ResultText")]
 [UiControl("ErrorText", UiControlType.Label, "ErrorText")]
 [UiControl("StepsList", UiControlType.ListBox, "StepsList")]
+[UiControl("MultiSelection", UiControlType.MultiSelect, "MultiSelection")]
+[UiControl("MultiSelectStatusLabel", UiControlType.Label, "MultiSelectStatusLabel")]
 [UiControl("MixInput", UiControlType.TextBox, "MixInput")]
 [UiControl("MixModeCombo", UiControlType.ComboBox, "MixModeCombo")]
 [UiControl("MixShowDetailsCheck", UiControlType.CheckBox, "MixShowDetailsCheck")]
 [UiControl("MixAdvancedToggle", UiControlType.ToggleButton, "MixAdvancedToggle")]
 [UiControl("MixDirectionAscendingRadio", UiControlType.RadioButton, "MixDirectionAscendingRadio")]
 [UiControl("MixDirectionDescendingRadio", UiControlType.RadioButton, "MixDirectionDescendingRadio")]
-[UiControl("MixCountSpinner", UiControlType.TextBox, "MixCountSpinner")]
+[UiControl("MixCountSpinner", UiControlType.Spinner, "MixCountSpinner")]
 [UiControl("MixSpeedSlider", UiControlType.Slider, "MixSpeedSlider")]
 [UiControl("MixRunButton", UiControlType.Button, "MixRunButton")]
 [UiControl("MixClearButton", UiControlType.Button, "MixClearButton")]
@@ -38,6 +40,8 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("DemoDataGrid", UiControlType.Grid, "DemoDataGrid")]
 [UiControl("EremexDemoDataGrid", UiControlType.AutomationElement, "EremexDemoDataGrid")]
 [UiControl("EremexDemoDataGridAutomationBridge", UiControlType.Grid, "EremexDemoDataGridAutomationBridge")]
+[UiControl("SearchPickerGridAutomationBridge", UiControlType.Grid, "SearchPickerGridAutomationBridge")]
+[UiControl("SearchPickerGridSearchInput", UiControlType.TextBox, "SearchPickerGridEditor_Input")]
 [UiControl("DataGridRowsInput", UiControlType.TextBox, "DataGridRowsInput")]
 [UiControl("BuildGridButton", UiControlType.Button, "BuildGridButton")]
 [UiControl("ClearGridButton", UiControlType.Button, "ClearGridButton")]
@@ -56,6 +60,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("CalendarErrorText", UiControlType.Label, "CalendarErrorText")]
 [UiControl("StartDatePicker", UiControlType.DateTimePicker, "StartDatePicker")]
 [UiControl("EndDatePicker", UiControlType.DateTimePicker, "EndDatePicker")]
+[UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
 [UiControl("DateDiffButton", UiControlType.Button, "DateDiffButton")]
 [UiControl("DateResult", UiControlType.Label, "DateResult")]
 [UiControl("DateDiffList", UiControlType.ListBox, "DateDiffList")]
@@ -68,20 +73,25 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmCopyTextBox", UiControlType.TextBox, "ArmCopyTextBox")]
 [UiControl("ArmCopyButton", UiControlType.Button, "ArmCopyButton")]
 [UiControl("ArmCopyResultLabel", UiControlType.Label, "ArmCopyResultLabel")]
-[UiControl("ArmSearchInput", UiControlType.TextBox, "ArmSearchInput")]
-[UiControl("ArmSearchResults", UiControlType.ComboBox, "ArmSearchResults")]
-[UiControl("ArmSearchFuzzyToggle", UiControlType.CheckBox, "ArmSearchFuzzyToggle")]
-[UiControl("ArmSearchApplyButton", UiControlType.Button, "ArmSearchApplyButton")]
-[UiControl("ArmSearchClearButton", UiControlType.Button, "ArmSearchClearButton")]
-[UiControl("ArmSearchStatusLabel", UiControlType.Label, "ArmSearchStatusLabel")]
-[UiControl("ArmServerPickerInput", UiControlType.TextBox, "ArmServerPickerInput")]
-[UiControl("ArmServerPickerResults", UiControlType.ComboBox, "ArmServerPickerResults")]
-[UiControl("ArmServerPickerOpenButton", UiControlType.Button, "ArmServerPickerOpenButton")]
+[UiControl("ArmServerPickerInput", UiControlType.TextBox, "ArmServerSearchPicker_Input")]
+[UiControl("ArmServerPickerResults", UiControlType.ListBox, "ArmServerSearchPicker_Results")]
+[UiControl("ArmServerPickerOpenButton", UiControlType.Button, "ArmServerSearchPicker_OpenButton")]
 [UiControl("ArmServerPickerClearButton", UiControlType.Button, "ArmServerPickerClearButton")]
 [UiControl("ArmServerPickerStatusLabel", UiControlType.Label, "ArmServerPickerStatusLabel")]
+[UiControl("ArmTableSearch", UiControlType.Search, "ArmTableSearch")]
+[UiControl("ArmAccentColorPicker", UiControlType.ColorPicker, "ArmAccentColorPicker")]
+[UiControl("MainMenu", UiControlType.Menu, "MainMenu")]
+[UiControl("RefreshMenuItem", UiControlType.MenuItem, "RefreshMenuItem")]
+[UiControl("MenuStatusLabel", UiControlType.Label, "MenuStatusLabel")]
+[UiControl("ContextTarget", UiControlType.Button, "ContextTarget")]
+[UiControl("ContextMenuStatusLabel", UiControlType.Label, "ContextMenuStatusLabel")]
+[UiControl("ArmStatusFilter", UiControlType.ComboBoxFilter, "ArmStatusFilter")]
+[UiControl("ArmStatusFilterStatusLabel", UiControlType.Label, "ArmStatusFilterStatusLabel")]
 [UiControl("ArmEremexDataGridHost", UiControlType.AutomationElement, "ArmEremexDataGridHost")]
 [UiControl("ArmEremexDataGridControl", UiControlType.AutomationElement, "ArmEremexDataGridControl")]
 [UiControl("ArmGridAutomationBridge", UiControlType.Grid, "ArmGridAutomationBridge")]
+[UiControl("GridComboAutomationBridge", UiControlType.Grid, "GridComboAutomationBridge")]
+[UiControl("GridComboStateEditor", UiControlType.ComboBox, "GridComboStateEditor")]
 [UiControl("ArmGridRow0ValueEditor", UiControlType.TextBox, "ArmGridAutomationBridge_Row0_Cell1")]
 [UiControl("ArmGridBuildButton", UiControlType.Button, "ArmGridBuildButton")]
 [UiControl("ArmGridOpenButton", UiControlType.Button, "ArmGridOpenButton")]
@@ -124,7 +134,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmLoadingProgressBar", UiControlType.ProgressBar, "ArmLoadingProgressBar")]
 [UiControl("ArmReloadButton", UiControlType.Button, "ArmReloadButton")]
 [UiControl("ArmLoadingStatusLabel", UiControlType.Label, "ArmLoadingStatusLabel")]
-[UiControl("ArmStatusExpanderToggle", UiControlType.ToggleButton, "ArmStatusExpanderToggle")]
+[UiControl("ArmStatusExpander", UiControlType.Expander, "ArmStatusExpander")]
 [UiControl("ArmStatusLabel", UiControlType.Label, "ArmStatusLabel")]
 [UiControl("ArmMetadataToggle", UiControlType.ToggleButton, "ArmMetadataToggle")]
 [UiControl("ArmMetadataStatusLabel", UiControlType.Label, "ArmMetadataStatusLabel")]
@@ -141,9 +151,6 @@ public sealed partial class MainWindowPage : UiPage
 {
     private static UiControlDefinition HistoryOperationPickerDefinition { get; } =
         new("HistoryOperationPicker", UiControlType.AutomationElement, "HistoryOperationPicker", UiLocatorKind.AutomationId, FallbackToName: false);
-
-    private static UiControlDefinition ArmSearchPickerDefinition { get; } =
-        new("ArmSearchPicker", UiControlType.AutomationElement, "ArmSearchPicker", UiLocatorKind.AutomationId, FallbackToName: false);
 
     private static UiControlDefinition ArmServerSearchPickerDefinition { get; } =
         new("ArmServerSearchPicker", UiControlType.AutomationElement, "ArmServerSearchPicker", UiLocatorKind.AutomationId, FallbackToName: false);
@@ -171,8 +178,6 @@ public sealed partial class MainWindowPage : UiPage
     }
 
     public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(HistoryOperationPickerDefinition);
-
-    public ISearchPickerControl ArmSearchPicker => Resolve<ISearchPickerControl>(ArmSearchPickerDefinition);
 
     public ISearchPickerControl ArmServerSearchPicker => Resolve<ISearchPickerControl>(ArmServerSearchPickerDefinition);
 

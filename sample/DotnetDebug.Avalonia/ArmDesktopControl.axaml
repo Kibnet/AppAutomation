@@ -1,6 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+             xmlns:editors="clr-namespace:Eremex.AvaloniaUI.Controls.Editors;assembly=Eremex.Avalonia.Controls"
+             xmlns:local="clr-namespace:DotnetDebug.Avalonia"
              xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
              x:Class="DotnetDebug.Avalonia.ArmDesktopControl"
              x:CompileBindings="False">
@@ -19,9 +21,9 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Primitives, wrappers and search"
                      FontWeight="SemiBold" />
-          <UniformGrid Columns="3"
-                       Rows="1">
-            <StackPanel Margin="0,0,8,0"
+          <Grid ColumnDefinitions="*,*,*,*">
+            <StackPanel Grid.Column="0"
+                        Margin="0,0,8,0"
                         Spacing="6">
               <TextBlock Text="Copy wrapper" />
               <TextBox x:Name="ArmCopyTextBox"
@@ -37,63 +39,126 @@
                      automation:AutomationProperties.AutomationId="ArmCopyResultLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0"
-                        Spacing="6"
-                        automation:AutomationProperties.AutomationId="ArmSearchPicker">
-              <TextBlock Text="Search picker" />
-              <TextBox x:Name="ArmSearchInput"
-                       Watermark="Search"
-                       automation:AutomationProperties.AutomationId="ArmSearchInput" />
-              <ComboBox x:Name="ArmSearchResults"
-                        ItemsSource="{Binding ArmSearchItems}"
-                        SelectionChanged="OnArmSearchResultsChanged"
-                        automation:AutomationProperties.AutomationId="ArmSearchResults" />
-              <StackPanel Orientation="Horizontal"
-                          Spacing="6">
-                <CheckBox x:Name="ArmSearchFuzzyToggle"
-                          Content="Fuzzy"
-                          automation:AutomationProperties.AutomationId="ArmSearchFuzzyToggle" />
-                <Button x:Name="ArmSearchApplyButton"
-                        Content="Apply"
-                        Click="OnArmSearchApplyClick"
-                        automation:AutomationProperties.AutomationId="ArmSearchApplyButton" />
-                <Button x:Name="ArmSearchClearButton"
-                        Content="Clear"
-                        Click="OnArmSearchClearClick"
-                        automation:AutomationProperties.AutomationId="ArmSearchClearButton" />
-              </StackPanel>
-              <Label x:Name="ArmSearchStatusLabel"
-                     Content="Search idle"
-                     automation:AutomationProperties.AutomationId="ArmSearchStatusLabel" />
-            </StackPanel>
-
-            <StackPanel Margin="8,0,0,0"
-                        Spacing="6"
-                        automation:AutomationProperties.AutomationId="ArmServerSearchPicker">
+            <StackPanel Grid.Column="1"
+                        Margin="8,0"
+                        Spacing="6">
               <TextBlock Text="Server picker" />
-              <TextBox x:Name="ArmServerPickerInput"
-                       Watermark="Lookup"
-                       automation:AutomationProperties.AutomationId="ArmServerPickerInput" />
-              <ComboBox x:Name="ArmServerPickerResults"
-                        ItemsSource="{Binding ArmServerItems}"
-                        SelectionChanged="OnArmServerPickerResultsChanged"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerResults" />
-              <StackPanel Orientation="Horizontal"
-                          Spacing="6">
-                <Button x:Name="ArmServerPickerOpenButton"
-                        Content="Open"
-                        Click="OnArmServerPickerOpenClick"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerOpenButton" />
-                <Button x:Name="ArmServerPickerClearButton"
-                        Content="Clear"
-                        Click="OnArmServerPickerClearClick"
-                        automation:AutomationProperties.AutomationId="ArmServerPickerClearButton" />
-              </StackPanel>
+              <local:ServerSearchComboBox x:Name="ArmServerSearchPicker"
+                                          Width="220"
+                                          HorizontalAlignment="Left"
+                                          automation:AutomationProperties.AutomationId="ArmServerSearchPicker"
+                                          CurrentSelectedChanged="OnArmServerPickerSelected"
+                                          ItemList="{Binding ArmServerItems}"
+                                          Watermark="Lookup" />
+              <Button x:Name="ArmServerPickerClearButton"
+                      Content="Clear"
+                      Click="OnArmServerPickerClearClick"
+                      automation:AutomationProperties.AutomationId="ArmServerPickerClearButton" />
               <Label x:Name="ArmServerPickerStatusLabel"
                      Content="Server picker idle"
                      automation:AutomationProperties.AutomationId="ArmServerPickerStatusLabel" />
             </StackPanel>
-          </UniformGrid>
+
+            <StackPanel Grid.Column="2"
+                        Margin="8,0,0,0"
+                        Spacing="6">
+              <TextBlock Text="Table search" />
+              <local:SearchHistoryControl x:Name="ArmTableSearchControl"
+                                          automation:AutomationProperties.AutomationId="ArmTableSearch" />
+              <Label Content="Search with history"
+                     automation:AutomationProperties.AutomationId="ArmTableSearchStatusLabel" />
+            </StackPanel>
+
+            <StackPanel x:Name="ArmAccentColorPicker"
+                        Grid.Column="3"
+                        Margin="8,0,0,0"
+                        Spacing="6"
+                        automation:AutomationProperties.AutomationId="ArmAccentColorPicker">
+              <TextBlock Text="Color picker" />
+              <TextBox x:Name="ArmAccentColorValue"
+                       Text="#FF336699"
+                       IsReadOnly="True"
+                       automation:AutomationProperties.AutomationId="ArmAccentColorValue" />
+              <Button x:Name="ArmAccentColorOpenButton"
+                      Content="Choose color"
+                      Click="OnArmAccentColorOpenClick"
+                      automation:AutomationProperties.AutomationId="ArmAccentColorOpenButton" />
+              <Border x:Name="ArmAccentColorPopup"
+                      IsVisible="False"
+                      BorderBrush="#D0D7DE"
+                      BorderThickness="1"
+                      Padding="6"
+                      automation:AutomationProperties.AutomationId="ArmAccentColorPopup">
+                <StackPanel Spacing="6">
+                  <TextBox x:Name="ArmAccentColorCustomValue"
+                           Watermark="#AARRGGBB"
+                           automation:AutomationProperties.AutomationId="ArmAccentColorCustomValue" />
+                  <StackPanel Orientation="Horizontal"
+                              Spacing="6">
+                    <Button x:Name="ArmAccentColorConfirmButton"
+                            Content="Apply"
+                            Click="OnArmAccentColorConfirmClick"
+                            automation:AutomationProperties.AutomationId="ArmAccentColorConfirmButton" />
+                    <Button x:Name="ArmAccentColorCancelButton"
+                            Content="Cancel"
+                            Click="OnArmAccentColorCancelClick"
+                            automation:AutomationProperties.AutomationId="ArmAccentColorCancelButton" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </Grid>
+          <Grid ColumnDefinitions="Auto,Auto,*"
+                ColumnSpacing="12">
+            <StackPanel Grid.Column="0"
+                        Orientation="Horizontal"
+                        Spacing="8">
+              <Menu automation:AutomationProperties.AutomationId="MainMenu">
+                <MenuItem Header="Refresh"
+                          Click="OnRefreshMenuItemClick"
+                          automation:AutomationProperties.AutomationId="RefreshMenuItem" />
+                <MenuItem Header="_Actions">
+                  <MenuItem Header="_Export">
+                    <MenuItem Click="OnNestedMenuItemClick">
+                      <MenuItem.Header>
+                        <TextBlock Text="Snapshot" />
+                      </MenuItem.Header>
+                    </MenuItem>
+                  </MenuItem>
+                  <MenuItem Header="Disabled action"
+                            IsEnabled="False" />
+                </MenuItem>
+              </Menu>
+            </StackPanel>
+            <Button x:Name="ContextTarget"
+                    Grid.Column="1"
+                    Padding="10,4"
+                    Content="Context target"
+                    automation:AutomationProperties.AutomationId="ContextTarget">
+              <Button.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Pin"
+                            Click="OnContextPinMenuItemClick" />
+                  <MenuItem Header="_Export">
+                    <MenuItem Header="Summary"
+                              Click="OnContextSummaryMenuItemClick" />
+                  </MenuItem>
+                  <MenuItem Header="Disabled action"
+                            IsEnabled="False" />
+                </ContextMenu>
+              </Button.ContextMenu>
+            </Button>
+            <StackPanel Grid.Column="2"
+                        VerticalAlignment="Center"
+                        Spacing="2">
+              <Label x:Name="MenuStatusLabel"
+                     Content="Menu idle"
+                     automation:AutomationProperties.AutomationId="MenuStatusLabel" />
+              <Label x:Name="ContextMenuStatusLabel"
+                     Content="Context menu idle"
+                     automation:AutomationProperties.AutomationId="ContextMenuStatusLabel" />
+            </StackPanel>
+          </Grid>
         </StackPanel>
       </Border>
 
@@ -122,39 +187,76 @@
                                    Header="Key" />
                   <mxdg:GridColumn FieldName="Value"
                                    Header="Value" />
+                  <mxdg:GridColumn FieldName="Color"
+                                   Header="Color" />
                   <mxdg:GridColumn FieldName="State"
                                    Header="State" />
                 </mxdg:DataGridControl.Columns>
               </mxdg:DataGridControl>
 
-              <ListBox x:Name="ArmGridAutomationBridge"
-                       Height="126"
-                       ItemsSource="{Binding ArmGridRows}"
-                       automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
-                <ListBox.ItemTemplate>
-                  <DataTemplate>
-                    <Grid ColumnDefinitions="120,160,120"
-                          Margin="0,1"
-                          DoubleTapped="OnArmGridRowDoubleTapped"
-                          automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
-                      <TextBlock Grid.Column="0"
-                                 Text="{Binding Key}"
-                                 automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding Key}" />
-                      <TextBox Grid.Column="1"
-                               Text="{Binding Value, Mode=TwoWay}"
-                               MinHeight="24"
-                               BorderThickness="0"
-                               automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
-                               automation:AutomationProperties.Name="{Binding Value}" />
-                      <TextBlock Grid.Column="2"
-                                 Text="{Binding State}"
-                                 automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding State}" />
-                    </Grid>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
-              </ListBox>
+              <Grid Height="126">
+                <ItemsControl x:Name="ArmGridAutomationBridge"
+                              Height="126"
+                              ItemsSource="{Binding ArmGridRows}"
+                              automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnDefinitions="90,130,90,130"
+                            Margin="0,1"
+                            DoubleTapped="OnArmGridRowDoubleTapped"
+                            automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding Key}"
+                                   automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
+                                   automation:AutomationProperties.Name="{Binding Key}" />
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding Value, Mode=TwoWay}"
+                                 MinHeight="24"
+                                 BorderThickness="0"
+                                 automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding Value}" />
+                        <TextBox Grid.Column="2"
+                                 Text="{Binding Color, Mode=TwoWay}"
+                                 MinHeight="24"
+                                 BorderThickness="0"
+                                 automation:AutomationProperties.AutomationId="{Binding ColorCellAutomationId}"
+                                 automation:AutomationProperties.Name="{Binding Color}" />
+                        <TextBlock Grid.Column="3"
+                                   Text="{Binding State}"
+                                   automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
+                                   automation:AutomationProperties.Name="{Binding State}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Border Width="230"
+                        Padding="4"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom"
+                        BorderBrush="#666666"
+                        BorderThickness="1"
+                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge"
+                        automation:AutomationProperties.IsControlElementOverride="True">
+                  <Grid ColumnDefinitions="90,130"
+                        DataContext="{Binding GridComboRow}"
+                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0">
+                    <TextBlock Grid.Column="0"
+                               Text="{Binding Key}"
+                               automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell0"
+                               automation:AutomationProperties.Name="{Binding Key}" />
+                    <Border Grid.Column="1"
+                            automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell1"
+                            automation:AutomationProperties.IsControlElementOverride="True"
+                            automation:AutomationProperties.Name="{Binding State}">
+                      <ComboBox ItemsSource="{Binding StateOptions}"
+                                automation:AutomationProperties.AutomationId="GridComboStateEditor"
+                                SelectedItem="{Binding State, Mode=TwoWay}"
+                                MinHeight="24" />
+                    </Border>
+                  </Grid>
+                </Border>
+              </Grid>
             </StackPanel>
 
             <StackPanel Grid.Column="1"
@@ -210,9 +312,28 @@
         <StackPanel Spacing="10">
           <TextBlock Text="Filters, dialogs, notifications and export"
                      FontWeight="SemiBold" />
-          <UniformGrid Columns="4"
-                       Rows="1">
-            <StackPanel Margin="0,0,8,0"
+          <WrapPanel Orientation="Horizontal"
+                     ItemWidth="320">
+            <StackPanel Margin="0,0,16,16"
+                        Spacing="6">
+              <TextBlock Text="Combo-box filter" />
+              <editors:ComboBoxEditor x:Name="ArmStatusFilterEditor"
+                                      Width="220"
+                                      HorizontalAlignment="Left"
+                                      Classes="filterComboBox"
+                                      automation:AutomationProperties.AutomationId="ArmStatusFilter"
+                                      Loaded="OnArmStatusFilterLoaded"
+                                      SelectionMode="Multiple"
+                                      ItemsSource="{Binding ArmStatusFilterItems}"
+                                      SelectedItems="{Binding SelectedArmStatusFilterItems, Mode=TwoWay}"
+                                      DisplayMember="Name"
+                                      Watermark="Statuses" />
+              <Label x:Name="ArmStatusFilterStatusLabel"
+                     Content="Filter: Open"
+                     automation:AutomationProperties.AutomationId="ArmStatusFilterStatusLabel" />
+            </StackPanel>
+
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmDateRangeFilter">
               <TextBlock Text="Date range" />
@@ -240,7 +361,7 @@
                      automation:AutomationProperties.AutomationId="ArmDateRangeStatusLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmNumericRangeFilter">
               <TextBlock Text="Numeric range" />
@@ -270,7 +391,7 @@
                      automation:AutomationProperties.AutomationId="ArmNumericRangeStatusLabel" />
             </StackPanel>
 
-            <StackPanel Margin="8,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6">
               <TextBlock Text="Dialog and notification" />
               <StackPanel Spacing="6"
@@ -312,7 +433,7 @@
               </StackPanel>
             </StackPanel>
 
-            <StackPanel Margin="8,0,0,0"
+            <StackPanel Margin="0,0,16,16"
                         Spacing="6"
                         automation:AutomationProperties.AutomationId="ArmFolderExport">
               <TextBlock Text="Folder export" />
@@ -338,7 +459,7 @@
                      Content="Export idle"
                      automation:AutomationProperties.AutomationId="ArmFolderExportStatusLabel" />
             </StackPanel>
-          </UniformGrid>
+          </WrapPanel>
         </StackPanel>
       </Border>
 
@@ -405,10 +526,12 @@
               <Label x:Name="ArmLoadingStatusLabel"
                      Content="Loading idle"
                      automation:AutomationProperties.AutomationId="ArmLoadingStatusLabel" />
-              <ToggleButton x:Name="ArmStatusExpanderToggle"
-                            Content="Status details"
-                            Click="OnArmStatusExpanderClick"
-                            automation:AutomationProperties.AutomationId="ArmStatusExpanderToggle" />
+              <Expander x:Name="ArmStatusExpander"
+                        Header="Status details"
+                        automation:AutomationProperties.AutomationId="ArmStatusExpander">
+                <TextBlock Text="Detailed status content"
+                           Margin="8,4,0,0" />
+              </Expander>
               <Label x:Name="ArmStatusLabel"
                      Content="Status expanded: False"
                      automation:AutomationProperties.AutomationId="ArmStatusLabel" />

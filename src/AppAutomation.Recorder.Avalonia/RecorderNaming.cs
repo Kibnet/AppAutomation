@@ -49,6 +49,50 @@ internal static class RecorderNaming
         }
     }
 
+    public static string CreateCheckpointVariableName(string? proposedName, ISet<string> reservedNames)
+    {
+        return CreateVariableName(
+            proposedName,
+            reservedNames,
+            fallback: "CheckpointValue",
+            keywordPrefix: "checkpoint");
+    }
+
+    public static string CreateGeneratedValueVariableName(string? proposedName, ISet<string> reservedNames)
+    {
+        return CreateVariableName(
+            proposedName,
+            reservedNames,
+            fallback: "GeneratedValue",
+            keywordPrefix: "generated");
+    }
+
+    private static string CreateVariableName(
+        string? proposedName,
+        ISet<string> reservedNames,
+        string fallback,
+        string keywordPrefix)
+    {
+        ArgumentNullException.ThrowIfNull(reservedNames);
+
+        var identifier = SanitizeIdentifier(proposedName, fallback);
+        identifier = char.ToLowerInvariant(identifier[0]) + identifier[1..];
+        if (IsKeyword(identifier))
+        {
+            identifier = $"{keywordPrefix}{char.ToUpperInvariant(identifier[0])}{identifier[1..]}";
+        }
+
+        return EnsureUniqueName(identifier, reservedNames);
+    }
+
+    private static bool IsKeyword(string identifier)
+    {
+        return Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(identifier)
+                != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+            || Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetContextualKeywordKind(identifier)
+                != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None;
+    }
+
     public static string SanitizeIdentifier(string? rawValue, string fallbackPrefix)
     {
         var value = rawValue?.Trim() ?? string.Empty;

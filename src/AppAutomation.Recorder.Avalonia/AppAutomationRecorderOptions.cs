@@ -5,6 +5,9 @@ namespace AppAutomation.Recorder.Avalonia;
 
 public sealed class AppAutomationRecorderOptions
 {
+    private readonly object _gridHintsSync = new();
+    private IReadOnlyList<RecorderGridHint>? _normalizedGridHints;
+
     public string ScenarioName { get; init; } = "Scenario";
 
     public string? AuthoringProjectDirectory { get; init; }
@@ -18,6 +21,8 @@ public sealed class AppAutomationRecorderOptions
     public string? ScenarioNamespace { get; init; }
 
     public string? ScenarioClassName { get; init; }
+
+    public RecorderScenarioSelectionOptions ScenarioSelection { get; init; } = new();
 
     public bool AllowNameLocators { get; init; }
 
@@ -35,6 +40,11 @@ public sealed class AppAutomationRecorderOptions
 
     public RecorderValidationOptions Validation { get; init; } = new();
 
+    /// <summary>
+    /// Gets the provider-neutral grid definitions shared with Headless and FlaUI runtime setup.
+    /// </summary>
+    public GridAutomationCatalog GridAutomation { get; init; } = new();
+
     public IList<RecorderControlHint> ControlHints { get; } = new List<RecorderControlHint>();
 
     public IList<RecorderGridHint> GridHints { get; } = new List<RecorderGridHint>();
@@ -46,6 +56,27 @@ public sealed class AppAutomationRecorderOptions
     public IList<RecorderGridEditHint> GridEditHints { get; } = new List<RecorderGridEditHint>();
 
     public IList<RecorderSearchPickerHint> SearchPickerHints { get; } = new List<RecorderSearchPickerHint>();
+
+    public IList<IRecorderSearchPickerSelectionSource> SearchPickerSelectionSources { get; } =
+        new List<IRecorderSearchPickerSelectionSource>();
+
+    public IList<RecorderSearchControlHint> SearchControlHints { get; } = new List<RecorderSearchControlHint>();
+
+    public IList<RecorderMultiSelectHint> MultiSelectHints { get; } = new List<RecorderMultiSelectHint>();
+
+    public IList<RecorderComboBoxFilterHint> ComboBoxFilterHints { get; } =
+        new List<RecorderComboBoxFilterHint>();
+
+    public IList<RecorderTimePickerHint> TimePickerHints { get; } = new List<RecorderTimePickerHint>();
+
+    public IList<RecorderDatePickerHint> DatePickerHints { get; } = new List<RecorderDatePickerHint>();
+
+    public IList<RecorderSingleSelectHint> SingleSelectHints { get; } = new List<RecorderSingleSelectHint>();
+
+    public IList<RecorderColorPickerHint> ColorPickerHints { get; } = new List<RecorderColorPickerHint>();
+
+    public IList<IRecorderColorPickerSelectionSource> ColorPickerSelectionSources { get; } =
+        new List<IRecorderColorPickerSelectionSource>();
 
     public IList<RecorderDateRangeFilterHint> DateRangeFilterHints { get; } = new List<RecorderDateRangeFilterHint>();
 
@@ -62,6 +93,74 @@ public sealed class AppAutomationRecorderOptions
     public IList<RecorderLocatorAlias> LocatorAliases { get; } = new List<RecorderLocatorAlias>();
 
     public IList<IRecorderAssertionExtractor> AssertionExtractors { get; } = new List<IRecorderAssertionExtractor>();
+
+    public IList<IRecorderSemanticValueResolver> SemanticValueResolvers { get; } =
+        new List<IRecorderSemanticValueResolver>();
+
+    internal IReadOnlyList<RecorderGridHint> FreezeGridHints()
+    {
+        lock (_gridHintsSync)
+        {
+            if (_normalizedGridHints is not null)
+            {
+                return _normalizedGridHints;
+            }
+
+            var configuredLocators = new HashSet<(UiLocatorKind Kind, string Value)>();
+            var normalized = new List<RecorderGridHint>(GridAutomation.Count + GridHints.Count);
+            foreach (var definition in GridAutomation)
+            {
+                configuredLocators.Add((definition.CaptureLocatorKind, definition.CaptureLocatorValue));
+                normalized.Add(new RecorderGridHint(
+                    definition.CaptureLocatorValue,
+                    definition.RuntimeLocatorValue,
+                    Array.AsReadOnly(definition.Columns.Select(static column => column.LogicalName).ToArray()),
+                    definition.CaptureLocatorKind,
+                    definition.RuntimeLocatorKind,
+                    definition.RuntimeFallbackToName)
+                {
+                    RowIdentityColumnPropertyNames = definition.RowIdentityColumns
+                });
+            }
+
+            normalized.AddRange(GridHints.Where(hint =>
+                !configuredLocators.Contains((hint.SourceLocatorKind, hint.SourceLocatorValue))));
+            _normalizedGridHints = Array.AsReadOnly(normalized.ToArray());
+            return _normalizedGridHints;
+        }
+    }
+
+    internal IReadOnlyList<RecorderGridHint> EnumerateGridHints() => FreezeGridHints();
+
+    internal GridAutomationDefinition? FindGridDefinition(RecorderGridHint hint)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        return GridAutomation.FirstOrDefault(definition =>
+            definition.CaptureLocatorKind == hint.SourceLocatorKind
+            && string.Equals(definition.CaptureLocatorValue, hint.SourceLocatorValue, StringComparison.Ordinal));
+    }
+}
+
+public sealed record RecordedScenarioDestination(
+    string DisplayName,
+    string ScenarioNamespace,
+    string ScenarioClassName,
+    string OutputSubdirectory)
+{
+    internal int GenericArity { get; init; }
+
+    internal string TypeParameterListText { get; init; } = string.Empty;
+
+    internal string TypeParameterSignature { get; init; } = string.Empty;
+}
+
+public sealed class RecorderScenarioSelectionOptions
+{
+    public bool IsEnabled { get; init; }
+
+    public string? ScenarioNamespaceRoot { get; init; }
+
+    public string OutputSubdirectoryRoot { get; init; } = "Recorded";
 }
 
 public enum RecorderOverlayTheme
@@ -91,7 +190,10 @@ public sealed record RecorderGridHint(
     IReadOnlyList<string> ColumnPropertyNames,
     UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
     UiLocatorKind TargetLocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = false);
+    bool FallbackToName = false)
+{
+    public IReadOnlyList<string> RowIdentityColumnPropertyNames { get; init; } = Array.Empty<string>();
+}
 
 public sealed record RecorderGridActionHint(
     string SourceLocatorValue,
@@ -130,6 +232,48 @@ public sealed record RecorderGridEditHint(
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,
     SearchPickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderSearchControlHint(
+    string LocatorValue,
+    SearchControlParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderMultiSelectHint(
+    string LocatorValue,
+    MultiSelectParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderComboBoxFilterHint(
+    string LocatorValue,
+    ComboBoxFilterParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderTimePickerHint(
+    string LocatorValue,
+    TimePickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderDatePickerHint(
+    string LocatorValue,
+    DatePickerParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderSingleSelectHint(
+    string LocatorValue,
+    SingleSelectParts Parts,
+    UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
+    bool FallbackToName = false);
+
+public sealed record RecorderColorPickerHint(
+    string LocatorValue,
+    ColorPickerParts Parts,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = false);
 
@@ -209,6 +353,10 @@ public sealed class RecorderHotkeys
     public string? CaptureAssertChecked { get; init; } = "Ctrl+Shift+K";
 
     public string? CaptureAssertExists { get; init; } = "Ctrl+Shift+F";
+
+    public string? CaptureCheckpoint { get; init; } = "Ctrl+Shift+M";
+
+    public string? CaptureCheckpointAssertion { get; init; } = "Ctrl+Shift+V";
 
     public string? ToggleOverlayMinimize { get; init; } = "Ctrl+Shift+M";
 }

@@ -1,5 +1,5 @@
-using AppAutomation.Abstractions;
 using System.Reflection;
+using AppAutomation.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -7,6 +7,237 @@ namespace AppAutomation.Abstractions.Tests;
 
 public sealed class UiControlAdapterTests
 {
+    [Test]
+    public async Task DeferredAdapters_OnlySuppressTransientResolutionFailures()
+    {
+        var inner = new FakeResolver(("Input", new FakeTextBoxControl("Input")))
+        {
+            FailureLocator = "Results"
+        };
+        var multiSelect = inner.WithMultiSelect("Picker", new MultiSelectParts("Input", "Open", "Results", "Apply"))
+            .Resolve<IMultiSelectControl>(new UiControlDefinition("Picker", UiControlType.MultiSelect, "Input"));
+        var searchPicker = inner.WithSearchPicker("Picker", SearchPickerParts.ByAutomationIds("Input", "Results", applyButtonAutomationId: "Results"))
+            .Resolve<ISearchPickerControl>(new UiControlDefinition("Picker", UiControlType.SearchPicker, "Input"));
+        var search = inner.WithSearchControl("Search", SearchControlParts.ByAutomationIds("Input", "Results"))
+            .Resolve<ISearchControl>(new UiControlDefinition("Search", UiControlType.Search, "Input"));
+        var singleSelect = inner.WithSingleSelect("Picker", SingleSelectParts.ByAutomationIds("Input", "Results"))
+            .Resolve<IComboBoxControl>(new UiControlDefinition("Picker", UiControlType.ComboBox, "Input"));
+        var date = inner.WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("Input", "Results"))
+            .Resolve<IDateTimePickerControl>(new UiControlDefinition("Date", UiControlType.DateTimePicker, "Input"));
+        var time = inner.WithTimePicker("Time", TimePickerParts.ByAutomationIds("Input", "Results"))
+            .Resolve<ITimePickerControl>(new UiControlDefinition("Time", UiControlType.TimePicker, "Input"));
+        var color = inner.WithColorPicker("Color", ColorPickerParts.ByAutomationIds("Input", "Results", customValueAutomationId: "Results"))
+            .Resolve<IColorPickerControl>(new UiControlDefinition("Color", UiControlType.ColorPicker, "Input"));
+
+        await Assert.That(multiSelect.IsOpen).IsFalse();
+        await Assert.That(searchPicker.Items).IsEmpty();
+        await Assert.That(searchPicker.IsEnabled).IsFalse();
+        await Assert.That(search.HistoryItems).IsEmpty();
+        await Assert.That(singleSelect.Items).IsEmpty();
+        await Assert.That(date.SelectedDate).IsNull();
+        await Assert.That(time.SelectedTime).IsNull();
+        await Assert.That(color.IsEnabled).IsTrue();
+
+        Action[] reads =
+        [
+            () => _ = multiSelect.IsOpen,
+            () => _ = searchPicker.Items,
+            () => _ = searchPicker.IsEnabled,
+            () => _ = search.HistoryItems,
+            () => _ = singleSelect.Items,
+            () => _ = date.SelectedDate,
+            () => _ = time.SelectedTime,
+            () => _ = color.Color
+        ];
+        Exception[] failures =
+        [
+            new UiControlResolutionException(UiControlResolutionFailure.Ambiguous, "Two results containers matched."),
+            new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch, "Control does not expose the required capability."),
+            new InvalidOperationException("Provider configuration is invalid."),
+            new NotSupportedException("Provider does not support the configured surface.")
+        ];
+        foreach (var failure in failures)
+        {
+            inner.ResolutionFailure = failure;
+            foreach (var read in reads)
+            {
+                Exception actual = failure switch
+                {
+                    UiControlResolutionException => Assert.Throws<UiControlResolutionException>(read),
+                    NotSupportedException => Assert.Throws<NotSupportedException>(read),
+                    _ => Assert.Throws<InvalidOperationException>(read)
+                };
+                await Assert.That(actual).IsEqualTo(failure);
+            }
+        }
+
+        var nativeDate = new FakeDateTimePickerControl("DateValue") { SelectedDate = new DateTime(2026, 9, 11) };
+        var nativeDateProxy = new FakeResolver(("DateValue", nativeDate))
+            .WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("DateValue", "DateValue"))
+            .Resolve<IDateTimePickerControl>(new UiControlDefinition("Date", UiControlType.DateTimePicker, "DateValue"));
+        await Assert.That(nativeDateProxy.SelectedDate).IsEqualTo(nativeDate.SelectedDate);
+        nativeDate.SelectedDate = null;
+        await Assert.That(nativeDateProxy.SelectedDate).IsNull();
+    }
+
+    [Test]
+    public async Task ComboBoxFilterAdapter_AppliesOneOrManyValuesAndReplaysCancel()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        context.Page
+            .ApplyFilterSelection(static page => page.StatusFilter, [])
+            .ApplyFilterSelection(static page => page.StatusFilter, ["Pending"])
+            .ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"])
+            .CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
+            await Assert.That(context.Items.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(4);
+            await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(3);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task ComboBoxFilterAdapter_AppliesImmediateSelectionWithoutApplyButton()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: false);
+        context.Items.OnSetSelectedItems = _ => context.Items.IsAvailable = false;
+
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectAdapter_AppliesExactSelectionAndCancelRestoresCommittedItems()
+    {
+        var editorRoot = new FakeControl("CategoriesEditor");
+        var items = new FakeMultiSelectItemsControl(
+            "CategoriesItems",
+            ["Alpha", "Beta", "Gamma"],
+            ["Alpha"]);
+        var openButton = new FakeButtonControl("CategoriesOpenButton")
+        {
+            OnInvoke = () => items.IsAvailable = true
+        };
+        var applyButton = new FakeButtonControl("CategoriesApplyButton")
+        {
+            OnInvoke = () => items.IsAvailable = false
+        };
+        var cancelButton = new FakeButtonControl("CategoriesCancelButton")
+        {
+            OnInvoke = () =>
+            {
+                items.SetSelectedItems(["Alpha", "Gamma"]);
+                items.IsAvailable = false;
+            }
+        };
+        var resolver = new FakeResolver(
+                ("CategoriesEditor", editorRoot),
+                ("CategoriesOpenButton", openButton),
+                ("CategoriesItems", items),
+                ("CategoriesApplyButton", applyButton),
+                ("CategoriesCancelButton", cancelButton))
+            .WithMultiSelect(
+                "Categories",
+                MultiSelectParts.ByAutomationIds(
+                    "CategoriesEditor",
+                    "CategoriesOpenButton",
+                    "CategoriesItems",
+                    "CategoriesApplyButton",
+                    "CategoriesCancelButton"));
+        var page = new MultiSelectPage(resolver);
+
+        page
+            .SelectMultiItems(static candidate => candidate.Categories, ["Gamma", "Alpha"])
+            .CancelMultiSelection(static candidate => candidate.Categories, ["Beta"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.Categories.IsOpen).IsFalse();
+            await Assert.That(page.Categories.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(2);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+        }
+
+        await Assert.That(() => page.SelectMultiItems(
+                static candidate => candidate.Categories,
+                ["Missing"],
+                timeoutMs: 50))
+            .Throws<UiOperationException>();
+        await Assert.That(() => page.SelectMultiItems(
+                static candidate => candidate.Categories,
+                ["Alpha", "alpha"],
+                timeoutMs: 50))
+            .Throws<UiOperationException>();
+    }
+
+    [Test]
+    public async Task MultiSelectAdapter_ReReadsSelectionAfterPopupReopens()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending"]);
+        context.Items.SetSelectedItems(["Closed"]);
+
+        context.Page.StatusFilter.Open();
+
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
+        context.Items.IsAvailable = false;
+    }
+
+    [Test]
+    public async Task MultiSelectAdapter_ReadsInitialCommittedSelectionWhileClosed()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        var selectedItems = context.Page.StatusFilter.SelectedItems;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selectedItems).IsEquivalentTo(["Open"]);
+            await Assert.That(context.Items.IsAvailable).IsFalse();
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectAdapter_UsesProviderSelectionSnapshotWithoutPreReadingItems()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Items.SelectionSnapshotCount).IsEqualTo(1);
+            await Assert.That(context.Items.ItemsReadCount).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task CancelMultiSelection_ReusesKnownCommittedItemsWithoutScanningPopupSelection()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
+        context.Items.ResetObservationCounts();
+
+        context.Page.CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
+
+        await Assert.That(context.Items.SelectedItemsReadCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task SearchPickerAdapter_SupportsSharedPageFlow()
     {
@@ -44,6 +275,134 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(comboBox.SelectedIndex).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_WaitsForActionsEnabledByEarlierPhases()
+    {
+        var searchInput = new FakeTextBoxControl("ProductPickerInput");
+        var expandButton = new FakeButtonControl("ProductPickerExpand")
+        {
+            IsEnabled = false
+        };
+        var applyButton = new FakeButtonControl("ProductPickerApply")
+        {
+            IsEnabled = false,
+            OnInvoke = () => EnableAfterDelay(expandButton)
+        };
+        searchInput.OnEnter = _ => EnableAfterDelay(applyButton);
+        var results = new FakeSelectableListBoxControl(
+            "ProductPickerResults",
+            [new FakeListBoxItem("Item 42", "Item 42")]);
+        var resolver = new FakeResolver(
+                ("ProductPickerInput", searchInput),
+                ("ProductPickerApply", applyButton),
+                ("ProductPickerExpand", expandButton),
+                ("ProductPickerResults", results))
+            .WithSearchPicker(
+                "ProductPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "ProductPickerInput",
+                    "ProductPickerResults",
+                    "ProductPickerApply",
+                    "ProductPickerExpand",
+                    SearchPickerResultsKind.ListBox));
+        var page = new ProductPickerPage(resolver);
+
+        page.SearchAndSelect(
+            static candidate => candidate.ProductPicker,
+            "Item",
+            "Item 42",
+            timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(applyButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(expandButton.WasInvokedWhileDisabled).IsFalse();
+            await Assert.That(results.SelectedItemText).IsEqualTo("Item 42");
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_ReflectsConfiguredActionButtonAvailability()
+    {
+        var searchInput = new FakeTextBoxControl("HistoryFilterInput");
+        var applyButton = new FakeButtonControl("ApplyFilterButton");
+        var expandButton = new FakeButtonControl("ExpandFilterButton");
+        var comboBox = new FakeComboBoxControl(
+            "OperationCombo",
+            [new FakeComboBoxItem("Least Common Multiple", "Least Common Multiple")]);
+        var resolver = new FakeResolver(
+                ("HistoryFilterInput", searchInput),
+                ("ApplyFilterButton", applyButton),
+                ("ExpandFilterButton", expandButton),
+                ("OperationCombo", comboBox))
+            .WithSearchPicker(
+                "HistoryOperationPicker",
+                SearchPickerParts.ByAutomationIds(
+                    "HistoryFilterInput",
+                    "OperationCombo",
+                    "ApplyFilterButton",
+                    "ExpandFilterButton",
+                    SearchPickerResultsKind.ComboBox));
+        var picker = new SearchPickerPage(resolver).HistoryOperationPicker;
+
+        applyButton.IsEnabled = false;
+        await Assert.That(picker.IsEnabled).IsFalse();
+
+        applyButton.IsEnabled = true;
+        expandButton.IsEnabled = false;
+        await Assert.That(picker.IsEnabled).IsFalse();
+
+        expandButton.IsEnabled = true;
+        await Assert.That(picker.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchPickerParts_PreservesPublishedSevenValueApiShape()
+    {
+        var constructorParameterTypes = new[]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(UiLocatorKind),
+            typeof(bool),
+            typeof(SearchPickerResultsKind)
+        };
+        var factoryParameterTypes = new[]
+        {
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(SearchPickerResultsKind)
+        };
+        var deconstructParameterTypes = constructorParameterTypes
+            .Select(static type => type.MakeByRefType())
+            .ToArray();
+
+        var constructor = typeof(SearchPickerParts).GetConstructor(constructorParameterTypes);
+        var factory = typeof(SearchPickerParts).GetMethod(
+            nameof(SearchPickerParts.ByAutomationIds),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            factoryParameterTypes,
+            modifiers: null);
+        var deconstruct = typeof(SearchPickerParts).GetMethod(
+            "Deconstruct",
+            BindingFlags.Public | BindingFlags.Instance,
+            binder: null,
+            deconstructParameterTypes,
+            modifiers: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(constructor).IsNotNull();
+            await Assert.That(factory).IsNotNull();
+            await Assert.That(deconstruct).IsNotNull();
         }
     }
 
@@ -88,6 +447,47 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task SearchPickerAdapter_SearchOpenedList_DoesNotTogglePopupClosed()
+    {
+        var searchInput = new FakeTextBoxControl("ServerSearchComboBox_Input");
+        var expandButton = new FakeButtonControl("ServerSearchComboBox_OpenButton");
+        var listBox = new FakeSelectableListBoxControl(
+            "ServerSearchComboBox_Results",
+            [
+                new FakeListBoxItem("Product 42", "Product 42")
+            ]);
+
+        var resolver = new FakeResolver(
+            ("ServerSearchComboBox_Input", searchInput),
+            ("ServerSearchComboBox_OpenButton", expandButton),
+            ("ServerSearchComboBox_Results", listBox))
+            .WithSearchPicker(
+                "ServerSearchComboBox",
+                SearchPickerParts.ByAutomationIds(
+                    "ServerSearchComboBox_Input",
+                    "ServerSearchComboBox_Results",
+                    expandButtonAutomationId: "ServerSearchComboBox_OpenButton",
+                    resultsKind: SearchPickerResultsKind.ListBox,
+                    opensOnSearch: true));
+        var page = new ServerSearchComboBoxPage(resolver);
+        expandButton.IsEnabled = false;
+
+        var isEnabledWithoutExpandAction = page.ServerSearchComboBox.IsEnabled;
+
+        page.SearchAndSelect(
+            static candidate => candidate.ServerSearchComboBox,
+            "product",
+            "Product 42");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(isEnabledWithoutExpandAction).IsTrue();
+            await Assert.That(expandButton.InvokeCount).IsEqualTo(0);
+            await Assert.That(listBox.SelectedItemText).IsEqualTo("Product 42");
         }
     }
 
@@ -163,7 +563,7 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task SearchPickerAdapter_DefersDetachedListBackedResultsUntilExpand()
+    public async Task SearchPickerAdapter_DefersDetachedResultsAndRetainsSelectionAfterClose()
     {
         var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
         var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
@@ -193,13 +593,17 @@ public sealed class UiControlAdapterTests
             "АЭРОСКАН ООО",
             "АЭРОСКАН ООО",
             timeoutMs: 1000);
+        innerResolver.ResultsAvailable = false;
 
         using (Assert.Multiple())
         {
             await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
             await Assert.That(innerResolver.ResultsResolveAttemptsBeforeExpand).IsEqualTo(0);
-            await Assert.That(listBox.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+            await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
         }
+
+        searchInput.Text = "Другой клиент";
+        await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsNull();
     }
 
     [Test]
@@ -811,12 +1215,89 @@ public sealed class UiControlAdapterTests
             .Throws<ArgumentNullException>();
     }
 
+    private static ComboBoxFilterTestContext CreateComboBoxFilterContext(bool hasApplyButton)
+    {
+        var items = new FakeMultiSelectItemsControl(
+            "StatusFilterItems",
+            ["Open", "Pending", "Closed"],
+            ["Open"]);
+        var committedItems = new[] { "Open" };
+        var openButton = new FakeButtonControl("StatusFilterOpenButton")
+        {
+            OnInvoke = () => items.IsAvailable = true
+        };
+        var applyButton = new FakeButtonControl("StatusFilterApplyButton")
+        {
+            OnInvoke = () =>
+            {
+                committedItems = items.SelectedItems.ToArray();
+                items.IsAvailable = false;
+            }
+        };
+        var cancelButton = new FakeButtonControl("StatusFilterCancelButton")
+        {
+            OnInvoke = () =>
+            {
+                items.SetSelectedItems(committedItems);
+                items.IsAvailable = false;
+            }
+        };
+        var resolver = new FakeResolver(
+                ("StatusFilterRoot", new FakeControl("StatusFilterRoot")),
+                ("StatusFilterOpenButton", openButton),
+                ("StatusFilterItems", items),
+                ("StatusFilterApplyButton", applyButton),
+                ("StatusFilterCancelButton", cancelButton))
+            .WithComboBoxFilter(
+                "StatusFilter",
+                ComboBoxFilterParts.ByAutomationIds(
+                    "StatusFilterRoot",
+                    "StatusFilterOpenButton",
+                    "StatusFilterItems",
+                    applyButtonAutomationId: hasApplyButton ? "StatusFilterApplyButton" : null,
+                    cancelButtonAutomationId: hasApplyButton ? "StatusFilterCancelButton" : null));
+
+        return new ComboBoxFilterTestContext(
+            new ComboBoxFilterPage(resolver),
+            items,
+            openButton,
+            applyButton,
+            cancelButton);
+    }
+
+    private sealed record ComboBoxFilterTestContext(
+        ComboBoxFilterPage Page,
+        FakeMultiSelectItemsControl Items,
+        FakeButtonControl OpenButton,
+        FakeButtonControl ApplyButton,
+        FakeButtonControl CancelButton);
+
     public static class SearchPickerPageDefinitions
     {
         public static UiControlDefinition HistoryOperationPicker { get; } = new(
             "HistoryOperationPicker",
             UiControlType.AutomationElement,
             "HistoryOperationPicker",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    public static class MultiSelectPageDefinitions
+    {
+        public static UiControlDefinition Categories { get; } = new(
+            "Categories",
+            UiControlType.MultiSelect,
+            "Categories",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    public static class ComboBoxFilterPageDefinitions
+    {
+        public static UiControlDefinition StatusFilter { get; } = new(
+            "StatusFilter",
+            UiControlType.ComboBoxFilter,
+            "StatusFilter",
             UiLocatorKind.AutomationId,
             FallbackToName: false);
     }
@@ -841,6 +1322,26 @@ public sealed class UiControlAdapterTests
             FallbackToName: false);
     }
 
+    public static class ServerSearchComboBoxPageDefinitions
+    {
+        public static UiControlDefinition ServerSearchComboBox { get; } = new(
+            "ServerSearchComboBox",
+            UiControlType.SearchPicker,
+            "ServerSearchComboBox",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
+    public static class ProductPickerPageDefinitions
+    {
+        public static UiControlDefinition ProductPicker { get; } = new(
+            "ProductPicker",
+            UiControlType.SearchPicker,
+            "ProductPicker",
+            UiLocatorKind.AutomationId,
+            FallbackToName: false);
+    }
+
     private sealed class SearchPickerPage : UiPage
     {
         public SearchPickerPage(IUiControlResolver resolver)
@@ -849,6 +1350,27 @@ public sealed class UiControlAdapterTests
         }
 
         public ISearchPickerControl HistoryOperationPicker => Resolve<ISearchPickerControl>(SearchPickerPageDefinitions.HistoryOperationPicker);
+    }
+
+    private sealed class MultiSelectPage : UiPage
+    {
+        public MultiSelectPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IMultiSelectControl Categories => Resolve<IMultiSelectControl>(MultiSelectPageDefinitions.Categories);
+    }
+
+    private sealed class ComboBoxFilterPage : UiPage
+    {
+        public ComboBoxFilterPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IComboBoxFilterControl StatusFilter =>
+            Resolve<IComboBoxFilterControl>(ComboBoxFilterPageDefinitions.StatusFilter);
     }
 
     private sealed class OrderCustomerSearchPage : UiPage
@@ -860,6 +1382,28 @@ public sealed class UiControlAdapterTests
 
         public ISearchPickerControl OrderCustomerSearch =>
             Resolve<ISearchPickerControl>(OrderCustomerSearchPageDefinitions.OrderCustomerSearch);
+    }
+
+    private sealed class ServerSearchComboBoxPage : UiPage
+    {
+        public ServerSearchComboBoxPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl ServerSearchComboBox =>
+            Resolve<ISearchPickerControl>(ServerSearchComboBoxPageDefinitions.ServerSearchComboBox);
+    }
+
+    private sealed class ProductPickerPage : UiPage
+    {
+        public ProductPickerPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public ISearchPickerControl ProductPicker =>
+            Resolve<ISearchPickerControl>(ProductPickerPageDefinitions.ProductPicker);
     }
 
     private sealed class SearchPickerInputPartPage : UiPage
@@ -998,13 +1542,24 @@ public sealed class UiControlAdapterTests
 
         public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
 
+        public string? FailureLocator { get; init; }
+
+        public Exception? ResolutionFailure { get; set; }
+
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
+            if (definition.LocatorValue == FailureLocator && ResolutionFailure is { } failure)
+            {
+                throw failure;
+            }
+
             return _controls.TryGetValue(definition.LocatorValue, out var control)
                 ? (control as TControl
-                    ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
-                : throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+                    ?? throw new UiControlResolutionException(
+                        UiControlResolutionFailure.TypeMismatch, $"Control '{definition.LocatorValue}' is not of expected type."))
+                : throw new UiControlResolutionException(
+                    UiControlResolutionFailure.NotFound, $"Unknown control '{definition.LocatorValue}'.");
         }
     }
 
@@ -1021,22 +1576,26 @@ public sealed class UiControlAdapterTests
 
         public int ResultsResolveAttemptsBeforeExpand { get; private set; }
 
+        public bool ResultsAvailable { get; set; } = true;
+
         public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
             if (string.Equals(definition.LocatorValue, "OrderCustomerSearch_Results", StringComparison.Ordinal)
-                && _expandButton.InvokeCount == 0)
+                && (_expandButton.InvokeCount == 0 || !ResultsAvailable))
             {
                 ResultsResolveAttemptsBeforeExpand++;
-                throw new InvalidOperationException("Popup results are not attached before expand.");
+                throw new UiControlResolutionException(
+                    UiControlResolutionFailure.Detached, "Popup results are not attached before expand.");
             }
 
             return _controls.TryGetValue(definition.LocatorValue, out var control)
                 ? (control as TControl
                     ?? throw new InvalidOperationException($"Control '{definition.LocatorValue}' is not of expected type."))
-                : throw new InvalidOperationException($"Unknown control '{definition.LocatorValue}'.");
+                : throw new UiControlResolutionException(
+                    UiControlResolutionFailure.NotFound, $"Unknown control '{definition.LocatorValue}'.");
         }
     }
 
@@ -1052,7 +1611,7 @@ public sealed class UiControlAdapterTests
 
         public string Name { get; protected set; }
 
-        public bool IsEnabled { get; init; } = true;
+        public bool IsEnabled { get; set; } = true;
     }
 
     private sealed class FakeTextBoxControl : FakeControlBase, ITextBoxControl
@@ -1065,9 +1624,12 @@ public sealed class UiControlAdapterTests
 
         public string Text { get; set; }
 
+        public Action<string>? OnEnter { get; set; }
+
         public void Enter(string value)
         {
             Text = value;
+            OnEnter?.Invoke(value);
         }
     }
 
@@ -1096,9 +1658,110 @@ public sealed class UiControlAdapterTests
 
         public int InvokeCount { get; private set; }
 
+        public bool WasInvokedWhileDisabled { get; private set; }
+
+        public Action? OnInvoke { get; init; }
+
         public void Invoke()
         {
+            if (!IsEnabled)
+            {
+                WasInvokedWhileDisabled = true;
+                throw new InvalidOperationException($"Button '{AutomationId}' is disabled.");
+            }
+
             InvokeCount++;
+            OnInvoke?.Invoke();
+        }
+    }
+
+    private static void EnableAfterDelay(FakeControlBase control)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            control.IsEnabled = true;
+        });
+    }
+
+    private sealed class FakeControl : FakeControlBase
+    {
+        public FakeControl(string automationId)
+            : base(automationId)
+        {
+        }
+    }
+
+    private sealed class FakeMultiSelectItemsControl : FakeControlBase, IMultiSelectItemsControl, IUiControlAvailability
+    {
+        private readonly string[] _items;
+        private string[] _selectedItems;
+
+        public FakeMultiSelectItemsControl(
+            string automationId,
+            IReadOnlyCollection<string> items,
+            IReadOnlyCollection<string> selectedItems)
+            : base(automationId)
+        {
+            _items = items.ToArray();
+            _selectedItems = selectedItems.ToArray();
+        }
+
+        public IReadOnlyList<string> Items
+        {
+            get
+            {
+                ItemsReadCount++;
+                return _items;
+            }
+        }
+
+        public IReadOnlyList<string> SelectedItems
+        {
+            get
+            {
+                SelectedItemsReadCount++;
+                return _selectedItems;
+            }
+        }
+
+        public bool IsAvailable { get; set; }
+
+        public int ItemsReadCount { get; private set; }
+
+        public int SelectionSnapshotCount { get; private set; }
+
+        public int SelectedItemsReadCount { get; private set; }
+
+        public Action<IReadOnlyCollection<string>>? OnSetSelectedItems { get; set; }
+
+        public void SetSelectedItems(IReadOnlyCollection<string> values)
+        {
+            _selectedItems = values.ToArray();
+            OnSetSelectedItems?.Invoke(values);
+        }
+
+        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+        {
+            SelectionSnapshotCount++;
+            var missingItems = values
+                .Where(value => !_items.Contains(value, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (missingItems.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Multi-select items were not found: [{string.Join(", ", missingItems)}].");
+            }
+
+            SetSelectedItems(values);
+            return _items;
+        }
+
+        public void ResetObservationCounts()
+        {
+            ItemsReadCount = 0;
+            SelectedItemsReadCount = 0;
+            SelectionSnapshotCount = 0;
         }
     }
 

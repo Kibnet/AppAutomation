@@ -1,10 +1,11 @@
+using System;
+using System.IO;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia;
+using DotnetDebug.AppAutomation.Configuration;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
-using System;
-using System.IO;
 
 namespace DotnetDebug.Avalonia;
 
@@ -50,6 +51,7 @@ public partial class App : Application
         var outputDirectory = Environment.GetEnvironmentVariable(RecorderOutputDirectoryEnvironmentVariable);
         var authoringProjectDirectory = Environment.GetEnvironmentVariable(RecorderAuthoringProjectEnvironmentVariable);
         var saveHotkey = Environment.GetEnvironmentVariable(RecorderSaveHotkeyEnvironmentVariable);
+        var useInteractiveScenarioSelection = string.IsNullOrWhiteSpace(scenarioName);
         var options = new AppAutomationRecorderOptions
         {
             ScenarioName = string.IsNullOrWhiteSpace(scenarioName) ? "RecordedSmoke" : scenarioName,
@@ -59,8 +61,18 @@ public partial class App : Application
             OutputSubdirectory = string.IsNullOrWhiteSpace(outputDirectory) ? "Recorded" : Path.GetFullPath(outputDirectory),
             PageNamespace = "DotnetDebug.AppAutomation.Authoring.Pages",
             PageClassName = "MainWindowPage",
-            ScenarioNamespace = "DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests",
-            ScenarioClassName = "MainWindowScenariosBase",
+            ScenarioNamespace = useInteractiveScenarioSelection
+                ? null
+                : "DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests",
+            ScenarioClassName = useInteractiveScenarioSelection ? null : "MainWindowScenariosBase",
+            ScenarioSelection = new RecorderScenarioSelectionOptions
+            {
+                IsEnabled = useInteractiveScenarioSelection,
+                ScenarioNamespaceRoot = "DotnetDebug.AppAutomation.Authoring.Tests",
+                OutputSubdirectoryRoot = string.IsNullOrWhiteSpace(outputDirectory)
+                    ? "Recorded"
+                    : Path.GetFullPath(outputDirectory)
+            },
             OverlayTheme = RecorderOverlayTheme.Dark,
             ShowOverlay = !string.Equals(Environment.GetEnvironmentVariable(RecorderOverlayEnvironmentVariable), "0", StringComparison.Ordinal),
             DiagnosticLog = new RecorderDiagnosticLogOptions
@@ -71,9 +83,17 @@ public partial class App : Application
             Hotkeys = string.IsNullOrWhiteSpace(saveHotkey)
                 ? RecorderHotkeys.Default
                 : new RecorderHotkeys { Save = saveHotkey },
-            AllowNameLocators = false
+            AllowNameLocators = false,
+            GridAutomation = SampleGridAutomation.CreateRecorderCatalog()
         };
-        options.ControlHints.Add(new RecorderControlHint("MixCountSpinner", RecorderActionHint.SpinnerTextBox));
+        options.MultiSelectHints.Add(new RecorderMultiSelectHint(
+            "MultiSelection",
+            MultiSelectParts.ByAutomationIds(
+                "MultiSelection",
+                "MultiSelection_OpenButton",
+                "MultiSelection_Results",
+                "MultiSelection_ApplyButton",
+                "MultiSelection_CancelButton")));
         options.LocatorAliases.Add(new RecorderLocatorAlias(
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
@@ -85,11 +105,17 @@ public partial class App : Application
         options.GridHints.Add(new RecorderGridHint(
             "EremexDemoDataGridControl",
             "EremexDemoDataGridAutomationBridge",
-            ["EremexRow", "EremexValue", "EremexParity"]));
+            ["EremexRow", "EremexValue", "EremexParity"])
+        {
+            RowIdentityColumnPropertyNames = ["EremexRow"]
+        });
         options.GridHints.Add(new RecorderGridHint(
             "ArmEremexDataGridControl",
             "ArmGridAutomationBridge",
-            ["Key", "Value", "State"]));
+            ["Key", "Value", "Color", "State"])
+        {
+            RowIdentityColumnPropertyNames = ["Key"]
+        });
         options.GridActionHints.Add(new RecorderGridActionHint(
             "ArmGridOpenButton",
             "ArmGridAutomationBridge",
@@ -128,17 +154,39 @@ public partial class App : Application
             1,
             CommitMode: GridCellEditCommitMode.Cancel));
         options.SearchPickerHints.Add(new RecorderSearchPickerHint(
-            "ArmSearchPicker",
-            SearchPickerParts.ByAutomationIds(
-                "ArmSearchInput",
-                "ArmSearchResults",
-                applyButtonAutomationId: "ArmSearchApplyButton")));
-        options.SearchPickerHints.Add(new RecorderSearchPickerHint(
             "ArmServerSearchPicker",
             SearchPickerParts.ByAutomationIds(
-                "ArmServerPickerInput",
-                "ArmServerPickerResults",
-                expandButtonAutomationId: "ArmServerPickerOpenButton")));
+                "ArmServerSearchPicker_Input",
+                "ArmServerSearchPicker_Results",
+                expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
+                resultsKind: SearchPickerResultsKind.ListBox,
+                opensOnSearch: true)));
+        options.SearchControlHints.Add(new RecorderSearchControlHint(
+            "ArmTableSearch",
+            SearchControlParts.ByAutomationIds(
+                "ArmTableSearchInput",
+                "ArmTableSearchHistoryItemButton",
+                historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
+                historyRootAutomationId: "ArmTableSearchHistoryRoot")));
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "ArmStatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "ArmStatusFilter",
+                "ArmStatusFilter_OpenButton",
+                "ArmStatusFilter_Results",
+                "ArmStatusFilter_ApplyButton",
+                "ArmStatusFilter_CancelButton")));
+        options.ColorPickerHints.Add(new RecorderColorPickerHint(
+            "ArmAccentColorPicker",
+            ColorPickerParts.ByAutomationIds(
+                "ArmAccentColorPicker",
+                "ArmAccentColorValue",
+                openButtonAutomationId: "ArmAccentColorOpenButton",
+                popupRootAutomationId: "ArmAccentColorPopup",
+                customValueAutomationId: "ArmAccentColorCustomValue",
+                confirmButtonAutomationId: "ArmAccentColorConfirmButton",
+                cancelButtonAutomationId: "ArmAccentColorCancelButton",
+                commitMode: ColorPickerCommitMode.Confirm)));
         options.DateRangeFilterHints.Add(new RecorderDateRangeFilterHint(
             "ArmDateRangeFilter",
             DateRangeFilterParts.ByAutomationIds(
@@ -185,7 +233,10 @@ public partial class App : Application
                 navigationKind: ShellNavigationSourceKind.ListBox)));
 
         var session = AppAutomationRecorder.Attach(mainWindow, options);
-        session.Start();
+        if (!useInteractiveScenarioSelection)
+        {
+            session.Start();
+        }
     }
 
     private static string ResolveAuthoringProjectDirectory()

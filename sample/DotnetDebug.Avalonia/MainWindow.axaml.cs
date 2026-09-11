@@ -5,15 +5,26 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DotnetDebug;
+using Eremex.AvaloniaUI.Controls.Editors;
+using Eremex.AvaloniaUI.Controls.Utils;
 
 namespace DotnetDebug.Avalonia;
 
 public partial class MainWindow : Window
 {
+    private static readonly TimeSpan DelayedStatusDelay = TimeSpan.FromSeconds(5);
+
+    private const string FlaUiCalendarFallbackFixtureEnvironmentVariable =
+        "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
+
     private readonly MainWindowViewModel _viewModel = new();
+    private bool _flaUiCalendarFallbackInitialized;
 
     private enum ComputeMode
     {
@@ -44,6 +55,93 @@ public partial class MainWindow : Window
         StartDatePicker.SelectedDate = DateTime.Today;
         EndDatePicker.SelectedDate = DateTime.Today.AddDays(3);
         MixModeCombo.SelectedIndex = 0;
+        _viewModel.SelectedMultiSelectItems.CollectionChanged += (_, _) => UpdateMultiSelectStatus();
+        UpdateMultiSelectStatus();
+        InitializeFlaUiCalendarFallbackFixture();
+    }
+
+    private void InitializeFlaUiCalendarFallbackFixture()
+    {
+        FlaUiCalendarFallbackFixtureHost.IsVisible = string.Equals(
+            Environment.GetEnvironmentVariable(FlaUiCalendarFallbackFixtureEnvironmentVariable),
+            "1",
+            StringComparison.Ordinal);
+    }
+
+    private void OnFlaUiCalendarFallbackFixtureLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (_flaUiCalendarFallbackInitialized || sender is not DateEditor dateEditor)
+        {
+            return;
+        }
+
+        _flaUiCalendarFallbackInitialized = true;
+
+        ApplyTemplatesRecursively(dateEditor);
+        if (dateEditor.PopupContent is Control popupContent)
+        {
+            ApplyTemplatesRecursively(popupContent);
+        }
+
+        if (dateEditor.RealEditor is Control valueControl)
+        {
+            AutomationProperties.SetAutomationId(valueControl, "FlaUiCalendarFallbackValue");
+        }
+
+        var openButton = EnumerateControls(dateEditor)
+            .OfType<Button>()
+            .FirstOrDefault(static button => string.Equals(
+                button.Name,
+                "PART_PopupOpenButton",
+                StringComparison.Ordinal));
+        if (openButton is not null)
+        {
+            AutomationProperties.SetAutomationId(openButton, "FlaUiCalendarFallbackOpen");
+        }
+
+        if (dateEditor.PopupContent is CalendarControl calendar)
+        {
+            AutomationProperties.SetAutomationId(calendar, "FlaUiCalendarFallbackCalendar");
+            calendar.SelectedDatesChanged += (_, _) => ApplyFlaUiCalendarFallbackDate(dateEditor, calendar);
+        }
+    }
+
+    private static void ApplyFlaUiCalendarFallbackDate(DateEditor dateEditor, CalendarControl calendar)
+    {
+        if (calendar.SelectedDate is not { } selectedDate)
+        {
+            return;
+        }
+
+        dateEditor.EditorValue = selectedDate;
+        if (dateEditor.ClosePopupCommand.CanExecute(PopupCloseMode.Apply))
+        {
+            dateEditor.ClosePopupCommand.Execute(PopupCloseMode.Apply);
+        }
+    }
+
+    private static void ApplyTemplatesRecursively(Control root)
+    {
+        root.ApplyTemplate();
+        foreach (var control in root.GetVisualDescendants().OfType<Control>())
+        {
+            control.ApplyTemplate();
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateControls(Control root)
+    {
+        yield return root;
+
+        foreach (var control in root.GetVisualDescendants().OfType<Control>())
+        {
+            yield return control;
+        }
+
+        foreach (var control in root.GetLogicalDescendants().OfType<Control>())
+        {
+            yield return control;
+        }
     }
 
     private void OnCalculateClick(object? sender, RoutedEventArgs e)
@@ -100,12 +198,31 @@ public partial class MainWindow : Window
         ApplyCurrentHistoryFilter();
     }
 
+    private void OnMultiSelectionEditorLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is PopupEditor popupEditor)
+        {
+            MultiSelectEditorAutomation.Apply(popupEditor, "MultiSelection");
+        }
+    }
+
+    private void UpdateMultiSelectStatus()
+    {
+        var selected = _viewModel.SelectedMultiSelectItems
+            .Select(static item => item.Name)
+            .OrderBy(static item => item, StringComparer.Ordinal)
+            .ToArray();
+        MultiSelectStatusLabel.Content = selected.Length == 0
+            ? "Selected: none"
+            : $"Selected: {string.Join(", ", selected)}";
+    }
+
     private async void OnShowDelayedStatusClick(object? sender, RoutedEventArgs e)
     {
         var requestVersion = ++_delayedStatusRequestVersion;
         DelayedStatusHost.Children.Clear();
 
-        await Task.Delay(1000).ConfigureAwait(false);
+        await Task.Delay(DelayedStatusDelay).ConfigureAwait(false);
         await Dispatcher.InvokeAsync(() => AddDelayedStatusLabel(requestVersion));
     }
 
@@ -134,7 +251,7 @@ public partial class MainWindow : Window
         SeriesProgressBar.Value = 0;
 
         var mode = ResolveSeriesMode();
-        var count = ParseInputAsNonNegativeInt(MixCountSpinner.Text, defaultValue: 8);
+        var count = decimal.ToInt32(MixCountSpinner.Value ?? 8);
         var speed = Math.Max(1, (int)Math.Round(MixSpeedSlider.Value));
         var includeDetails = MixShowDetailsCheck.IsChecked == true;
         var useAdvanced = MixAdvancedToggle.IsChecked == true;
@@ -156,7 +273,7 @@ public partial class MainWindow : Window
     {
         MixInput.Text = string.Empty;
         MixResultTextClear();
-        MixCountSpinner.Text = "8";
+        MixCountSpinner.Value = 8;
         MixSpeedSlider.Value = 5;
         MixShowDetailsCheck.IsChecked = false;
         MixAdvancedToggle.IsChecked = false;

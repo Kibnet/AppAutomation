@@ -125,6 +125,21 @@ private static UiControlDefinition ServerPickerDefinition { get; } =
 public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(ServerPickerDefinition);
 ```
 
+If a custom popup does not expose a standard `ComboBox` or `ListBox`, register its logical picker hint and a confirmed-selection source before attaching Recorder:
+
+```csharp
+var selectionSource = new RecorderSearchPickerSelectionSource();
+options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+    "CustomPicker",
+    SearchPickerParts.ByAutomationIds("CustomPickerInput", "CustomPickerResults")));
+options.SearchPickerSelectionSources.Add(selectionSource);
+
+// Call synchronously on the UI thread after commit and before popup cleanup.
+selectionSource.ConfirmSelection(searchInput, resultsRoot, selectedDisplayText);
+```
+
+Typing or closing the popup does not call `ConfirmSelection`. Replay still resolves the logical `ISearchPickerControl`; a Headless consumer can provide it directly from the ViewModel through `IUiControlAdapter` without popup controls.
+
 ## 6. Dynamic selectors and selector contract
 
 Keep one selector contract for both runtimes:
@@ -308,6 +323,21 @@ private static UiControlDefinition ServerPickerDefinition { get; } =
 
 public ISearchPickerControl ServerPicker => Resolve<ISearchPickerControl>(ServerPickerDefinition);
 ```
+
+Если нестандартный popup не предоставляет обычный `ComboBox` или `ListBox`, до подключения Recorder зарегистрируйте hint логического picker и источник подтверждённого выбора:
+
+```csharp
+var selectionSource = new RecorderSearchPickerSelectionSource();
+options.SearchPickerHints.Add(new RecorderSearchPickerHint(
+    "CustomPicker",
+    SearchPickerParts.ByAutomationIds("CustomPickerInput", "CustomPickerResults")));
+options.SearchPickerSelectionSources.Add(selectionSource);
+
+// Вызвать синхронно в UI-потоке после commit и до очистки popup.
+selectionSource.ConfirmSelection(searchInput, resultsRoot, selectedDisplayText);
+```
+
+При простом вводе или закрытии popup `ConfirmSelection` не вызывается. Воспроизведение по-прежнему разрешает логический `ISearchPickerControl`; Headless-потребитель может связать его с ViewModel через `IUiControlAdapter` без popup-контролов.
 
 ## 6. Динамические селекторы и selector contract
 

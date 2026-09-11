@@ -16,4 +16,7 @@ public sealed record RecorderAssertionCandidate(
     double? DoubleValue = null,
     DateTime? DateValue = null,
     int? IntValue = null,
-    string? Warning = null);
+    string? Warning = null)
+{
+    public TimeSpan? TimeValue { get; init; }
+}

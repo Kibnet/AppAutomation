@@ -1,8 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
+using System.Globalization;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -21,6 +24,8 @@ internal sealed partial class RecorderOverlay : UserControl
     private Button? _saveButton;
     private Button? _exportButton;
     private Button? _settingsButton;
+    private Button? _checkButton;
+    private Button? _generateValueButton;
     private Button? _copyDiagnosticLogPathButton;
     private CheckBox? _diagnosticLogCheckBox;
     private TextBlock? _stepCounter;
@@ -32,11 +37,24 @@ internal sealed partial class RecorderOverlay : UserControl
     private TextBlock? _shortcutText;
     private TextBlock? _validationBadgeText;
     private TextBlock? _journalEmptyText;
+    private Control? _scenarioSelectionPanel;
+    private ProgressBar? _scenarioScanProgress;
+    private TextBlock? _scenarioScanStatus;
+    private ComboBox? _scenarioDestinationComboBox;
+    private TextBox? _scenarioNameTextBox;
+    private Button? _restoreAutosaveButton;
+    private TextBlock? _scenarioSelectionErrorText;
     private ScrollViewer? _stepJournalScrollViewer;
     private Panel? _stepJournalPanel;
     private IRecorderScenarioPathDetails? _scenarioPathDetails;
     private IRecorderStepReorderSessionDetails? _stepReorderDetails;
+    private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
+    private IRecorderCheckpointSessionDetails? _checkpointDetails;
+    private IRecorderGeneratedValueSessionDetails? _generatedValueDetails;
+    private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
+    private RecorderCalculatedAssertionDraft? _calculatedAssertionDraft;
     private int _renderedJournalEntryCount;
+    private bool _isRefreshingScenarioSelection;
 
     public RecorderOverlay()
     {
@@ -47,6 +65,8 @@ internal sealed partial class RecorderOverlay : UserControl
     public event EventHandler? ExportRequested;
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
+
+    internal Control? LastDateExpressionEditorForTesting { get; private set; }
 
     internal void RefreshForTesting()
     {
@@ -59,6 +79,10 @@ internal sealed partial class RecorderOverlay : UserControl
         _sessionDetails = session as IAppAutomationRecorderSessionDetails;
         _scenarioPathDetails = session as IRecorderScenarioPathDetails;
         _stepReorderDetails = session as IRecorderStepReorderSessionDetails;
+        _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
+        _checkpointDetails = session as IRecorderCheckpointSessionDetails;
+        _generatedValueDetails = session as IRecorderGeneratedValueSessionDetails;
+        _relativeDateDetails = session as IRecorderRelativeDateSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -97,6 +121,17 @@ internal sealed partial class RecorderOverlay : UserControl
             _timer.Start();
         }
 
+        if (_checkpointDetails is not null)
+        {
+            _checkpointDetails.CheckTargetSelected += OnCheckTargetSelected;
+            _checkpointDetails.NumericOperandTargetSelected += OnNumericOperandTargetSelected;
+        }
+
+        if (_generatedValueDetails is not null)
+        {
+            _generatedValueDetails.GeneratedValueTargetSelected += OnGeneratedValueTargetSelected;
+        }
+
         Refresh();
     }
 
@@ -128,6 +163,8 @@ internal sealed partial class RecorderOverlay : UserControl
         _saveButton = this.FindControl<Button>("SaveButton");
         _exportButton = this.FindControl<Button>("ExportButton");
         _settingsButton = this.FindControl<Button>("SettingsButton");
+        _checkButton = this.FindControl<Button>("CheckButton");
+        _generateValueButton = this.FindControl<Button>("GenerateValueButton");
         _copyDiagnosticLogPathButton = this.FindControl<Button>("CopyDiagnosticLogPathButton");
         _diagnosticLogCheckBox = this.FindControl<CheckBox>("DiagnosticLogCheckBox");
         _stepCounter = this.FindControl<TextBlock>("StepCounter");
@@ -139,6 +176,13 @@ internal sealed partial class RecorderOverlay : UserControl
         _shortcutText = this.FindControl<TextBlock>("ShortcutText");
         _validationBadgeText = this.FindControl<TextBlock>("ValidationBadgeText");
         _journalEmptyText = this.FindControl<TextBlock>("JournalEmptyText");
+        _scenarioSelectionPanel = this.FindControl<Control>("ScenarioSelectionPanel");
+        _scenarioScanProgress = this.FindControl<ProgressBar>("ScenarioScanProgress");
+        _scenarioScanStatus = this.FindControl<TextBlock>("ScenarioScanStatus");
+        _scenarioDestinationComboBox = this.FindControl<ComboBox>("ScenarioDestinationComboBox");
+        _scenarioNameTextBox = this.FindControl<TextBox>("ScenarioNameTextBox");
+        _restoreAutosaveButton = this.FindControl<Button>("RestoreAutosaveButton");
+        _scenarioSelectionErrorText = this.FindControl<TextBlock>("ScenarioSelectionErrorText");
         _stepJournalScrollViewer = this.FindControl<ScrollViewer>("StepJournalScrollViewer");
         _stepJournalPanel = this.FindControl<Panel>("StepJournalPanel");
 
@@ -167,6 +211,16 @@ internal sealed partial class RecorderOverlay : UserControl
             _settingsButton.Click += OnSettingsClick;
         }
 
+        if (_checkButton is not null)
+        {
+            _checkButton.Click += OnCheckClick;
+        }
+
+        if (_generateValueButton is not null)
+        {
+            _generateValueButton.Click += OnGenerateValueClick;
+        }
+
         if (_diagnosticLogCheckBox is not null)
         {
             _diagnosticLogCheckBox.Click += OnDiagnosticLogToggleClick;
@@ -177,6 +231,68 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.Click += OnCopyDiagnosticLogPathClick;
         }
 
+        if (_scenarioDestinationComboBox is not null)
+        {
+            _scenarioDestinationComboBox.SelectionChanged += OnScenarioDestinationSelectionChanged;
+        }
+
+        if (_scenarioNameTextBox is not null)
+        {
+            _scenarioNameTextBox.TextChanged += OnScenarioNameTextChanged;
+        }
+
+        if (_restoreAutosaveButton is not null)
+        {
+            _restoreAutosaveButton.Click += OnRestoreAutosaveClick;
+        }
+
+        AddHandler(
+            InputElement.KeyDownEvent,
+            OnOverlayKeyDown,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+    }
+
+    private void OnOverlayKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        if (_checkpointDetails?.IsCheckTargetSelectionActive == true)
+        {
+            _checkpointDetails.CancelCheckTargetSelection();
+            e.Handled = true;
+        }
+        else if (_generatedValueDetails?.IsGeneratedValueTargetSelectionActive == true)
+        {
+            _generatedValueDetails.CancelGeneratedValueTargetSelection();
+            e.Handled = true;
+        }
+    }
+
+    private void OnScenarioDestinationSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        _scenarioSelectionDetails.TrySelectScenarioDestination(
+            _scenarioDestinationComboBox?.SelectedItem as RecordedScenarioDestination);
+        Refresh();
+    }
+
+    private void OnScenarioNameTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        _scenarioSelectionDetails.TrySetScenarioName(_scenarioNameTextBox?.Text);
+        Refresh();
     }
 
     private void OnRecordClick(object? sender, RoutedEventArgs e)
@@ -261,6 +377,976 @@ internal sealed partial class RecorderOverlay : UserControl
         Refresh();
     }
 
+    private async void OnRestoreAutosaveClick(object? sender, RoutedEventArgs e)
+    {
+        if (_scenarioSelectionDetails is null)
+        {
+            return;
+        }
+
+        await _scenarioSelectionDetails.RestoreAutosaveAsync();
+        Refresh();
+    }
+
+    private void OnCheckClick(object? sender, RoutedEventArgs e)
+    {
+        _checkpointDetails?.BeginCheckTargetSelection();
+    }
+
+    private void OnGenerateValueClick(object? sender, RoutedEventArgs e)
+    {
+        if (_generateValueButton is null || _generatedValueDetails is null)
+        {
+            return;
+        }
+
+        CreateGeneratedValueMenu().ShowAt(_generateValueButton);
+    }
+
+    private MenuFlyout CreateGeneratedValueMenu()
+    {
+        if (_generatedValueDetails is null)
+        {
+            throw new InvalidOperationException("Recorder generated-value details are not attached.");
+        }
+
+        var menu = new MenuFlyout();
+        var create = new MenuItem { Header = "New value" };
+        create.Click += (_, _) => _generatedValueDetails.BeginGeneratedValueTargetSelection();
+        menu.Items.Add(create);
+
+        var existingValues = _generatedValueDetails.GeneratedValues;
+        if (existingValues.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+        }
+
+        foreach (var generatedValue in existingValues)
+        {
+            var reuse = new MenuItem
+            {
+                Header = $"{generatedValue.VariableName} ({generatedValue.PreviewValue})",
+                Tag = generatedValue.GeneratedValueId
+            };
+            reuse.Click += (_, _) =>
+                _generatedValueDetails.BeginGeneratedValueTargetSelection(generatedValue.GeneratedValueId);
+            menu.Items.Add(reuse);
+        }
+
+        return menu;
+    }
+
+    internal MenuFlyout CreateGeneratedValueMenuForTesting() => CreateGeneratedValueMenu();
+
+    private void OnGeneratedValueTargetSelected(
+        object? sender,
+        RecorderGeneratedValueTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() => ShowGeneratedValueConfirmation(e.Selection));
+    }
+
+    private void ShowGeneratedValueConfirmation(RecorderGeneratedValueTargetSelection selection)
+    {
+        if (_generateValueButton is null)
+        {
+            return;
+        }
+
+        var flyout = new Flyout();
+        flyout.Content = CreateGeneratedValueConfirmation(selection, flyout.Hide);
+        flyout.ShowAt(_generateValueButton);
+    }
+
+    internal Control CreateGeneratedValueConfirmationForTesting(
+        RecorderGeneratedValueTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateGeneratedValueConfirmation(selection, static () => { });
+    }
+
+    private StackPanel CreateGeneratedValueConfirmation(
+        RecorderGeneratedValueTargetSelection selection,
+        Action close)
+    {
+        if (_generatedValueDetails is null)
+        {
+            throw new InvalidOperationException("Recorder generated-value details are not attached.");
+        }
+
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        add.Click += (_, _) =>
+        {
+            _generatedValueDetails.ApplyGeneratedValue(selection);
+            close();
+        };
+        cancel.Click += (_, _) => close();
+
+        return new StackPanel
+        {
+            Width = 300,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = selection.DefinesGeneratedValue
+                        ? "Generate and enter value"
+                        : "Enter generated value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                new TextBlock
+                {
+                    Text = selection.GeneratedValue.PreviewValue,
+                    TextWrapping = TextWrapping.Wrap
+                },
+                new TextBlock
+                {
+                    Text = $"Target: {selection.ControlName}",
+                    Foreground = GetBrush("RecorderMuted")
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
+    }
+
+    private void OnCheckTargetSelected(object? sender, RecorderCheckTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() =>
+        {
+            _calculatedAssertionDraft = null;
+            ShowCheckMenu(e.Selection);
+        });
+    }
+
+    private void OnNumericOperandTargetSelected(
+        object? sender,
+        RecorderNumericOperandTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() =>
+        {
+            if (_calculatedAssertionDraft is not { } draft)
+            {
+                return;
+            }
+
+            if (e.Selection.Operand is { } operand)
+            {
+                draft.SetSelectedControlOperand(operand, e.Selection.ControlName);
+                draft.Error = null;
+            }
+            else
+            {
+                draft.Error = e.Selection.Error
+                    ?? "Selected operand does not expose a numeric value.";
+            }
+
+            ShowCalculatedAssertionEditor(draft.Selection, draft);
+        });
+    }
+
+    private void ShowCheckMenu(RecorderCheckTargetSelection selection)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        var menu = CreateCheckMenu(selection);
+        menu.ShowAt(_checkButton);
+    }
+
+    internal MenuFlyout CreateCheckMenuForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateCheckMenu(selection);
+    }
+
+    private MenuFlyout CreateCheckMenu(RecorderCheckTargetSelection selection)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        var menu = new MenuFlyout();
+        if (!selection.CanCaptureAssertions)
+        {
+            menu.Items.Add(new MenuItem
+            {
+                Header = selection.ValueDescriptionError
+                    ?? "Select one unambiguous control before adding a check.",
+                IsEnabled = false
+            });
+            return menu;
+        }
+
+        var currentValue = selection.ValueDescription;
+        var hasReadableValue = currentValue is not null;
+        var remember = new MenuItem
+        {
+            Header = "Remember value…",
+            IsEnabled = hasReadableValue
+        };
+        remember.Click += (_, _) => ShowRememberValueEditor(selection);
+        menu.Items.Add(remember);
+
+        var compare = new MenuItem { Header = "Compare with checkpoint" };
+        var checkpoints = _checkpointDetails.Checkpoints
+            .Where(checkpoint => checkpoint.ValueKind == currentValue?.ValueKind)
+            .ToArray();
+        compare.IsEnabled = checkpoints.Length > 0;
+        foreach (var checkpoint in checkpoints)
+        {
+            var checkpointItem = new MenuItem
+            {
+                Header = $"{checkpoint.VariableName} ({checkpoint.ControlName})",
+                Tag = checkpoint.CheckpointId
+            };
+            if (checkpoint.ValueKind == RecorderValueKind.StringSet)
+            {
+                checkpointItem.Click += (_, _) =>
+                    _checkpointDetails.CaptureCheckpointAssertion(
+                        selection,
+                        checkpoint.CheckpointId,
+                        RecorderComparisonKind.Equivalent);
+            }
+            else
+            {
+                foreach (var comparisonKind in new[]
+                         {
+                             RecorderComparisonKind.Equal,
+                             RecorderComparisonKind.NotEqual
+                         })
+                {
+                    var comparisonItem = new MenuItem
+                    {
+                        Header = DescribeComparison(comparisonKind)
+                    };
+                    comparisonItem.Click += (_, _) =>
+                        _checkpointDetails.CaptureCheckpointAssertion(
+                            selection,
+                            checkpoint.CheckpointId,
+                            comparisonKind);
+                    checkpointItem.Items.Add(comparisonItem);
+                }
+            }
+
+            compare.Items.Add(checkpointItem);
+        }
+
+        menu.Items.Add(compare);
+
+        var compareWithCalculated = new MenuItem
+        {
+            Header = "Compare with calculated value…",
+            IsEnabled = currentValue?.ValueKind == RecorderValueKind.Number
+        };
+        compareWithCalculated.Click += (_, _) => ShowCalculatedAssertionEditor(selection);
+        menu.Items.Add(compareWithCalculated);
+
+        var compareWithGenerated = new MenuItem { Header = "Compare with generated value" };
+        var generatedValues = currentValue?.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
+            ? _generatedValueDetails?.GeneratedValues ?? Array.Empty<RecorderGeneratedValueOption>()
+            : Array.Empty<RecorderGeneratedValueOption>();
+        compareWithGenerated.IsEnabled = generatedValues.Count > 0;
+        foreach (var generatedValue in generatedValues)
+        {
+            var generatedValueItem = new MenuItem
+            {
+                Header = generatedValue.VariableName,
+                Tag = generatedValue.GeneratedValueId
+            };
+            foreach (var comparisonKind in new[]
+                     {
+                         RecorderComparisonKind.Equal,
+                         RecorderComparisonKind.NotEqual
+                     })
+            {
+                var comparisonItem = new MenuItem { Header = DescribeComparison(comparisonKind) };
+                comparisonItem.Click += (_, _) =>
+                    _generatedValueDetails?.CaptureGeneratedValueAssertion(
+                        selection,
+                        generatedValue.GeneratedValueId,
+                        comparisonKind);
+                generatedValueItem.Items.Add(comparisonItem);
+            }
+
+            compareWithGenerated.Items.Add(generatedValueItem);
+        }
+
+        menu.Items.Add(compareWithGenerated);
+
+        if (currentValue is not null
+            && RecorderValueAssertions.TryGetHasValueAssertionKind(currentValue.ValueKind, out _))
+        {
+            menu.Items.Add(CreatePresenceAssertionMenu(selection, currentValue.ValueKind));
+        }
+
+        var assertExpected = new MenuItem
+        {
+            Header = "Assert expected value…",
+            IsEnabled = hasReadableValue
+        };
+        assertExpected.Click += (_, _) => ShowLiteralAssertionEditor(selection);
+        menu.Items.Add(assertExpected);
+
+        var assertEnabled = new MenuItem
+        {
+            Header = "Enable…"
+        };
+        assertEnabled.Click += (_, _) => ShowEnabledAssertionEditor(selection);
+        menu.Items.Add(assertEnabled);
+
+        if (!hasReadableValue && !string.IsNullOrWhiteSpace(selection.ValueDescriptionError))
+        {
+            menu.Items.Add(new MenuItem
+            {
+                Header = selection.ValueDescriptionError,
+                IsEnabled = false
+            });
+        }
+
+        return menu;
+    }
+
+    private MenuItem CreatePresenceAssertionMenu(
+        RecorderCheckTargetSelection selection,
+        RecorderValueKind valueKind)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        if (!RecorderValueAssertions.TryGetHasValueAssertionKind(valueKind, out var assertionKind))
+        {
+            throw new InvalidOperationException(
+                $"A presence assertion is not meaningful for {valueKind} values.");
+        }
+
+        var assertPresence = new MenuItem { Header = "Has Value" };
+        var hasValue = new MenuItem
+        {
+            Header = assertionKind == RecorderHasValueAssertionKind.NotNull
+                ? "IsNotNull"
+                : "IsNotEmpty"
+        };
+        var empty = new MenuItem
+        {
+            Header = assertionKind == RecorderHasValueAssertionKind.NotNull
+                ? "IsNull"
+                : "IsEmpty"
+        };
+        hasValue.Click += (_, _) =>
+            _checkpointDetails.CapturePresenceAssertion(selection, expectEmpty: false);
+        empty.Click += (_, _) =>
+            _checkpointDetails.CapturePresenceAssertion(selection, expectEmpty: true);
+        assertPresence.ItemsSource = new[] { hasValue, empty };
+        return assertPresence;
+    }
+
+    private void ShowCalculatedAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        RecorderCalculatedAssertionDraft? existingDraft = null)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        if (selection.ValueDescription?.ValueKind != RecorderValueKind.Number)
+        {
+            ShowSettingsError("A calculated expected value can only be used with a numeric control.");
+            return;
+        }
+
+        var draft = existingDraft ?? new RecorderCalculatedAssertionDraft(selection);
+        _calculatedAssertionDraft = draft;
+        var flyout = new Flyout();
+        flyout.Content = CreateCalculatedAssertionEditor(
+            draft,
+            preserveDraft =>
+            {
+                flyout.Hide();
+                if (!preserveDraft)
+                {
+                    _calculatedAssertionDraft = null;
+                }
+            });
+        flyout.ShowAt(_checkButton);
+    }
+
+    internal Control CreateCalculatedAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateCalculatedAssertionEditor(
+            new RecorderCalculatedAssertionDraft(selection),
+            static _ => { });
+    }
+
+    private StackPanel CreateCalculatedAssertionEditor(
+        RecorderCalculatedAssertionDraft draft,
+        Action<bool> close)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        var operation = new ComboBox
+        {
+            Name = "RecorderCalculatedOperation",
+            ItemsSource = new[] { "+", "−", "×", "÷" },
+            SelectedIndex = (int)draft.Operation,
+            MinWidth = 90
+        };
+        var validation = new TextBlock
+        {
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var add = new Button
+        {
+            Name = "RecorderCalculatedAdd",
+            Content = "Add",
+            Padding = new Thickness(10, 4)
+        };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        Action refresh = static () => { };
+        var leftEditor = CreateNumericOperandEditor(draft.Left, operandIndex: 0, () =>
+        {
+            draft.Error = null;
+            refresh();
+        });
+        var rightEditor = CreateNumericOperandEditor(draft.Right, operandIndex: 1, () =>
+        {
+            draft.Error = null;
+            refresh();
+        });
+
+        refresh = () =>
+        {
+            draft.Operation = (RecorderArithmeticOperation)Math.Clamp(operation.SelectedIndex, 0, 3);
+            var leftValid = TryCreateNumericOperand(draft.Left, out _, out var leftError);
+            var rightValid = TryCreateNumericOperand(draft.Right, out var rightOperand, out var rightError);
+            var dividesByLiteralZero = draft.Operation == RecorderArithmeticOperation.Divide
+                && rightOperand?.Kind == RecorderNumericOperandKind.Literal
+                && rightOperand.LiteralValue == 0;
+            var error = draft.Error
+                ?? (!leftValid ? leftError : null)
+                ?? (!rightValid ? rightError : null)
+                ?? (dividesByLiteralZero ? "Cannot divide by a literal zero." : null);
+            add.IsEnabled = leftValid && rightValid && !dividesByLiteralZero;
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        };
+
+        operation.SelectionChanged += (_, _) =>
+        {
+            draft.Error = null;
+            refresh();
+        };
+        add.Click += (_, _) =>
+        {
+            var leftValid = TryCreateNumericOperand(draft.Left, out var left, out var leftError);
+            var rightValid = TryCreateNumericOperand(draft.Right, out var right, out var rightError);
+            if (!leftValid || !rightValid)
+            {
+                validation.Text = leftError ?? rightError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            _checkpointDetails.CaptureCalculatedAssertion(
+                draft.Selection,
+                new RecorderNumericExpectedExpression(draft.Operation, left!, right!));
+            close(false);
+        };
+        cancel.Click += (_, _) =>
+        {
+            _checkpointDetails.CancelNumericOperandTargetSelection();
+            close(false);
+        };
+
+        var content = new StackPanel
+        {
+            Width = 360,
+            Spacing = 7,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Calculated expected value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                leftEditor,
+                new TextBlock { Text = "Operation" },
+                operation,
+                rightEditor,
+                validation,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
+        refresh();
+        return content;
+
+        Control CreateNumericOperandEditor(
+            RecorderNumericOperandDraft operandDraft,
+            int operandIndex,
+            Action changed)
+        {
+            var numericCheckpoints = _checkpointDetails.Checkpoints
+                .Where(static checkpoint => checkpoint.ValueKind == RecorderValueKind.Number)
+                .ToArray();
+            var source = new ComboBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Source",
+                ItemsSource = new[] { "Number", "Checkpoint", "UI element" },
+                SelectedIndex = (int)operandDraft.Kind,
+                MinWidth = 125
+            };
+            var literal = new TextBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Literal",
+                Text = operandDraft.LiteralText,
+                MinWidth = 120,
+                PlaceholderText = "Number"
+            };
+            var checkpoint = new ComboBox
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Checkpoint",
+                ItemsSource = numericCheckpoints
+                    .Select(static option => $"{option.VariableName} ({option.ControlName})")
+                    .ToArray(),
+                SelectedIndex = Math.Max(
+                    0,
+                    Array.FindIndex(
+                        numericCheckpoints,
+                        option => option.CheckpointId == operandDraft.CheckpointId)),
+                MinWidth = 210
+            };
+            if (numericCheckpoints.Length > 0 && operandDraft.CheckpointId is null)
+            {
+                operandDraft.CheckpointId = numericCheckpoints[checkpoint.SelectedIndex].CheckpointId;
+            }
+
+            var selectControl = new Button
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Select",
+                Content = "Select element",
+                Padding = new Thickness(10, 4)
+            };
+            var selectedControl = new TextBlock
+            {
+                Name = $"RecorderCalculatedOperand{operandIndex + 1}Selected",
+                Text = operandDraft.ControlName is null
+                    ? "No element selected"
+                    : $"Selected: {operandDraft.ControlName}",
+                Foreground = GetBrush("RecorderMuted"),
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            void RefreshOperand()
+            {
+                operandDraft.Kind = (RecorderNumericOperandKind)Math.Clamp(source.SelectedIndex, 0, 2);
+                literal.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Literal;
+                checkpoint.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Checkpoint;
+                selectControl.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Control;
+                selectedControl.IsVisible = operandDraft.Kind == RecorderNumericOperandKind.Control;
+                changed();
+            }
+
+            source.SelectionChanged += (_, _) => RefreshOperand();
+            literal.TextChanged += (_, _) =>
+            {
+                operandDraft.LiteralText = literal.Text ?? string.Empty;
+                changed();
+            };
+            checkpoint.SelectionChanged += (_, _) =>
+            {
+                operandDraft.CheckpointId = checkpoint.SelectedIndex >= 0
+                    && checkpoint.SelectedIndex < numericCheckpoints.Length
+                    ? numericCheckpoints[checkpoint.SelectedIndex].CheckpointId
+                    : null;
+                changed();
+            };
+            selectControl.Click += (_, _) =>
+            {
+                draft.PendingOperandIndex = operandIndex;
+                draft.Error = null;
+                close(true);
+                _checkpointDetails.BeginNumericOperandTargetSelection();
+            };
+
+            var panel = new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    new TextBlock { Text = $"Operand {operandIndex + 1}" },
+                    source,
+                    literal,
+                    checkpoint,
+                    selectControl,
+                    selectedControl
+                }
+            };
+            RefreshOperand();
+            return panel;
+        }
+    }
+
+    private static bool TryCreateNumericOperand(
+        RecorderNumericOperandDraft draft,
+        out RecorderNumericOperand? operand,
+        out string? error)
+    {
+        operand = null;
+        error = null;
+        switch (draft.Kind)
+        {
+            case RecorderNumericOperandKind.Literal:
+                if (!double.TryParse(
+                        draft.LiteralText,
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out var value)
+                    || !double.IsFinite(value))
+                {
+                    error = "Enter a finite number using invariant decimal format.";
+                    return false;
+                }
+
+                operand = RecorderNumericOperand.FromLiteral(value);
+                return true;
+            case RecorderNumericOperandKind.Checkpoint:
+                if (draft.CheckpointId is not { } checkpointId)
+                {
+                    error = "Select a numeric checkpoint.";
+                    return false;
+                }
+
+                operand = RecorderNumericOperand.FromCheckpoint(checkpointId);
+                return true;
+            case RecorderNumericOperandKind.Control:
+                if (draft.ControlOperand is null)
+                {
+                    error = "Select a numeric UI element.";
+                    return false;
+                }
+
+                operand = draft.ControlOperand;
+                return true;
+            default:
+                error = "Select an operand source.";
+                return false;
+        }
+    }
+
+    private void ShowEnabledAssertionEditor(RecorderCheckTargetSelection selection)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        var flyout = new Flyout();
+        flyout.Content = CreateEnabledAssertionEditor(selection, flyout.Hide);
+        flyout.ShowAt(_checkButton);
+    }
+
+    internal Control CreateEnabledAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateEnabledAssertionEditor(selection, static () => { });
+    }
+
+    private StackPanel CreateEnabledAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        Action close)
+    {
+        if (_checkpointDetails is null)
+        {
+            throw new InvalidOperationException("Recorder checkpoint details are not attached.");
+        }
+
+        var expected = new ComboBox
+        {
+            Name = "RecorderExpectedEnabled",
+            ItemsSource = new[] { "true", "false" },
+            SelectedIndex = selection.IsEnabled ? 0 : 1,
+            MinWidth = 120
+        };
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        add.Click += (_, _) =>
+        {
+            _checkpointDetails.CaptureEnabledAssertion(selection, expected.SelectedIndex == 0);
+            close();
+        };
+        cancel.Click += (_, _) => close();
+
+        return new StackPanel
+        {
+            Width = 220,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Enable",
+                    FontWeight = FontWeight.SemiBold
+                },
+                expected,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { add, cancel }
+                }
+            }
+        };
+    }
+
+    private void ShowRememberValueEditor(RecorderCheckTargetSelection selection)
+    {
+        var description = selection.ValueDescription;
+        if (_checkButton is null || _checkpointDetails is null || description is null)
+        {
+            return;
+        }
+
+        var name = new TextBox
+        {
+            Text = description.SuggestedCheckpointName,
+            MinWidth = 220,
+            PlaceholderText = "Checkpoint name"
+        };
+        var add = new Button { Content = "Remember", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        var flyout = new Flyout
+        {
+            Content = new StackPanel
+            {
+                Width = 260,
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Remember runtime value",
+                        FontWeight = FontWeight.SemiBold
+                    },
+                    name,
+                    new TextBlock
+                    {
+                        Text = $"Current preview: {description.CurrentValueText}",
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = GetBrush("RecorderMuted")
+                    },
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 6,
+                        Children = { add, cancel }
+                    }
+                }
+            }
+        };
+        add.Click += (_, _) =>
+        {
+            _checkpointDetails.CaptureCheckpoint(selection, name.Text);
+            flyout.Hide();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        flyout.ShowAt(_checkButton);
+        name.Focus();
+        name.SelectAll();
+    }
+
+    private void ShowLiteralAssertionEditor(RecorderCheckTargetSelection selection)
+    {
+        if (_checkButton is null || _checkpointDetails is null)
+        {
+            return;
+        }
+
+        if (selection.ValueDescription is not { } description)
+        {
+            ShowSettingsError(
+                selection.ValueDescriptionError
+                ?? "The selected control does not expose a readable value.");
+            return;
+        }
+
+        var flyout = new Flyout();
+        var content = CreateLiteralAssertionEditor(selection, flyout.Hide);
+        flyout.Content = content;
+        flyout.ShowAt(_checkButton);
+        var expected = content.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .FirstOrDefault(textBox => textBox.Name == "RecorderExpectedValue");
+        expected?.Focus();
+        expected?.SelectAll();
+    }
+
+    internal Control CreateLiteralAssertionEditorForTesting(RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        return CreateLiteralAssertionEditor(selection, static () => { });
+    }
+
+    private StackPanel CreateLiteralAssertionEditor(
+        RecorderCheckTargetSelection selection,
+        Action close)
+    {
+        if (_checkpointDetails is null || selection.ValueDescription is not { } description)
+        {
+            throw new InvalidOperationException(
+                selection.ValueDescriptionError
+                ?? "The selected control does not expose a readable value.");
+        }
+
+        var comparisons = description.ValueKind switch
+        {
+            RecorderValueKind.StringSet => new[] { RecorderComparisonKind.Equivalent },
+            RecorderValueKind.Text or RecorderValueKind.GridCellText =>
+                new[]
+                {
+                    RecorderComparisonKind.Equal,
+                    RecorderComparisonKind.NotEqual,
+                    RecorderComparisonKind.Contains
+                },
+            _ => new[] { RecorderComparisonKind.Equal, RecorderComparisonKind.NotEqual }
+        };
+        var comparison = new ComboBox
+        {
+            Name = "RecorderExpectedComparison",
+            ItemsSource = comparisons.Select(DescribeComparison).ToArray(),
+            SelectedIndex = 0,
+            MinWidth = 120
+        };
+        var expected = new TextBox
+        {
+            Name = "RecorderExpectedValue",
+            Text = description.CurrentValueText,
+            MinWidth = 220,
+            PlaceholderText = "Expected value"
+        };
+        var dateEditor = description.ValueKind == RecorderValueKind.Date
+            ? new RelativeDateOperandEditor(
+                "Date mode",
+                new RecorderDateOperandConfiguration(
+                    selection.ValueSnapshot?.Prototype.DateValue,
+                    RecorderDateReferenceKind.Exact,
+                    DayOffset: 0),
+                GetBrush("RecorderMuted"),
+                showRecordedValue: false,
+                controlNamePrefix: "RecorderLiteralDate")
+            : null;
+        var validation = new TextBlock
+        {
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var add = new Button { Content = "Add", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { add, cancel }
+        };
+        var content = new StackPanel
+        {
+            Width = 260,
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Assert {description.SuggestedCheckpointName}",
+                    FontWeight = FontWeight.SemiBold
+                },
+                expected,
+            }
+        };
+        if (dateEditor is not null)
+        {
+            content.Children.Add(dateEditor.Content);
+        }
+
+        content.Children.Add(comparison);
+        content.Children.Add(validation);
+        content.Children.Add(actions);
+
+        void RefreshDateState()
+        {
+            expected.IsEnabled = dateEditor?.IsRelative != true;
+            if (dateEditor is null)
+            {
+                add.IsEnabled = true;
+                validation.IsVisible = false;
+                return;
+            }
+
+            add.IsEnabled = dateEditor.TryGetExpression(out _, out var error);
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        }
+
+        if (dateEditor is not null)
+        {
+            dateEditor.Changed += (_, _) => RefreshDateState();
+        }
+
+        add.Click += (_, _) =>
+        {
+            var selectedIndex = Math.Clamp(comparison.SelectedIndex, 0, comparisons.Length - 1);
+            RecorderDateExpression? dateExpression = null;
+            if (dateEditor is not null
+                && !dateEditor.TryGetExpression(out dateExpression, out var error))
+            {
+                validation.Text = error;
+                validation.IsVisible = true;
+                return;
+            }
+
+            _checkpointDetails.CaptureLiteralAssertion(
+                selection,
+                dateExpression is null ? expected.Text ?? string.Empty : description.CurrentValueText,
+                comparisons[selectedIndex],
+                dateExpression);
+            close();
+        };
+        cancel.Click += (_, _) => close();
+        RefreshDateState();
+        return content;
+    }
+
+    private static string DescribeComparison(RecorderComparisonKind comparisonKind) =>
+        comparisonKind switch
+        {
+            RecorderComparisonKind.Equal => "Equals",
+            RecorderComparisonKind.NotEqual => "Not equals",
+            RecorderComparisonKind.Contains => "Contains",
+            RecorderComparisonKind.Equivalent => "Same items",
+            _ => comparisonKind.ToString()
+        };
+
     private void OnDiagnosticLogToggleClick(object? sender, RoutedEventArgs e)
     {
         if (_sessionDetails is null || _diagnosticLogCheckBox is null)
@@ -301,21 +1387,58 @@ internal sealed partial class RecorderOverlay : UserControl
         }
 
         var isBusy = _sessionDetails?.IsBusy == true;
+        if (_recordButton is not null)
+        {
+            _recordButton.IsEnabled = !isBusy
+                && (_session.State == RecorderSessionState.Recording
+                    || _scenarioSelectionDetails?.CanStartRecording != false);
+        }
         if (_clearButton is not null)
         {
-            _clearButton.IsEnabled = !isBusy;
+            _clearButton.IsEnabled = !isBusy
+                && (_scenarioSelectionDetails?.IsScenarioSelectionEnabled != true
+                    || _session.State == RecorderSessionState.Off);
         }
 
         if (_saveButton is not null)
         {
-            _saveButton.IsEnabled = !isBusy;
+            _saveButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
             _saveButton.Content = isBusy ? "Saving..." : "Save";
         }
 
         if (_exportButton is not null)
         {
-            _exportButton.IsEnabled = !isBusy;
+            _exportButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
             _exportButton.Content = isBusy ? "Busy..." : "Export...";
+        }
+
+        if (_checkButton is not null)
+        {
+            _checkButton.IsEnabled = !isBusy
+                && _session.State == RecorderSessionState.Recording
+                && _checkpointDetails is not null;
+            var hotkeyMap = _session is RecorderSession recorderSession
+                ? recorderSession.HotkeyMap
+                : _options is null
+                    ? null
+                    : RecorderHotkeyMap.Create(_options.Hotkeys);
+            if (hotkeyMap is not null)
+            {
+                ToolTip.SetTip(
+                    _checkButton,
+                    $"Remember: {hotkeyMap.GetDisplayText(RecorderCommandKind.CaptureCheckpoint)}; "
+                    + $"compare: {hotkeyMap.GetDisplayText(RecorderCommandKind.CaptureCheckpointAssertion)}");
+            }
+        }
+
+        if (_generateValueButton is not null)
+        {
+            _generateValueButton.IsEnabled = !isBusy
+                && _session.State == RecorderSessionState.Recording
+                && _generatedValueDetails is not null;
+            ToolTip.SetTip(
+                _generateValueButton,
+                "Create a new runtime value or reuse one already generated in this scenario.");
         }
 
         if (_stepCounter is not null)
@@ -366,8 +1489,81 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.IsEnabled = _sessionDetails is not null;
         }
 
+        RefreshScenarioSelection();
+
         RenderStepJournal();
         UpdateValidationBadge(_session.LatestValidationStatus);
+    }
+
+    private bool CanPersistSelectedScenario()
+    {
+        return _scenarioSelectionDetails is not { IsScenarioSelectionEnabled: true } selection
+            || (!selection.IsScanning
+                && selection.SelectedScenarioDestination is not null
+                && selection.ScenarioSelectionError is null);
+    }
+
+    private void RefreshScenarioSelection()
+    {
+        if (_scenarioSelectionPanel is null)
+        {
+            return;
+        }
+
+        var selection = _scenarioSelectionDetails;
+        var isVisible = selection?.IsScenarioSelectionEnabled == true;
+        _scenarioSelectionPanel.IsVisible = isVisible;
+        if (!isVisible || selection is null)
+        {
+            return;
+        }
+
+        _isRefreshingScenarioSelection = true;
+        try
+        {
+            if (_scenarioScanProgress is not null)
+            {
+                _scenarioScanProgress.IsVisible = selection.IsScanning;
+            }
+
+            if (_scenarioScanStatus is not null)
+            {
+                _scenarioScanStatus.IsVisible = selection.IsScanning;
+            }
+
+            if (_scenarioDestinationComboBox is not null)
+            {
+                _scenarioDestinationComboBox.ItemsSource = selection.ScenarioDestinations;
+                _scenarioDestinationComboBox.SelectedItem = selection.SelectedScenarioDestination;
+                _scenarioDestinationComboBox.IsEnabled = selection.CanChangeScenarioTarget;
+            }
+
+            if (_scenarioNameTextBox is not null)
+            {
+                if (!string.Equals(_scenarioNameTextBox.Text, selection.ScenarioName, StringComparison.Ordinal))
+                {
+                    _scenarioNameTextBox.Text = selection.ScenarioName;
+                }
+
+                _scenarioNameTextBox.IsEnabled = selection.CanChangeScenarioTarget;
+            }
+
+            if (_restoreAutosaveButton is not null)
+            {
+                _restoreAutosaveButton.IsEnabled = selection.CanRestoreAutosave;
+            }
+
+            if (_scenarioSelectionErrorText is not null)
+            {
+                var error = selection.IsScanning ? null : selection.ScenarioSelectionError;
+                _scenarioSelectionErrorText.Text = error ?? string.Empty;
+                _scenarioSelectionErrorText.IsVisible = !string.IsNullOrWhiteSpace(error);
+            }
+        }
+        finally
+        {
+            _isRefreshingScenarioSelection = false;
+        }
     }
 
     private void RefreshShortcutLegend()
@@ -497,6 +1693,16 @@ internal sealed partial class RecorderOverlay : UserControl
         };
 
         var canReorder = _stepReorderDetails is not null && !(_sessionDetails?.IsBusy ?? false);
+        if (_relativeDateDetails?.TryGetDateConfiguration(entry.StepId, out var dateConfiguration) == true)
+        {
+            actions.Children.Add(CreateActionButton(
+                DescribeDateConfiguration(dateConfiguration!),
+                entry.StepId,
+                OnEditDateExpressionClick,
+                isEnabled: !(_sessionDetails?.IsBusy ?? false) && !entry.IsIgnored,
+                toolTip: "Choose an exact or relative date"));
+        }
+
         actions.Children.Add(CreateActionButton(
             "↑",
             entry.StepId,
@@ -519,6 +1725,157 @@ internal sealed partial class RecorderOverlay : UserControl
         container.Children.Add(actions);
         border.Child = container;
         return border;
+    }
+
+    private static string DescribeDateConfiguration(RecorderStepDateConfiguration configuration)
+    {
+        var prefix = configuration.Secondary is null ? "Date" : "Dates";
+        var primary = DescribeDateOperand(configuration.Primary);
+        return configuration.Secondary is null
+            ? $"{prefix}: {primary}"
+            : $"{prefix}: {primary} / {DescribeDateOperand(configuration.Secondary)}";
+    }
+
+    private static string DescribeDateOperand(RecorderDateOperandConfiguration operand)
+    {
+        if (operand.ReferenceKind == RecorderDateReferenceKind.Exact)
+        {
+            return "Exact";
+        }
+
+        return operand.DayOffset switch
+        {
+            0 => "Today",
+            > 0 => $"Today +{operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d",
+            _ => $"Today {operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d"
+        };
+    }
+
+    private void OnEditDateExpressionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid stepId } button
+            || _relativeDateDetails?.TryGetDateConfiguration(stepId, out var configuration) != true)
+        {
+            return;
+        }
+
+        ShowDateExpressionEditor(button, configuration!);
+    }
+
+    private void ShowDateExpressionEditor(
+        Button anchor,
+        RecorderStepDateConfiguration configuration)
+    {
+        if (_relativeDateDetails is null)
+        {
+            return;
+        }
+
+        var primary = new RelativeDateOperandEditor(
+            configuration.Secondary is null ? "Date" : "From",
+            configuration.Primary,
+            GetBrush("RecorderMuted"),
+            controlNamePrefix: "RecorderJournalDate");
+        var secondary = configuration.Secondary is null
+            ? null
+            : new RelativeDateOperandEditor(
+                "To",
+                configuration.Secondary,
+                GetBrush("RecorderMuted"),
+                controlNamePrefix: "RecorderJournalDateSecondary");
+        var validation = new TextBlock
+        {
+            Name = "RecorderJournalDateValidation",
+            Foreground = GetBrush("RecorderDanger"),
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var apply = new Button { Content = "Apply", Padding = new Thickness(10, 4) };
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        var content = new StackPanel
+        {
+            Width = configuration.Secondary is null ? 300 : 340,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Date value",
+                    FontWeight = FontWeight.SemiBold
+                },
+                primary.Content
+            }
+        };
+        if (secondary is not null)
+        {
+            content.Children.Add(secondary.Content);
+        }
+
+        content.Children.Add(validation);
+        content.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { apply, cancel }
+        });
+        LastDateExpressionEditorForTesting = content;
+
+        var flyout = new Flyout { Content = content };
+        void RefreshValidation()
+        {
+            var primaryValid = primary.TryGetExpression(out _, out var primaryError);
+            var secondaryValid = true;
+            string? secondaryError = null;
+            if (secondary is not null)
+            {
+                secondaryValid = secondary.TryGetExpression(out _, out secondaryError);
+            }
+
+            var error = primaryValid ? secondaryError : primaryError;
+            apply.IsEnabled = primaryValid && secondaryValid;
+            validation.Text = error;
+            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+        }
+
+        primary.Changed += (_, _) => RefreshValidation();
+        if (secondary is not null)
+        {
+            secondary.Changed += (_, _) => RefreshValidation();
+        }
+
+        apply.Click += (_, _) =>
+        {
+            if (!primary.TryGetExpression(out var primaryExpression, out var primaryError))
+            {
+                validation.Text = primaryError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            RecorderDateExpression? secondaryExpression = null;
+            if (secondary is not null
+                && !secondary.TryGetExpression(out secondaryExpression, out var secondaryError))
+            {
+                validation.Text = secondaryError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            if (!_relativeDateDetails.SetStepDateExpressions(
+                    configuration.StepId,
+                    primaryExpression,
+                    secondaryExpression))
+            {
+                validation.Text = "The date expression could not be applied.";
+                validation.IsVisible = true;
+                return;
+            }
+
+            flyout.Hide();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        RefreshValidation();
+        flyout.ShowAt(anchor);
     }
 
     private void ScrollStepJournalToEnd()
@@ -714,6 +2071,165 @@ internal sealed partial class RecorderOverlay : UserControl
         return this.TryFindResource(key, out var value) && value is IBrush brush
             ? brush
             : Brushes.Gray;
+    }
+
+    private sealed class RelativeDateOperandEditor
+    {
+        private readonly DateTime? _exactDate;
+        private readonly ComboBox _mode;
+        private readonly TextBox _dayOffset;
+
+        public RelativeDateOperandEditor(
+            string label,
+            RecorderDateOperandConfiguration configuration,
+            IBrush mutedBrush,
+            bool showRecordedValue = true,
+            string? controlNamePrefix = null)
+        {
+            _exactDate = configuration.ExactDate;
+            _mode = new ComboBox
+            {
+                Name = controlNamePrefix is null ? null : $"{controlNamePrefix}Mode",
+                ItemsSource = new[] { "Exact date", "Today ± days" },
+                SelectedIndex = configuration.ReferenceKind == RecorderDateReferenceKind.RelativeToToday ? 1 : 0,
+                MinWidth = 145,
+                IsEnabled = configuration.ExactDate.HasValue
+            };
+            _dayOffset = new TextBox
+            {
+                Name = controlNamePrefix is null ? null : $"{controlNamePrefix}Offset",
+                Text = configuration.DayOffset.ToString(CultureInfo.InvariantCulture),
+                Width = 74,
+                HorizontalContentAlignment = HorizontalAlignment.Right
+            };
+            var row = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 6
+            };
+            row.Children.Add(_mode);
+            Grid.SetColumn(_dayOffset, 1);
+            row.Children.Add(_dayOffset);
+            var content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    new TextBlock { Text = label, FontWeight = FontWeight.SemiBold },
+                    row
+                }
+            };
+            if (showRecordedValue)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = configuration.ExactDate.HasValue
+                        ? $"Recorded: {configuration.ExactDate.Value:yyyy-MM-dd}"
+                        : "Recorded boundary is empty",
+                    Foreground = mutedBrush
+                });
+            }
+
+            Content = content;
+
+            _mode.SelectionChanged += (_, _) =>
+            {
+                RefreshOffsetState();
+                Changed?.Invoke(this, EventArgs.Empty);
+            };
+            _dayOffset.TextChanged += (_, _) => Changed?.Invoke(this, EventArgs.Empty);
+            RefreshOffsetState();
+        }
+
+        public event EventHandler? Changed;
+
+        public Control Content { get; }
+
+        public bool IsRelative => _mode.SelectedIndex == 1;
+
+        public bool TryGetExpression(
+            out RecorderDateExpression? expression,
+            out string? error)
+        {
+            expression = null;
+            error = null;
+            if (_mode.SelectedIndex != 1)
+            {
+                return true;
+            }
+
+            if (!_exactDate.HasValue)
+            {
+                error = "A relative expression cannot be used for an empty boundary.";
+                return false;
+            }
+
+            if (!int.TryParse(
+                    _dayOffset.Text,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var dayOffset))
+            {
+                error = "Enter a whole number of days.";
+                return false;
+            }
+
+            try
+            {
+                _ = DateTime.Today.AddDays(dayOffset);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                error = "The relative date is outside the supported range.";
+                return false;
+            }
+
+            expression = new RecorderDateExpression(
+                RecorderDateReferenceKind.RelativeToToday,
+                dayOffset);
+            return true;
+        }
+
+        private void RefreshOffsetState()
+        {
+            _dayOffset.IsEnabled = _exactDate.HasValue && _mode.SelectedIndex == 1;
+        }
+    }
+
+    private sealed class RecorderCalculatedAssertionDraft(RecorderCheckTargetSelection selection)
+    {
+        public RecorderCheckTargetSelection Selection { get; } = selection;
+
+        public RecorderNumericOperandDraft Left { get; } = new();
+
+        public RecorderNumericOperandDraft Right { get; } = new();
+
+        public RecorderArithmeticOperation Operation { get; set; }
+
+        public int PendingOperandIndex { get; set; }
+
+        public string? Error { get; set; }
+
+        public void SetSelectedControlOperand(RecorderNumericOperand operand, string? controlName)
+        {
+            var target = PendingOperandIndex == 0 ? Left : Right;
+            target.Kind = RecorderNumericOperandKind.Control;
+            target.ControlOperand = operand;
+            target.ControlName = controlName;
+        }
+    }
+
+    private sealed class RecorderNumericOperandDraft
+    {
+        public RecorderNumericOperandKind Kind { get; set; }
+
+        public string LiteralText { get; set; } = "0";
+
+        public Guid? CheckpointId { get; set; }
+
+        public RecorderNumericOperand? ControlOperand { get; set; }
+
+        public string? ControlName { get; set; }
     }
 
     internal readonly record struct RecorderOverlayPalette(

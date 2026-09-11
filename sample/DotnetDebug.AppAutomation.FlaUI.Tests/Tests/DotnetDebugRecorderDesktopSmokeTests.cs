@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
@@ -5,9 +6,11 @@ using AppAutomation.TestHost.Avalonia;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
+using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.WindowsAPI;
-using System.Runtime.InteropServices;
+using FlaUI.UIA3;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -84,7 +87,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
         var page = MainWindowFlaUiPageFactory.Create(session);
         page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
-        ReplaceText(session, "MixCountSpinner", "7");
+        page.SetSpinnerValue(static candidate => candidate.MixCountSpinner, 7);
 
         var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
 
@@ -101,6 +104,105 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderInteractiveDestinationSelectsRecordsAndSaves()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("Interactive");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderInteractive");
+        using var session = DesktopAppSession.Launch(CreateInteractiveRecorderLaunchOptions(outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
+        var overlayWindow = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllChildren(session.ConditionFactory.ByControlType(ControlType.Window))
+                .Select(static element => element.AsWindow())
+                .FirstOrDefault(window =>
+                    string.Equals(window.Name, "AppAutomation Recorder", StringComparison.Ordinal)
+                    && window.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "Recorder overlay window was not found.")!;
+        var appWindow = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllChildren(session.ConditionFactory.ByControlType(ControlType.Window))
+                .Select(static element => element.AsWindow())
+                .FirstOrDefault(window =>
+                    string.Equals(window.Name, "DotnetDebug - Math Operations Showcase", StringComparison.Ordinal)
+                    && window.Properties.ProcessId.Value == overlayWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "DotnetDebug application window was not found.")!;
+        var destinationCombo = FindElement(overlayWindow, session, "RecorderScenarioDestination").AsComboBox();
+        var nameTextBox = FindElement(overlayWindow, session, "RecorderScenarioName").AsTextBox();
+        var recordButton = FindElement(overlayWindow, session, "RecordButton").AsButton();
+        var saveButton = FindElement(overlayWindow, session, "SaveButton").AsButton();
+
+        UiWait.Until(
+            () => destinationCombo.Items,
+            static items => items.Any(item => string.Equals(
+                item.Text,
+                "UIAutomationTests.MainWindowScenariosBase",
+                StringComparison.Ordinal)),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "Recorder scenario destinations were not loaded.");
+        destinationCombo.Select("UIAutomationTests.MainWindowScenariosBase");
+        destinationCombo.Collapse();
+        nameTextBox.Focus();
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+        Keyboard.Type(scenarioName);
+        UiWait.Until(
+            () => nameTextBox.Text,
+            text => string.Equals(text, scenarioName, StringComparison.Ordinal),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Recorder scenario name was not updated.");
+        UiWait.Until(
+            () => recordButton.IsEnabled,
+            static enabled => enabled,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Recorder Record button did not become enabled.");
+
+        TryCaptureDesktopElement(overlayWindow, "recorder-destination-selection.png");
+        recordButton.Invoke();
+        var numbersInput = FindElement(appWindow, session, "NumbersInput");
+        numbersInput.Focus();
+        numbersInput.AsTextBox().Text = "4 2";
+        recordButton.Invoke();
+        saveButton.Invoke();
+
+        var selectedOutputDirectory = Path.Combine(outputDirectory.FullPath, "UIAutomationTests");
+        var scenarioPath = await WaitForScenarioFileAsync(
+            selectedOutputDirectory,
+            scenarioName,
+            patternOverride: "MainWindowScenariosBase.RecorderScenarios.g.cs");
+        var scenarioSource = await File.ReadAllTextAsync(scenarioPath);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource).Contains(
+                "namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;");
+            await Assert.That(scenarioSource).Contains(
+                "partial class MainWindowScenariosBase<TSession>");
+            await Assert.That(scenarioSource).Contains(
+                "Page.EnterText(static page => page.NumbersInput, \"4 2\");");
+        }
+    }
+
+    private static void TryCaptureDesktopElement(AutomationElement element, string fileName)
+    {
+        try
+        {
+            var screenshotDirectory = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+            var screenshotPath = Path.Combine(screenshotDirectory.FullName, fileName);
+            Capture.Element(element).ToFile(screenshotPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ExternalException)
+        {
+            Console.WriteLine($"Recorder overlay screenshot is unavailable: {exception.Message}");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeSearchPickersSaveCompositeSearchSteps()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -108,27 +210,186 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var scenarioName = CreateScenarioName("SearchPickers");
         using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
         using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
         var page = MainWindowFlaUiPageFactory.Create(session);
 
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var serverInput = FindElement(session, "ArmServerSearchPicker_Input");
+        if (serverInput.Patterns.ScrollItem.IsSupported)
+        {
+            serverInput.Patterns.ScrollItem.Pattern.ScrollIntoView();
+        }
+
+        UiWait.Until(
+            () => serverInput.BoundingRectangle,
+            static bounds => bounds.Top >= 0,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker input did not scroll into view.");
+        page.ArmServerSearchPicker.Expand();
+        var serverResults = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmServerSearchPicker_Results"))
+                .FirstOrDefault(element =>
+                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker popup results were not found.")!;
+        var popupVerticalGap = UiWait.Until(
+            () => serverResults.BoundingRectangle.Top - serverInput.BoundingRectangle.Bottom,
+            static gap => gap >= -1 && gap <= 8,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Server search picker popup did not stay adjacent to its editor.");
+        TryCaptureDesktopElement(session.MainWindow, "server-search-picker-popup.png");
+
         page
-            .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
-            .SetChecked(static candidate => candidate.ArmSearchFuzzyToggle, true)
-            .SearchAndSelect(static candidate => candidate.ArmSearchPicker, "customer", "Customer Alpha")
-            .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42");
+            .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42")
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .SearchAndSelectGridCell(
+                static candidate => candidate.SearchPickerGridAutomationBridge,
+                0,
+                1,
+                "ga",
+                "Gamma");
 
         var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
 
         using (Assert.Multiple())
         {
-            await Assert.That(scenarioSource.Contains(
-                "Page.SearchAndSelect(static page => page.ArmSearchPicker, \"customer\", \"Customer Alpha\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(popupVerticalGap >= -1 && popupVerticalGap <= 8).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.SearchAndSelect(static page => page.ArmServerSearchPicker, \"product\", \"Product 42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("ArmSearchInput", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmSearchApplyButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmServerPickerOpenButton", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(scenarioSource.Contains(
+                "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"Row-1\"), \"SelectedValue\", \"ga\", \"Gamma\");",
+                StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("ArmServerSearchPicker_OpenButton", StringComparison.Ordinal)).IsEqualTo(false);
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeSearchControlSavesHistoryStepAndKeepsPopupAdjacent()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("SearchControl");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        using var automation = new UIA3Automation();
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var searchInput = FindElement(session, "ArmTableSearchInput");
+
+        page.ArmTableSearch.OpenHistory();
+        var historyItem = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmTableSearchHistoryItemButton"))
+                .FirstOrDefault(element =>
+                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            static candidate => candidate is not null && candidate.IsAvailable && !candidate.IsOffscreen,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "SearchControl history item was not found.")!;
+        _ = UiWait.Until(
+            () => historyItem.BoundingRectangle.Top - searchInput.BoundingRectangle.Bottom,
+            static offset => offset >= -1 && offset <= 100,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "SearchControl history popup did not stay adjacent to its editor.");
+
+        page.ApplySearchFromHistory(static candidate => candidate.ArmTableSearch, "orders");
+
+        var scenarioSource = await SaveAndReadScenarioSourceAsync(
+            session,
+            outputDirectory.FullPath,
+            scenarioName);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ArmTableSearch.IsHistoryOpen).IsFalse();
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplySearchFromHistory(static page => page.ArmTableSearch, \"orders\");");
+            await Assert.That(scenarioSource).DoesNotContain("Page.EnterText(static page => page.ArmTableSearch");
+            await Assert.That(scenarioSource).DoesNotContain("ArmTableSearchHistoryItemButton");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeMultiSelectCapturesConfirmedAndCanceledSelections()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("MultiSelect");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page
+            .SelectTabItem(static candidate => candidate.ControlMixTabItem)
+            .SelectMultiItems(
+                static candidate => candidate.MultiSelection,
+                ["Alpha", "Omega"])
+            .CancelMultiSelection(
+                static candidate => candidate.MultiSelection,
+                ["Beta", "Psi"]);
+
+        var scenarioSource = await WaitForAutosaveScenarioSourceAsync(
+            outputDirectory.FullPath,
+            scenarioName);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(scenarioSource.Contains(
+                "Page.SelectMultiItems(static page => page.MultiSelection, new[] { \"Alpha\", \"Omega\" });",
+                StringComparison.Ordinal)).IsTrue();
+            await Assert.That(scenarioSource.Contains(
+                "Page.CancelMultiSelection(static page => page.MultiSelection, new[] { \"Beta\", \"Psi\" });",
+                StringComparison.Ordinal)).IsTrue();
+            await Assert.That(scenarioSource.Contains("Page.SetChecked", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("MultiSelection_OpenButton", StringComparison.Ordinal)).IsFalse();
+            await Assert.That(scenarioSource.Contains("MultiSelection_ApplyButton", StringComparison.Ordinal)).IsFalse();
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderSmokeComboBoxFilterCapturesValuesAndCommitOutcome()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("ComboBoxFilter");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        var armScrollViewer = FindElement(session, "ArmDesktopScrollViewer");
+        var initialScrollPosition = ReadVerticalScrollPercent(armScrollViewer);
+
+        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending"]);
+        TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-one-value.png");
+
+        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending", "Closed"]);
+        TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-several-values.png");
+
+        page.CancelFilterSelection(static candidate => candidate.ArmStatusFilter, []);
+
+        var scenarioSource = await WaitForAutosaveScenarioSourceAsync(
+            outputDirectory.FullPath,
+            scenarioName);
+        var finalScrollPosition = ReadVerticalScrollPercent(armScrollViewer);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(finalScrollPosition).IsEqualTo(initialScrollPosition);
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplyFilterSelection(static page => page.ArmStatusFilter, new[] { \"Pending\" });");
+            await Assert.That(scenarioSource).Contains(
+                "Page.ApplyFilterSelection(static page => page.ArmStatusFilter, new[] { \"Closed\", \"Pending\" });");
+            await Assert.That(scenarioSource).Contains(
+                "Page.CancelFilterSelection(static page => page.ArmStatusFilter, global::System.Array.Empty<string>());");
+            await Assert.That(scenarioSource).DoesNotContain("Page.SetChecked");
+            await Assert.That(scenarioSource).DoesNotContain("ArmStatusFilter_ApplyButton");
         }
     }
 
@@ -206,10 +467,10 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         using (Assert.Multiple())
         {
             await Assert.That(scenarioSource.Contains(
-                "Page.EditGridCellText(static page => page.ArmGridAutomationBridge, 0, 1, \"Edited-42\");",
+                "Page.EditGridCellText(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"), \"Value\", \"Edited-42\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
-                "Page.OpenGridRow(static page => page.ArmGridAutomationBridge, 0);",
+                "Page.OpenGridRow(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.ScrollGridToEnd(static page => page.ArmGridAutomationBridge);",
@@ -218,7 +479,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "Page.SortGridByColumn(static page => page.ArmGridAutomationBridge, \"Value\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
-                "Page.CopyGridCell(static page => page.ArmGridAutomationBridge, 0, 1);",
+                "Page.CopyGridCell(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-05\"), \"Value\");",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains(
                 "Page.ExportGrid(static page => page.ArmGridAutomationBridge);",
@@ -286,6 +547,32 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         return CreateRecorderLaunchOptions(baseOptions, scenarioName, outputDirectory);
     }
 
+    private static DesktopAppLaunchOptions CreateInteractiveRecorderLaunchOptions(string outputDirectory)
+    {
+        var baseOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildConfiguration: "Debug");
+        var environmentVariables = new Dictionary<string, string?>(baseOptions.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            [RecorderEnabledEnvironmentVariable] = "1",
+            [RecorderScenarioEnvironmentVariable] = null,
+            [RecorderOutputDirectoryEnvironmentVariable] = Path.GetFullPath(outputDirectory),
+            [RecorderAuthoringProjectEnvironmentVariable] = ResolveAuthoringProjectDirectory(),
+            [RecorderOverlayEnvironmentVariable] = "1",
+            [RecorderDiagnosticsEnvironmentVariable] = "0"
+        };
+
+        return new DesktopAppLaunchOptions
+        {
+            ExecutablePath = baseOptions.ExecutablePath,
+            WorkingDirectory = baseOptions.WorkingDirectory,
+            Arguments = baseOptions.Arguments,
+            EnvironmentVariables = environmentVariables,
+            DisposeCallback = CreateRecorderDisposeCallback(baseOptions.DisposeCallback),
+            MainWindowTimeout = baseOptions.MainWindowTimeout,
+            PollInterval = baseOptions.PollInterval,
+            WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
     private static DesktopAppLaunchOptions CreateRecorderLaunchOptions(
         DesktopAppLaunchOptions baseOptions,
         string scenarioName,
@@ -312,10 +599,34 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             WorkingDirectory = baseOptions.WorkingDirectory,
             Arguments = baseOptions.Arguments,
             EnvironmentVariables = environmentVariables,
-            DisposeCallback = baseOptions.DisposeCallback,
+            DisposeCallback = CreateRecorderDisposeCallback(baseOptions.DisposeCallback),
             MainWindowTimeout = baseOptions.MainWindowTimeout,
             PollInterval = baseOptions.PollInterval,
             WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
+    private static Action CreateRecorderDisposeCallback(Action? baseDisposeCallback)
+    {
+        var generatedControlsPath = Path.Combine(
+            ResolveAuthoringProjectDirectory(),
+            "Pages",
+            "MainWindowPage.RecorderControls.g.cs");
+        var removeGeneratedControls = !File.Exists(generatedControlsPath);
+
+        return () =>
+        {
+            try
+            {
+                baseDisposeCallback?.Invoke();
+            }
+            finally
+            {
+                if (removeGeneratedControls)
+                {
+                    File.Delete(generatedControlsPath);
+                }
+            }
         };
     }
 
@@ -335,6 +646,18 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 session.MainWindow.SetForeground();
                 SendSaveHotkey(session.MainWindow);
             });
+        return await File.ReadAllTextAsync(scenarioPath);
+    }
+
+    private static async Task<string> WaitForAutosaveScenarioSourceAsync(
+        string outputDirectory,
+        string scenarioName)
+    {
+        var pattern = $"MainWindowScenariosBase.{scenarioName}.autosave.*.g.cs.autosave";
+        var scenarioPath = await WaitForScenarioFileAsync(
+            outputDirectory,
+            scenarioName,
+            patternOverride: pattern);
         return await File.ReadAllTextAsync(scenarioPath);
     }
 
@@ -361,6 +684,25 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             $"Element '{automationId}' was not found.")!;
     }
 
+    private static AutomationElement FindElement(
+        AutomationElement root,
+        DesktopAppSession session,
+        string automationId)
+    {
+        return UiWait.Until(
+            () => root.FindFirstDescendant(session.ConditionFactory.ByAutomationId(automationId)),
+            static candidate => candidate is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            $"Element '{automationId}' was not found in the selected window.")!;
+    }
+
+    private static double ReadVerticalScrollPercent(AutomationElement element)
+    {
+        return element.Patterns.Scroll.PatternOrDefault?.VerticalScrollPercent.ValueOrDefault
+            ?? throw new InvalidOperationException(
+                $"Element '{element.AutomationId}' does not expose a Scroll pattern.");
+    }
+
     private static void SendSaveHotkey(Window window)
     {
         var windowHandle = new IntPtr(window.Properties.NativeWindowHandle.Value);
@@ -379,9 +721,11 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         string outputDirectory,
         string scenarioName,
         DateTime? newerThanUtc = null,
-        Action? retryAction = null)
+        Action? retryAction = null,
+        string? patternOverride = null)
     {
-        var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+        var pattern = patternOverride
+            ?? "MainWindowScenariosBase.RecorderScenarios.g.cs";
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Exception? lastReadError = null;
         var nextRetryAt = TimeSpan.Zero;
@@ -436,7 +780,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             return null;
         }
 
-        var pattern = $"MainWindowScenariosBase.{scenarioName}.*.g.cs";
+        const string pattern = "MainWindowScenariosBase.RecorderScenarios.g.cs";
         return Directory.EnumerateFiles(outputDirectory, pattern, SearchOption.TopDirectoryOnly)
             .Select(File.GetLastWriteTimeUtc)
             .OrderByDescending(static timestamp => timestamp)

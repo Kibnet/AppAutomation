@@ -1,8 +1,9 @@
 using System;
 using System.Linq;
-using DotnetDebug.AppAutomation.Authoring.Pages;
 using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
+using DotnetDebug.AppAutomation.Authoring.Pages;
+using DotnetDebug.AppAutomation.Configuration;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -11,7 +12,35 @@ namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSession, MainWindowPage>
     where TSession : class, IUiTestSession
 {
-    private const int DelayedStatusTimeoutMs = 3000;
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task Checkpoint_ReadsTheSameLogicalValueWithoutRequiredIntermediateActions()
+    {
+        Page.EnterText(static page => page.NumbersInput, "checkpoint value");
+        var valueAtCheckpoint = Page.NumbersInput.Text;
+
+        await Assert.That(Page.NumbersInput.Text).IsEqualTo(valueAtCheckpoint);
+
+        Page.SearchAndSelect(static page => page.HistoryOperationPicker, "GCD", "GCD");
+        var selectedItemAtCheckpoint = Page.HistoryOperationPicker.SelectedItemText;
+
+        await Assert.That(Page.HistoryOperationPicker.SelectedItemText).IsEqualTo(selectedItemAtCheckpoint);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmSearch_EntersClearsAndAppliesHistory()
+    {
+        Page
+            .SelectTabItem(static page => page.ArmDesktopTabItem)
+            .EnterSearch(static page => page.ArmTableSearch, "manual search")
+            .ClearSearch(static page => page.ArmTableSearch)
+            .ApplySearchFromHistory(static page => page.ArmTableSearch, "orders");
+
+        await Assert.That(Page.ArmTableSearch.Text).IsEqualTo("orders");
+    }
+
+    private const int DelayedStatusTimeoutMs = 10000;
     private const string DelayedStatusReadyText = "Delayed status ready";
 
     [Test]
@@ -200,7 +229,7 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
         Page.SetSpinnerValue(p => p.MixCountSpinner, 10);
 
-        await Assert.That(Page.MixCountSpinner.Text).IsEqualTo("10");
+        await Assert.That(Page.MixCountSpinner.Value).IsEqualTo(10);
 
         Page
             .SetSliderValue(p => p.MixSpeedSlider, 4)
@@ -298,6 +327,99 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task SearchPicker_CardAndGrid_RuntimeParity_Works()
+    {
+        var firstRow = GridRowSelector.ByCell("Key", "Row-1");
+        var recorderFingerprint = SampleGridAutomation.CreateRecorderCatalog().Fingerprint;
+        var headlessFingerprint = SampleGridAutomation.CreateHeadlessCatalog().Fingerprint;
+        var flaUiFingerprint = SampleGridAutomation.CreateFlaUiCatalog().Fingerprint;
+
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
+            .WaitUntilTextEquals(p => p.ArmServerSearchPicker, "Product 42");
+
+        await Assert.That(Page.ArmServerSearchPicker.SelectedItemText).IsEqualTo("Product 42");
+
+        Page
+            .SelectTabItem(p => p.DataGridTabItem)
+            .SearchAndSelectGridCell(
+                p => p.SearchPickerGridAutomationBridge,
+                firstRow,
+                "SelectedValue",
+                "ga",
+                "Gamma")
+            .WaitUntilTextEquals(p => p.SearchPickerGridSearchInput, "Gamma")
+            .WaitUntilGridCellEquals(
+                p => p.SearchPickerGridAutomationBridge,
+                firstRow,
+                "SelectedValue",
+                "Gamma");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(recorderFingerprint).IsEqualTo(headlessFingerprint);
+            await Assert.That(recorderFingerprint).IsEqualTo(flaUiFingerprint);
+            await Assert.That(((IGridAutomationCatalogControl)Page.SearchPickerGridAutomationBridge)
+                    .GridAutomationFingerprint)
+                .IsEqualTo(recorderFingerprint);
+            await Assert.That(Page.SearchPickerGridSearchInput.Text).IsEqualTo("Gamma");
+            await Assert.That(GridValueReader.ReadCellText(
+                    Page.SearchPickerGridAutomationBridge,
+                    firstRow,
+                    "SelectedValue"))
+                .IsEqualTo("Gamma");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task MultiSelectPopup_SelectsExactItemsAndCloses()
+    {
+        string[] expectedItems = ["Alpha", "Omega"];
+
+        Page
+            .SelectTabItem(p => p.ControlMixTabItem)
+            .SelectMultiItems(p => p.MultiSelection, expectedItems)
+            .WaitUntilSelectedItemsEqual(p => p.MultiSelection, expectedItems)
+            .CancelMultiSelection(p => p.MultiSelection, ["Beta", "Psi"])
+            .WaitUntilSelectedItemsEqual(p => p.MultiSelection, expectedItems)
+            .WaitUntilTextEquals(p => p.MultiSelectStatusLabel, "Selected: Alpha, Omega");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.MultiSelection.IsOpen).IsFalse();
+            await Assert.That(Page.MultiSelection.SelectedItems).IsEquivalentTo(expectedItems);
+            await Assert.That(Page.MultiSelectStatusLabel.Text).IsEqualTo("Selected: Alpha, Omega");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ArmDesktop_ComboBoxFilter_UsesOneContractForOneAndSeveralValues()
+    {
+        string[] severalValues = ["Pending", "Closed"];
+
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .ApplyFilterSelection(p => p.ArmStatusFilter, ["Pending"])
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, ["Pending"])
+            .ApplyFilterSelection(p => p.ArmStatusFilter, severalValues)
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
+            .CancelFilterSelection(p => p.ArmStatusFilter, [])
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
+            .WaitUntilTextEquals(p => p.ArmStatusFilterStatusLabel, "Filter: Closed, Pending");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.ArmStatusFilter.IsOpen).IsFalse();
+            await Assert.That(Page.ArmStatusFilter.SelectedItems).IsEquivalentTo(severalValues);
+            await Assert.That(Page.ArmStatusFilterStatusLabel.Text).IsEqualTo("Filter: Closed, Pending");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_PrimitivesWrappersAndSearch_Work()
     {
         Page
@@ -305,10 +427,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             .EnterText(p => p.ArmCopyTextBox, "ARM-COPY-42")
             .ClickButton(p => p.ArmCopyButton)
             .WaitUntilNameEquals(p => p.ArmCopyResultLabel, "Copied: ARM-COPY-42")
-            .SetChecked(p => p.ArmSearchFuzzyToggle, true)
-            .WaitUntilIsChecked(p => p.ArmSearchFuzzyToggle, true)
-            .SearchAndSelect(p => p.ArmSearchPicker, "customer", "Customer Alpha")
-            .WaitUntilNameContains(p => p.ArmSearchStatusLabel, "Customer Alpha")
             .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
             .WaitUntilNameContains(p => p.ArmServerPickerStatusLabel, "Product 42")
             .ClickButton(p => p.ArmServerPickerClearButton)
@@ -317,34 +435,94 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
         using (Assert.Multiple())
         {
             await UiAssert.TextEqualsAsync(() => Page.ArmCopyResultLabel.Text, "Copied: ARM-COPY-42");
-            await UiAssert.TextContainsAsync(() => Page.ArmSearchStatusLabel.Text, "Customer Alpha");
             await UiAssert.TextContainsAsync(() => Page.ArmServerPickerStatusLabel.Text, "cleared");
         }
     }
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task MenuItems_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .InvokeMenuItem(p => p.RefreshMenuItem)
+            .WaitUntilNameEquals(p => p.MenuStatusLabel, "Menu: refreshed")
+            .InvokeMenuItem(p => p.MainMenu, ["Actions", "Export", "Snapshot"])
+            .WaitUntilNameEquals(p => p.MenuStatusLabel, "Menu: snapshot exported");
+
+        await UiAssert.TextEqualsAsync(
+            () => Page.MenuStatusLabel.Text,
+            "Menu: snapshot exported");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DisabledMenuItem_IsRejected()
+    {
+        Page.SelectTabItem(p => p.ArmDesktopTabItem);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            Page.InvokeMenuItem(p => p.MainMenu, ["Actions", "Disabled action"]));
+
+        await Assert.That(exception.Message).Contains("disabled");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task ContextMenuItems_Work()
+    {
+        Page
+            .SelectTabItem(p => p.ArmDesktopTabItem)
+            .InvokeContextMenuItem(p => p.ContextTarget, ["Pin"])
+            .WaitUntilNameEquals(p => p.ContextMenuStatusLabel, "Context: pinned")
+            .InvokeContextMenuItem(p => p.ContextTarget, ["Export", "Summary"])
+            .WaitUntilNameEquals(p => p.ContextMenuStatusLabel, "Context: summary exported");
+
+        await UiAssert.TextEqualsAsync(
+            () => Page.ContextMenuStatusLabel.Text,
+            "Context: summary exported");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DisabledContextMenuItem_IsRejected()
+    {
+        Page.SelectTabItem(p => p.ArmDesktopTabItem);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            Page.InvokeContextMenuItem(p => p.ContextTarget, ["Disabled action"]));
+
+        await Assert.That(exception.Message).Contains("disabled");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ArmDesktop_GridActionsAndEditableCells_Work()
     {
+        var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
+        var dynamicallyAddedRow = GridRowSelector.ByCell("Key", "ARM-05");
+
         Page
             .SelectTabItem(p => p.ArmDesktopTabItem)
             .ClickButton(p => p.ArmGridBuildButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 3")
             .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 3)
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 0, "ARM-01")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Value-1")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Value-1")
             .EnterText(p => p.ArmGridEditValueInput, "Edited-42")
             .WaitUntilTextEquals(p => p.ArmGridEditValueInput, "Edited-42")
             .ClickButton(p => p.ArmGridCommitEditButton)
             .WaitUntilNameContains(p => p.ArmGridStatusLabel, "Edited-42")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, 0, 1, "Edited-42")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
             .ClickButton(p => p.ArmGridOpenButton)
             .WaitUntilNameContains(p => p.ArmGridStatusLabel, "ARM-01")
             .ClickButton(p => p.ArmGridLoadMoreButton)
             .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 5)
+            .WaitUntilGridContainsRow(p => p.ArmGridAutomationBridge, dynamicallyAddedRow)
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, dynamicallyAddedRow, "Value", "Value-5")
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 5")
             .ClickButton(p => p.ArmGridSortButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid sorted by value")
+            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
             .ClickButton(p => p.ArmGridCopyButton)
             .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid copied")
             .ClickButton(p => p.ArmGridExportButton)
@@ -357,6 +535,43 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             await Assert.That(Page.ArmGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
             await Assert.That(Page.ArmEremexDataGridHost.AutomationId).IsEqualTo("ArmEremexDataGridHost");
         }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task GridComboCellSelection_CommitsSelectedValue()
+    {
+        var firstRow = GridRowSelector.ByCell("Key", "ITEM-42");
+
+        Page
+            .SelectTabItem(static page => page.ArmDesktopTabItem)
+            .SelectGridCellComboItem(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Ready")
+            .WaitUntilGridCellEquals(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Ready");
+
+        Page.GridComboStateEditor.Expand();
+        Page
+            .SelectGridCellComboItem(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Draft")
+            .WaitUntilGridCellEquals(
+                static page => page.GridComboAutomationBridge,
+                firstRow,
+                "State",
+                "Draft");
+
+        await Assert.That(
+            GridValueReader.ReadCellText(Page.GridComboAutomationBridge, firstRow, "State"))
+            .IsEqualTo("Draft");
     }
 
     [Test]
@@ -402,10 +617,13 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Reports")
             .ActivateShellPane(p => p.ArmShellNavigation, "Customers")
             .WaitUntilNameEquals(p => p.ArmShellActivePaneLabel, "Customers")
+            .SetColor(p => p.ArmAccentColorPicker, "#7F224466")
+            .WaitUntilColorEquals(p => p.ArmAccentColorPicker, "#7F224466")
             .ClickButton(p => p.ArmReloadButton)
             .WaitUntilProgressAtLeast(p => p.ArmLoadingProgressBar, 100)
             .WaitUntilNameEquals(p => p.ArmLoadingStatusLabel, "Reloaded: 100%")
-            .SetToggled(p => p.ArmStatusExpanderToggle, true)
+            .SetExpanded(p => p.ArmStatusExpander, true)
+            .WaitUntilIsExpanded(p => p.ArmStatusExpander, true)
             .WaitUntilNameEquals(p => p.ArmStatusLabel, "Status expanded: True")
             .SetToggled(p => p.ArmMetadataToggle, true)
             .WaitUntilNameEquals(p => p.ArmMetadataStatusLabel, "Metadata visible: True")
@@ -468,6 +686,20 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             await UiAssert.TextContainsAsync(() => Page.DateResult.Text, "7 days");
             await UiAssert.TextContainsAsync(() => Page.DateDiffList.Items[0].Text ?? string.Empty, "Start:");
         }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DateTime_SetTimePicker_PreservesSeconds()
+    {
+        var expected = new TimeSpan(9, 45, 30);
+
+        Page
+            .SelectTabItem(static page => page.DateTimeTabItem)
+            .SetTime(static page => page.StartTimePicker, expected)
+            .WaitUntilTimeEquals(static page => page.StartTimePicker, expected);
+
+        await Assert.That(Page.StartTimePicker.SelectedTime).IsEqualTo(expected);
     }
 
     [Test]

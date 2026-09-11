@@ -1,10 +1,13 @@
 using AppAutomation.Abstractions;
+using AppAutomation.FlaUI.Automation;
+using AppAutomation.FlaUI.Session;
+using AppAutomation.Session.Contracts;
+using AppAutomation.TestHost.Avalonia;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
-using AppAutomation.FlaUI.Automation;
-using AppAutomation.FlaUI.Session;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -12,11 +15,81 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
-    private static readonly UiWaitOptions EremexGridWaitOptions = new()
+    private const string CalendarFallbackFixtureEnvironmentVariable =
+        "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
+
+    private static readonly UiWaitOptions DesktopControlWaitOptions = new()
     {
         Timeout = TimeSpan.FromSeconds(10),
         PollInterval = TimeSpan.FromMilliseconds(200)
     };
+
+    private static readonly string[] ExpectedMultiSelectItems =
+    [
+        "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta",
+        "Eta", "Theta", "Iota", "Kappa", "Lambda", "Mu",
+        "Nu", "Xi", "Omicron", "Pi", "Rho", "Sigma",
+        "Tau", "Upsilon", "Phi", "Chi", "Psi", "Omega"
+    ];
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task EremexMultiSelectPopup_ExposesInstrumentedPartsAndReadsAllItems()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var desktop = session.MainWindow.Automation.GetDesktop();
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
+        page.MultiSelection.Open();
+        var popup = FindInstrumentedMultiSelectPopup(session, desktop);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(popup.Results.AutomationId).IsEqualTo("MultiSelection_Results");
+            await Assert.That(popup.ApplyButton.AutomationId).IsEqualTo("MultiSelection_ApplyButton");
+            await Assert.That(popup.CancelButton.AutomationId).IsEqualTo("MultiSelection_CancelButton");
+            await Assert.That(page.MultiSelection.Items).IsEquivalentTo(ExpectedMultiSelectItems);
+        }
+
+        popup.CancelButton.Click();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task MultiSelectMissingItem_DoesNotPartiallyChangeDesktopSelection()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
+        page.MultiSelection.Open();
+
+        try
+        {
+            var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory);
+            var items = resolver.Resolve<IMultiSelectItemsControl>(new UiControlDefinition(
+                "MultiSelectionItems",
+                UiControlType.ListBox,
+                "MultiSelection_Results",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false));
+            items.SetSelectedItems(["Alpha"]);
+
+            await Assert.That(() => items.SetSelectedItems(["Beta", "Missing"]))
+                .Throws<InvalidOperationException>();
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Alpha"]);
+        }
+        finally
+        {
+            if (page.MultiSelection.IsOpen)
+            {
+                page.MultiSelection.Cancel();
+            }
+        }
+    }
 
     [Test]
     [NotInParallel("DesktopUi")]
@@ -44,11 +117,119 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task ServerSearchComboBox_GridPopupStaysClosedUntilEditorIsUsed()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var desktop = session.MainWindow.Automation.GetDesktop();
+        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
+
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var input = WaitForDesktopElement(session, desktop, "SearchPickerGridEditor_Input", "search input");
+        var isPopupVisible = IsVisible(desktop.FindFirstDescendant(
+            session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")));
+
+        await Assert.That(isPopupVisible).IsFalse();
+
+        input.AsTextBox().Text = "a";
+        var results = UiWait.Until(
+            () => desktop.FindFirstDescendant(
+                session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")),
+            IsVisible,
+            DesktopControlWaitOptions,
+            "ServerSearchComboBox results did not become visible after text input.");
+
+        await Assert.That(results).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task SearchHistory_ReadsItemsFromItsPopupScope()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        page.ArmTableSearch.OpenHistory();
+
+        var historyItems = UiWait.Until(
+            () => page.ArmTableSearch.HistoryItems,
+            static items => items.Count == 3,
+            DesktopControlWaitOptions,
+            "Search history items did not become available.");
+
+        await Assert.That(historyItems)
+            .IsEquivalentTo(["orders", "customers", "reports"]);
+
+        var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory);
+        var repeatedButton = new UiControlDefinition("HistoryItem", UiControlType.Button,
+            "ArmTableSearchHistoryItemButton")
+        {
+            Scope = new UiControlScope("ArmTableSearchHistoryRoot") { AnchorLocatorValue = "ArmTableSearchInput" }
+        };
+        UiControlResolutionException? ambiguity = null;
+        try
+        {
+            resolver.Resolve<IButtonControl>(repeatedButton);
+        }
+        catch (UiControlResolutionException exception)
+        {
+            ambiguity = exception;
+        }
+
+        await Assert.That(ambiguity?.Failure).IsEqualTo(UiControlResolutionFailure.Ambiguous);
+        await Assert.That(() => resolver.Resolve<IButtonControl>(repeatedButton with
+            { LocatorValue = "MissingHistoryButton" }))
+            .Throws<UiControlResolutionException>();
+        var otherHistory = resolver.Resolve<ISearchHistoryItemsControl>(repeatedButton with
+        {
+            Scope = new UiControlScope("AnotherHistoryRoot") { AnchorLocatorValue = "ArmTableSearchInput" }
+        });
+        await Assert.That(otherHistory.Items).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task CompositeDatePicker_SelectsDateByVisibleCalendarCell_WhenNativeSelectionIsUnsupported()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(CreateCalendarFallbackLaunchOptions());
+        var calendarTab = session.MainWindow
+            .FindFirstDescendant(session.ConditionFactory.ByAutomationId("CalendarTabItem"))
+            ?.AsTabItem()
+            ?? throw new InvalidOperationException("Calendar tab was not found.");
+        calendarTab.Select();
+        var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+            .WithDateTimePickerProxy(
+                "DatePicker",
+                DatePickerParts.ByAutomationIds(
+                    "FlaUiCalendarFallbackFixture",
+                    "FlaUiCalendarFallbackValue",
+                    "FlaUiCalendarFallbackOpen",
+                    "FlaUiCalendarFallbackCalendar"));
+        var page = new CalendarFallbackPage(resolver);
+        var targetDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1)
+            .AddMonths(1)
+            .AddDays(2);
+
+        page.SetDate(static candidate => candidate.DatePicker, targetDate);
+
+        await Assert.That(page.DatePicker.SelectedDate?.Date).IsEqualTo(targetDate.Date);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        // This bridge test reads realized rows; virtualization is covered separately.
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
         var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
 
         page
@@ -64,13 +245,13 @@ public sealed class FlaUiControlResolverTests
         var eremexAnchor = UiWait.Until(
             () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGrid")),
             static element => element is not null && TryRead(() => element.IsAvailable),
-            EremexGridWaitOptions,
+            DesktopControlWaitOptions,
             "Eremex DataGrid automation anchor was not found by AutomationId.")
             ?? throw new InvalidOperationException("Eremex DataGrid automation anchor was not found by AutomationId.");
         var bridgeElement = UiWait.Until(
             () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGridAutomationBridge")),
             static element => element is not null && TryRead(() => element.IsAvailable),
-            EremexGridWaitOptions,
+            DesktopControlWaitOptions,
             "Eremex DataGrid automation bridge was not found by AutomationId.")
             ?? throw new InvalidOperationException("Eremex DataGrid automation bridge was not found by AutomationId.");
 
@@ -90,7 +271,53 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task VisualGridOpenRow_DoubleClicksDesktopBridgeRow()
+    public async Task AvaloniaDataGrid_StableAddressFindsVirtualizedRow()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        var page = MainWindowFlaUiPageFactory.Create(session);
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "60")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 60")
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R60"),
+                "Value",
+                "184",
+                timeoutMs: 30000)
+            .WaitUntilGridCellEquals(
+                static candidate => candidate.DemoDataGrid,
+                GridRowSelector.ByCell("Row", "R1"),
+                "Value",
+                "7",
+                timeoutMs: 30000);
+
+        var duplicateIdentityCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("DemoDataGrid", "DemoDataGrid", "DemoDataGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Row"),
+                    GridColumnDefinition.Auto("Value").AsValue(GridCellValueKind.Number),
+                    GridColumnDefinition.Auto("Parity"))
+                .IdentifyRowsBy("Parity"));
+        var duplicateIdentityPage = new MainWindowPage(
+            new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+                .WithGridAutomation(duplicateIdentityCatalog));
+        var duplicateIdentityException = await Assert.That(() => GridValueReader.ReadCellText(
+                duplicateIdentityPage.DemoDataGrid,
+                GridRowSelector.ByCell("Parity", "Even"),
+                "Value"))
+            .Throws<InvalidOperationException>();
+
+        await Assert.That(duplicateIdentityException!.Message).Contains("matched");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task VisualGridActions_OpenRowAndEditColor()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
@@ -102,7 +329,9 @@ public sealed class FlaUiControlResolverTests
             .ClickButton(static candidate => candidate.ArmGridBuildButton)
             .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid rows: 3")
             .OpenGridRow(static candidate => candidate.ArmGridAutomationBridge, 0)
-            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01");
+            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01")
+            .EditGridCellColor(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#336699")
+            .WaitUntilGridCellEquals(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#FF336699");
 
         await Assert.That(page.ArmGridStatusLabel.Text).IsEqualTo("Grid opened: ARM-01");
     }
@@ -117,9 +346,61 @@ public sealed class FlaUiControlResolverTests
             .ToArray();
     }
 
+    private static MultiSelectPopupParts FindInstrumentedMultiSelectPopup(
+        DesktopAppSession session,
+        AutomationElement desktop)
+    {
+        return new MultiSelectPopupParts(
+            WaitForDesktopElement(session, desktop, "MultiSelection_Results", "results"),
+            WaitForDesktopElement(session, desktop, "MultiSelection_ApplyButton", "Apply button"),
+            WaitForDesktopElement(session, desktop, "MultiSelection_CancelButton", "Cancel button"));
+    }
+
+    private static AutomationElement WaitForDesktopElement(
+        DesktopAppSession session,
+        AutomationElement desktop,
+        string automationId,
+        string description)
+    {
+        var failureMessage = $"The instrumented multi-select popup part '{description}' was not exposed.";
+        return UiWait.Until(
+                () => desktop.FindFirstDescendant(session.ConditionFactory.ByAutomationId(automationId)),
+                static element => element is not null && TryRead(() => element.IsAvailable),
+                DesktopControlWaitOptions,
+                failureMessage)
+            ?? throw new InvalidOperationException(failureMessage);
+    }
+
     private static bool ContainsText(IEnumerable<string> texts, string expected)
     {
         return texts.Any(text => text.Contains(expected, StringComparison.Ordinal));
+    }
+
+    private static DesktopAppLaunchOptions CreateCalendarFallbackLaunchOptions()
+    {
+        var baseOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildConfiguration: "Debug");
+        var environmentVariables = new Dictionary<string, string?>(baseOptions.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            [CalendarFallbackFixtureEnvironmentVariable] = "1"
+        };
+
+        return new DesktopAppLaunchOptions
+        {
+            ExecutablePath = baseOptions.ExecutablePath,
+            WorkingDirectory = baseOptions.WorkingDirectory,
+            Arguments = baseOptions.Arguments,
+            EnvironmentVariables = environmentVariables,
+            DisposeCallback = baseOptions.DisposeCallback,
+            MainWindowTimeout = baseOptions.MainWindowTimeout,
+            PollInterval = baseOptions.PollInterval,
+            WindowPlacement = baseOptions.WindowPlacement
+        };
+    }
+
+    private static bool IsVisible(AutomationElement? element)
+    {
+        return element is not null
+            && TryRead(() => element.IsAvailable && !element.IsOffscreen);
     }
 
     private static T? TryRead<T>(Func<T> accessor)
@@ -132,5 +413,25 @@ public sealed class FlaUiControlResolverTests
         {
             return default;
         }
+    }
+
+    private sealed record MultiSelectPopupParts(
+        AutomationElement Results,
+        AutomationElement ApplyButton,
+        AutomationElement CancelButton);
+
+    private sealed class CalendarFallbackPage : UiPage
+    {
+        private static readonly UiControlDefinition DatePickerDefinition = new(
+            "DatePicker",
+            UiControlType.DateTimePicker,
+            "FlaUiCalendarFallbackFixture");
+
+        public CalendarFallbackPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IDateTimePickerControl DatePicker => Resolve<IDateTimePickerControl>(DatePickerDefinition);
     }
 }

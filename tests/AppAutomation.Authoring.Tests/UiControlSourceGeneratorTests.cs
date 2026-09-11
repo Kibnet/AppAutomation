@@ -29,6 +29,14 @@ namespace Sample.Pages;
 [UiControl("ExportToast", UiControlType.Notification, "ExportToast")]
 [UiControl("ReportExport", UiControlType.FolderExport, "ReportExport")]
 [UiControl("Shell", UiControlType.ShellNavigation, "Shell")]
+[UiControl("Categories", UiControlType.MultiSelect, "Categories")]
+[UiControl("StatusFilter", UiControlType.ComboBoxFilter, "StatusFilter")]
+[UiControl("TableSearch", UiControlType.Search, "TableSearch")]
+[UiControl("StartTimePicker", UiControlType.TimePicker, "StartTimePicker")]
+[UiControl("DetailsExpander", UiControlType.Expander, "DetailsExpander")]
+[UiControl("AccentColor", UiControlType.ColorPicker, "AccentColor")]
+[UiControl("MainMenu", UiControlType.Menu, "MainMenu")]
+[UiControl("RefreshMenuItem", UiControlType.MenuItem, "RefreshMenuItem")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -56,6 +64,14 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.INotificationControl ExportToast => Resolve<global::AppAutomation.Abstractions.INotificationControl>(MainWindowPageDefinitions.ExportToast);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IFolderExportControl ReportExport => Resolve<global::AppAutomation.Abstractions.IFolderExportControl>(MainWindowPageDefinitions.ReportExport);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IShellNavigationControl Shell => Resolve<global::AppAutomation.Abstractions.IShellNavigationControl>(MainWindowPageDefinitions.Shell);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMultiSelectControl Categories => Resolve<global::AppAutomation.Abstractions.IMultiSelectControl>(MainWindowPageDefinitions.Categories);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IComboBoxFilterControl StatusFilter => Resolve<global::AppAutomation.Abstractions.IComboBoxFilterControl>(MainWindowPageDefinitions.StatusFilter);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ISearchControl TableSearch => Resolve<global::AppAutomation.Abstractions.ISearchControl>(MainWindowPageDefinitions.TableSearch);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITimePickerControl StartTimePicker => Resolve<global::AppAutomation.Abstractions.ITimePickerControl>(MainWindowPageDefinitions.StartTimePicker);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IExpanderControl DetailsExpander => Resolve<global::AppAutomation.Abstractions.IExpanderControl>(MainWindowPageDefinitions.DetailsExpander);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IColorPickerControl AccentColor => Resolve<global::AppAutomation.Abstractions.IColorPickerControl>(MainWindowPageDefinitions.AccentColor);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuControl MainMenu => Resolve<global::AppAutomation.Abstractions.IMenuControl>(MainWindowPageDefinitions.MainMenu);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuItemControl RefreshMenuItem => Resolve<global::AppAutomation.Abstractions.IMenuItemControl>(MainWindowPageDefinitions.RefreshMenuItem);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");
