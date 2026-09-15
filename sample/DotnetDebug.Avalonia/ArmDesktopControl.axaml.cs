@@ -3,11 +3,14 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
+using Avalonia.VisualTree;
 using Eremex.AvaloniaUI.Controls.Editors;
+using Eremex.AvaloniaUI.Controls.Utils;
 
 namespace DotnetDebug.Avalonia;
 
@@ -17,10 +20,10 @@ public partial class ArmDesktopControl : UserControl
     {
         InitializeComponent();
         DataContext = this;
+        ArmServerSearchPicker.CurrentSelected = ArmServerItems[1];
         ArmStatusExpander.PropertyChanged += OnArmStatusExpanderPropertyChanged;
         ArmMetadataToggle.PropertyChanged += OnArmMetadataTogglePropertyChanged;
         ArmApprovalToggle.PropertyChanged += OnArmApprovalTogglePropertyChanged;
-        BuildArmRows(3);
         ArmDateRangeFrom.SelectedDate = new DateTimeOffset(new DateTime(2026, 4, 1));
         ArmDateRangeTo.SelectedDate = new DateTimeOffset(new DateTime(2026, 4, 30));
         ArmShellNavigationList.SelectedIndex = 0;
@@ -29,10 +32,6 @@ public partial class ArmDesktopControl : UserControl
         SelectedArmStatusFilterItems.CollectionChanged += (_, _) => UpdateArmStatusFilterLabel();
         UpdateArmStatusFilterLabel();
     }
-
-    public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = new();
-
-    public GridComboRowViewModel GridComboRow { get; } = new();
 
     public ObservableCollection<MultiSelectItemViewModel> ArmStatusFilterItems { get; } =
     [
@@ -46,8 +45,10 @@ public partial class ArmDesktopControl : UserControl
 
     public string[] ArmServerItems { get; } =
     [
-        "Product 42",
+        "Product 42 extended",
         "Service Contract",
+        "Product 42",
+        "Product  42 rolled",
         "Warehouse North",
         "Customer Archive"
     ];
@@ -169,81 +170,6 @@ public partial class ArmDesktopControl : UserControl
         ArmNumericRangeStatusLabel.Content = "Numeric filter canceled";
     }
 
-    private void OnArmGridBuildClick(object? sender, RoutedEventArgs e)
-    {
-        BuildArmRows(3);
-        ArmGridStatusLabel.Content = "Grid rows: 3";
-    }
-
-    private void OnArmGridOpenClick(object? sender, RoutedEventArgs e)
-    {
-        ArmGridStatusLabel.Content = ArmGridRows.Count == 0
-            ? "Grid open: no rows"
-            : $"Grid opened: {ArmGridRows[0].Key}";
-    }
-
-    private void OnArmGridRowDoubleTapped(object? sender, TappedEventArgs e)
-    {
-        if (sender is Control { DataContext: ArmDesktopGridRowViewModel row })
-        {
-            ArmGridStatusLabel.Content = $"Grid opened: {row.Key}";
-            e.Handled = true;
-        }
-    }
-
-    private void OnArmGridSortClick(object? sender, RoutedEventArgs e)
-    {
-        var sorted = ArmGridRows.OrderByDescending(row => row.Value, StringComparer.Ordinal).ToArray();
-        ArmGridRows.Clear();
-        foreach (var row in sorted)
-        {
-            ArmGridRows.Add(row);
-        }
-
-        ArmGridStatusLabel.Content = "Grid sorted by value";
-    }
-
-    private void OnArmGridLoadMoreClick(object? sender, RoutedEventArgs e)
-    {
-        var nextIndex = ArmGridRows.Count;
-        ArmGridRows.Add(CreateRow(nextIndex));
-        ArmGridRows.Add(CreateRow(nextIndex + 1));
-        ArmGridStatusLabel.Content = $"Grid rows: {ArmGridRows.Count}";
-    }
-
-    private void OnArmGridCopyClick(object? sender, RoutedEventArgs e)
-    {
-        ArmGridStatusLabel.Content = "Grid copied";
-    }
-
-    private void OnArmGridExportClick(object? sender, RoutedEventArgs e)
-    {
-        ArmGridStatusLabel.Content = "Grid export requested";
-    }
-
-    private void OnArmGridCommitEditClick(object? sender, RoutedEventArgs e)
-    {
-        if (ArmGridRows.Count == 0)
-        {
-            ArmGridStatusLabel.Content = "Grid edit: no rows";
-            return;
-        }
-
-        ArmGridRows[0].Value = ArmGridEditValueInput.Text ?? string.Empty;
-        ArmGridStatusLabel.Content = $"Grid edit committed: {ArmGridRows[0].Value}";
-    }
-
-    private void OnArmGridCancelEditClick(object? sender, RoutedEventArgs e)
-    {
-        if (ArmGridRows.Count > 0)
-        {
-            ArmGridRows[0].Value = "Value-1";
-            ArmGridEditValueInput.Text = ArmGridRows[0].Value;
-        }
-
-        ArmGridStatusLabel.Content = "Grid edit canceled";
-    }
-
     private void OnArmDialogConfirmClick(object? sender, RoutedEventArgs e)
     {
         ArmDialogResultLabel.Content = "Dialog confirmed";
@@ -362,24 +288,6 @@ public partial class ArmDesktopControl : UserControl
     private void OnArmCloseClick(object? sender, RoutedEventArgs e)
     {
         ArmActionStatusLabel.Content = "Action: closed";
-    }
-
-    private void BuildArmRows(int count)
-    {
-        ArmGridRows.Clear();
-        for (var index = 0; index < count; index++)
-        {
-            ArmGridRows.Add(CreateRow(index));
-        }
-
-        ArmGridEditValueInput.Text = ArmGridRows.FirstOrDefault()?.Value ?? string.Empty;
-    }
-
-    private static ArmDesktopGridRowViewModel CreateRow(int index)
-    {
-        var state = index % 2 == 0 ? "Open" : "Pending";
-        var color = index % 2 == 0 ? "#FF336699" : "#FF663399";
-        return new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state, color);
     }
 
     private void ActivatePane(string pane)

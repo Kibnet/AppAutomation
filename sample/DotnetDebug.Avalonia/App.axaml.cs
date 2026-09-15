@@ -94,65 +94,6 @@ public partial class App : Application
                 "MultiSelection_Results",
                 "MultiSelection_ApplyButton",
                 "MultiSelection_CancelButton")));
-        options.LocatorAliases.Add(new RecorderLocatorAlias(
-            "EremexDemoDataGridControl",
-            "EremexDemoDataGridAutomationBridge",
-            UiControlType.Grid));
-        options.LocatorAliases.Add(new RecorderLocatorAlias(
-            "ArmEremexDataGridControl",
-            "ArmGridAutomationBridge",
-            UiControlType.Grid));
-        options.GridHints.Add(new RecorderGridHint(
-            "EremexDemoDataGridControl",
-            "EremexDemoDataGridAutomationBridge",
-            ["EremexRow", "EremexValue", "EremexParity"])
-        {
-            RowIdentityColumnPropertyNames = ["EremexRow"]
-        });
-        options.GridHints.Add(new RecorderGridHint(
-            "ArmEremexDataGridControl",
-            "ArmGridAutomationBridge",
-            ["Key", "Value", "Color", "State"])
-        {
-            RowIdentityColumnPropertyNames = ["Key"]
-        });
-        options.GridActionHints.Add(new RecorderGridActionHint(
-            "ArmGridOpenButton",
-            "ArmGridAutomationBridge",
-            RecorderGridUserActionKind.OpenRow,
-            RowIndex: 0));
-        options.GridActionHints.Add(new RecorderGridActionHint(
-            "ArmGridSortButton",
-            "ArmGridAutomationBridge",
-            RecorderGridUserActionKind.SortByColumn,
-            ColumnName: "Value"));
-        options.GridActionHints.Add(new RecorderGridActionHint(
-            "ArmGridLoadMoreButton",
-            "ArmGridAutomationBridge",
-            RecorderGridUserActionKind.ScrollToEnd));
-        options.GridActionHints.Add(new RecorderGridActionHint(
-            "ArmGridCopyButton",
-            "ArmGridAutomationBridge",
-            RecorderGridUserActionKind.CopyCell,
-            RowIndex: 0,
-            ColumnIndex: 1));
-        options.GridActionHints.Add(new RecorderGridActionHint(
-            "ArmGridExportButton",
-            "ArmGridAutomationBridge",
-            RecorderGridUserActionKind.Export));
-        options.GridEditHints.Add(new RecorderGridEditHint(
-            "ArmGridCommitEditButton",
-            "ArmGridAutomationBridge",
-            "ArmGridEditValueInput",
-            0,
-            1));
-        options.GridEditHints.Add(new RecorderGridEditHint(
-            "ArmGridCancelEditButton",
-            "ArmGridAutomationBridge",
-            "ArmGridEditValueInput",
-            0,
-            1,
-            CommitMode: GridCellEditCommitMode.Cancel));
         options.SearchPickerHints.Add(new RecorderSearchPickerHint(
             "ArmServerSearchPicker",
             SearchPickerParts.ByAutomationIds(

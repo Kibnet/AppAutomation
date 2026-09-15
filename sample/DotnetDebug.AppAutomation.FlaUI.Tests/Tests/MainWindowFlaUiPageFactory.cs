@@ -28,14 +28,7 @@ internal static class MainWindowFlaUiPageFactory
                         "HistoryFilterInput",
                         "OperationCombo",
                         applyButtonAutomationId: "ApplyFilterButton"))
-                .WithSearchPicker(
-                    "ArmServerSearchPicker",
-                    SearchPickerParts.ByAutomationIds(
-                        "ArmServerSearchPicker_Input",
-                        "ArmServerSearchPicker_Results",
-                        expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
-                        resultsKind: SearchPickerResultsKind.ListBox,
-                        opensOnSearch: true))
+                .WithSampleSearchPicker("ArmServerSearchPicker", "SamplePickerCommittedValue")
                 .WithColorPicker(
                     "ArmAccentColorPicker",
                     ColorPickerParts.ByAutomationIds(
@@ -54,12 +47,6 @@ internal static class MainWindowFlaUiPageFactory
                         "ArmTableSearchHistoryItemButton",
                         historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
                         historyRootAutomationId: "ArmTableSearchHistoryRoot"))
-                .WithGridColumns(
-                    "EremexDemoDataGridAutomationBridge",
-                    ["EremexRow", "EremexValue", "EremexParity"])
-                .WithGridColumns(
-                    "ArmGridAutomationBridge",
-                    ["Key", "Value", "Color", "State"])
                 .WithGridAutomation(SampleGridAutomation.CreateFlaUiCatalog())
                 .WithComboBoxFilter(
                     "ArmStatusFilter",

@@ -97,6 +97,11 @@ public sealed record GridAutomationDefinition
             }
         }
 
+        if (RowIdentityColumns.Count > 0)
+        {
+            ValidateRowIdentitySources(validated, RowIdentityColumns, nameof(columns));
+        }
+
         return this with { Columns = validated };
     }
 
@@ -121,6 +126,8 @@ public sealed record GridAutomationDefinition
                     nameof(logicalColumnNames));
             }
         }
+
+        ValidateRowIdentitySources(Columns, identities, nameof(logicalColumnNames));
 
         return this with { RowIdentityColumns = identities };
     }
@@ -181,26 +188,50 @@ public sealed record GridAutomationDefinition
                 nameof(columns));
         }
 
-        var crossCollision = columns
-            .SelectMany((sourceColumn, sourceIndex) => columns
-                .Select((logicalColumn, logicalIndex) =>
-                    (sourceColumn, sourceIndex, logicalColumn, logicalIndex)))
-            .FirstOrDefault(candidate =>
-                candidate.sourceIndex != candidate.logicalIndex
-                && string.Equals(
-                    candidate.sourceColumn.SourceFieldName,
-                    candidate.logicalColumn.LogicalName,
-                    StringComparison.Ordinal));
-        if (crossCollision.sourceColumn is not null)
+        var runtimeDuplicates = columns
+            .Where(static column => column.RuntimeColumnName is not null)
+            .GroupBy(static column => column.RuntimeColumnName!, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (runtimeDuplicates is not null)
         {
             throw new ArgumentException(
-                $"Grid name '{crossCollision.sourceColumn.SourceFieldName}' is both the source field of logical column "
-                + $"'{crossCollision.sourceColumn.LogicalName}' and the logical name of source field "
-                + $"'{crossCollision.logicalColumn.SourceFieldName}'. Logical and source column names must not cross-collide.",
+                $"Grid runtime column '{runtimeDuplicates.Key}' is mapped more than once.",
+                nameof(columns));
+        }
+
+        var allNameCollision = columns
+            .SelectMany((column, columnIndex) => GetConfiguredNames(column)
+                .Select(name => (column, columnIndex, name)))
+            .GroupBy(static candidate => candidate.name, StringComparer.Ordinal)
+            .Select(group => new
+            {
+                Name = group.Key,
+                Columns = group
+                    .GroupBy(static candidate => candidate.columnIndex)
+                    .Select(static entries => entries.First().column)
+                    .ToArray()
+            })
+            .FirstOrDefault(static collision => collision.Columns.Length > 1);
+        if (allNameCollision is not null)
+        {
+            throw new ArgumentException(
+                $"Grid name '{allNameCollision.Name}' belongs to multiple columns: "
+                + string.Join(", ", allNameCollision.Columns.Select(static column => column.LogicalName))
+                + ". Logical, source, and runtime column names must not cross-collide.",
                 nameof(columns));
         }
 
         return Array.AsReadOnly(columns.ToArray());
+    }
+
+    private static IEnumerable<string> GetConfiguredNames(GridColumnDefinition column)
+    {
+        yield return column.LogicalName;
+        yield return column.SourceFieldName;
+        if (column.RuntimeColumnName is not null)
+        {
+            yield return column.RuntimeColumnName;
+        }
     }
 
     private static IReadOnlyList<string> NormalizeDistinct(IEnumerable<string> values, string parameterName)
@@ -214,6 +245,22 @@ public sealed record GridAutomationDefinition
         }
 
         return Array.AsReadOnly(normalized);
+    }
+
+    private static void ValidateRowIdentitySources(
+        IReadOnlyList<GridColumnDefinition> columns,
+        IReadOnlyList<string> identities,
+        string parameterName)
+    {
+        var invalid = columns.FirstOrDefault(column =>
+            column.RowIdentityAutomationProperty is not null
+            && !identities.Contains(column.LogicalName, StringComparer.Ordinal));
+        if (invalid is not null)
+        {
+            throw new ArgumentException(
+                $"Grid column '{invalid.LogicalName}' reads a row automation property but is not part of the stable row identity.",
+                parameterName);
+        }
     }
 
     internal static string NormalizeRequired(string value, string parameterName)

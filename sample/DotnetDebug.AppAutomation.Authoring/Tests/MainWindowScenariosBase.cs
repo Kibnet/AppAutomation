@@ -3,7 +3,6 @@ using System.Linq;
 using AppAutomation.Abstractions;
 using AppAutomation.TUnit;
 using DotnetDebug.AppAutomation.Authoring.Pages;
-using DotnetDebug.AppAutomation.Configuration;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -302,78 +301,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
-    public async Task DataGrid_EremexRecorderBridge_GeneratedFlowWorks()
-    {
-        Page
-            .SelectTabItem(p => p.DataGridTabItem)
-            .EnterText(p => p.DataGridRowsInput, "5")
-            .ClickButton(p => p.BuildGridButton)
-            .WaitUntilNameEquals(p => p.GridResultLabel, "Grid rows: 5")
-            .WaitUntilGridRowsAtLeast(p => p.EremexDemoDataGridAutomationBridge, 5)
-            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 0, "EX-R3")
-            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 1, "EX-13")
-            .WaitUntilGridCellEquals(p => p.EremexDemoDataGridAutomationBridge, 2, 2, "EX-Odd")
-            .WaitUntilIsEnabled(p => p.EremexDemoDataGrid, true);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(Page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
-            await Assert.That(Page.EremexDemoDataGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
-            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
-            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("EX-13");
-            await Assert.That(Page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("EX-Odd");
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
-    public async Task SearchPicker_CardAndGrid_RuntimeParity_Works()
-    {
-        var firstRow = GridRowSelector.ByCell("Key", "Row-1");
-        var recorderFingerprint = SampleGridAutomation.CreateRecorderCatalog().Fingerprint;
-        var headlessFingerprint = SampleGridAutomation.CreateHeadlessCatalog().Fingerprint;
-        var flaUiFingerprint = SampleGridAutomation.CreateFlaUiCatalog().Fingerprint;
-
-        Page
-            .SelectTabItem(p => p.ArmDesktopTabItem)
-            .SearchAndSelect(p => p.ArmServerSearchPicker, "product", "Product 42")
-            .WaitUntilTextEquals(p => p.ArmServerSearchPicker, "Product 42");
-
-        await Assert.That(Page.ArmServerSearchPicker.SelectedItemText).IsEqualTo("Product 42");
-
-        Page
-            .SelectTabItem(p => p.DataGridTabItem)
-            .SearchAndSelectGridCell(
-                p => p.SearchPickerGridAutomationBridge,
-                firstRow,
-                "SelectedValue",
-                "ga",
-                "Gamma")
-            .WaitUntilTextEquals(p => p.SearchPickerGridSearchInput, "Gamma")
-            .WaitUntilGridCellEquals(
-                p => p.SearchPickerGridAutomationBridge,
-                firstRow,
-                "SelectedValue",
-                "Gamma");
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(recorderFingerprint).IsEqualTo(headlessFingerprint);
-            await Assert.That(recorderFingerprint).IsEqualTo(flaUiFingerprint);
-            await Assert.That(((IGridAutomationCatalogControl)Page.SearchPickerGridAutomationBridge)
-                    .GridAutomationFingerprint)
-                .IsEqualTo(recorderFingerprint);
-            await Assert.That(Page.SearchPickerGridSearchInput.Text).IsEqualTo("Gamma");
-            await Assert.That(GridValueReader.ReadCellText(
-                    Page.SearchPickerGridAutomationBridge,
-                    firstRow,
-                    "SelectedValue"))
-                .IsEqualTo("Gamma");
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
     public async Task MultiSelectPopup_SelectsExactItemsAndCloses()
     {
         string[] expectedItems = ["Alpha", "Omega"];
@@ -493,85 +420,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             Page.InvokeContextMenuItem(p => p.ContextTarget, ["Disabled action"]));
 
         await Assert.That(exception.Message).Contains("disabled");
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
-    public async Task ArmDesktop_GridActionsAndEditableCells_Work()
-    {
-        var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
-        var dynamicallyAddedRow = GridRowSelector.ByCell("Key", "ARM-05");
-
-        Page
-            .SelectTabItem(p => p.ArmDesktopTabItem)
-            .ClickButton(p => p.ArmGridBuildButton)
-            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 3")
-            .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 3)
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Value-1")
-            .EnterText(p => p.ArmGridEditValueInput, "Edited-42")
-            .WaitUntilTextEquals(p => p.ArmGridEditValueInput, "Edited-42")
-            .ClickButton(p => p.ArmGridCommitEditButton)
-            .WaitUntilNameContains(p => p.ArmGridStatusLabel, "Edited-42")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
-            .ClickButton(p => p.ArmGridOpenButton)
-            .WaitUntilNameContains(p => p.ArmGridStatusLabel, "ARM-01")
-            .ClickButton(p => p.ArmGridLoadMoreButton)
-            .WaitUntilGridRowsAtLeast(p => p.ArmGridAutomationBridge, 5)
-            .WaitUntilGridContainsRow(p => p.ArmGridAutomationBridge, dynamicallyAddedRow)
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, dynamicallyAddedRow, "Value", "Value-5")
-            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid rows: 5")
-            .ClickButton(p => p.ArmGridSortButton)
-            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid sorted by value")
-            .WaitUntilGridCellEquals(p => p.ArmGridAutomationBridge, firstRow, "Value", "Edited-42")
-            .ClickButton(p => p.ArmGridCopyButton)
-            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid copied")
-            .ClickButton(p => p.ArmGridExportButton)
-            .WaitUntilNameEquals(p => p.ArmGridStatusLabel, "Grid export requested")
-            .WaitUntilIsEnabled(p => p.ArmEremexDataGridHost, true);
-
-        using (Assert.Multiple())
-        {
-            await UiAssert.TextContainsAsync(() => Page.ArmGridStatusLabel.Text, "export");
-            await Assert.That(Page.ArmGridAutomationBridge.Rows.Count).IsGreaterThanOrEqualTo(5);
-            await Assert.That(Page.ArmEremexDataGridHost.AutomationId).IsEqualTo("ArmEremexDataGridHost");
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
-    public async Task GridComboCellSelection_CommitsSelectedValue()
-    {
-        var firstRow = GridRowSelector.ByCell("Key", "ITEM-42");
-
-        Page
-            .SelectTabItem(static page => page.ArmDesktopTabItem)
-            .SelectGridCellComboItem(
-                static page => page.GridComboAutomationBridge,
-                firstRow,
-                "State",
-                "Ready")
-            .WaitUntilGridCellEquals(
-                static page => page.GridComboAutomationBridge,
-                firstRow,
-                "State",
-                "Ready");
-
-        Page.GridComboStateEditor.Expand();
-        Page
-            .SelectGridCellComboItem(
-                static page => page.GridComboAutomationBridge,
-                firstRow,
-                "State",
-                "Draft")
-            .WaitUntilGridCellEquals(
-                static page => page.GridComboAutomationBridge,
-                firstRow,
-                "State",
-                "Draft");
-
-        await Assert.That(
-            GridValueReader.ReadCellText(Page.GridComboAutomationBridge, firstRow, "State"))
-            .IsEqualTo("Draft");
     }
 
     [Test]

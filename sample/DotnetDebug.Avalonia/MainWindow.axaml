@@ -5,7 +5,6 @@
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
         xmlns:editors="clr-namespace:Eremex.AvaloniaUI.Controls.Editors;assembly=Eremex.Avalonia.Controls"
         xmlns:local="clr-namespace:DotnetDebug.Avalonia"
-        xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
         x:CompileBindings="False"
         mc:Ignorable="d"
         d:DesignWidth="920" d:DesignHeight="620"
@@ -412,13 +411,14 @@
                     </Grid>
                 </StackPanel>
 
-                <Grid Grid.Row="2" RowDefinitions="Auto,120,Auto,2*" RowSpacing="6">
+                <Grid Grid.Row="2" RowDefinitions="Auto,120,Auto,190" RowSpacing="6">
                     <TextBlock Grid.Row="0" FontSize="14" FontWeight="SemiBold" Text="Avalonia DataGrid" />
                     <DataGrid x:Name="DemoDataGrid"
                               Grid.Row="1"
                               automation:AutomationProperties.AutomationId="DemoDataGrid"
                               SelectionMode="Single"
                               HeadersVisibility="All"
+                              LoadingRow="OnDemoDataGridLoadingRow"
                               ItemsSource="{Binding DataGridRows}"
                               SelectedItem="{Binding SelectedDataGridRow, Mode=TwoWay}"
                               IsReadOnly="True">
@@ -438,130 +438,139 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <Border Grid.Row="2"
-                            BorderBrush="#666666"
-                            BorderThickness="1"
-                            CornerRadius="6"
-                            Padding="8">
-                        <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
-                            <TextBlock Grid.Row="0"
-                                       FontSize="14"
-                                       FontWeight="SemiBold"
-                                       Text="Search-picker grid editor" />
-                            <local:SearchPickerGridHost x:Name="SearchPickerGridAutomationBridge"
-                                                        Grid.Row="1"
-                                                        automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge"
-                                                        ItemsSource="{Binding SearchPickerGridRows}">
-                                <Grid ColumnDefinitions="100,*"
-                                      MinHeight="40"
-                                      automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0">
-                                    <TextBlock Grid.Column="0"
-                                               Padding="6,8"
-                                               Text="{Binding Key}"
-                                               automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0_Cell0"
-                                               automation:AutomationProperties.Name="{Binding Key}" />
-                                    <Border Grid.Column="1"
-                                            automation:AutomationProperties.AutomationId="SearchPickerGridAutomationBridge_Row0_Cell1"
-                                            automation:AutomationProperties.IsControlElementOverride="True"
-                                            automation:AutomationProperties.Name="{Binding SelectedValue}">
-                                        <local:ServerSearchComboBox Width="280"
-                                                                    automation:AutomationProperties.AutomationId="SearchPickerGridEditor"
-                                                                    CurrentSelected="{Binding SelectedValue, Mode=TwoWay}"
-                                                                    DataGridControlMode="True"
-                                                                    ItemList="{Binding AvailableValues}"
-                                                                    SearchText="{Binding SearchText, Mode=TwoWay}"
-                                                                    Watermark="Search value" />
-                                    </Border>
-                                </Grid>
-                            </local:SearchPickerGridHost>
-                        </Grid>
-                    </Border>
-
-                    <Border Grid.Row="3"
-                            BorderBrush="#444444"
-                            BorderThickness="1"
-                            CornerRadius="6"
-                            Padding="8">
-                        <Grid RowDefinitions="Auto,*" ColumnDefinitions="*,*" ColumnSpacing="10" RowSpacing="6">
-                            <TextBlock x:Name="EremexDemoDataGrid"
-                                       Grid.Row="0"
-                                       Grid.Column="0"
-                                       FontSize="14"
-                                       FontWeight="SemiBold"
-                                       Text="Eremex DataGrid"
-                                       automation:AutomationProperties.AutomationId="EremexDemoDataGrid" />
-                            <TextBlock Grid.Row="0"
-                                       Grid.Column="1"
-                                       FontSize="14"
-                                       FontWeight="SemiBold"
-                                       Text="Eremex automation bridge" />
-                            <mxdg:DataGridControl x:Name="EremexDemoDataGridControl"
-                                                   Grid.Row="1"
-                                                   Grid.Column="0"
-                                                   automation:AutomationProperties.AutomationId="EremexDemoDataGridControl"
-                                                   ItemsSource="{Binding DataGridRows}">
-                                <mxdg:DataGridControl.Columns>
-                                    <mxdg:GridColumn FieldName="EremexRow" Header="Row" Width="90" />
-                                    <mxdg:GridColumn FieldName="EremexValue" Header="Value" Width="110" />
-                                    <mxdg:GridColumn FieldName="EremexParity" Header="Parity" Width="110" />
-                                </mxdg:DataGridControl.Columns>
-                            </mxdg:DataGridControl>
-                            <Border Grid.Row="1"
-                                    Grid.Column="1"
-                                    BorderBrush="#666666"
-                                    BorderThickness="1"
-                                    MinHeight="160">
-                                <Grid RowDefinitions="Auto,*">
-                                    <Grid Grid.Row="0"
-                                          ColumnDefinitions="90,110,110"
-                                          Background="#F4F4F4">
-                                        <TextBlock Grid.Column="0"
-                                                   Padding="6,4"
-                                                   FontWeight="SemiBold"
-                                                   Text="Row" />
-                                        <TextBlock Grid.Column="1"
-                                                   Padding="6,4"
-                                                   FontWeight="SemiBold"
-                                                   Text="Value" />
-                                        <TextBlock Grid.Column="2"
-                                                   Padding="6,4"
-                                                   FontWeight="SemiBold"
-                                                   Text="Parity" />
-                                    </Grid>
-                                    <ListBox x:Name="EremexDemoDataGridAutomationBridge"
-                                             Grid.Row="1"
-                                             automation:AutomationProperties.AutomationId="EremexDemoDataGridAutomationBridge"
-                                             BorderThickness="0"
-                                             Background="Transparent"
-                                             ItemsSource="{Binding DataGridRows}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="local:DataGridRowViewModel">
-                                                <Grid ColumnDefinitions="90,110,110"
-                                                      MinHeight="28"
-                                                      automation:AutomationProperties.AutomationId="{Binding EremexAutomationRowId}">
-                                                    <TextBlock Grid.Column="0"
-                                                               Padding="6,4"
-                                                               Text="{Binding EremexRow}"
-                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell0Id}"
-                                                               automation:AutomationProperties.Name="{Binding EremexRow}" />
-                                                    <TextBlock Grid.Column="1"
-                                                               Padding="6,4"
-                                                               Text="{Binding EremexValue}"
-                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell1Id}"
-                                                               automation:AutomationProperties.Name="{Binding EremexValue}" />
-                                                    <TextBlock Grid.Column="2"
-                                                               Padding="6,4"
-                                                               Text="{Binding EremexParity}"
-                                                               automation:AutomationProperties.AutomationId="{Binding EremexAutomationCell2Id}"
-                                                               automation:AutomationProperties.Name="{Binding EremexParity}" />
-                                                </Grid>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
-                                </Grid>
-                            </Border>
-                        </Grid>
-                    </Border>
+                    <TextBlock Grid.Row="2"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Text="Three-row complex editor grid" />
+                    <DataGrid x:Name="ArmComplexDataGridControl"
+                              Grid.Row="3"
+                              Height="190"
+                              ItemsSource="{Binding ArmGridRows}"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="False"
+                              SelectionMode="Single"
+                              LoadingRow="OnArmComplexDataGridLoadingRow"
+                              CellEditEnding="OnArmComplexGridCellEditEnding"
+                              automation:AutomationProperties.AutomationId="ArmComplexDataGridControl">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Key"
+                                                    SortMemberPath="Key"
+                                                    IsReadOnly="True"
+                                                    Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Key}"
+                                                   Focusable="True"
+                                                   automation:AutomationProperties.AutomationId="ArmGridRowCommitTarget" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Value"
+                                                SortMemberPath="Value"
+                                                Binding="{Binding Value, Mode=TwoWay}"
+                                                Width="110" />
+                            <DataGridTemplateColumn Header="Required"
+                                                    SortMemberPath="RequiredAmount"
+                                                    Width="105">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding RequiredAmount}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <editors:SpinEditor Value="{Binding RequiredAmount, Mode=TwoWay}"
+                                                            ShowEditorButtons="False"
+                                                            Loaded="OnArmGridRequiredEditorLoaded"
+                                                            automation:AutomationProperties.AutomationId="ArmGridRequiredEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Approved"
+                                                    SortMemberPath="IsApproved"
+                                                    Width="95">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding IsApproved}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsApproved, Mode=TwoWay}"
+                                                  HorizontalAlignment="Center"
+                                                  automation:AutomationProperties.AutomationId="ArmGridApprovedEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="State"
+                                                    SortMemberPath="State"
+                                                    Width="115">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding State}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding $parent[DataGrid].DataContext.ArmGridStateOptions}"
+                                                  SelectedItem="{Binding State, Mode=TwoWay}"
+                                                  automation:AutomationProperties.AutomationId="ArmGridStateEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Product"
+                                                    SortMemberPath="Product"
+                                                    Width="150">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border automation:AutomationProperties.Name="">
+                                            <TextBlock Text="{Binding Product}"
+                                                       automation:AutomationProperties.AutomationId="ArmGridProductDisplayText" />
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <local:ServerSearchComboBox DataGridControlMode="True"
+                                                                    CurrentSelected="{Binding Product, Mode=TwoWay}"
+                                                                    ItemList="{Binding $parent[DataGrid].DataContext.ArmServerItems}"
+                                                                    automation:AutomationProperties.AutomationId="ArmGridProductEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Date"
+                                                    SortMemberPath="ScheduledDate"
+                                                    Width="125">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ScheduledDate, StringFormat={}{0:yyyy-MM-dd}}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <editors:DateEditor EditorValue="{Binding ScheduledDate, Mode=TwoWay}"
+                                                            Loaded="OnArmGridDateEditorLoaded"
+                                                            automation:AutomationProperties.AutomationId="ArmGridDateEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Time"
+                                                    SortMemberPath="ScheduledTime"
+                                                    Width="115">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ScheduledTime}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <TimePicker SelectedTime="{Binding ScheduledTime, Mode=TwoWay}"
+                                                    automation:AutomationProperties.AutomationId="ArmGridTimeEditor" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </Grid>
 
                 <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12">

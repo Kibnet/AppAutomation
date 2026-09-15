@@ -4,6 +4,13 @@ namespace AppAutomation.Abstractions;
 public sealed record GridIndexedRowSelector
 {
     public GridIndexedRowSelector(IEnumerable<GridIndexedCellCondition> conditions)
+        : this(conditions, hasDeclaredUniqueIdentity: false)
+    {
+    }
+
+    private GridIndexedRowSelector(
+        IEnumerable<GridIndexedCellCondition> conditions,
+        bool hasDeclaredUniqueIdentity)
     {
         ArgumentNullException.ThrowIfNull(conditions);
         var materialized = conditions.ToArray();
@@ -23,7 +30,17 @@ public sealed record GridIndexedRowSelector
         }
 
         Conditions = Array.AsReadOnly(materialized);
+        HasDeclaredUniqueIdentity = hasDeclaredUniqueIdentity;
     }
 
     public IReadOnlyList<GridIndexedCellCondition> Conditions { get; }
+
+    internal bool HasDeclaredUniqueIdentity { get; }
+
+    internal GridIndexedRowSelector WithDeclaredUniqueIdentity()
+    {
+        return HasDeclaredUniqueIdentity
+            ? this
+            : new GridIndexedRowSelector(Conditions, hasDeclaredUniqueIdentity: true);
+    }
 }

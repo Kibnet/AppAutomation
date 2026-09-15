@@ -211,7 +211,8 @@ internal static class GridValueConversion
             snapshot,
             "number",
             static (string text, System.Globalization.CultureInfo culture, out decimal parsed) =>
-                decimal.TryParse(text, SupportedNumberStyles, culture, out parsed),
+                decimal.TryParse(text, SupportedNumberStyles, culture, out parsed)
+                || TryExtractNumberToken(text, culture, out parsed),
             out value,
             out diagnostic);
     }
@@ -387,6 +388,34 @@ internal static class GridValueConversion
                 value = default;
                 return false;
         }
+    }
+
+    private static bool TryExtractNumberToken(
+        string text,
+        System.Globalization.CultureInfo culture,
+        out decimal value)
+    {
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+                text,
+                @"[+-]?\d[\d\s\u00A0\u202F.,']*")
+            .Select(static match => match.Value.Trim())
+            .Where(static token => token.Length > 0)
+            .Take(2)
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            value = default;
+            return false;
+        }
+
+        var groupSeparator = culture.NumberFormat.NumberGroupSeparator;
+        var normalized = new string(matches[0]
+                .SelectMany(character => char.IsWhiteSpace(character) || character is '\u00A0' or '\u202F' or '\''
+                    ? groupSeparator
+                    : character.ToString())
+                .ToArray())
+            .Trim();
+        return decimal.TryParse(normalized, SupportedNumberStyles, culture, out value);
     }
 
     private static IReadOnlyList<System.Globalization.CultureInfo> CandidateCultures()

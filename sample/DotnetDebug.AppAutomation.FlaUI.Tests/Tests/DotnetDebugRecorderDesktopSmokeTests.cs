@@ -203,71 +203,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
-    public async Task RecorderSmokeSearchPickersSaveCompositeSearchSteps()
-    {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
-
-        var scenarioName = CreateScenarioName("SearchPickers");
-        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
-        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
-        using var automation = new UIA3Automation();
-        var page = MainWindowFlaUiPageFactory.Create(session);
-
-        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
-        var serverInput = FindElement(session, "ArmServerSearchPicker_Input");
-        if (serverInput.Patterns.ScrollItem.IsSupported)
-        {
-            serverInput.Patterns.ScrollItem.Pattern.ScrollIntoView();
-        }
-
-        UiWait.Until(
-            () => serverInput.BoundingRectangle,
-            static bounds => bounds.Top >= 0,
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Server search picker input did not scroll into view.");
-        page.ArmServerSearchPicker.Expand();
-        var serverResults = UiWait.Until(
-            () => automation.GetDesktop()
-                .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmServerSearchPicker_Results"))
-                .FirstOrDefault(element =>
-                    element.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
-            static candidate => candidate is not null,
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Server search picker popup results were not found.")!;
-        var popupVerticalGap = UiWait.Until(
-            () => serverResults.BoundingRectangle.Top - serverInput.BoundingRectangle.Bottom,
-            static gap => gap >= -1 && gap <= 8,
-            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
-            "Server search picker popup did not stay adjacent to its editor.");
-        TryCaptureDesktopElement(session.MainWindow, "server-search-picker-popup.png");
-
-        page
-            .SearchAndSelect(static candidate => candidate.ArmServerSearchPicker, "product", "Product 42")
-            .SelectTabItem(static candidate => candidate.DataGridTabItem)
-            .SearchAndSelectGridCell(
-                static candidate => candidate.SearchPickerGridAutomationBridge,
-                0,
-                1,
-                "ga",
-                "Gamma");
-
-        var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(popupVerticalGap >= -1 && popupVerticalGap <= 8).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.SearchAndSelect(static page => page.ArmServerSearchPicker, \"product\", \"Product 42\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.SearchAndSelectGridCell(static page => page.SearchPickerGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"Row-1\"), \"SelectedValue\", \"ga\", \"Gamma\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains("ArmServerSearchPicker_OpenButton", StringComparison.Ordinal)).IsEqualTo(false);
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeSearchControlSavesHistoryStepAndKeepsPopupAdjacent()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -438,61 +373,6 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             await Assert.That(scenarioSource.Contains(
                 "Page.EnterText(static page => page.ArmFolderExportPathInput",
                 StringComparison.Ordinal)).IsEqualTo(false);
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
-    public async Task RecorderSmokeGridEditAndUserActionsSaveGridSteps()
-    {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
-
-        var scenarioName = CreateScenarioName("GridActions");
-        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
-        using var session = DesktopAppSession.Launch(CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath));
-        var page = MainWindowFlaUiPageFactory.Create(session);
-
-        page
-            .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
-            .EnterText(static candidate => candidate.ArmGridEditValueInput, "Edited-42")
-            .ClickButton(static candidate => candidate.ArmGridCommitEditButton)
-            .ClickButton(static candidate => candidate.ArmGridOpenButton)
-            .ClickButton(static candidate => candidate.ArmGridLoadMoreButton)
-            .ClickButton(static candidate => candidate.ArmGridSortButton)
-            .ClickButton(static candidate => candidate.ArmGridCopyButton)
-            .ClickButton(static candidate => candidate.ArmGridExportButton);
-
-        var scenarioSource = await SaveAndReadScenarioSourceAsync(session, outputDirectory.FullPath, scenarioName);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(scenarioSource.Contains(
-                "Page.EditGridCellText(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"), \"Value\", \"Edited-42\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.OpenGridRow(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-01\"));",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.ScrollGridToEnd(static page => page.ArmGridAutomationBridge);",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.SortGridByColumn(static page => page.ArmGridAutomationBridge, \"Value\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.CopyGridCell(static page => page.ArmGridAutomationBridge, GridRowSelector.ByCell(\"Key\", \"ARM-05\"), \"Value\");",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.ExportGrid(static page => page.ArmGridAutomationBridge);",
-                StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(scenarioSource.Contains(
-                "Page.EnterText(static page => page.ArmGridEditValueInput",
-                StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridCommitEditButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridOpenButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridLoadMoreButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridSortButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridCopyButton", StringComparison.Ordinal)).IsEqualTo(false);
-            await Assert.That(scenarioSource.Contains("ArmGridExportButton", StringComparison.Ordinal)).IsEqualTo(false);
         }
     }
 

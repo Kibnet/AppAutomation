@@ -315,6 +315,180 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_ReadsPublicItemsSourceWithoutItemsControl()
+    {
+        using var headless = StartHeadlessRuntime();
+        var rows = new List<RuntimeGridRow>
+        {
+            new(10, new RuntimeReference("Repeated item"), 100m, RuntimeGridState.Pending),
+            new(20, new RuntimeReference("Repeated item"), 200m, RuntimeGridState.Ready),
+            new(30, new RuntimeReference("Other item"), 300m, RuntimeGridState.Pending)
+        };
+        var window = HeadlessRuntime.Dispatch(() => CreateRuntimeGridWindow(rows));
+        var catalog = CreateRuntimeGridCatalog();
+        var page = new RuntimeGridPage(
+            new HeadlessControlResolver(window).WithGridAutomation(catalog));
+        var targetRow = GridRowSelector.ByCell("PositionNumber", "20");
+
+        var movedRow = rows[2];
+        rows.RemoveAt(2);
+        rows.Insert(0, movedRow);
+
+        var resolution = ((IAddressableGridControl)page.RuntimeGrid).ResolveRow(targetRow, 1000);
+        var product = GridValueReader.ReadCellText(page.RuntimeGrid, targetRow, "Product");
+        var required = GridValueReader.ReadCellNumber(page.RuntimeGrid, targetRow, "Required");
+        var state = GridValueReader.ReadCellText(page.RuntimeGrid, targetRow, "State");
+        page.EditGridCellNumber(
+            static candidate => candidate.RuntimeGrid,
+            targetRow,
+            "Required",
+            275d);
+        var editedRequired = GridValueReader.ReadCellNumber(page.RuntimeGrid, targetRow, "Required");
+        var grid = HeadlessRuntime.Dispatch(() => (RuntimeGridHost)window.Content!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolution.State).IsEqualTo(GridRowResolutionState.Unique);
+            await Assert.That(product).IsEqualTo("Repeated item");
+            await Assert.That(required).IsEqualTo(200d);
+            await Assert.That(state).IsEqualTo("Ready for processing");
+            await Assert.That(editedRequired).IsEqualTo(275d);
+            await Assert.That(rows[1].RequiredVolume).IsEqualTo(100m);
+            await Assert.That(grid.Columns.Any(column => column.FieldName == "PositionNumber")).IsFalse();
+            await Assert.That(grid.ScrollIntoViewCalls).IsEqualTo(1);
+            await Assert.That(grid.ShowEditorCalls).IsEqualTo(2);
+            await Assert.That(grid.PostEditorCalls).IsEqualTo(1);
+            await Assert.That(grid.CommitEditingCalls).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessDataGrid_ResolvesHiddenStableRowIdentityFromSourceItem()
+    {
+        using var headless = StartHeadlessRuntime();
+        var rows = new List<RuntimeGridRow>
+        {
+            new(10, new RuntimeReference("First item"), 100m, RuntimeGridState.Pending),
+            new(20, new RuntimeReference("Second item"), 200m, RuntimeGridState.Ready)
+        };
+        var window = HeadlessRuntime.Dispatch(() => CreateNativeDataGridWindow(rows));
+        var page = new RuntimeGridPage(
+            new HeadlessControlResolver(window).WithGridAutomation(
+                CreateRuntimeGridCatalog(useHiddenRowMetadata: true)));
+
+        var value = GridValueReader.ReadCellNumber(
+            page.RuntimeGrid,
+            GridRowSelector.ByCell("PositionNumber", "20"),
+            "Required");
+
+        await Assert.That(value).IsEqualTo(200d);
+    }
+
+    [Test]
+    [Arguments(GridCellEditCommitMode.Commit)]
+    [Arguments(GridCellEditCommitMode.Cancel)]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_RejectsNoOpEditorActivation(
+        GridCellEditCommitMode commitMode)
+    {
+        using var headless = StartHeadlessRuntime();
+        var rows = new List<RuntimeGridRow>
+        {
+            new(10, new RuntimeReference("Item"), 200m, RuntimeGridState.Pending)
+        };
+        var window = HeadlessRuntime.Dispatch(() => CreateRuntimeGridWindow(rows, opensEditor: false));
+        var page = new RuntimeGridPage(
+            new HeadlessControlResolver(window).WithGridAutomation(CreateRuntimeGridCatalog()));
+        var selector = GridRowSelector.ByCell("PositionNumber", "10");
+        var grid = (IAddressableGridControl)page.RuntimeGrid;
+
+        var exception = await Assert.That(() => grid.EditCell(
+                new GridCellAddress(selector, "Required"),
+                new GridCellValueEditRequest(
+                    "321",
+                    GridCellEditorKind.Number,
+                    commitMode),
+                timeoutMs: 250))
+            .Throws<InvalidOperationException>();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception!.Message).Contains("writable");
+            await Assert.That(rows[0].RequiredVolume).IsEqualTo(200m);
+        }
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_SearchPickerWaitsForDetachedResultsAfterEnteringSearchText(
+        bool resultsOpenFromText)
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(() => CreateDelayedSearchGridWindow(resultsOpenFromText));
+        var catalog = CreateDelayedSearchGridCatalog();
+        var page = new DelayedSearchGridPage(
+            new HeadlessControlResolver(context.Window).WithGridAutomation(catalog));
+
+        page.SearchAndSelectGridCell(
+            static candidate => candidate.CatalogGrid,
+            GridRowSelector.ByCell("StableKey", "10"),
+            "SelectedItem",
+            "item",
+            "Item 42",
+            timeoutMs: 2000);
+
+        var expectedEvents = resultsOpenFromText
+            ? new[] { "search:item", "select:Item 42", "commit" }
+            : new[] { "search:item", "open", "select:Item 42", "commit" };
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Row.SelectedItem).IsEqualTo("Item 42");
+            await Assert.That(string.Join("|", context.Events))
+                .IsEqualTo(string.Join("|", expectedEvents));
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_SequentialSearchPickerAndNumberUsesActiveEditorWhenCellStaysVirtualized()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(() => CreateDelayedSearchGridWindow(
+            resultsOpenFromText: true,
+            keepNumberCellVirtualizedAfterSearchCommit: true));
+        var page = new DelayedSearchGridPage(
+            new HeadlessControlResolver(context.Window).WithGridAutomation(CreateDelayedSearchGridCatalog()));
+        var row = GridRowSelector.ByCell("StableKey", "10");
+
+        page
+            .SearchAndSelectGridCell(
+                static candidate => candidate.CatalogGrid,
+                row,
+                "SelectedItem",
+                "item",
+                "Item 42",
+                timeoutMs: 5000)
+            .EditGridCellNumber(
+                static candidate => candidate.CatalogGrid,
+                row,
+                "RequiredVolume",
+                321,
+                timeoutMs: 5000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Row.SelectedItem).IsEqualTo("Item 42");
+            await Assert.That(context.Row.RequiredVolume).IsEqualTo(321m);
+            await Assert.That(string.Join("|", context.Events))
+                .Contains("commit|show:RequiredVolume|commit-number");
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessProxyTextBox_ResolvesLogicalWrapperThroughInnerPart()
     {
         using var headless = StartHeadlessRuntime();
@@ -707,7 +881,7 @@ Console.WriteLine("Fake desktop");
     {
         var row = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal };
         var firstCell = new TextBlock { Text = "EX-R1" };
-        var editableCell = new TextBlock { Text = editableCellValue };
+        var editableCell = new TextBox { Text = editableCellValue };
         AutomationProperties.SetAutomationId(row, "EremexDemoDataGridAutomationBridge_Row0");
         AutomationProperties.SetAutomationId(firstCell, "EremexDemoDataGridAutomationBridge_Row0_Cell0");
         AutomationProperties.SetAutomationId(editableCell, "EremexDemoDataGridAutomationBridge_Row0_Cell1");
@@ -750,6 +924,137 @@ Console.WriteLine("Fake desktop");
         bridge.Children.Add(row);
 
         return new Window { Content = bridge };
+    }
+
+    private static Window CreateRuntimeGridWindow(
+        IEnumerable<RuntimeGridRow> rows,
+        bool opensEditor = true)
+    {
+        var grid = new RuntimeGridHost(rows, opensEditor)
+        {
+            Columns =
+            [
+                new RuntimeGridColumn("Product", "Product"),
+                new RuntimeGridColumn("RequiredVolume", "Required"),
+                new RuntimeGridColumn("State", "State")
+            ]
+        };
+        grid.MaterializeFirstRow();
+        AutomationProperties.SetAutomationId(grid, "RuntimeGrid");
+        return new Window { Content = grid };
+    }
+
+    private static GridAutomationCatalog CreateRuntimeGridCatalog(bool useHiddenRowMetadata = false)
+    {
+        var identityColumn = GridColumnDefinition.Auto("PositionNumber")
+            .AsValue(GridCellValueKind.Number);
+        if (useHiddenRowMetadata)
+        {
+            identityColumn = identityColumn.ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus);
+        }
+
+        return new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds(
+                    "RuntimeGrid",
+                    "RuntimeGrid",
+                    "RuntimeGrid")
+                .WithColumns(
+                    identityColumn,
+                    GridColumnDefinition.Auto("Product")
+                        .DisplayValueFrom("Product.Name")
+                        .AsValue(GridCellValueKind.Reference),
+                    GridColumnDefinition.Map("Required")
+                        .FromField("RequiredVolume")
+                        .AsValue(GridCellValueKind.Number),
+                    GridColumnDefinition.Auto("State")
+                        .AsValue(GridCellValueKind.Selection))
+                .IdentifyRowsBy("PositionNumber"));
+    }
+
+    private static Window CreateNativeDataGridWindow(IEnumerable<RuntimeGridRow> rows)
+    {
+        var grid = new DataGrid
+        {
+            ItemsSource = rows,
+            AutoGenerateColumns = false,
+            Columns =
+            {
+                new DataGridTextColumn
+                {
+                    Header = "Product",
+                    SortMemberPath = "Product.Name",
+                    Binding = new global::Avalonia.Data.Binding("Product.Name")
+                },
+                new DataGridTextColumn
+                {
+                    Header = "Required",
+                    SortMemberPath = "RequiredVolume",
+                    Binding = new global::Avalonia.Data.Binding("RequiredVolume")
+                },
+                new DataGridTextColumn
+                {
+                    Header = "State",
+                    SortMemberPath = "State",
+                    Binding = new global::Avalonia.Data.Binding("State")
+                }
+            }
+        };
+        AutomationProperties.SetAutomationId(grid, "RuntimeGrid");
+        return new Window { Content = grid };
+    }
+
+    private static GridAutomationCatalog CreateDelayedSearchGridCatalog()
+    {
+        return new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds(
+                    "CatalogGrid",
+                    "CatalogGrid",
+                    "CatalogGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("StableKey"),
+                    GridColumnDefinition.Auto("SelectedItem")
+                        .AsValue(GridCellValueKind.Reference)
+                        .EditWith(
+                            GridCellEditorKind.SearchPicker,
+                            new GridCellEditorParts(
+                                Input: new GridRelativeLocator("ItemPicker_Input"),
+                                Results: new GridRelativeLocator(
+                                    "ItemPicker_Results",
+                                    GridRelativeLocatorScope.DetachedPopup),
+                                OpenButton: new GridRelativeLocator("ItemPicker_Open"))),
+                    GridColumnDefinition.Auto("RequiredVolume")
+                        .AsValue(GridCellValueKind.Number)
+                        .EditWith(
+                            GridCellEditorKind.Number,
+                            new GridCellEditorParts(
+                                Input: new GridRelativeLocator("RequiredVolume_Input"),
+                                CommitTarget: new GridRelativeLocator(
+                                    "RequiredVolume_CommitTarget",
+                                    GridRelativeLocatorScope.Row),
+                                UseKeyboardInput: true)))
+                .IdentifyRowsBy("StableKey"));
+    }
+
+    private static DelayedSearchGridContext CreateDelayedSearchGridWindow(
+        bool resultsOpenFromText,
+        int numberCellMaterializationDelayMs = 0,
+        bool keepNumberCellVirtualizedAfterSearchCommit = false)
+    {
+        var row = new DelayedSearchGridRow("10", "Original item", 200m);
+        var popupLayer = new StackPanel();
+        var grid = new DelayedSearchGridHost(
+            row,
+            popupLayer,
+            resultsOpenFromText,
+            numberCellMaterializationDelayMs,
+            keepNumberCellVirtualizedAfterSearchCommit);
+        AutomationProperties.SetAutomationId(grid, "CatalogGrid");
+        var root = new StackPanel();
+        root.Children.Add(grid);
+        root.Children.Add(popupLayer);
+        var window = new Window { Content = root };
+        window.Show();
+        return new DelayedSearchGridContext(window, row, grid.Events);
     }
 
     private static Window CreateProxyEditorWindow()
@@ -863,6 +1168,491 @@ Console.WriteLine("Fake desktop");
 
         public IGridControl TypedEditorsGrid =>
             Resolve<IGridControl>(VisualGridPageDefinitions.TypedEditorsGrid);
+    }
+
+    private sealed class RuntimeGridPage : UiPage
+    {
+        public RuntimeGridPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IGridControl RuntimeGrid => Resolve<IGridControl>(RuntimeGridPageDefinitions.RuntimeGrid);
+    }
+
+    private sealed class DelayedSearchGridPage : UiPage
+    {
+        public DelayedSearchGridPage(IUiControlResolver resolver)
+            : base(resolver)
+        {
+        }
+
+        public IGridControl CatalogGrid => Resolve<IGridControl>(DelayedSearchGridPageDefinitions.CatalogGrid);
+    }
+
+    private static class RuntimeGridPageDefinitions
+    {
+        public static UiControlDefinition RuntimeGrid { get; } = new(
+            "RuntimeGrid",
+            UiControlType.Grid,
+            "RuntimeGrid");
+    }
+
+    private static class DelayedSearchGridPageDefinitions
+    {
+        public static UiControlDefinition CatalogGrid { get; } = new(
+            "CatalogGrid",
+            UiControlType.Grid,
+            "CatalogGrid");
+    }
+
+    private sealed record DelayedSearchGridContext(
+        Window Window,
+        DelayedSearchGridRow Row,
+        IReadOnlyList<string> Events);
+
+    private sealed class DelayedSearchGridHost : StackPanel
+    {
+        private readonly DelayedSearchGridRow _row;
+        private readonly StackPanel _popupLayer;
+        private readonly bool _resultsOpenFromText;
+        private readonly int _numberCellMaterializationDelayMs;
+        private readonly bool _keepNumberCellVirtualizedAfterSearchCommit;
+        private string? _pendingSelection;
+        private decimal? _pendingRequiredVolume;
+        private bool _numberCellPending;
+        private bool _numberCellMaterializationScheduled;
+
+        public DelayedSearchGridHost(
+            DelayedSearchGridRow row,
+            StackPanel popupLayer,
+            bool resultsOpenFromText,
+            int numberCellMaterializationDelayMs,
+            bool keepNumberCellVirtualizedAfterSearchCommit)
+        {
+            _row = row;
+            _popupLayer = popupLayer;
+            _resultsOpenFromText = resultsOpenFromText;
+            _numberCellMaterializationDelayMs = numberCellMaterializationDelayMs;
+            _keepNumberCellVirtualizedAfterSearchCommit = keepNumberCellVirtualizedAfterSearchCommit;
+            ItemsSource = new[] { row };
+            Columns =
+            [
+                new DelayedSearchGridColumn("StableKey", "Key"),
+                new DelayedSearchGridColumn("SelectedItem", "Item"),
+                new DelayedSearchGridColumn("RequiredVolume", "Required")
+            ];
+            Materialize();
+        }
+
+        public IEnumerable<DelayedSearchGridRow> ItemsSource { get; }
+
+        public IReadOnlyList<DelayedSearchGridColumn> Columns { get; }
+
+        public object? FocusedItem { get; set; }
+
+        public int FocusedRowIndex { get; set; }
+
+        public DelayedSearchGridColumn? FocusedColumn { get; set; }
+
+        public Control? ActiveEditor { get; private set; }
+
+        public List<string> Events { get; } = [];
+
+        public void ShowEditor()
+        {
+            if (!ReferenceEquals(FocusedItem, _row) || FocusedColumn is null)
+            {
+                return;
+            }
+
+            if (FocusedColumn.FieldName == "RequiredVolume")
+            {
+                Events.Add("show:RequiredVolume");
+                var numberInput = new TextBox
+                {
+                    Text = _row.RequiredVolume.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                };
+                AutomationProperties.SetAutomationId(numberInput, "RequiredVolume_Input");
+                var numberEditor = new DelayedNumberEditor
+                {
+                    Value = _row.RequiredVolume,
+                    Content = numberInput
+                };
+                var numberCell = Children.OfType<DelayedSearchGridCell>()
+                    .SingleOrDefault(candidate => candidate.Context.Column.FieldName == FocusedColumn.FieldName);
+                if (numberCell is not null)
+                {
+                    numberCell.Child = numberEditor;
+                }
+
+                ActiveEditor = numberEditor;
+                return;
+            }
+
+            if (FocusedColumn.FieldName != "SelectedItem")
+            {
+                return;
+            }
+
+            var cell = Children.OfType<DelayedSearchGridCell>()
+                .Single(candidate => candidate.Context.Column.FieldName == FocusedColumn.FieldName);
+
+            var editor = new StackPanel();
+            var input = new TextBox();
+            var open = new MenuItem { Header = "Open" };
+            AutomationProperties.SetAutomationId(input, "ItemPicker_Input");
+            AutomationProperties.SetAutomationId(open, "ItemPicker_Open");
+            input.TextChanged += (_, _) =>
+            {
+                Events.Add($"search:{input.Text}");
+                if (_resultsOpenFromText)
+                {
+                    global::Avalonia.Threading.Dispatcher.UIThread.Post(
+                        EnsureResults,
+                        global::Avalonia.Threading.DispatcherPriority.Background);
+                }
+            };
+            open.Click += (_, _) =>
+            {
+                Events.Add("open");
+                global::Avalonia.Threading.Dispatcher.UIThread.Post(
+                    EnsureResults,
+                    global::Avalonia.Threading.DispatcherPriority.Background);
+            };
+            editor.Children.Add(input);
+            editor.Children.Add(open);
+            cell.Child = editor;
+            ActiveEditor = editor;
+        }
+
+        public void PostEditor()
+        {
+            if (FocusedColumn?.FieldName == "RequiredVolume"
+                && ActiveEditor is DelayedNumberEditor { Value: { } value })
+            {
+                _pendingRequiredVolume = value;
+            }
+        }
+
+        public void CommitEditing()
+        {
+            if (_pendingSelection is not null)
+            {
+                _row.SelectedItem = _pendingSelection;
+                _pendingSelection = null;
+                ActiveEditor = null;
+                Events.Add("commit");
+                _numberCellPending = _keepNumberCellVirtualizedAfterSearchCommit
+                    || _numberCellMaterializationDelayMs > 0;
+                Materialize();
+                if (_numberCellPending && !_keepNumberCellVirtualizedAfterSearchCommit)
+                {
+                    ScheduleNumberCellMaterialization();
+                }
+
+                return;
+            }
+
+            if (_pendingRequiredVolume is { } requiredVolume)
+            {
+                _row.RequiredVolume = requiredVolume;
+                _pendingRequiredVolume = null;
+                ActiveEditor = null;
+                Events.Add("commit-number");
+                Materialize();
+            }
+        }
+
+        private void EnsureResults()
+        {
+            if (_popupLayer.Children.OfType<ListBox>().Any())
+            {
+                return;
+            }
+
+            var results = new ListBox { ItemsSource = new[] { "Item 42", "Item 84" } };
+            AutomationProperties.SetAutomationId(results, "ItemPicker_Results");
+            results.SelectionChanged += (_, _) =>
+            {
+                if (results.SelectedItem is not string selected)
+                {
+                    return;
+                }
+
+                _pendingSelection = selected;
+                Events.Add($"select:{selected}");
+                _popupLayer.Children.Remove(results);
+            };
+            _popupLayer.Children.Add(results);
+        }
+
+        private void Materialize()
+        {
+            Children.Clear();
+            foreach (var column in Columns)
+            {
+                if (_numberCellPending && column.FieldName == "RequiredVolume")
+                {
+                    continue;
+                }
+
+                object? value = column.FieldName switch
+                {
+                    "StableKey" => _row.StableKey,
+                    "SelectedItem" => _row.SelectedItem,
+                    "RequiredVolume" => _row.RequiredVolume,
+                    _ => null
+                };
+                Children.Add(new DelayedSearchGridCell(
+                    new DelayedSearchGridCellContext(_row, column, value)));
+            }
+        }
+
+        private void ScheduleNumberCellMaterialization()
+        {
+            if (_numberCellMaterializationScheduled)
+            {
+                return;
+            }
+
+            _numberCellMaterializationScheduled = true;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(_numberCellMaterializationDelayMs).ConfigureAwait(false);
+                HeadlessRuntime.Dispatch(() =>
+                {
+                    _numberCellPending = false;
+                    _numberCellMaterializationScheduled = false;
+                    Materialize();
+                });
+            });
+        }
+    }
+
+    private sealed class DelayedNumberEditor : ContentControl
+    {
+        public decimal? Value { get; set; }
+    }
+
+    private sealed record DelayedSearchGridColumn(string FieldName, string Header);
+
+    private sealed class DelayedSearchGridRow(
+        string stableKey,
+        string selectedItem,
+        decimal requiredVolume)
+    {
+        public string StableKey { get; } = stableKey;
+
+        public string SelectedItem { get; set; } = selectedItem;
+
+        public decimal RequiredVolume { get; set; } = requiredVolume;
+    }
+
+    private sealed record DelayedSearchGridCellContext(
+        DelayedSearchGridRow Row,
+        DelayedSearchGridColumn Column,
+        object? Value);
+
+    private sealed class DelayedSearchGridCell : Border
+    {
+        public DelayedSearchGridCell(DelayedSearchGridCellContext context)
+        {
+            Context = context;
+            DataContext = context;
+            Child = new TextBlock
+            {
+                Text = Convert.ToString(
+                    context.Value,
+                    System.Globalization.CultureInfo.InvariantCulture)
+            };
+        }
+
+        public DelayedSearchGridCellContext Context { get; }
+    }
+
+    private sealed class RuntimeGridHost : StackPanel
+    {
+        private readonly bool _opensEditor;
+
+        public RuntimeGridHost(IEnumerable<RuntimeGridRow> itemsSource, bool opensEditor)
+        {
+            ItemsSource = itemsSource;
+            _opensEditor = opensEditor;
+        }
+
+        public IEnumerable<RuntimeGridRow> ItemsSource { get; }
+
+        public IReadOnlyList<RuntimeGridColumn> Columns { get; init; } = [];
+
+        public object? FocusedItem { get; set; }
+
+        public int FocusedRowIndex { get; set; }
+
+        public RuntimeGridColumn? FocusedColumn { get; set; }
+
+        public Control? ActiveEditor { get; private set; }
+
+        public int ScrollIntoViewCalls { get; private set; }
+
+        public int ShowEditorCalls { get; private set; }
+
+        public int CommitEditingCalls { get; private set; }
+
+        public int PostEditorCalls { get; private set; }
+
+        private decimal? _postedRequiredVolume;
+
+        public void MaterializeFirstRow()
+        {
+            var first = ItemsSource.FirstOrDefault();
+            if (first is not null)
+            {
+                Materialize(first);
+            }
+        }
+
+        public void ScrollIntoView(RuntimeGridRow row)
+        {
+            ScrollIntoViewCalls++;
+            Materialize(row);
+        }
+
+        public void ShowEditor()
+        {
+            ShowEditorCalls++;
+            if (!_opensEditor)
+            {
+                return;
+            }
+
+            if (FocusedItem is not RuntimeGridRow row || FocusedColumn is null)
+            {
+                return;
+            }
+
+            var cell = Children
+                .OfType<RuntimeGridCell>()
+                .SingleOrDefault(candidate =>
+                    ReferenceEquals(candidate.Context.Row, row)
+                    && ReferenceEquals(candidate.Context.Column, FocusedColumn));
+            if (cell is null)
+            {
+                return;
+            }
+
+            var editor = new TextBox
+            {
+                Text = Convert.ToString(cell.Context.Value, System.Globalization.CultureInfo.InvariantCulture)
+            };
+            cell.Child = editor;
+            ActiveEditor = editor;
+        }
+
+        public void PostEditor()
+        {
+            PostEditorCalls++;
+            if (FocusedItem is not RuntimeGridRow row
+                || FocusedColumn?.FieldName != "RequiredVolume"
+                || ActiveEditor is not TextBox editor
+                || !decimal.TryParse(
+                    editor.Text,
+                    System.Globalization.NumberStyles.Number,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var value))
+            {
+                return;
+            }
+
+            _postedRequiredVolume = value;
+        }
+
+        public void CommitEditing()
+        {
+            CommitEditingCalls++;
+            if (FocusedItem is not RuntimeGridRow row
+                || _postedRequiredVolume is not { } value)
+            {
+                return;
+            }
+
+            row.RequiredVolume = value;
+            _postedRequiredVolume = null;
+            ActiveEditor = null;
+            Materialize(row);
+        }
+
+        public void CancelEditing()
+        {
+            ActiveEditor = null;
+        }
+
+        private void Materialize(RuntimeGridRow row)
+        {
+            Children.Clear();
+            foreach (var column in Columns)
+            {
+                object? value = column.FieldName switch
+                {
+                    "PositionNumber" => row.PositionNumber,
+                    "Product" => row.Product,
+                    "RequiredVolume" => row.RequiredVolume,
+                    "State" => row.State,
+                    _ => null
+                };
+                Children.Add(new RuntimeGridCell(new RuntimeCellContext(row, column, value)));
+            }
+        }
+    }
+
+    private sealed record RuntimeGridColumn(string FieldName, string Header);
+
+    private sealed class RuntimeGridRow(
+        int positionNumber,
+        RuntimeReference product,
+        decimal requiredVolume,
+        RuntimeGridState state)
+    {
+        public int PositionNumber { get; } = positionNumber;
+
+        public RuntimeReference Product { get; } = product;
+
+        public decimal RequiredVolume { get; set; } = requiredVolume;
+
+        public RuntimeGridState State { get; } = state;
+    }
+
+    private enum RuntimeGridState
+    {
+        [System.ComponentModel.DataAnnotations.Display(Name = "Pending")]
+        Pending,
+
+        [System.ComponentModel.DataAnnotations.Display(Name = "Ready for processing")]
+        Ready
+    }
+
+    private sealed record RuntimeReference(string Name);
+
+    private sealed record RuntimeCellContext(
+        RuntimeGridRow Row,
+        RuntimeGridColumn Column,
+        object? Value);
+
+    private sealed class RuntimeGridCell : Border
+    {
+        public RuntimeGridCell(RuntimeCellContext context)
+        {
+            Context = context;
+            DataContext = context;
+            Child = new TextBlock
+            {
+                Text = Convert.ToString(
+                    context.Value,
+                    System.Globalization.CultureInfo.InvariantCulture)
+            };
+        }
+
+        public RuntimeCellContext Context { get; }
     }
 
     public static class VisualGridPageDefinitions

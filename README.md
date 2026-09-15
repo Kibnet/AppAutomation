@@ -807,6 +807,19 @@ Page.ApplySearchFromHistory(static page => page.TableSearch, "previous orders");
 
 `EnterSearch`, `ClearSearch` и `ApplySearchFromHistory` покрывают ввод, очистку и выбор из истории. История остаётся необязательным состоянием того же контрола; `SearchHistoryResultsKind.ListBox` нужен только для результатов в `ListBox`. `ISearchPickerControl` остаётся отдельной абстракцией для relation picker, например `ServerSearchComboBox`.
 
+Для составного селектора `SingleSelectParts.SelectedValueLocator` указывает на **подтверждённое значение**, доступное и при закрытом popup, а не на поисковый input. Пустой источник означает отсутствие выбора; недоступный — ошибку конфигурации/чтения. Для `SearchAndSelect` используйте существующую композицию:
+
+```csharp
+var resolver = innerResolver
+    .WithSingleSelect("ItemPickerResults", new SingleSelectParts(
+        "ItemPickerRoot", "ItemPickerPopupItems",
+        OpenButtonLocator: "ItemPickerOpen", SelectedValueLocator: "ItemPickerValue",
+        ResultsKind: SingleSelectResultsKind.ListBox))
+    .WithSearchPicker("ItemPicker", new SearchPickerParts("ItemPickerInput", "ItemPickerRoot"));
+```
+
+Одинаковая регистрация применяется в Headless и FlaUI. Суффикс `Results` — имя составной части SearchPicker; это не требование к CLR-типу внешнего редактора. Пример с реальной связанной UI-частью есть в `SampleSearchPicker`.
+
 Один catalog передаётся Recorder, Headless и FlaUI. Native grid может отдать metadata автоматически; для templated grid достаточно декларативно указать колонки, типы редакторов и стабильный ключ строки:
 
 ```csharp

@@ -7,17 +7,47 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class SingleSelectControlTests
 {
     [Test]
-    public async Task ConfirmedListSelection_UsesConfiguredPrimitiveParts()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ConfirmedListSelection_UsesConfiguredPrimitiveParts(bool useSearchPicker)
     {
         var fixture = new SingleSelectFixture("Item 42", "Search result");
+        string? ReadSelection() => useSearchPicker
+            ? fixture.Page.ItemPicker.SelectedItemText
+            : fixture.Page.CategorySelector.SelectedItem?.Text;
 
-        fixture.Page.SelectComboItem(static page => page.CategorySelector, "Item 42");
+        fixture.CommittedValue.Text = "Initial item";
+        fixture.Input.Enter("Uncommitted query");
+        await Assert.That(ReadSelection()).IsEqualTo("Initial item");
+        await Assert.That(fixture.Actions).IsEmpty();
+
+        if (useSearchPicker)
+        {
+            fixture.Page.SearchAndSelect(static page => page.ItemPicker, "Item", "Item 42");
+        }
+        else
+        {
+            fixture.Page.SelectComboItem(static page => page.CategorySelector, "Item 42");
+        }
 
         using (Assert.Multiple())
         {
             await Assert.That(string.Join(" > ", fixture.Actions)).IsEqualTo("Open > Select:Item 42 > Confirm");
-            await Assert.That(fixture.Page.CategorySelector.SelectedItem?.Text).IsEqualTo("Item 42");
+            await Assert.That(ReadSelection()).IsEqualTo("Item 42");
         }
+
+        fixture.Input.Enter("Another query");
+        await Assert.That(ReadSelection()).IsEqualTo("Item 42");
+        fixture.CommittedValue.Text = string.Empty;
+        await Assert.That(ReadSelection()).IsNull();
+        fixture.CommittedValue.Text = "Replacement item";
+        await Assert.That(ReadSelection()).IsEqualTo("Replacement item");
+        fixture.CommittedValue.IsAvailable = false;
+        Assert.Throws<UiControlResolutionException>(() => ReadSelection());
+        fixture.CommittedValue.IsAvailable = true;
+        fixture.ValueAvailable = false;
+        var unavailable = Assert.Throws<UiControlResolutionException>(() => ReadSelection());
+        await Assert.That(unavailable.Message).Contains("CategorySelectorValue");
     }
 
     [Test]
@@ -122,7 +152,7 @@ public sealed class SingleSelectControlTests
             OpenButton = new FakeButton("CategorySelectorOpen", () =>
             {
                 Actions.Add("Open");
-                PopupRoot.IsAvailable = true;
+                PopupRoot.IsAvailable = !PopupRoot.IsAvailable;
             });
             CommittedValue = new FakeTextBox("CategorySelectorValue");
             ConfirmButton = new FakeButton("CategorySelectorConfirm", () =>
@@ -139,17 +169,20 @@ public sealed class SingleSelectControlTests
                 }
                 PopupRoot.IsAvailable = false;
             });
-            _resolver = this.WithSingleSelect(
-                "CategorySelector",
-                SingleSelectParts.ByAutomationIds(
+            var parts = SingleSelectParts.ByAutomationIds(
                     "CategorySelector",
                     "CategorySelectorResults",
+                    inputAutomationId: "CategorySelectorInput",
                     selectedValueAutomationId: "CategorySelectorValue",
                     openButtonAutomationId: "CategorySelectorOpen",
                     popupRootAutomationId: "CategorySelectorPopup",
                     confirmButtonAutomationId: "CategorySelectorConfirm",
                     resultsKind: resultsKind,
-                    commitMode: SingleSelectCommitMode.Confirm));
+                    commitMode: SingleSelectCommitMode.Confirm);
+            _resolver = this.WithSingleSelect("CategorySelector", parts)
+                .WithSingleSelect("ItemPickerResults", parts)
+                .WithSearchPicker("ItemPicker", new SearchPickerParts(
+                    "CategorySelectorInput", "CategorySelector"));
             Page = new SingleSelectPage(_resolver);
         }
 
@@ -158,6 +191,10 @@ public sealed class SingleSelectControlTests
         public bool CommitSelection { get; init; } = true;
 
         public FakeTextBox CommittedValue { get; }
+
+        public FakeTextBox Input { get; } = new("CategorySelectorInput");
+
+        public bool ValueAvailable { get; set; } = true;
 
         public FakeButton OpenButton { get; }
 
@@ -176,8 +213,16 @@ public sealed class SingleSelectControlTests
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
+            if ((definition.LocatorValue == "CategorySelectorValue" && !ValueAvailable)
+                || (definition.LocatorValue == "CategorySelectorResults" && !PopupRoot.IsAvailable))
+            {
+                throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                    $"Part '{definition.LocatorValue}' is unavailable.");
+            }
+
             object control = definition.LocatorValue switch
             {
+                "CategorySelectorInput" when typeof(TControl) == typeof(ITextBoxControl) => Input,
                 "CategorySelector" when typeof(TControl) == typeof(IUiControl) => Root,
                 "CategorySelectorOpen" when typeof(TControl) == typeof(IButtonControl) => OpenButton,
                 "CategorySelectorConfirm" when typeof(TControl) == typeof(IButtonControl) => ConfirmButton,
@@ -208,6 +253,9 @@ public sealed class SingleSelectControlTests
         }
 
         public IComboBoxControl CategorySelector => Resolve<IComboBoxControl>(CategorySelectorDefinition);
+
+        public ISearchPickerControl ItemPicker => Resolve<ISearchPickerControl>(new UiControlDefinition(
+            "ItemPicker", UiControlType.SearchPicker, "CategorySelector"));
     }
 
     private sealed class FakeButton : IButtonControl
@@ -229,7 +277,7 @@ public sealed class SingleSelectControlTests
         public void Invoke() => _invoke();
     }
 
-    private sealed class FakeTextBox(string automationId) : ITextBoxControl
+    private sealed class FakeTextBox(string automationId) : ITextBoxControl, IUiControlAvailability
     {
         public string AutomationId { get; } = automationId;
 
@@ -238,6 +286,8 @@ public sealed class SingleSelectControlTests
         public bool IsEnabled => true;
 
         public string Text { get; set; } = string.Empty;
+
+        public bool IsAvailable { get; set; } = true;
 
         public void Enter(string value) => Text = value;
     }

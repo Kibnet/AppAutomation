@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Read Headless ListBox captions from real item templates and accessibility names consistently for enumeration, selection and selected text, retaining duplicate-caption errors.
+- Read composite selector commits through the existing SingleSelect value part instead of search input or requested-value caches; support composing it with SearchPicker without reopening an active popup.
+- Honor the remaining grid-operation timeout while Headless waits for a newly materialized cell after a preceding edit.
+- Activate catalog-backed Headless grid editors before requiring a visual cell and use the current `ActiveEditor` when a wide-table cell remains virtualized.
+- Apply Number edits to a composite Headless editor's public `Value` before posting and committing the grid transaction.
+- Normalize native grid row projections by configured stable identity and compatible scroll/row geometry even when non-identity cells differ, while preserving ambiguity across distinct vertical rows.
+- Accept measured FlaUI scrollbar movement or a reached boundary when visible native rows remain unchanged.
+- Recognize the start of FlaUI native grids through a usable ScrollPattern or the scrollbar RangeValue fallback, avoiding reset waits when the first rows are already visible.
+- Remove the obsolete sample automation-bridge tables and their manual action controls; the native three-row DataGrid is now the single table-editor showcase.
+- Resolve catalog-declared stable row identities, including hidden row metadata, from normalized visible FlaUI projections before attempting virtualized scroll traversal, while preserving visible ambiguity.
+- Re-resolve virtualized SearchPicker list-item containers after result stabilization and scrolling, preferring `SelectionItemPattern` before a freshly verified click fallback.
+- Stop native FlaUI grid scans at known scroll boundaries and distinguish repeated row observations from recycled containers and distinct matching rows.
+- Read effective enabled state in Headless, including command availability and disabled ancestors, and reflect changes in both directions.
 - Save Recorder controls and scenarios as a rollback-protected file transaction; retain recovery on failed saves.
 - Reject ambiguous scoped controls and propagate composite configuration errors instead of treating them as missing popup parts.
 - Share grid projection, formatting and explicit culture handling across value reads and stable-row matching.

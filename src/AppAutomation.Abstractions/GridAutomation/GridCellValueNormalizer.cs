@@ -15,7 +15,7 @@ internal static class GridCellValueNormalizer
         var cultureName = column.CultureName ?? snapshot.CultureName;
         if (snapshot.IsDisplayOnly)
         {
-            return NormalizeTypedValue(snapshot with { ValueKind = kind, CultureName = cultureName });
+            return NormalizeTypedValue(snapshot with { ValueKind = kind, CultureName = cultureName }, column);
         }
 
         if (snapshot.IsNull && string.IsNullOrWhiteSpace(column.DisplayValuePath))
@@ -47,7 +47,7 @@ internal static class GridCellValueNormalizer
             RawValue = projectedValue,
             ValueKind = kind,
             CultureName = cultureName
-        });
+        }, column);
         return normalized with
         {
             DisplayText = FormatProjectedValue(normalized.RawValue, snapshot.DisplayText, column)
@@ -70,13 +70,23 @@ internal static class GridCellValueNormalizer
             definition = definition.FormatWith(column.FormatString, column.CultureName);
         }
 
+        if (column.BooleanTrueDisplayText is not null
+            && column.BooleanFalseDisplayText is not null)
+        {
+            definition = definition.WithBooleanDisplayText(
+                column.BooleanTrueDisplayText,
+                column.BooleanFalseDisplayText);
+        }
+
         return Normalize(
             gridPropertyName,
             snapshot with { CultureName = column.CultureName ?? snapshot.CultureName },
             definition);
     }
 
-    private static GridCellValueSnapshot NormalizeTypedValue(GridCellValueSnapshot snapshot)
+    private static GridCellValueSnapshot NormalizeTypedValue(
+        GridCellValueSnapshot snapshot,
+        GridColumnDefinition column)
     {
         var rawValue = snapshot.ValueKind switch
         {
@@ -84,6 +94,8 @@ internal static class GridCellValueNormalizer
             GridCellValueKind.Date when GridValueConversion.TryConvertDate(snapshot, out var date, out _) => date,
             GridCellValueKind.Time when GridValueConversion.TryConvertTime(snapshot, out var time, out _) => time,
             GridCellValueKind.Boolean when snapshot.RawValue is bool value => value,
+            GridCellValueKind.Boolean when snapshot.DisplayText is { } text
+                && TryParseConfiguredBoolean(text, column, out var configuredBoolean) => configuredBoolean,
             GridCellValueKind.Boolean when bool.TryParse(snapshot.DisplayText, out var boolean) => boolean,
             _ => snapshot.RawValue
         };
@@ -147,6 +159,15 @@ internal static class GridCellValueNormalizer
             return providerDisplayText;
         }
 
+        if (value is bool boolean
+            && column.BooleanTrueDisplayText is not null
+            && column.BooleanFalseDisplayText is not null)
+        {
+            return boolean
+                ? column.BooleanTrueDisplayText
+                : column.BooleanFalseDisplayText;
+        }
+
         if (string.IsNullOrWhiteSpace(column.FormatString))
         {
             return string.IsNullOrWhiteSpace(column.DisplayValuePath)
@@ -158,12 +179,33 @@ internal static class GridCellValueNormalizer
     }
 
     public static string? FormatValue(object? value, GridColumnDefinition? column) =>
-        value is IFormattable formattable
-            ? formattable.ToString(column?.FormatString, ResolveCulture(column))
-            : Convert.ToString(value, ResolveCulture(column));
+        GridCellDisplayFormatter.Format(value, column?.FormatString, column?.CultureName);
 
     private static CultureInfo ResolveCulture(GridColumnDefinition? column) =>
         string.IsNullOrWhiteSpace(column?.CultureName)
             ? CultureInfo.InvariantCulture
             : CultureInfo.GetCultureInfo(column.CultureName);
+
+    private static bool TryParseConfiguredBoolean(
+        string displayText,
+        GridColumnDefinition column,
+        out bool value)
+    {
+        if (column.BooleanTrueDisplayText is not null
+            && string.Equals(displayText, column.BooleanTrueDisplayText, StringComparison.Ordinal))
+        {
+            value = true;
+            return true;
+        }
+
+        if (column.BooleanFalseDisplayText is not null
+            && string.Equals(displayText, column.BooleanFalseDisplayText, StringComparison.Ordinal))
+        {
+            value = false;
+            return true;
+        }
+
+        value = false;
+        return false;
+    }
 }
