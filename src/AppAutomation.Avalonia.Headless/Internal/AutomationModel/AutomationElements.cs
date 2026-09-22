@@ -1065,76 +1065,6 @@ internal class Grid : AutomationElement
         });
     }
 
-    public void SetCellValue(int rowIndex, int columnIndex, string value)
-    {
-        Ui(() =>
-        {
-            var items = ReadItems(Native);
-            if (rowIndex < 0 || rowIndex >= items.Length)
-            {
-                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
-            }
-
-            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
-            }
-
-            var path = ReadColumnPath(Native.Columns[columnIndex]);
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
-            }
-
-            WritePropertyPath(items[rowIndex], path, value);
-            return true;
-        });
-    }
-
-    public void ValidateCellValue(int rowIndex, int columnIndex, string value)
-    {
-        Ui(() =>
-        {
-            var items = ReadItems(Native);
-            if (rowIndex < 0 || rowIndex >= items.Length)
-            {
-                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
-            }
-
-            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
-            }
-
-            var path = ReadColumnPath(Native.Columns[columnIndex]);
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
-            }
-
-            object? owner = items[rowIndex];
-            var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            for (var index = 0; index < segments.Length - 1; index++)
-            {
-                owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
-            }
-
-            if (owner is null || segments.Length == 0)
-            {
-                throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
-            }
-
-            var property = ReadProperty(owner, segments[^1]);
-            if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
-            {
-                throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
-            }
-
-            _ = ConvertText(value, property.PropertyType);
-            return true;
-        });
-    }
-
     public GridCellValueSnapshot ReadCellValue(int rowIndex, int columnIndex)
     {
         return Ui(() =>
@@ -1255,29 +1185,6 @@ internal class Grid : AutomationElement
             : null;
     }
 
-    private static void WritePropertyPath(object? item, string path, string value)
-    {
-        object? owner = item;
-        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        for (var index = 0; index < segments.Length - 1; index++)
-        {
-            owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
-        }
-
-        if (owner is null || segments.Length == 0)
-        {
-            throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
-        }
-
-        var property = ReadProperty(owner, segments[^1]);
-        if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
-        {
-            throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
-        }
-
-        property.SetValue(owner, ConvertText(value, property.PropertyType));
-    }
-
     private static PropertyInfo? ReadProperty(object owner, string name)
     {
         var matches = owner.GetType()
@@ -1328,47 +1235,6 @@ internal class Grid : AutomationElement
         };
     }
 
-    private static object? ConvertText(string value, Type targetType)
-    {
-        var nullableType = Nullable.GetUnderlyingType(targetType);
-        var effectiveType = nullableType ?? targetType;
-        if (nullableType is not null && string.IsNullOrEmpty(value))
-        {
-            return null;
-        }
-
-        if (effectiveType == typeof(string))
-        {
-            return value;
-        }
-
-        if (effectiveType.IsEnum)
-        {
-            return Enum.Parse(effectiveType, value, ignoreCase: false);
-        }
-
-        if (effectiveType == typeof(DateTime))
-        {
-            return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
-        }
-
-        if (effectiveType == typeof(DateTimeOffset))
-        {
-            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
-        }
-
-        if (effectiveType == typeof(TimeSpan))
-        {
-            return TimeSpan.Parse(value, CultureInfo.InvariantCulture);
-        }
-
-        if (effectiveType == typeof(Guid))
-        {
-            return Guid.Parse(value);
-        }
-
-        return Convert.ChangeType(value, effectiveType, CultureInfo.InvariantCulture);
-    }
 }
 
 internal class DataGridView : Grid

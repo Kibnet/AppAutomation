@@ -108,26 +108,32 @@ internal static class VirtualizedExactItemSelector
             var snapshotStartedAt = stopwatch.ElapsedMilliseconds;
             var candidates = readCandidates();
             var candidateValues = candidates
-                .Select(candidate => new
+                .Select(candidate =>
                 {
-                    Candidate = candidate,
-                    Text = readCandidateText(candidate)
+                    var container = resolveContainer(candidate);
+                    return new
+                    {
+                        CandidateText = readCandidateText(candidate),
+                        Container = container,
+                        ContainerIdentity = getContainerIdentity(container),
+                        ContainerText = readContainerText(container)
+                    };
                 })
                 .ToArray();
             var containers = candidateValues
-                .Select(static candidate => candidate.Candidate)
-                .Select(resolveContainer)
-                .DistinctBy(getContainerIdentity)
+                .DistinctBy(static candidate => candidate.ContainerIdentity)
                 .ToArray();
             var matches = candidateValues
                 .Where(candidate => string.Equals(
-                    Normalize(candidate.Text),
+                    Normalize(candidate.CandidateText),
                     normalizedTarget,
                     StringComparison.OrdinalIgnoreCase))
-                .Select(static candidate => candidate.Candidate)
-                .Select(resolveContainer)
-                .DistinctBy(getContainerIdentity)
-                .Where(IsExactMatch)
+                .Where(candidate => string.Equals(
+                    Normalize(candidate.ContainerText),
+                    normalizedTarget,
+                    StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(static candidate => candidate.ContainerIdentity)
+                .Select(static candidate => candidate.Container)
                 .Take(2)
                 .ToArray();
             snapshotCount++;
@@ -136,7 +142,7 @@ internal static class VirtualizedExactItemSelector
             lastCandidateTexts = string.Join(
                 ", ",
                 candidateValues
-                    .Select(static candidate => Normalize(candidate.Text))
+                    .Select(static candidate => Normalize(candidate.CandidateText))
                     .Where(static text => text.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .Take(10));
@@ -145,8 +151,8 @@ internal static class VirtualizedExactItemSelector
                 '\u001e',
                 containers.Select(container => string.Join(
                     '\u001f',
-                    getContainerIdentity(container),
-                    Normalize(readContainerText(container)))));
+                    container.ContainerIdentity,
+                    Normalize(container.ContainerText))));
             return new SelectionSnapshot<TContainer>(signature, matches);
         }
 

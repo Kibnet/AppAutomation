@@ -10,19 +10,18 @@ internal static class GridScrollBoundary
         double? rangeValue,
         bool forward)
     {
-        if (patternScrollable == false)
-        {
-            return true;
-        }
-
-        if (patternPercent is >= 0 and { } percent)
+        if (patternScrollable != false && patternPercent is >= 0 and { } percent)
         {
             return forward ? percent >= 100 : percent <= 0;
         }
 
-        return rangeMinimum is { } minimum
+        if (rangeMinimum is { } minimum
             && rangeMaximum is { } maximum
-            && rangeValue is { } value
-            && (maximum <= minimum || (forward ? value >= maximum : value <= minimum));
+            && rangeValue is { } value)
+        {
+            return maximum <= minimum || (forward ? value >= maximum : value <= minimum);
+        }
+
+        return patternScrollable == false;
     }
 }

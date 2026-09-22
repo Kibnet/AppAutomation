@@ -31,6 +31,13 @@ internal static class GridAutomationColumnResolver
         var merged = new List<GridColumnDefinition>(runtimeColumnNames.Count + remaining.Count);
         foreach (var runtimeName in runtimeColumnNames)
         {
+            // Keep unnamed entries in the provider metadata so later physical indexes stay exact,
+            // but do not invent an addressable logical column for a caption the user cannot name.
+            if (string.IsNullOrWhiteSpace(runtimeName))
+            {
+                continue;
+            }
+
             var matches = remaining
                 .Where(column =>
                     column.RuntimeColumnName is not null

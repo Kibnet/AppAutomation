@@ -345,6 +345,7 @@ public sealed class GridRowSelectorTests
         {
             await Assert.That(resolution.State).IsEqualTo(GridRowResolutionState.Unique);
             await Assert.That(copied).IsEqualTo("Да");
+            await Assert.That(grid.IndexedOperationCount).IsEqualTo(1);
         }
     }
 

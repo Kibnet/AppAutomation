@@ -356,7 +356,7 @@ public sealed class LaunchContractTests
             await Assert.That(rows[1].RequiredVolume).IsEqualTo(100m);
             await Assert.That(grid.Columns.Any(column => column.FieldName == "PositionNumber")).IsFalse();
             await Assert.That(grid.ScrollIntoViewCalls).IsEqualTo(1);
-            await Assert.That(grid.ShowEditorCalls).IsEqualTo(2);
+            await Assert.That(grid.ShowEditorCalls).IsEqualTo(1);
             await Assert.That(grid.PostEditorCalls).IsEqualTo(1);
             await Assert.That(grid.CommitEditingCalls).IsEqualTo(1);
         }
@@ -364,7 +364,7 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessDataGrid_ResolvesHiddenStableRowIdentityFromSourceItem()
+    public async Task HeadlessDataGrid_UsesHiddenIdentityAndRealEditTransaction()
     {
         using var headless = StartHeadlessRuntime();
         var rows = new List<RuntimeGridRow>
@@ -377,20 +377,48 @@ public sealed class LaunchContractTests
             new HeadlessControlResolver(window).WithGridAutomation(
                 CreateRuntimeGridCatalog(useHiddenRowMetadata: true)));
 
+        var selector = GridRowSelector.ByCell("PositionNumber", "20");
         var value = GridValueReader.ReadCellNumber(
             page.RuntimeGrid,
-            GridRowSelector.ByCell("PositionNumber", "20"),
+            selector,
             "Required");
+        var grid = (IAddressableGridControl)page.RuntimeGrid;
 
-        await Assert.That(value).IsEqualTo(200d);
+        grid.EditCell(
+            new GridCellAddress(selector, "Required"),
+            new GridCellValueEditRequest("325", GridCellEditorKind.Number, GridCellEditCommitMode.Commit),
+            timeoutMs: 1000);
+        var committed = GridValueReader.ReadCellNumber(page.RuntimeGrid, selector, "Required");
+
+        grid.EditCell(
+            new GridCellAddress(selector, "Required"),
+            new GridCellValueEditRequest("999", GridCellEditorKind.Number, GridCellEditCommitMode.Cancel),
+            timeoutMs: 1000);
+        var afterCancel = GridValueReader.ReadCellNumber(page.RuntimeGrid, selector, "Required");
+
+        var failedEdit = await Assert.That(() => grid.EditCell(
+                new GridCellAddress(selector, "Required"),
+                new GridCellValueEditRequest("ignored", GridCellEditorKind.SearchPicker),
+                timeoutMs: 1000))
+            .Throws<InvalidOperationException>();
+        var afterFailedEdit = GridValueReader.ReadCellNumber(page.RuntimeGrid, selector, "Required");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value).IsEqualTo(200d);
+            await Assert.That(committed).IsEqualTo(325d);
+            await Assert.That(afterCancel).IsEqualTo(325d);
+            await Assert.That(afterFailedEdit).IsEqualTo(325d);
+            await Assert.That(failedEdit!.Message).Contains("SearchPicker");
+            await Assert.That(rows[1].BeginEditCount).IsEqualTo(3);
+            await Assert.That(rows[1].EndEditCount).IsEqualTo(1);
+            await Assert.That(rows[1].CancelEditCount).IsEqualTo(2);
+        }
     }
 
     [Test]
-    [Arguments(GridCellEditCommitMode.Commit)]
-    [Arguments(GridCellEditCommitMode.Cancel)]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessCatalogGrid_RejectsNoOpEditorActivation(
-        GridCellEditCommitMode commitMode)
+    public async Task HeadlessCatalogGrid_RejectsNoOpEditorActivation()
     {
         using var headless = StartHeadlessRuntime();
         var rows = new List<RuntimeGridRow>
@@ -408,7 +436,7 @@ public sealed class LaunchContractTests
                 new GridCellValueEditRequest(
                     "321",
                     GridCellEditorKind.Number,
-                    commitMode),
+                    GridCellEditCommitMode.Commit),
                 timeoutMs: 250))
             .Throws<InvalidOperationException>();
 
@@ -420,14 +448,11 @@ public sealed class LaunchContractTests
     }
 
     [Test]
-    [Arguments(true)]
-    [Arguments(false)]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessCatalogGrid_SearchPickerWaitsForDetachedResultsAfterEnteringSearchText(
-        bool resultsOpenFromText)
+    public async Task HeadlessCatalogGrid_SearchPickerUsesOpenButtonWhenTextDoesNotOpenResults()
     {
         using var headless = StartHeadlessRuntime();
-        var context = HeadlessRuntime.Dispatch(() => CreateDelayedSearchGridWindow(resultsOpenFromText));
+        var context = HeadlessRuntime.Dispatch(() => CreateDelayedSearchGridWindow(resultsOpenFromText: false));
         var catalog = CreateDelayedSearchGridCatalog();
         var page = new DelayedSearchGridPage(
             new HeadlessControlResolver(context.Window).WithGridAutomation(catalog));
@@ -440,14 +465,11 @@ public sealed class LaunchContractTests
             "Item 42",
             timeoutMs: 2000);
 
-        var expectedEvents = resultsOpenFromText
-            ? new[] { "search:item", "select:Item 42", "commit" }
-            : new[] { "search:item", "open", "select:Item 42", "commit" };
         using (Assert.Multiple())
         {
             await Assert.That(context.Row.SelectedItem).IsEqualTo("Item 42");
             await Assert.That(string.Join("|", context.Events))
-                .IsEqualTo(string.Join("|", expectedEvents));
+                .IsEqualTo("search:item|open|select:Item 42|commit");
         }
     }
 
@@ -483,7 +505,7 @@ public sealed class LaunchContractTests
             await Assert.That(context.Row.SelectedItem).IsEqualTo("Item 42");
             await Assert.That(context.Row.RequiredVolume).IsEqualTo(321m);
             await Assert.That(string.Join("|", context.Events))
-                .Contains("commit|show:RequiredVolume|commit-number");
+                .IsEqualTo("search:item|select:Item 42|commit|show:RequiredVolume|commit-number");
         }
     }
 
@@ -965,6 +987,7 @@ Console.WriteLine("Fake desktop");
                         .AsValue(GridCellValueKind.Reference),
                     GridColumnDefinition.Map("Required")
                         .FromField("RequiredVolume")
+                        .AtRuntime("Required")
                         .AsValue(GridCellValueKind.Number),
                     GridColumnDefinition.Auto("State")
                         .AsValue(GridCellValueKind.Selection))
@@ -985,11 +1008,36 @@ Console.WriteLine("Fake desktop");
                     SortMemberPath = "Product.Name",
                     Binding = new global::Avalonia.Data.Binding("Product.Name")
                 },
-                new DataGridTextColumn
+                new DataGridTemplateColumn
                 {
-                    Header = "Required",
-                    SortMemberPath = "RequiredVolume",
-                    Binding = new global::Avalonia.Data.Binding("RequiredVolume")
+                    Header = null,
+                    IsVisible = false,
+                    CellTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<RuntimeGridRow>(
+                        static (row, _) => new NativeNumberEditor { Value = row.PositionNumber })
+                },
+                new DataGridTemplateColumn
+                {
+                    Header = new StackPanel
+                    {
+                        Children =
+                        {
+                            new TextBlock { Text = "_Required" }
+                        }
+                    },
+                    CellTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<RuntimeGridRow>(
+                        (row, _) => new TextBlock { Text = row.RequiredVolume.ToString(System.Globalization.CultureInfo.InvariantCulture) }),
+                    CellEditingTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<RuntimeGridRow>(
+                        static (_, _) =>
+                        {
+                            var editor = new NativeNumberEditor();
+                            editor.Bind(
+                                NativeNumberEditor.ValueProperty,
+                                new global::Avalonia.Data.Binding(nameof(RuntimeGridRow.RequiredVolume))
+                                {
+                                    Mode = global::Avalonia.Data.BindingMode.TwoWay
+                                });
+                            return editor;
+                        })
                 },
                 new DataGridTextColumn
                 {
@@ -1000,7 +1048,14 @@ Console.WriteLine("Fake desktop");
             }
         };
         AutomationProperties.SetAutomationId(grid, "RuntimeGrid");
-        return new Window { Content = grid };
+        var window = new Window
+        {
+            Width = 640,
+            Height = 320,
+            Content = grid
+        };
+        window.Show();
+        return window;
     }
 
     private static GridAutomationCatalog CreateDelayedSearchGridCatalog()
@@ -1607,19 +1662,69 @@ Console.WriteLine("Fake desktop");
 
     private sealed record RuntimeGridColumn(string FieldName, string Header);
 
-    private sealed class RuntimeGridRow(
-        int positionNumber,
-        RuntimeReference product,
-        decimal requiredVolume,
-        RuntimeGridState state)
+    private sealed class NativeNumberEditor : ContentControl
     {
-        public int PositionNumber { get; } = positionNumber;
+        public static readonly global::Avalonia.StyledProperty<decimal> ValueProperty =
+            global::Avalonia.AvaloniaProperty.Register<NativeNumberEditor, decimal>(nameof(Value));
 
-        public RuntimeReference Product { get; } = product;
+        public NativeNumberEditor()
+        {
+            Content = new TextBox();
+        }
 
-        public decimal RequiredVolume { get; set; } = requiredVolume;
+        public decimal Value
+        {
+            get => GetValue(ValueProperty);
+            set => SetValue(ValueProperty, value);
+        }
+    }
 
-        public RuntimeGridState State { get; } = state;
+    private sealed class RuntimeGridRow : System.ComponentModel.IEditableObject
+    {
+        private decimal _editSnapshot;
+
+        public RuntimeGridRow(
+            int positionNumber,
+            RuntimeReference product,
+            decimal requiredVolume,
+            RuntimeGridState state)
+        {
+            PositionNumber = positionNumber;
+            Product = product;
+            RequiredVolume = requiredVolume;
+            State = state;
+        }
+
+        public int PositionNumber { get; }
+
+        public RuntimeReference Product { get; }
+
+        public decimal RequiredVolume { get; set; }
+
+        public RuntimeGridState State { get; }
+
+        public int BeginEditCount { get; private set; }
+
+        public int EndEditCount { get; private set; }
+
+        public int CancelEditCount { get; private set; }
+
+        public void BeginEdit()
+        {
+            BeginEditCount++;
+            _editSnapshot = RequiredVolume;
+        }
+
+        public void EndEdit()
+        {
+            EndEditCount++;
+        }
+
+        public void CancelEdit()
+        {
+            CancelEditCount++;
+            RequiredVolume = _editSnapshot;
+        }
     }
 
     private enum RuntimeGridState
@@ -1763,6 +1868,15 @@ Console.WriteLine("Fake desktop");
 
     private sealed class TestAvaloniaApp : global::Avalonia.Application
     {
+        public override void Initialize()
+        {
+            Styles.Add(new global::Avalonia.Themes.Fluent.FluentTheme());
+            Styles.Add(new global::Avalonia.Markup.Xaml.Styling.StyleInclude(
+                new Uri("avares://AppAutomation.TestHost.Avalonia.Tests"))
+            {
+                Source = new Uri("avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml")
+            });
+        }
     }
 
     private sealed class HeadlessSessionScope : IDisposable

@@ -383,6 +383,8 @@ public sealed class FlaUiControlResolverTests
         ];
         string? selected = null;
         var reads = 0;
+        var resolutionsBySnapshot = new Dictionary<int, int>();
+        var candidateCountsBySnapshot = new Dictionary<int, int>();
 
         VirtualizedExactItemSelector.Select(
             expected,
@@ -390,10 +392,15 @@ public sealed class FlaUiControlResolverTests
             () =>
             {
                 reads++;
+                candidateCountsBySnapshot[reads] = candidates.Count;
                 return candidates;
             },
             static candidate => candidate.Caption,
-            static candidate => candidate.Container,
+            candidate =>
+            {
+                resolutionsBySnapshot[reads] = resolutionsBySnapshot.GetValueOrDefault(reads) + 1;
+                return candidate.Container;
+            },
             static container => container.Caption,
             static container => container.Identity,
             container =>
@@ -431,7 +438,24 @@ public sealed class FlaUiControlResolverTests
         {
             await Assert.That(selected).IsEqualTo(expected);
             await Assert.That(reads).IsGreaterThanOrEqualTo(2);
+            await Assert.That(resolutionsBySnapshot.All(pair =>
+                    candidateCountsBySnapshot[pair.Key] == pair.Value))
+                .IsTrue();
         }
+    }
+
+    [Test]
+    public async Task GridScrollBoundary_IgnoresUnusableScrollPatternWhenRangeCanMove()
+    {
+        var reached = GridScrollBoundary.IsReached(
+            patternScrollable: false,
+            patternPercent: 0,
+            rangeMinimum: 0,
+            rangeMaximum: 100,
+            rangeValue: 25,
+            forward: true);
+
+        await Assert.That(reached).IsFalse();
     }
 
     private static string[] ReadElementNames(AutomationElement root)

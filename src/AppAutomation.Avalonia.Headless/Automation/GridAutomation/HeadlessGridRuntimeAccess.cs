@@ -2,6 +2,7 @@ using System.Collections;
 using System.Reflection;
 using AppAutomation.Abstractions;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Avalonia.Headless.Automation.GridAutomation;
@@ -22,6 +23,51 @@ internal static class HeadlessGridRuntimeAccess
         return source is IEnumerable values && source is not string
             ? values.Cast<object?>().ToArray()
             : Array.Empty<object?>();
+    }
+
+    public static string[] ReadColumnNames(Control grid)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+        if (grid is DataGrid dataGrid)
+        {
+            return dataGrid.Columns
+                .Select(ReadDataGridColumnName)
+                .ToArray();
+        }
+
+        if (!GridPropertyValueReader.TryReadProperty(grid, "Columns", out var columns)
+            || columns is not IEnumerable values
+            || columns is string)
+        {
+            return Array.Empty<string>();
+        }
+
+        return values.Cast<object?>()
+            .Select(static column =>
+            {
+                if (column is null)
+                {
+                    return string.Empty;
+                }
+
+                if (GridPropertyValueReader.TryReadProperty(column, "Header", out var header)
+                    && MenuPathValue.TryGetVisibleCaption(header) is { } headerText
+                    && !string.IsNullOrWhiteSpace(headerText))
+                {
+                    return headerText.Trim();
+                }
+
+                if (GridPropertyValueReader.TryReadProperty(column!, "FieldName", out var fieldName)
+                    && Convert.ToString(fieldName, System.Globalization.CultureInfo.InvariantCulture) is { } sourceName
+                    && !string.IsNullOrWhiteSpace(sourceName))
+                {
+                    return sourceName.Trim();
+                }
+
+                return null;
+            })
+            .Select(static name => name ?? string.Empty)
+            .ToArray();
     }
 
     public static Control? FindCell(
@@ -69,7 +115,16 @@ internal static class HeadlessGridRuntimeAccess
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(column);
-        var providerColumn = FindProviderColumn(grid, column.SourceFieldName);
+        if (grid is DataGrid dataGrid)
+        {
+            var dataGridColumn = FindDataGridColumn(dataGrid, column);
+            dataGrid.ScrollIntoView(row, dataGridColumn);
+            dataGrid.Dispatcher.RunJobs();
+            dataGrid.UpdateLayout();
+            return true;
+        }
+
+        var providerColumn = FindProviderColumn(grid, column);
         var providerRowIndex = ResolveProviderRowIndex(grid, row) ?? rowIndex;
         foreach (var method in FindMethods(grid, "ScrollIntoView"))
         {
@@ -105,6 +160,12 @@ internal static class HeadlessGridRuntimeAccess
             }
 
             method.Invoke(grid, arguments);
+            grid.Dispatcher.RunJobs();
+            if (grid is global::Avalonia.Controls.Primitives.TemplatedControl templatedGrid)
+            {
+                templatedGrid.ApplyTemplate();
+            }
+            grid.UpdateLayout();
             return true;
         }
 
@@ -121,7 +182,12 @@ internal static class HeadlessGridRuntimeAccess
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(column);
 
-        var providerColumn = FindProviderColumn(grid, column.SourceFieldName);
+        if (grid is DataGrid dataGrid)
+        {
+            return ActivateDataGridEditor(dataGrid, row, column);
+        }
+
+        var providerColumn = FindProviderColumn(grid, column);
         var providerRowIndex = ResolveProviderRowIndex(grid, row) ?? rowIndex;
         if (providerRowIndex < 0)
         {
@@ -154,6 +220,11 @@ internal static class HeadlessGridRuntimeAccess
     public static Control? ReadActiveEditor(Control grid)
     {
         ArgumentNullException.ThrowIfNull(grid);
+        if (grid is DataGrid dataGrid)
+        {
+            return FindDataGridEditor(dataGrid, dataGrid.SelectedItem);
+        }
+
         return GridPropertyValueReader.TryReadProperty(grid, "ActiveEditor", out var activeEditor)
             ? activeEditor as Control
             : null;
@@ -162,6 +233,13 @@ internal static class HeadlessGridRuntimeAccess
     public static bool FinishEditing(Control grid, GridCellEditCommitMode commitMode)
     {
         ArgumentNullException.ThrowIfNull(grid);
+        if (grid is DataGrid dataGrid)
+        {
+            return commitMode == GridCellEditCommitMode.Cancel
+                ? dataGrid.CancelEdit()
+                : dataGrid.CommitEdit();
+        }
+
         if (commitMode == GridCellEditCommitMode.Cancel)
         {
             var activeEditor = ReadActiveEditor(grid);
@@ -197,45 +275,60 @@ internal static class HeadlessGridRuntimeAccess
             return false;
         }
 
-        var properties = editor.GetType()
-            .GetProperties(PublicInstance)
-            .Where(static property =>
-                string.Equals(property.Name, "Value", StringComparison.Ordinal)
-                && property.GetIndexParameters().Length == 0
-                && property.SetMethod is { IsPublic: true })
-            .Take(2)
-            .ToArray();
-        if (properties.Length != 1
-            || !TryConvertNumericValue(number, properties[0].PropertyType, out var converted))
+        var properties = editor.GetType().GetProperties(PublicInstance);
+        foreach (var propertyName in new[] { "Value", "EditorValue" })
         {
-            return false;
+            var matches = properties
+                .Where(property =>
+                    string.Equals(property.Name, propertyName, StringComparison.Ordinal)
+                    && property.GetIndexParameters().Length == 0
+                    && property.SetMethod is { IsPublic: true })
+                .Take(2)
+                .ToArray();
+            if (matches.Length > 1)
+            {
+                return false;
+            }
+            if (matches.Length == 0
+                || !TryConvertNumericValue(number, matches[0].PropertyType, out var converted))
+            {
+                continue;
+            }
+
+            matches[0].SetValue(editor, converted);
+            var actual = matches[0].GetValue(editor);
+            try
+            {
+                return actual is not null
+                    && Convert.ToDecimal(actual, System.Globalization.CultureInfo.InvariantCulture) == number;
+            }
+            catch (InvalidCastException)
+            {
+                return false;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+            catch (OverflowException)
+            {
+                return false;
+            }
         }
 
-        properties[0].SetValue(editor, converted);
-        var actual = properties[0].GetValue(editor);
-        try
-        {
-            return actual is not null
-                && Convert.ToDecimal(actual, System.Globalization.CultureInfo.InvariantCulture) == number;
-        }
-        catch (InvalidCastException)
-        {
-            return false;
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-        catch (OverflowException)
-        {
-            return false;
-        }
+        return false;
     }
 
     public static bool SelectRow(Control grid, object row)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
+        if (grid is DataGrid dataGrid)
+        {
+            dataGrid.SelectedItem = row;
+            return ReferenceEquals(dataGrid.SelectedItem, row) || Equals(dataGrid.SelectedItem, row);
+        }
+
         return SetPropertyIfCompatible(grid, "SelectedItem", row)
             || SetPropertyIfCompatible(grid, "FocusedItem", row);
     }
@@ -271,8 +364,26 @@ internal static class HeadlessGridRuntimeAccess
         return false;
     }
 
-    private static object? FindProviderColumn(Control grid, string sourceFieldName)
+    private static string ReadDataGridColumnName(DataGridColumn column)
     {
+        var header = MenuPathValue.TryGetVisibleCaption(column.Header);
+        if (!string.IsNullOrWhiteSpace(header))
+        {
+            return header.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(column.SortMemberPath)
+            ? string.Empty
+            : column.SortMemberPath.Trim();
+    }
+
+    private static object? FindProviderColumn(Control grid, GridRuntimeColumn column)
+    {
+        if (grid is DataGrid dataGrid)
+        {
+            return FindDataGridColumn(dataGrid, column);
+        }
+
         if (!GridPropertyValueReader.TryReadProperty(grid, "Columns", out var columns)
             || columns is not IEnumerable values
             || columns is string)
@@ -286,23 +397,226 @@ internal static class HeadlessGridRuntimeAccess
                 GridPropertyValueReader.TryReadProperty(candidate!, "FieldName", out var fieldName)
                 && string.Equals(
                     Convert.ToString(fieldName, System.Globalization.CultureInfo.InvariantCulture),
-                    sourceFieldName,
+                    column.SourceFieldName,
                     StringComparison.Ordinal))
             .Take(2)
             .ToArray();
         if (matches.Length > 1)
         {
             throw new InvalidOperationException(
-                $"Grid column source field '{sourceFieldName}' is ambiguous in the runtime Columns collection.");
+                $"Grid column source field '{column.SourceFieldName}' is ambiguous in the runtime Columns collection.");
         }
 
         if (matches.Length == 0)
         {
             throw new InvalidOperationException(
-                $"Grid runtime Columns collection does not expose source field '{sourceFieldName}'.");
+                $"Grid runtime Columns collection does not expose source field '{column.SourceFieldName}'.");
         }
 
         return matches[0];
+    }
+
+    private static HeadlessGridEditorActivation ActivateDataGridEditor(
+        DataGrid dataGrid,
+        object row,
+        GridRuntimeColumn column)
+    {
+        var dataGridColumn = FindDataGridColumn(dataGrid, column);
+        dataGrid.SelectedItem = row;
+        dataGrid.CurrentColumn = dataGridColumn;
+        dataGrid.ScrollIntoView(row, dataGridColumn);
+        dataGrid.UpdateLayout();
+        _ = dataGrid.Focus();
+        var started = false;
+        try
+        {
+            started = dataGrid.BeginEdit();
+            dataGrid.Dispatcher.RunJobs();
+            dataGrid.UpdateLayout();
+            var editor = FindDataGridEditor(dataGrid, row);
+            return new HeadlessGridEditorActivation(
+                started,
+                editor,
+                editor is null
+                    ? $"Native DataGrid BeginEdit returned {started}, but no active editor was materialized. "
+                      + $"Observed controls: {DescribeDataGridControls(dataGrid, row)}."
+                    : null,
+                InvocationAttempted: true);
+        }
+        catch
+        {
+            if (started)
+            {
+                _ = dataGrid.CancelEdit();
+            }
+
+            throw;
+        }
+    }
+
+    private static DataGridColumn FindDataGridColumn(DataGrid dataGrid, GridRuntimeColumn column)
+    {
+        if (column.RuntimeColumnIndex is { } runtimeColumnIndex
+            && runtimeColumnIndex >= 0
+            && runtimeColumnIndex < dataGrid.Columns.Count)
+        {
+            return dataGrid.Columns[runtimeColumnIndex];
+        }
+
+        var bindingMatches = dataGrid.Columns
+            .Where(candidate => string.Equals(
+                ReadDataGridBindingPath(candidate),
+                column.SourceFieldName,
+                StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (bindingMatches.Length == 1)
+        {
+            return bindingMatches[0];
+        }
+        if (bindingMatches.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Grid column binding path '{column.SourceFieldName}' is ambiguous in the runtime Columns collection.");
+        }
+
+        var matches = dataGrid.Columns
+            .Where(candidate => string.Equals(
+                candidate.SortMemberPath,
+                column.SourceFieldName,
+                StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw new InvalidOperationException(matches.Length == 0
+                ? $"Grid runtime Columns collection does not expose source field '{column.SourceFieldName}' by runtime index, binding path, or sort metadata."
+                : $"Grid column source field '{column.SourceFieldName}' is ambiguous in the runtime Columns collection.");
+        }
+
+        return matches[0];
+    }
+
+    private static string? ReadDataGridBindingPath(DataGridColumn column)
+    {
+        return column is DataGridBoundColumn
+            {
+                Binding: global::Avalonia.Data.Binding binding
+            }
+            ? binding.Path
+            : null;
+    }
+
+    private static Control? FindDataGridEditor(DataGrid dataGrid, object? row)
+    {
+        if (row is null)
+        {
+            return null;
+        }
+
+        var activeCell = FindCurrentDataGridCell(dataGrid, row);
+        if (activeCell is null)
+        {
+            return null;
+        }
+
+        var cellControls = activeCell.GetVisualDescendants()
+            .OfType<Control>()
+            .Concat(activeCell.GetLogicalDescendants().OfType<Control>())
+            .Prepend(activeCell)
+            .Distinct()
+            .ToArray();
+        var semanticRoots = cellControls
+            .Where(HasWritableSemanticValue)
+            .Where(candidate => !candidate.GetVisualAncestors()
+                .OfType<Control>()
+                .Any(ancestor => cellControls.Contains(ancestor) && HasWritableSemanticValue(ancestor)))
+            .OrderByDescending(static candidate => candidate.IsKeyboardFocusWithin)
+            .Take(2)
+            .ToArray();
+        if (semanticRoots.Length == 1 || semanticRoots.FirstOrDefault()?.IsKeyboardFocusWithin == true)
+        {
+            return semanticRoots[0];
+        }
+
+        var builtInEditors = cellControls
+            .Where(IsBuiltInEditor)
+            .OrderByDescending(static candidate => candidate.IsKeyboardFocusWithin)
+            .Take(2)
+            .ToArray();
+        return builtInEditors.Length switch
+        {
+            0 => null,
+            1 => builtInEditors[0],
+            _ when builtInEditors[0].IsKeyboardFocusWithin => builtInEditors[0],
+            _ => null
+        };
+    }
+
+    private static DataGridCell? FindCurrentDataGridCell(DataGrid dataGrid, object row)
+    {
+        var currentColumn = dataGrid.CurrentColumn;
+        if (currentColumn is null || !currentColumn.IsVisible)
+        {
+            return null;
+        }
+
+        var sourceColumnIndex = dataGrid.Columns.IndexOf(currentColumn);
+        if (sourceColumnIndex < 0)
+        {
+            return null;
+        }
+
+        var matchingRows = dataGrid.GetVisualDescendants()
+            .OfType<DataGridRow>()
+            .Where(candidate => ReferenceEquals(candidate.DataContext, row) || Equals(candidate.DataContext, row))
+            .Take(2)
+            .ToArray();
+        if (matchingRows.Length != 1)
+        {
+            return null;
+        }
+
+        var cells = matchingRows[0].GetVisualDescendants()
+            .OfType<DataGridCell>()
+            .ToArray();
+        return sourceColumnIndex < cells.Length
+            ? cells[sourceColumnIndex]
+            : null;
+    }
+
+    private static bool HasWritableSemanticValue(Control control)
+    {
+        return control.GetType()
+            .GetProperties(PublicInstance)
+            .Any(static property =>
+                property.Name is "Value" or "EditorValue"
+                && property.GetIndexParameters().Length == 0
+                && property.SetMethod is { IsPublic: true });
+    }
+
+    private static bool IsBuiltInEditor(Control candidate) => candidate is TextBox
+        or ComboBox
+        or CheckBox
+        or DatePicker
+        or TimePicker;
+
+    private static string DescribeDataGridControls(DataGrid dataGrid, object row)
+    {
+        var controls = dataGrid.GetVisualDescendants()
+            .OfType<Control>()
+            .Concat(dataGrid.GetLogicalDescendants().OfType<Control>())
+            .Distinct()
+            .Where(candidate => IsBuiltInEditor(candidate) || HasWritableSemanticValue(candidate))
+            .Take(12)
+            .Select(candidate =>
+                $"{candidate.GetType().Name}[context="
+                + (ReferenceEquals(candidate.DataContext, row)
+                    ? "target"
+                    : candidate.DataContext?.GetType().Name ?? "null")
+                + $", focused={candidate.IsKeyboardFocusWithin}]")
+            .ToArray();
+        return controls.Length == 0 ? "<none>" : string.Join(", ", controls);
     }
 
     private static int? ResolveProviderRowIndex(Control grid, object row)
