@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using AppAutomation.Abstractions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUiCalendar = FlaUI.Core.AutomationElements.Calendar;
@@ -34,6 +35,32 @@ internal static class FlaUiCalendarSelection
         {
             SelectByVisibleCell(calendar, selectedDate.Date);
         }
+    }
+
+    internal static bool TrySelectDate(
+        FlaUiCalendar calendar,
+        DateTime selectedDate,
+        Func<bool> isSelectionCommitted,
+        TimeSpan confirmationTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(calendar);
+        ArgumentNullException.ThrowIfNull(isSelectionCommitted);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(confirmationTimeout, TimeSpan.Zero);
+
+        if (isSelectionCommitted())
+        {
+            return true;
+        }
+
+        SelectByVisibleCell(calendar, selectedDate.Date);
+        return UiWait.TryUntil(
+            isSelectionCommitted,
+            static committed => committed,
+            new UiWaitOptions
+            {
+                Timeout = confirmationTimeout,
+                PollInterval = TimeSpan.FromMilliseconds(25)
+            }).Success;
     }
 
     private static void SelectByVisibleCell(FlaUiCalendar calendar, DateTime targetDate)

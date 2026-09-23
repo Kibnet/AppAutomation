@@ -2184,7 +2184,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public double Value => TryRead(() => Inner.Value);
     }
 
-    private sealed class FlaUiCalendarControl : FlaUiControlBase<Calendar>, ICalendarControl
+    private sealed class FlaUiCalendarControl :
+        FlaUiControlBase<Calendar>,
+        ICalendarControl,
+        ICommittedCalendarSelectionControl
     {
         public FlaUiCalendarControl(Calendar inner) : base(inner)
         {
@@ -2196,6 +2199,18 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public void SelectDate(DateTime selectedDate)
         {
             FlaUiCalendarSelection.SelectDate(Inner, selectedDate);
+        }
+
+        bool ICommittedCalendarSelectionControl.TrySelectDate(
+            DateTime selectedDate,
+            Func<bool> isSelectionCommitted,
+            TimeSpan confirmationTimeout)
+        {
+            return FlaUiCalendarSelection.TrySelectDate(
+                Inner,
+                selectedDate,
+                isSelectionCommitted,
+                confirmationTimeout);
         }
     }
 

@@ -81,6 +81,44 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task CompositeDatePicker_ReResolvesCalendarWhenFirstClickIsNotCommitted()
+    {
+        var targetDate = new DateTime(2026, 9, 24);
+        var value = new FakeDateTimePickerControl("DeliveryDateValue");
+        var firstCalendar = new FakeCommittedCalendarControl("DeliveryDateCalendar");
+        var secondCalendar = new FakeCommittedCalendarControl("DeliveryDateCalendar")
+        {
+            OnSelect = selectedDate => value.SelectedDate = selectedDate
+        };
+        var resolver = new SequencedCalendarResolver(
+                "DeliveryDateCalendar",
+                [firstCalendar, secondCalendar],
+                ("DeliveryDateRoot", new FakeControl("DeliveryDateRoot")),
+                ("DeliveryDateValue", value),
+                ("DeliveryDateOpen", new FakeButtonControl("DeliveryDateOpen")))
+            .WithDateTimePickerProxy(
+                "DeliveryDate",
+                DatePickerParts.ByAutomationIds(
+                    "DeliveryDateRoot",
+                    "DeliveryDateValue",
+                    "DeliveryDateOpen",
+                    "DeliveryDateCalendar"));
+        var datePicker = resolver.Resolve<IDateTimePickerControl>(new UiControlDefinition(
+            "DeliveryDate",
+            UiControlType.DateTimePicker,
+            "DeliveryDate"));
+
+        ((IDateTimePickerOperationControl)datePicker).SetSelectedDate(targetDate, timeoutMs: 2_000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value.SelectedDate).IsEqualTo(targetDate);
+            await Assert.That(firstCalendar.SelectCount).IsEqualTo(1);
+            await Assert.That(secondCalendar.SelectCount).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task ComboBoxFilterAdapter_AppliesOneOrManyValuesAndReplaysCancel()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
@@ -1600,6 +1638,56 @@ public sealed class UiControlAdapterTests
         }
     }
 
+    private sealed class SequencedCalendarResolver : IUiControlResolver
+    {
+        private readonly string _calendarLocator;
+        private readonly Queue<ICalendarControl> _calendars;
+        private readonly Dictionary<string, object> _controls;
+
+        public SequencedCalendarResolver(
+            string calendarLocator,
+            IEnumerable<ICalendarControl> calendars,
+            params (string LocatorValue, object Control)[] controls)
+        {
+            _calendarLocator = calendarLocator;
+            _calendars = new Queue<ICalendarControl>(calendars);
+            _controls = controls.ToDictionary(
+                static entry => entry.LocatorValue,
+                static entry => entry.Control,
+                StringComparer.Ordinal);
+        }
+
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
+
+        public TControl Resolve<TControl>(UiControlDefinition definition)
+            where TControl : class
+        {
+            if (string.Equals(definition.LocatorValue, _calendarLocator, StringComparison.Ordinal))
+            {
+                if (_calendars.Count == 0)
+                {
+                    throw new UiControlResolutionException(
+                        UiControlResolutionFailure.NotFound,
+                        $"No fresh calendar remains for '{_calendarLocator}'.");
+                }
+
+                return _calendars.Dequeue() as TControl
+                    ?? throw new UiControlResolutionException(
+                        UiControlResolutionFailure.TypeMismatch,
+                        $"Calendar '{_calendarLocator}' is not of expected type.");
+            }
+
+            return _controls.TryGetValue(definition.LocatorValue, out var control)
+                ? (control as TControl
+                    ?? throw new UiControlResolutionException(
+                        UiControlResolutionFailure.TypeMismatch,
+                        $"Control '{definition.LocatorValue}' is not of expected type."))
+                : throw new UiControlResolutionException(
+                    UiControlResolutionFailure.NotFound,
+                    $"Unknown control '{definition.LocatorValue}'.");
+        }
+    }
+
     private abstract class FakeControlBase : IUiControl
     {
         protected FakeControlBase(string automationId)
@@ -1774,6 +1862,38 @@ public sealed class UiControlAdapterTests
         }
 
         public DateTime? SelectedDate { get; set; }
+    }
+
+    private sealed class FakeCommittedCalendarControl :
+        FakeControlBase,
+        ICalendarControl,
+        ICommittedCalendarSelectionControl
+    {
+        public FakeCommittedCalendarControl(string automationId)
+            : base(automationId)
+        {
+        }
+
+        public IReadOnlyList<DateTime> SelectedDates => [];
+
+        public int SelectCount { get; private set; }
+
+        public Action<DateTime>? OnSelect { get; init; }
+
+        public void SelectDate(DateTime selectedDate)
+        {
+            throw new InvalidOperationException("Composite date selection must use the committed calendar path.");
+        }
+
+        public bool TrySelectDate(
+            DateTime selectedDate,
+            Func<bool> isSelectionCommitted,
+            TimeSpan confirmationTimeout)
+        {
+            SelectCount++;
+            OnSelect?.Invoke(selectedDate);
+            return isSelectionCommitted();
+        }
     }
 
     private sealed class FakeSpinnerControl : FakeControlBase, ISpinnerControl
