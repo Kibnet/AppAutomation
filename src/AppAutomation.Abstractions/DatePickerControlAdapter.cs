@@ -191,6 +191,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                 if (committedCalendar.TrySelectDate(
                         expected,
                         () => TryReadCommittedDate()?.Date == expected,
+                        remaining,
                         confirmationTimeout))
                 {
                     return;
@@ -404,5 +405,6 @@ internal interface ICommittedCalendarSelectionControl
     bool TrySelectDate(
         DateTime selectedDate,
         Func<bool> isSelectionCommitted,
+        TimeSpan selectionTimeout,
         TimeSpan confirmationTimeout);
 }

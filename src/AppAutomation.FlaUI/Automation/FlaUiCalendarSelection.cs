@@ -10,7 +10,7 @@ namespace AppAutomation.FlaUI.Automation;
 internal static class FlaUiCalendarSelection
 {
     private static readonly TimeSpan SelectionTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan MonthChangeTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MonthChangeConfirmationTimeout = TimeSpan.FromMilliseconds(250);
     private const int MaximumMonthNavigationDistance = 240;
 
     private static readonly CultureInfo[] DateCultures =
@@ -38,13 +38,15 @@ internal static class FlaUiCalendarSelection
     }
 
     internal static bool TrySelectDate(
-        FlaUiCalendar calendar,
+        Func<FlaUiCalendar> resolveCalendar,
         DateTime selectedDate,
         Func<bool> isSelectionCommitted,
+        TimeSpan selectionTimeout,
         TimeSpan confirmationTimeout)
     {
-        ArgumentNullException.ThrowIfNull(calendar);
+        ArgumentNullException.ThrowIfNull(resolveCalendar);
         ArgumentNullException.ThrowIfNull(isSelectionCommitted);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(selectionTimeout, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(confirmationTimeout, TimeSpan.Zero);
 
         if (isSelectionCommitted())
@@ -52,7 +54,7 @@ internal static class FlaUiCalendarSelection
             return true;
         }
 
-        SelectByVisibleCell(calendar, selectedDate.Date);
+        SelectByVisibleCell(resolveCalendar, selectedDate.Date, selectionTimeout);
         return UiWait.TryUntil(
             isSelectionCommitted,
             static committed => committed,
@@ -65,11 +67,20 @@ internal static class FlaUiCalendarSelection
 
     private static void SelectByVisibleCell(FlaUiCalendar calendar, DateTime targetDate)
     {
+        SelectByVisibleCell(() => calendar, targetDate, SelectionTimeout);
+    }
+
+    private static void SelectByVisibleCell(
+        Func<FlaUiCalendar> resolveCalendar,
+        DateTime targetDate,
+        TimeSpan selectionTimeout)
+    {
         var operation = Stopwatch.StartNew();
         CalendarSnapshot? snapshot = null;
 
-        while (operation.Elapsed < SelectionTimeout)
+        while (operation.Elapsed < selectionTimeout)
         {
+            var calendar = resolveCalendar();
             snapshot = Capture(calendar);
             if (TryFindTargetDay(snapshot, targetDate, out var targetCell))
             {
@@ -95,11 +106,34 @@ internal static class FlaUiCalendarSelection
                     + $"{MaximumMonthNavigationDistance} months from displayed month '{displayedMonth:yyyy-MM}'.");
             }
 
-            var navigationButton = FindMonthNavigationButton(snapshot, moveForward: monthDistance > 0)
-                ?? throw new InvalidOperationException(
-                    $"Calendar month navigation button was not found while selecting '{targetDate:yyyy-MM-dd}'.");
-            Click(navigationButton, monthDistance > 0 ? "next calendar month" : "previous calendar month");
-            WaitForDisplayedMonthChange(calendar, displayedMonth, operation);
+            var moveForward = monthDistance > 0;
+            var remaining = selectionTimeout - operation.Elapsed;
+            var navigationCalendar = calendar;
+            if (remaining <= TimeSpan.Zero
+                || !NavigateMonthWithRetry(
+                    () => Capture(navigationCalendar).DisplayedMonth,
+                    () =>
+                    {
+                        navigationCalendar = resolveCalendar();
+                        var currentSnapshot = Capture(navigationCalendar);
+                        if (currentSnapshot.DisplayedMonth is { } currentMonth
+                            && HasMonthChanged(currentMonth, displayedMonth))
+                        {
+                            return;
+                        }
+
+                        var navigationButton = FindMonthNavigationButton(currentSnapshot, moveForward)
+                            ?? throw new InvalidOperationException(
+                                $"Calendar month navigation button was not found while selecting '{targetDate:yyyy-MM-dd}'.");
+                        Click(navigationButton, moveForward ? "next calendar month" : "previous calendar month");
+                    },
+                    displayedMonth,
+                    remaining,
+                    MonthChangeConfirmationTimeout))
+            {
+                throw new InvalidOperationException(
+                    $"Calendar did not change displayed month from '{displayedMonth:yyyy-MM}'.");
+            }
         }
 
         var displayed = snapshot?.DisplayedMonth is { } month
@@ -362,25 +396,47 @@ internal static class FlaUiCalendarSelection
         return moveForward ? candidates[^1].Element : candidates[0].Element;
     }
 
-    private static void WaitForDisplayedMonthChange(
-        FlaUiCalendar calendar,
+    internal static bool NavigateMonthWithRetry(
+        Func<DateTime?> readDisplayedMonth,
+        Action clickNavigationButton,
         DateTime previousMonth,
-        Stopwatch operation)
+        TimeSpan timeout,
+        TimeSpan confirmationTimeout)
     {
-        var monthChange = Stopwatch.StartNew();
-        while (monthChange.Elapsed < MonthChangeTimeout && operation.Elapsed < SelectionTimeout)
+        ArgumentNullException.ThrowIfNull(readDisplayedMonth);
+        ArgumentNullException.ThrowIfNull(clickNavigationButton);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(confirmationTimeout, TimeSpan.Zero);
+
+        var operation = Stopwatch.StartNew();
+        while (operation.Elapsed < timeout)
         {
-            Thread.Sleep(50);
-            var snapshot = Capture(calendar);
-            if (snapshot.DisplayedMonth is { } displayedMonth
-                && (displayedMonth.Year != previousMonth.Year || displayedMonth.Month != previousMonth.Month))
+            if (readDisplayedMonth() is { } displayedMonth
+                && HasMonthChanged(displayedMonth, previousMonth))
             {
-                return;
+                return true;
+            }
+
+            clickNavigationButton();
+            var confirmation = Stopwatch.StartNew();
+            while (confirmation.Elapsed < confirmationTimeout && operation.Elapsed < timeout)
+            {
+                Thread.Sleep(25);
+                if (readDisplayedMonth() is { } currentMonth
+                    && HasMonthChanged(currentMonth, previousMonth))
+                {
+                    return true;
+                }
             }
         }
 
-        throw new InvalidOperationException(
-            $"Calendar did not change displayed month from '{previousMonth:yyyy-MM}'.");
+        return readDisplayedMonth() is { } finalMonth
+            && HasMonthChanged(finalMonth, previousMonth);
+    }
+
+    private static bool HasMonthChanged(DateTime currentMonth, DateTime previousMonth)
+    {
+        return currentMonth.Year != previousMonth.Year || currentMonth.Month != previousMonth.Month;
     }
 
     private static int MonthDistance(DateTime displayedMonth, DateTime targetDate)

@@ -1888,6 +1888,7 @@ public sealed class UiControlAdapterTests
         public bool TrySelectDate(
             DateTime selectedDate,
             Func<bool> isSelectionCommitted,
+            TimeSpan selectionTimeout,
             TimeSpan confirmationTimeout)
         {
             SelectCount++;
