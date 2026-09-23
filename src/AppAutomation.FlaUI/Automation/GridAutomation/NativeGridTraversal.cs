@@ -2,6 +2,25 @@ namespace AppAutomation.FlaUI.Automation.GridAutomation;
 
 internal static class NativeGridTraversal
 {
+    public static TRow[] WaitForRows<TRow>(
+        Func<TRow[]> readRows,
+        Func<bool> canRetry,
+        Action waitBeforeRetry)
+    {
+        ArgumentNullException.ThrowIfNull(readRows);
+        ArgumentNullException.ThrowIfNull(canRetry);
+        ArgumentNullException.ThrowIfNull(waitBeforeRetry);
+
+        var rows = readRows();
+        while (rows.Length == 0 && canRetry())
+        {
+            waitBeforeRetry();
+            rows = readRows();
+        }
+
+        return rows;
+    }
+
     public static TRow[] Scan<TRow>(
         Func<TRow[]> readRows,
         Action<IReadOnlyList<TRow>> observeRows,

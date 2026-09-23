@@ -201,6 +201,7 @@ public sealed class FlaUiControlResolverTests
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
         var page = MainWindowFlaUiPageFactory.Create(session);
         var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
         var secondRow = GridRowSelector.ByCell("Key", "ARM-02");
@@ -255,6 +256,26 @@ public sealed class FlaUiControlResolverTests
             .IsEqualTo(1000);
 
     }
+    [Test]
+    public async Task NativeGridTraversal_WaitsForInitiallyEmptyRows()
+    {
+        var observations = new Queue<string[]>(
+        [
+            [],
+            [],
+            ["row-1"]
+        ]);
+        var waits = 0;
+
+        var rows = NativeGridTraversal.WaitForRows(
+            () => observations.Dequeue(),
+            () => observations.Count > 0,
+            () => waits++);
+
+        await Assert.That(rows).IsEquivalentTo(["row-1"]);
+        await Assert.That(waits).IsEqualTo(2);
+    }
+
     [Test]
     public async Task NativeRowSnapshots_DistinguishRepeatedAndRecycledRows()
     {

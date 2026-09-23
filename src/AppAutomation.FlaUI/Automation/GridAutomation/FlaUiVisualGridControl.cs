@@ -488,13 +488,12 @@ public sealed partial class FlaUiControlResolver
             bool hasDeclaredUniqueIdentity)
         {
             var rows = new List<NativeGridRowSnapshot>();
-            NativeFlaUiRow[] visibleRows;
+            var visibleRows = WaitForNativeDataRows(stopwatch, timeoutMs);
             _nativeSignatureColumnIndexes = selectorColumnIndexes.Distinct().ToArray();
             _nativeSignatureRowProperties = selectorRowProperties.Distinct().ToArray();
             var scroll = FindGridScrollState();
             if (hasDeclaredUniqueIdentity)
             {
-                visibleRows = TakePrefetchedNativeRows();
                 AppendNativeRows(
                     rows,
                     visibleRows,
@@ -514,6 +513,11 @@ public sealed partial class FlaUiControlResolver
                 }
 
                 rows.Clear();
+            }
+
+            if (visibleRows.Length == 0 && stopwatch.ElapsedMilliseconds >= timeoutMs)
+            {
+                return new NativeGridScan(rows, Array.Empty<NativeGridRowSnapshot>(), null);
             }
 
             MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
@@ -3275,6 +3279,31 @@ public sealed partial class FlaUiControlResolver
             return rows ?? ReadNativeDataRows();
         }
 
+        private NativeFlaUiRow[] WaitForNativeDataRows(Stopwatch stopwatch, int timeoutMs)
+        {
+            var firstRead = true;
+            return NativeGridTraversal.WaitForRows(
+                () =>
+                {
+                    if (firstRead)
+                    {
+                        firstRead = false;
+                        return TakePrefetchedNativeRows();
+                    }
+
+                    return ReadNativeDataRows();
+                },
+                () => stopwatch.ElapsedMilliseconds < timeoutMs,
+                () =>
+                {
+                    var remaining = timeoutMs - (int)stopwatch.ElapsedMilliseconds;
+                    if (remaining > 0)
+                    {
+                        Thread.Sleep(Math.Min(25, remaining));
+                    }
+                });
+        }
+
         private bool WaitForVisibleNativeRowsToChange(
             string previous,
             Stopwatch stopwatch,
@@ -3968,4 +3997,3 @@ public sealed partial class FlaUiControlResolver
         public GridCellValueSnapshot ValueSnapshot => new(Value, Value) { IsDisplayOnly = true };
     }
 }
-

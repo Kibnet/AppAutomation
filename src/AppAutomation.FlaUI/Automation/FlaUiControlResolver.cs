@@ -2905,8 +2905,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 FocusContainingWindow(target);
                 TryFocus(target);
-                MoveMouseImmediatelyTo(target);
-                Mouse.LeftClick();
+                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Press(VirtualKeyShort.ESCAPE);
             }
 
             if (waitForPopupClose)
