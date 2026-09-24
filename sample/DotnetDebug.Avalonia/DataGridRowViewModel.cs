@@ -5,8 +5,6 @@ namespace DotnetDebug.Avalonia;
 
 public sealed class DataGridRowViewModel(int index, int value)
 {
-    private const string EremexAutomationBridgeId = "EremexDemoDataGridAutomationBridge";
-
     public int Index => index;
 
     [Key]
@@ -16,17 +14,6 @@ public sealed class DataGridRowViewModel(int index, int value)
 
     public string Parity => value % 2 == 0 ? "Even" : "Odd";
 
-    public string EremexRow => $"EX-{Row}";
+    public string HiddenIdentity => $"item-{Index + 1}";
 
-    public string EremexValue => $"EX-{Value}";
-
-    public string EremexParity => $"EX-{Parity}";
-
-    public string EremexAutomationRowId => $"{EremexAutomationBridgeId}_Row{Index}";
-
-    public string EremexAutomationCell0Id => $"{EremexAutomationRowId}_Cell0";
-
-    public string EremexAutomationCell1Id => $"{EremexAutomationRowId}_Cell1";
-
-    public string EremexAutomationCell2Id => $"{EremexAutomationRowId}_Cell2";
 }

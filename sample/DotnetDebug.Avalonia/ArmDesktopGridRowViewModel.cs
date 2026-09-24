@@ -5,10 +5,14 @@ namespace DotnetDebug.Avalonia;
 
 public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
 {
-    private const string BridgeAutomationId = "ArmGridAutomationBridge";
     private string _value;
     private string _state;
     private string _color;
+    private decimal _requiredAmount;
+    private bool _isApproved;
+    private string _product;
+    private DateTime? _scheduledDate;
+    private TimeSpan? _scheduledTime;
 
     public ArmDesktopGridRowViewModel(int index, string value, string state, string color)
     {
@@ -16,6 +20,16 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
         _value = value;
         _state = state;
         _color = color;
+        _requiredAmount = 10 + index;
+        _isApproved = index % 2 == 0;
+        _product = index switch
+        {
+            0 => "Product 42",
+            1 => "Service Contract",
+            _ => "Warehouse North"
+        };
+        _scheduledDate = new DateTime(2026, 9, 10 + index);
+        _scheduledTime = new TimeSpan(8 + index, 30, 0);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -42,19 +56,39 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
         set => SetProperty(ref _color, value);
     }
 
-    public string RowAutomationId => $"{BridgeAutomationId}_Row{Index}";
-
-    public string KeyCellAutomationId => $"{RowAutomationId}_Cell0";
-
-    public string ValueCellAutomationId => $"{RowAutomationId}_Cell1";
-
-    public string StateCellAutomationId => $"{RowAutomationId}_Cell3";
-
-    public string ColorCellAutomationId => $"{RowAutomationId}_Cell2";
-
-    private void SetProperty(ref string field, string value, [CallerMemberName] string? propertyName = null)
+    public decimal RequiredAmount
     {
-        if (field == value)
+        get => _requiredAmount;
+        set => SetProperty(ref _requiredAmount, value);
+    }
+
+    public bool IsApproved
+    {
+        get => _isApproved;
+        set => SetProperty(ref _isApproved, value);
+    }
+
+    public string Product
+    {
+        get => _product;
+        set => SetProperty(ref _product, value);
+    }
+
+    public DateTime? ScheduledDate
+    {
+        get => _scheduledDate;
+        set => SetProperty(ref _scheduledDate, value);
+    }
+
+    public TimeSpan? ScheduledTime
+    {
+        get => _scheduledTime;
+        set => SetProperty(ref _scheduledTime, value);
+    }
+
+    private void SetProperty<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
         {
             return;
         }

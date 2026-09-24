@@ -60,6 +60,82 @@ public partial class MainWindow : Window
         InitializeFlaUiCalendarFallbackFixture();
     }
 
+    private void OnDemoDataGridLoadingRow(object? sender, DataGridRowEventArgs e)
+    {
+        if (e.Row.DataContext is DataGridRowViewModel row)
+        {
+            AutomationProperties.SetItemStatus(e.Row, row.HiddenIdentity);
+        }
+    }
+
+    private static void OnArmComplexDataGridLoadingRow(object? sender, DataGridRowEventArgs e)
+    {
+        if (e.Row.DataContext is ArmDesktopGridRowViewModel row)
+        {
+            AutomationProperties.SetItemStatus(e.Row, row.Key);
+        }
+    }
+
+    private static void OnArmComplexGridCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
+    {
+        var popupEditor = e.EditingElement is PopupEditor directEditor
+            ? directEditor
+            : e.EditingElement.GetVisualDescendants().OfType<PopupEditor>().FirstOrDefault();
+        if (popupEditor?.IsPopupOpen == true)
+        {
+            e.Cancel = true;
+        }
+    }
+
+    private void OnArmGridDateEditorLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not DateEditor dateEditor)
+        {
+            return;
+        }
+
+        ApplyTemplatesRecursively(dateEditor);
+        if (dateEditor.PopupContent is Control popupContent)
+        {
+            ApplyTemplatesRecursively(popupContent);
+        }
+
+        if (dateEditor.RealEditor is Control input)
+        {
+            AutomationProperties.SetAutomationId(input, "ArmGridDateEditor_Input");
+        }
+
+        var openButton = EnumerateControls(dateEditor)
+            .OfType<Button>()
+            .FirstOrDefault(static button => string.Equals(
+                button.Name,
+                "PART_PopupOpenButton",
+                StringComparison.Ordinal));
+        if (openButton is not null)
+        {
+            AutomationProperties.SetAutomationId(openButton, "ArmGridDateEditor_OpenButton");
+        }
+
+        if (dateEditor.PopupContent is CalendarControl calendar)
+        {
+            AutomationProperties.SetAutomationId(calendar, "ArmGridDateEditor_Calendar");
+        }
+    }
+
+    private void OnArmGridRequiredEditorLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not SpinEditor spinEditor)
+        {
+            return;
+        }
+
+        ApplyTemplatesRecursively(spinEditor);
+        if (spinEditor.RealEditor is Control input)
+        {
+            AutomationProperties.SetAutomationId(input, "ArmGridRequiredEditor_Input");
+        }
+    }
+
     private void InitializeFlaUiCalendarFallbackFixture()
     {
         FlaUiCalendarFallbackFixtureHost.IsVisible = string.Equals(

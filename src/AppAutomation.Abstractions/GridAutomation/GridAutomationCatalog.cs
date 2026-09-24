@@ -102,6 +102,11 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
                     ValidateEnum(editorKind, nameof(column.EditorKind));
                 }
 
+                if (column.RowIdentityAutomationProperty is { } rowIdentityAutomationProperty)
+                {
+                    ValidateEnum(rowIdentityAutomationProperty, nameof(column.RowIdentityAutomationProperty));
+                }
+
                 if (column.ValueKind is { } configuredValueKind
                     && column.EditorKind is { } configuredEditorKind
                     && !IsSupportedCombination(configuredValueKind, configuredEditorKind))
@@ -112,11 +117,37 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
                         nameof(definitions));
                 }
 
+                if (column.BooleanTrueDisplayText is not null
+                    && (column.ValueKind ?? GridCellValueNormalizer.InferValueKind(column.EditorKind))
+                    != GridCellValueKind.Boolean)
+                {
+                    throw new ArgumentException(
+                        $"Grid column '{column.LogicalName}' configures Boolean display text but is not a Boolean value.",
+                        nameof(definitions));
+                }
+
                 foreach (var locator in EnumerateEditorLocators(column.EditorParts))
                 {
                     ValidateEnum(locator.Scope, nameof(locator.Scope));
                     ValidateEnum(locator.LocatorKind, nameof(locator.LocatorKind));
                 }
+
+                if (column.EditorParts is { ConfirmButton: not null, CommitTarget: not null })
+                {
+                    throw new ArgumentException(
+                        $"Grid column '{column.LogicalName}' cannot configure both a confirm button and a focus-loss commit target.",
+                        nameof(definitions));
+                }
+            }
+
+            var nonIdentityRowSource = definition.Columns.FirstOrDefault(column =>
+                column.RowIdentityAutomationProperty is not null
+                && !definition.RowIdentityColumns.Contains(column.LogicalName, StringComparer.Ordinal));
+            if (nonIdentityRowSource is not null)
+            {
+                throw new ArgumentException(
+                    $"Grid column '{nonIdentityRowSource.LogicalName}' reads a row automation property but is not part of the stable row identity.",
+                    nameof(definitions));
             }
         }
 
@@ -159,6 +190,7 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
         if (parts.OpenButton is not null) yield return parts.OpenButton;
         if (parts.ConfirmButton is not null) yield return parts.ConfirmButton;
         if (parts.CancelButton is not null) yield return parts.CancelButton;
+        if (parts.CommitTarget is not null) yield return parts.CommitTarget;
     }
 
     private static void ValidateEnum<TEnum>(TEnum value, string name)
@@ -195,12 +227,16 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
             {
                 AppendField(builder, column.LogicalName);
                 AppendField(builder, column.SourceFieldName);
+                AppendField(builder, column.RuntimeColumnName);
                 AppendField(builder, column.DisplayValuePath);
                 AppendField(builder, column.FormatString);
                 AppendField(builder, column.CultureName);
                 AppendField(builder, column.ValueKind);
                 AppendField(builder, column.EditorKind);
                 AppendField(builder, column.IsStableIdentityCandidate);
+                AppendField(builder, column.RowIdentityAutomationProperty);
+                AppendField(builder, column.BooleanTrueDisplayText);
+                AppendField(builder, column.BooleanFalseDisplayText);
                 AppendEditorParts(builder, column.EditorParts);
             }
         }
@@ -227,6 +263,8 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
         AppendRelativeLocator(builder, parts.OpenButton);
         AppendRelativeLocator(builder, parts.ConfirmButton);
         AppendRelativeLocator(builder, parts.CancelButton);
+        AppendRelativeLocator(builder, parts.CommitTarget);
+        AppendField(builder, parts.UseKeyboardInput);
     }
 
     private static void AppendRelativeLocator(StringBuilder builder, GridRelativeLocator? locator)

@@ -3,6 +3,7 @@ namespace AppAutomation.Abstractions;
 internal class ConfiguredGridControl :
     IAddressableGridControl,
     IGridColumnMetadataControl,
+    IGridLogicalColumnMetadataControl,
     IGridAutomationCatalogControl
 {
     private readonly IEditableGridControl? _editableGrid;
@@ -11,6 +12,7 @@ internal class ConfiguredGridControl :
     private readonly IIndexedAddressableGridControl? _indexedGrid;
     private readonly IReadOnlyList<GridColumnDefinition> _columns;
     private readonly IReadOnlyList<string> _runtimeColumnNames;
+    private readonly IReadOnlyList<string> _runtimeMetadataNames;
     private readonly Dictionary<string, int> _columnIndexes;
 
     public ConfiguredGridControl(
@@ -29,11 +31,13 @@ internal class ConfiguredGridControl :
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _columns = columns ?? throw new ArgumentNullException(nameof(columns));
         GridAutomationFingerprint = catalogFingerprint;
-        ColumnNames = Array.AsReadOnly(columns.Select(static column => column.LogicalName).ToArray());
-        _runtimeColumnNames = inner is IGridColumnMetadataControl metadata
-            && metadata.ColumnNames.Count == columns.Count
-                ? Array.AsReadOnly(metadata.ColumnNames.ToArray())
-                : ColumnNames;
+        _runtimeMetadataNames = inner is IGridColumnMetadataControl metadata
+            ? Array.AsReadOnly(metadata.ColumnNames.ToArray())
+            : Array.Empty<string>();
+        ColumnNames = _runtimeMetadataNames;
+        _runtimeColumnNames = Array.AsReadOnly(columns
+            .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
+            .ToArray());
         _columnIndexes = columns
             .Select(static (column, index) => (column.LogicalName, index))
             .ToDictionary(static item => item.LogicalName, static item => item.index, StringComparer.Ordinal);
@@ -53,11 +57,32 @@ internal class ConfiguredGridControl :
 
     public IReadOnlyList<string> ColumnNames { get; }
 
+    public IReadOnlyList<GridColumnDefinition> LogicalColumns => _columns;
+
     public string GridAutomationFingerprint { get; }
 
     public IGridRowControl? GetRowByIndex(int index) => Inner.GetRowByIndex(index);
 
     public bool TryGetColumnIndex(string columnName, out int columnIndex)
+    {
+        if (string.IsNullOrWhiteSpace(columnName))
+        {
+            columnIndex = -1;
+            return false;
+        }
+
+        var normalized = columnName.Trim();
+        var matches = _runtimeMetadataNames
+            .Select((name, index) => (name, index))
+            .Where(candidate => string.Equals(candidate.name, normalized, StringComparison.Ordinal))
+            .Select(static candidate => candidate.index)
+            .Take(2)
+            .ToArray();
+        columnIndex = matches.Length == 1 ? matches[0] : -1;
+        return matches.Length == 1;
+    }
+
+    public bool TryGetLogicalColumnIndex(string columnName, out int columnIndex)
     {
         if (string.IsNullOrWhiteSpace(columnName))
         {
@@ -72,6 +97,11 @@ internal class ConfiguredGridControl :
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+
+        if (ShouldUseIndexedGrid(row))
+        {
+            return _indexedGrid!.ResolveRow(MapRow(row), timeoutMs);
+        }
 
         if (ShouldUseAddressableGrid())
         {
@@ -105,6 +135,12 @@ internal class ConfiguredGridControl :
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
 
         var columnIndex = ResolveColumnIndex(address.ColumnName);
+        if (ShouldUseIndexedGrid(address.Row, columnIndex))
+        {
+            var snapshot = _indexedGrid!.ReadCell(MapRow(address.Row), MapColumn(columnIndex), timeoutMs);
+            return NormalizeValueSnapshot(snapshot, _columns[columnIndex]);
+        }
+
         if (ShouldUseAddressableGrid())
         {
             var snapshot = _addressableGrid!.ReadCell(MapAddressableAddress(address, columnIndex), timeoutMs);
@@ -143,19 +179,35 @@ internal class ConfiguredGridControl :
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
 
         var columnIndex = ResolveColumnIndex(address.ColumnName);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "copy grid cell");
+        if (ShouldUseIndexedGrid(address.Row, columnIndex))
+        {
+            var mappedRow = MapRow(address.Row);
+            var mappedColumn = MapColumn(columnIndex);
+            var copied = _indexedGrid!.CopyCell(mappedRow, mappedColumn, budget.RemainingMilliseconds);
+            return NormalizeCopiedValue(copied, _columns[columnIndex]);
+        }
+
         if (ShouldUseAddressableGrid())
         {
-            return _addressableGrid!.CopyCell(MapAddressableAddress(address, columnIndex), timeoutMs);
+            var mappedAddress = MapAddressableAddress(address, columnIndex);
+            var copied = _addressableGrid!.CopyCell(mappedAddress, budget.RemainingMilliseconds);
+            return NormalizeCopiedValue(copied, _columns[columnIndex]);
         }
 
         if (_indexedGrid is not null)
         {
-            return _indexedGrid.CopyCell(MapRow(address.Row), MapColumn(columnIndex), timeoutMs);
+            var mappedRow = MapRow(address.Row);
+            var mappedColumn = MapColumn(columnIndex);
+            var copied = _indexedGrid.CopyCell(mappedRow, mappedColumn, budget.RemainingMilliseconds);
+            return NormalizeCopiedValue(copied, _columns[columnIndex]);
         }
 
         if (_addressableGrid is not null)
         {
-            return _addressableGrid.CopyCell(MapAddressableAddress(address, columnIndex), timeoutMs);
+            var mappedAddress = MapAddressableAddress(address, columnIndex);
+            var copied = _addressableGrid.CopyCell(mappedAddress, budget.RemainingMilliseconds);
+            return NormalizeCopiedValue(copied, _columns[columnIndex]);
         }
 
         if (_actionGrid is null)
@@ -163,7 +215,8 @@ internal class ConfiguredGridControl :
             return ReadCell(address, timeoutMs).DisplayText ?? string.Empty;
         }
 
-        return _actionGrid.CopyCell(ResolveUniqueRowIndex(address.Row), columnIndex);
+        var actionCopied = _actionGrid.CopyCell(ResolveUniqueRowIndex(address.Row), columnIndex);
+        return NormalizeCopiedValue(actionCopied, _columns[columnIndex]);
     }
 
     public void EditCell(
@@ -174,33 +227,41 @@ internal class ConfiguredGridControl :
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var columnIndex = ResolveColumnIndex(address.ColumnName);
+        if (ShouldUseIndexedGrid(address.Row, columnIndex))
+        {
+            _indexedGrid!.EditCell(
+                MapRow(address.Row),
+                MapColumn(columnIndex),
+                request with { EditorParts = request.EditorParts ?? _columns[columnIndex].EditorParts },
+                timeoutMs);
+            return;
+        }
+
         if (ShouldUseAddressableGrid())
         {
-            var addressableColumn = ResolveColumnIndex(address.ColumnName);
             _addressableGrid!.EditCell(
-                MapAddressableAddress(address, addressableColumn),
-                request with { EditorParts = request.EditorParts ?? _columns[addressableColumn].EditorParts },
+                MapAddressableAddress(address, columnIndex),
+                request with { EditorParts = request.EditorParts ?? _columns[columnIndex].EditorParts },
                 timeoutMs);
             return;
         }
 
         if (_indexedGrid is not null)
         {
-            var indexedColumn = ResolveColumnIndex(address.ColumnName);
             _indexedGrid.EditCell(
                 MapRow(address.Row),
-                MapColumn(indexedColumn),
-                request with { EditorParts = request.EditorParts ?? _columns[indexedColumn].EditorParts },
+                MapColumn(columnIndex),
+                request with { EditorParts = request.EditorParts ?? _columns[columnIndex].EditorParts },
                 timeoutMs);
             return;
         }
 
         if (_addressableGrid is not null)
         {
-            var addressableColumn = ResolveColumnIndex(address.ColumnName);
             _addressableGrid.EditCell(
-                MapAddressableAddress(address, addressableColumn),
-                request with { EditorParts = request.EditorParts ?? _columns[addressableColumn].EditorParts },
+                MapAddressableAddress(address, columnIndex),
+                request with { EditorParts = request.EditorParts ?? _columns[columnIndex].EditorParts },
                 timeoutMs);
             return;
         }
@@ -211,7 +272,7 @@ internal class ConfiguredGridControl :
                 $"Grid '{AutomationId}' does not support cell editing.");
         }
 
-        var (rowIndex, columnIndex) = ResolveIndexes(address);
+        var rowIndex = ResolveUniqueRowIndex(address.Row);
         _editableGrid.EditCell(
             new GridCellEditRequest(
                 rowIndex,
@@ -230,6 +291,12 @@ internal class ConfiguredGridControl :
     {
         ArgumentNullException.ThrowIfNull(row);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        if (ShouldUseIndexedGrid(row))
+        {
+            _indexedGrid!.OpenRow(MapRow(row), timeoutMs);
+            return;
+        }
+
         if (ShouldUseAddressableGrid())
         {
             _addressableGrid!.OpenRow(MapAddressableRow(row), timeoutMs);
@@ -268,9 +335,31 @@ internal class ConfiguredGridControl :
             || Inner is IGridColumnMetadataControl { ColumnNames.Count: > 0 };
     }
 
+    private bool ShouldUseIndexedGrid(GridRowSelector row, int? targetColumnIndex = null)
+    {
+        return _indexedGrid is not null
+            && (row.Conditions.Any(RequiresIndexedAccess)
+                || targetColumnIndex is { } columnIndex
+                && FindRuntimeColumnIndex(_columns[columnIndex]) is null);
+
+        bool RequiresIndexedAccess(GridRowCondition condition)
+        {
+            var column = _columns[ResolveColumnIndex(condition.ColumnName)];
+            return FindRuntimeColumnIndex(column) is null
+                || column.RowIdentityAutomationProperty is not null;
+        }
+    }
+
     protected int ResolveColumnIndex(string columnName)
     {
-        return GridRuntimeResolver.ResolveColumnIndex((IGridColumnMetadataControl)this, columnName);
+        if (TryGetLogicalColumnIndex(columnName, out var columnIndex))
+        {
+            return columnIndex;
+        }
+
+        throw new InvalidOperationException(
+            $"Grid logical column '{columnName}' is not configured. Available logical columns: "
+            + string.Join(", ", _columns.Select(static column => column.LogicalName)) + ".");
     }
 
     protected int ResolveUniqueRowIndex(GridRowSelector row)
@@ -288,10 +377,14 @@ internal class ConfiguredGridControl :
 
     private GridIndexedRowSelector MapRow(GridRowSelector row)
     {
-        return new GridIndexedRowSelector(
+        var mapped = new GridIndexedRowSelector(
             row.Conditions.Select(condition => new GridIndexedCellCondition(
                 MapColumn(ResolveColumnIndex(condition.ColumnName)),
                 condition.Value)));
+
+        return IsDeclaredIdentitySelector(row)
+            ? mapped.WithDeclaredUniqueIdentity()
+            : mapped;
     }
 
     private GridRowSelector MapAddressableRow(GridRowSelector row)
@@ -344,12 +437,38 @@ internal class ConfiguredGridControl :
             column.CultureName,
             column.ValueKind ?? GridCellValueNormalizer.InferValueKind(column.EditorKind),
             column.EditorKind,
-            column.EditorParts);
+            column.EditorParts)
+        {
+            CellContext = Definition.CellContext,
+            RuntimeColumnIndex = FindRuntimeColumnIndex(column),
+            RowIdentityAutomationProperty = column.RowIdentityAutomationProperty,
+            BooleanTrueDisplayText = column.BooleanTrueDisplayText,
+            BooleanFalseDisplayText = column.BooleanFalseDisplayText
+        };
     }
 
-    private (int RowIndex, int ColumnIndex) ResolveIndexes(GridCellAddress address)
+    private int? FindRuntimeColumnIndex(GridColumnDefinition column)
     {
-        return (ResolveUniqueRowIndex(address.Row), ResolveColumnIndex(address.ColumnName));
+        var runtimeName = column.RuntimeColumnName;
+        if (string.IsNullOrWhiteSpace(runtimeName))
+        {
+            return _runtimeMetadataNames.Count == 0
+                ? null
+                : FindUniqueRuntimeIndex(column.SourceFieldName);
+        }
+
+        return FindUniqueRuntimeIndex(runtimeName);
+    }
+
+    private int? FindUniqueRuntimeIndex(string runtimeName)
+    {
+        var matches = _runtimeMetadataNames
+            .Select((name, index) => (name, index))
+            .Where(candidate => string.Equals(candidate.name, runtimeName, StringComparison.Ordinal))
+            .Select(static candidate => candidate.index)
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     private GridCellValueSnapshot NormalizeValueSnapshot(
@@ -360,6 +479,19 @@ internal class ConfiguredGridControl :
             Definition.PagePropertyName,
             snapshot,
             column);
+    }
+
+    private string NormalizeCopiedValue(string copied, GridColumnDefinition column)
+    {
+        if (!string.IsNullOrWhiteSpace(column.DisplayValuePath))
+        {
+            return copied;
+        }
+
+        return NormalizeValueSnapshot(
+                new GridCellValueSnapshot(copied, copied, column.ValueKind ?? GridCellValueKind.Text),
+                column)
+            .DisplayText ?? string.Empty;
     }
 
     internal GridCellValueSnapshot NormalizeValueSnapshot(GridCellValueSnapshot snapshot, int columnIndex) =>

@@ -645,7 +645,6 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 {
     private readonly string _propertyName;
     private readonly SearchPickerParts _parts;
-    private readonly SearchPickerSelectionState _selectionState = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SearchPickerControlAdapter"/> class.
@@ -704,8 +703,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             results,
             applyButton,
             expandButton,
-            _parts.OpensOnSearch,
-            _selectionState);
+            _parts.OpensOnSearch);
     }
 
     private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver)
@@ -746,7 +744,6 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         private readonly IButtonControl? _applyButton;
         private readonly IButtonControl? _expandButton;
         private readonly bool _opensOnSearch;
-        private readonly SearchPickerSelectionState _selectionState;
         private bool _isExpanded;
 
         public SearchPickerControl(
@@ -755,8 +752,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             ISearchPickerResultsSurface results,
             IButtonControl? applyButton,
             IButtonControl? expandButton,
-            bool opensOnSearch,
-            SearchPickerSelectionState selectionState)
+            bool opensOnSearch)
         {
             AutomationId = automationId;
             _searchInput = searchInput;
@@ -764,7 +760,6 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             _applyButton = applyButton;
             _expandButton = expandButton;
             _opensOnSearch = opensOnSearch;
-            _selectionState = selectionState;
         }
 
         public string AutomationId { get; }
@@ -792,13 +787,17 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         {
             get
             {
-                if (_results.SelectedItemText is { } selectedItemText)
+                try
                 {
-                    _selectionState.Record(selectedItemText, SearchText);
-                    return selectedItemText;
+                    return _results.SelectedItemText;
                 }
-
-                return _selectionState.Read(SearchText);
+                catch (UiControlResolutionException exception) when (exception.IsTransient)
+                {
+                    throw new UiControlResolutionException(exception.Failure,
+                        $"Search picker '{AutomationId}' cannot read its committed selection: {exception.Message} " +
+                        "For detached popup results, configure a SingleSelect results adapter with a persistent SelectedValueLocator.",
+                        exception);
+                }
             }
         }
 
@@ -860,12 +859,10 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
             Expand();
             _results.SelectItem(itemText);
-            _selectionState.Record(itemText, SearchText);
         }
 
         private void EnterSearchInput(string value)
         {
-            _selectionState.Clear();
             _isExpanded = false;
             _searchInput.Enter(value);
         }
@@ -874,47 +871,6 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         {
             _applyButton?.Invoke();
             _isExpanded = _opensOnSearch;
-        }
-    }
-
-    private sealed class SearchPickerSelectionState
-    {
-        private readonly object _sync = new();
-        private string? _selectedItemText;
-        private string? _searchTextAtSelection;
-
-        public void Clear()
-        {
-            lock (_sync)
-            {
-                _selectedItemText = null;
-                _searchTextAtSelection = null;
-            }
-        }
-
-        public void Record(string selectedItemText, string searchText)
-        {
-            lock (_sync)
-            {
-                _selectedItemText = selectedItemText;
-                _searchTextAtSelection = searchText;
-            }
-        }
-
-        public string? Read(string currentSearchText)
-        {
-            lock (_sync)
-            {
-                if (string.Equals(currentSearchText, _searchTextAtSelection, StringComparison.Ordinal)
-                    || string.Equals(currentSearchText, _selectedItemText, StringComparison.OrdinalIgnoreCase))
-                {
-                    return _selectedItemText;
-                }
-
-                _selectedItemText = null;
-                _searchTextAtSelection = null;
-                return null;
-            }
         }
     }
 
@@ -950,7 +906,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public bool IsEnabled => TryResolve()?.IsEnabled ?? false;
 
-        public string? SelectedItemText => TryResolve()?.SelectedItemText;
+        public string? SelectedItemText => Resolve().SelectedItemText;
 
         public IReadOnlyList<string> Items => TryResolve()?.Items ?? Array.Empty<string>();
 

@@ -62,6 +62,8 @@ internal static class ControlTree
         EnqueuePropertyValue(control, "Content", queue);
         EnqueuePropertyValue(control, "Child", queue);
         EnqueuePropertyValue(control, "PopupContent", queue);
+        EnqueuePropertyValue(control, "InnerLeftContent", queue);
+        EnqueuePropertyValue(control, "InnerRightContent", queue);
         EnqueueEnumerablePropertyValues(control, "Items", queue);
     }
 

@@ -11,6 +11,79 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 public sealed class HeadlessControlResolverTests
 {
     [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("DesktopUi")]
+    public async Task ResolveButton_IsEnabledTracksCommand(bool parentEnabled)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var command = new EnableableCommand();
+        var button = HeadlessRuntime.Dispatch(() =>
+        {
+            var control = new global::Avalonia.Controls.Button { Command = command };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "ActionButton");
+            session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
+            {
+                IsEnabled = parentEnabled,
+                Children = { control }
+            };
+            return control;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var resolvedButton = resolver.Resolve<IButtonControl>(new UiControlDefinition(
+            "ActionButton", UiControlType.Button, "ActionButton"));
+
+        foreach (var canExecute in new[] { false, true, false })
+        {
+            HeadlessRuntime.Dispatch(() => command.SetCanExecute(canExecute));
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(HeadlessRuntime.Dispatch(() => button.IsEnabled)).IsTrue();
+                await Assert.That(resolvedButton.IsEnabled).IsEqualTo(canExecute && parentEnabled);
+            }
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ResolveControls_IsEnabledTracksDisabledAncestor()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var controls = HeadlessRuntime.Dispatch(() =>
+        {
+            var button = new global::Avalonia.Controls.Button();
+            var input = new global::Avalonia.Controls.TextBox();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(button, "ActionButton");
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(input, "ValueInput");
+            var ancestor = new global::Avalonia.Controls.Border
+            {
+                Child = new global::Avalonia.Controls.StackPanel { Children = { button, input } }
+            };
+            session.MainWindow.Content = ancestor;
+            return (Ancestor: ancestor, Button: button, Input: input);
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var resolvedButton = resolver.Resolve<IButtonControl>(new UiControlDefinition(
+            "ActionButton", UiControlType.Button, "ActionButton"));
+        var resolvedInput = resolver.Resolve<ITextBoxControl>(new UiControlDefinition(
+            "ValueInput", UiControlType.TextBox, "ValueInput"));
+
+        foreach (var enabled in new[] { false, true, false })
+        {
+            HeadlessRuntime.Dispatch(() => { controls.Ancestor.IsEnabled = enabled; });
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(HeadlessRuntime.Dispatch(() => controls.Button.IsEnabled)).IsTrue();
+                await Assert.That(HeadlessRuntime.Dispatch(() => controls.Input.IsEnabled)).IsTrue();
+                await Assert.That(resolvedButton.IsEnabled).IsEqualTo(enabled);
+                await Assert.That(resolvedInput.IsEnabled).IsEqualTo(enabled);
+            }
+        }
+    }
+
+    [Test]
     [Arguments(0)]
     [Arguments(1)]
     [Arguments(2)]
@@ -104,25 +177,61 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("DesktopUi")]
-    public async Task SelectListBoxItem_ByCapability_SelectsHeadlessItem()
+    public async Task SelectListBoxItem_ByCapability_SelectsHeadlessItem(bool useAutomationName)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
-        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+        var entries = Enumerable.Range(1, 24).Select(index => new DisplayListEntry($"Item {index}")).ToArray();
+        var list = HeadlessRuntime.Dispatch(() =>
+        {
+            var control = new global::Avalonia.Controls.ListBox
+            {
+                Height = 100,
+                ItemsSource = entries,
+                ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
+                {
+                    var text = new global::Avalonia.Controls.TextBlock
+                    {
+                        Text = useAutomationName ? "Visual decoration" : entry?.Caption
+                    };
+                    if (useAutomationName)
+                    {
+                        global::Avalonia.Automation.AutomationProperties.SetName(text, entry?.Caption);
+                    }
 
-        page
-            .SelectTabItem(static candidate => candidate.HierarchyTabItem)
-            .SelectTreeItem(static candidate => candidate.DemoTree, "Fibonacci")
-            .WaitUntilHasItemsAtLeast(static candidate => candidate.HierarchySelectionList, 2)
-            .SelectListBoxItem(static candidate => candidate.HierarchySelectionList, "Fibonacci");
+                    return text;
+                })
+            };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "ItemList");
+            session.MainWindow.Content = control;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+            return control;
+        });
+        var selectableList = new HeadlessControlResolver(session.MainWindow).Resolve<ISelectableListBoxControl>(
+            new UiControlDefinition("ItemList", UiControlType.ListBox, "ItemList"));
 
-        var selectableList = page.HierarchySelectionList as ISelectableListBoxControl;
+        await Assert.That(selectableList.Items.Select(item => item.Text).ToArray())
+            .IsEquivalentTo(entries.Select(entry => (string?)entry.Caption).ToArray());
+        selectableList.SelectItem("Item 24");
+        HeadlessRuntime.Dispatch(() => { list.ScrollIntoView(0); list.UpdateLayout(); });
 
         using (Assert.Multiple())
         {
-            await Assert.That(selectableList).IsNotNull();
-            await Assert.That(selectableList!.SelectedItemText).IsEqualTo("Fibonacci");
+            await Assert.That(selectableList.SelectedItemText).IsEqualTo("Item 24");
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[23]);
         }
+
+        HeadlessRuntime.Dispatch(() => { list.ItemsSource = entries.Append(new DisplayListEntry("Item 24")).ToArray(); });
+        var duplicate = Assert.Throws<InvalidOperationException>(() => selectableList.SelectItem("Item 24"));
+        var exactDuplicate = Assert.Throws<InvalidOperationException>(() =>
+            ((IExactSelectableListBoxControl)selectableList).SelectItemExact("Item 24"));
+        await Assert.That(duplicate.Message).Contains("ambiguous");
+        await Assert.That(exactDuplicate.Message).Contains("ambiguous");
+        await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[23]);
     }
 
     [Test]
@@ -144,33 +253,6 @@ public sealed class HeadlessControlResolverTests
         {
             await Assert.That(selected).IsEquivalentTo(["LCM"]);
             await Assert.That(items.SelectedItems).IsEmpty();
-        }
-    }
-
-    [Test]
-    [NotInParallel("DesktopUi")]
-    public async Task ResolveEremexDataGridBridge_ByAutomationId_ReadsRowsAndCells()
-    {
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
-        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
-
-        page
-            .SelectTabItem(static candidate => candidate.DataGridTabItem)
-            .EnterText(static candidate => candidate.DataGridRowsInput, "5")
-            .ClickButton(static candidate => candidate.BuildGridButton)
-            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
-            .WaitUntilGridRowsAtLeast(static candidate => candidate.EremexDemoDataGridAutomationBridge, 5)
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 0, "EX-R3")
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 1, "EX-13")
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 2, "EX-Odd");
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(page.Capabilities.SupportsGridCellAccess).IsEqualTo(true);
-            await Assert.That(page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
-            await Assert.That(page.EremexDemoDataGrid.IsEnabled).IsEqualTo(true);
-            await Assert.That(page.EremexDemoDataGridAutomationBridge.Rows.Count >= 5).IsEqualTo(true);
-            await Assert.That(page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
         }
     }
 
@@ -206,6 +288,28 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("R3");
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[1].Value).IsEqualTo("13");
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("Odd");
+        }
+    }
+
+    private sealed class DisplayListEntry(string caption)
+    {
+        public string Caption { get; } = caption;
+    }
+
+    private sealed class EnableableCommand : global::System.Windows.Input.ICommand
+    {
+        private bool _canExecute;
+
+        public event EventHandler? CanExecuteChanged;
+
+        public bool CanExecute(object? parameter) => _canExecute;
+
+        public void Execute(object? parameter) => throw new InvalidOperationException("This test only reads availability.");
+
+        public void SetCanExecute(bool value)
+        {
+            _canExecute = value;
+            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 }

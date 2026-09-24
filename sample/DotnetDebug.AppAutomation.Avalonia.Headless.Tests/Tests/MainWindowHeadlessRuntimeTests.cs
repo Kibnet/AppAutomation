@@ -31,14 +31,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         "HistoryFilterInput",
                         "OperationCombo",
                         applyButtonAutomationId: "ApplyFilterButton"))
-                .WithSearchPicker(
-                    "ArmServerSearchPicker",
-                    SearchPickerParts.ByAutomationIds(
-                        "ArmServerSearchPicker_Input",
-                        "ArmServerSearchPicker_Results",
-                        expandButtonAutomationId: "ArmServerSearchPicker_OpenButton",
-                        resultsKind: SearchPickerResultsKind.ListBox,
-                        opensOnSearch: true))
+                .WithSampleSearchPicker("ArmServerSearchPicker", "SamplePickerCommittedValue")
                 .WithColorPicker(
                     "ArmAccentColorPicker",
                     ColorPickerParts.ByAutomationIds(
@@ -50,12 +43,6 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         confirmButtonAutomationId: "ArmAccentColorConfirmButton",
                         cancelButtonAutomationId: "ArmAccentColorCancelButton",
                         commitMode: ColorPickerCommitMode.Confirm))
-                .WithGridColumns(
-                    "EremexDemoDataGridAutomationBridge",
-                    ["EremexRow", "EremexValue", "EremexParity"])
-                .WithGridColumns(
-                    "ArmGridAutomationBridge",
-                    ["Key", "Value", "Color", "State"])
                 .WithGridAutomation(SampleGridAutomation.CreateHeadlessCatalog())
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",

@@ -42,14 +42,29 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             new MultiSelectItemViewModel("Omega")
         ];
         SelectedMultiSelectItems.Add(MultiSelectItems[0]);
-        SearchPickerGridRows = [SearchPickerGridRow];
+        for (var index = 0; index < 3; index++)
+        {
+            var state = index % 2 == 0 ? "Open" : "Pending";
+            var color = index % 2 == 0 ? "#FF336699" : "#FF663399";
+            ArmGridRows.Add(new ArmDesktopGridRowViewModel(index, $"Value-{index + 1}", state, color));
+        }
     }
 
     public ObservableCollection<DataGridRowViewModel> DataGridRows { get; } = [];
 
-    public SearchPickerGridRowViewModel SearchPickerGridRow { get; } = new();
+    public ObservableCollection<ArmDesktopGridRowViewModel> ArmGridRows { get; } = [];
 
-    public IReadOnlyList<SearchPickerGridRowViewModel> SearchPickerGridRows { get; }
+    public IReadOnlyList<string> ArmServerItems { get; } =
+    [
+        "Product 42 extended",
+        "Service Contract",
+        "Product 42",
+        "Product  42 rolled",
+        "Warehouse North",
+        "Customer Archive"
+    ];
+
+    public IReadOnlyList<string> ArmGridStateOptions { get; } = ["Open", "Pending", "Closed"];
 
     public ObservableCollection<MultiSelectItemViewModel> MultiSelectItems { get; }
 

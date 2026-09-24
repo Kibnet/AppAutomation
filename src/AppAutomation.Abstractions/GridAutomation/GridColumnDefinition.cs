@@ -15,6 +15,12 @@ public sealed record GridColumnDefinition
 
     public string SourceFieldName { get; private init; }
 
+    /// <summary>
+    /// Gets the provider-facing runtime column name, such as a visible UIA header.
+    /// When omitted, the logical and source names remain valid runtime matches.
+    /// </summary>
+    public string? RuntimeColumnName { get; private init; }
+
     public string? DisplayValuePath { get; private init; }
 
     public string? FormatString { get; private init; }
@@ -33,6 +39,15 @@ public sealed record GridColumnDefinition
     /// </summary>
     public bool IsStableIdentityCandidate { get; private init; }
 
+    /// <summary>
+    /// Gets the UI Automation row property that exposes this hidden identity during cross-process playback.
+    /// </summary>
+    public GridRowAutomationProperty? RowIdentityAutomationProperty { get; private init; }
+
+    public string? BooleanTrueDisplayText { get; private init; }
+
+    public string? BooleanFalseDisplayText { get; private init; }
+
     public static GridColumnDefinition Auto(string fieldName) => new(fieldName);
 
     public static GridColumnDefinition Map(string logicalName) => new(logicalName);
@@ -43,6 +58,22 @@ public sealed record GridColumnDefinition
         {
             SourceFieldName = GridAutomationDefinition.NormalizeRequired(sourceFieldName, nameof(sourceFieldName))
         };
+    }
+
+    /// <summary>Maps this column to an independently named runtime column.</summary>
+    public GridColumnDefinition AtRuntime(string runtimeColumnName)
+    {
+        return this with
+        {
+            RuntimeColumnName = GridAutomationDefinition.NormalizeRequired(
+                runtimeColumnName,
+                nameof(runtimeColumnName))
+        };
+    }
+
+    internal GridColumnDefinition BindRuntimeColumn(string runtimeColumnName)
+    {
+        return AtRuntime(runtimeColumnName);
     }
 
     public GridColumnDefinition DisplayValueFrom(string propertyPath)
@@ -80,4 +111,27 @@ public sealed record GridColumnDefinition
 
     public GridColumnDefinition AsStableIdentityCandidate() =>
         this with { IsStableIdentityCandidate = true };
+
+    /// <summary>
+    /// Reads this identity value from metadata on the real row when no visible cell exposes it.
+    /// </summary>
+    public GridColumnDefinition ReadIdentityFromRow(GridRowAutomationProperty automationProperty) =>
+        this with { RowIdentityAutomationProperty = automationProperty };
+
+    /// <summary>Maps localized boolean captions while preserving the semantic Boolean value.</summary>
+    public GridColumnDefinition WithBooleanDisplayText(string trueText, string falseText)
+    {
+        var normalizedTrue = GridAutomationDefinition.NormalizeRequired(trueText, nameof(trueText));
+        var normalizedFalse = GridAutomationDefinition.NormalizeRequired(falseText, nameof(falseText));
+        if (string.Equals(normalizedTrue, normalizedFalse, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Boolean display texts must be distinct.", nameof(falseText));
+        }
+
+        return this with
+        {
+            BooleanTrueDisplayText = normalizedTrue,
+            BooleanFalseDisplayText = normalizedFalse
+        };
+    }
 }

@@ -23,9 +23,8 @@ internal static class GridRuntimeResolver
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(rowSelector);
 
-        var metadata = RequireColumnMetadata(grid);
         var conditions = rowSelector.Conditions
-            .Select(condition => (ColumnIndex: ResolveColumnIndex(metadata, condition.ColumnName), Condition: condition))
+            .Select(condition => (ColumnIndex: ResolveColumnIndex(grid, condition.ColumnName), Condition: condition))
             .ToArray();
         var matches = new List<int>();
         var rows = grid.Rows;
@@ -76,6 +75,12 @@ internal static class GridRuntimeResolver
 
     public static int ResolveColumnIndex(IGridControl grid, string columnName)
     {
+        if (grid is IGridLogicalColumnMetadataControl logical
+            && logical.TryGetLogicalColumnIndex(columnName, out var logicalIndex))
+        {
+            return logicalIndex;
+        }
+
         return ResolveColumnIndex(RequireColumnMetadata(grid), columnName);
     }
 

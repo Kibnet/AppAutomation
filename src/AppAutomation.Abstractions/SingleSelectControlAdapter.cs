@@ -185,7 +185,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         public void Expand()
         {
-            OpenAndResolveSurface(5000).Expand();
+            OpenAndResolveSurface(5000);
         }
 
         public void SelectItem(string itemText, int timeoutMs)
@@ -234,7 +234,10 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                 },
                 $"Single-selection editor '{_parts.RootLocator}' did not become available.");
 
-            if (!string.IsNullOrWhiteSpace(_parts.OpenButtonLocator))
+            var isOpen = !string.IsNullOrWhiteSpace(_parts.PopupRootLocator)
+                ? IsPopupAvailable()
+                : TryResolveSurface() is { IsEnabled: true };
+            if (!isOpen && !string.IsNullOrWhiteSpace(_parts.OpenButtonLocator))
             {
                 InvokeButton(_parts.OpenButtonLocator, "Open", budget.Remaining);
             }
@@ -290,70 +293,80 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         private string? ReadSelectedValue()
         {
-            if (_parts.CommitMode == SingleSelectCommitMode.Immediate)
+            if (!string.IsNullOrWhiteSpace(_parts.SelectedValueLocator))
             {
-                var surfaceValue = TryResolveSurface()?.SelectedText;
-                if (!string.IsNullOrWhiteSpace(surfaceValue))
-                {
-                    return surfaceValue.Trim();
-                }
+                var value = ReadSelectedValueText(_parts.SelectedValueLocator);
+                return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
             }
 
-            var displayedValue = TryReadText(_parts.SelectedValueLocator)
-                ?? TryReadText(_parts.InputLocator)
-                ?? TryReadRootSelection();
-            if (!string.IsNullOrWhiteSpace(displayedValue))
+            if (TryResolveRoot() is IComboBoxControl comboBox)
             {
-                return displayedValue.Trim();
+                return comboBox.SelectedItem?.Text;
             }
 
-            return null;
-        }
-
-        private string? TryReadRootSelection()
-        {
-            return TryResolveRoot() switch
+            if (_parts.CommitMode == SingleSelectCommitMode.Immediate && TryResolveSurface() is { } surface)
             {
-                IComboBoxControl comboBox => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name,
-                ITextBoxControl textBox => textBox.Text,
-                IReadableTextControl readable => readable.Text,
-                _ => null
-            };
+                return surface.SelectedText;
+            }
+
+            throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                $"Single-selection editor '{_parts.RootLocator}' has no accessible committed selection source. " +
+                "Configure SelectedValueLocator for a value part that remains readable when the popup is closed.");
         }
 
         private void WaitForCommittedSelection(string expected, TimeSpan timeout)
         {
-            UiWait.Until(
-                ReadSelectedValue,
-                actual => string.Equals(actual?.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase),
-                new UiWaitOptions { Timeout = timeout, PollInterval = TimeSpan.FromMilliseconds(50) },
-                $"Single-selection editor '{_parts.RootLocator}' did not commit item '{expected}'.");
+            UiControlResolutionException? lastFailure = null;
+            var result = UiWait.TryUntil(
+                () =>
+                {
+                    try
+                    {
+                        var actual = ReadSelectedValue();
+                        lastFailure = null;
+                        return string.Equals(actual?.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch (UiControlResolutionException exception) when (exception.IsTransient)
+                    {
+                        lastFailure = exception;
+                        return false;
+                    }
+                },
+                static committed => committed,
+                new UiWaitOptions { Timeout = timeout, PollInterval = TimeSpan.FromMilliseconds(50) });
+            if (!result.Success)
+            {
+                throw new TimeoutException(
+                    $"Single-selection editor '{_parts.RootLocator}' did not commit item '{expected}'. {lastFailure?.Message}".TrimEnd(),
+                    lastFailure);
+            }
         }
 
-        private string? TryReadText(string? locator)
+        private string? ReadSelectedValueText(string locator)
         {
-            if (string.IsNullOrWhiteSpace(locator))
-            {
-                return null;
-            }
-
             try
             {
-                try
+                var control = _resolver.Resolve<IUiControl>(Definition("ValueText", UiControlType.AutomationElement, locator));
+                if (control is IUiControlAvailability { IsAvailable: false })
                 {
-                    return _resolver.Resolve<ITextBoxControl>(Definition("ValueText", UiControlType.TextBox, locator)).Text;
+                    throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                        $"Committed value part '{locator}' is unavailable.");
                 }
-                catch (UiControlResolutionException exception) when (exception.Failure == UiControlResolutionFailure.TypeMismatch)
+
+                return control switch
                 {
-                    var control = _resolver.Resolve<IUiControl>(Definition("ValueText", UiControlType.AutomationElement, locator));
-                    return control is IReadableTextControl readable
-                        ? readable.Text
-                        : throw new NotSupportedException($"Single-selection value part '{locator}' must expose readable text.");
-                }
+                    ITextBoxControl textBox => textBox.Text,
+                    ILabelControl label => label.Text,
+                    IReadableTextControl readable => readable.Text,
+                    _ => throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                        $"Committed value part '{locator}' does not expose readable text.")
+                };
             }
-            catch (UiControlResolutionException exception) when (exception.IsTransient)
+            catch (UiControlResolutionException exception)
             {
-                return null;
+                throw new UiControlResolutionException(exception.Failure,
+                    $"Single-selection editor '{_parts.RootLocator}' cannot read committed value part '{locator}': {exception.Message}",
+                    exception);
             }
         }
 

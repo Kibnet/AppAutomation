@@ -1,5 +1,6 @@
 using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Automation;
+using AppAutomation.FlaUI.Automation.GridAutomation;
 using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
@@ -117,34 +118,6 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task ServerSearchComboBox_GridPopupStaysClosedUntilEditorIsUsed()
-    {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
-
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
-        var desktop = session.MainWindow.Automation.GetDesktop();
-        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
-
-        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
-        var input = WaitForDesktopElement(session, desktop, "SearchPickerGridEditor_Input", "search input");
-        var isPopupVisible = IsVisible(desktop.FindFirstDescendant(
-            session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")));
-
-        await Assert.That(isPopupVisible).IsFalse();
-
-        input.AsTextBox().Text = "a";
-        var results = UiWait.Until(
-            () => desktop.FindFirstDescendant(
-                session.ConditionFactory.ByAutomationId("SearchPickerGridEditor_Results")),
-            IsVisible,
-            DesktopControlWaitOptions,
-            "ServerSearchComboBox results did not become visible after text input.");
-
-        await Assert.That(results).IsNotNull();
-    }
-
-    [Test]
-    [NotInParallel("DesktopUi")]
     public async Task SearchHistory_ReadsItemsFromItsPopupScope()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -223,117 +196,287 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task EremexDataGridBridge_ByAutomationId_ReadsDesktopRowsAndCells()
+    public async Task ComplexDataGrid_ThreeRowsResolveAllConfiguredColumns()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
-        // This bridge test reads realized rows; virtualization is covered separately.
         session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
-        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
+        var secondRow = GridRowSelector.ByCell("Key", "ARM-02");
+        var thirdRow = GridRowSelector.ByCell("Key", "ARM-03");
 
         page
-            .SelectTabItem(static candidate => candidate.DataGridTabItem)
-            .EnterText(static candidate => candidate.DataGridRowsInput, "5")
-            .ClickButton(static candidate => candidate.BuildGridButton)
-            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 5")
-            .WaitUntilGridRowsAtLeast(static candidate => candidate.EremexDemoDataGridAutomationBridge, 5)
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 0, "EX-R3")
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 1, "EX-13")
-            .WaitUntilGridCellEquals(static candidate => candidate.EremexDemoDataGridAutomationBridge, 2, 2, "EX-Odd");
+            .SelectTabItem(static candidate => candidate.DataGridTabItem);
 
-        var eremexAnchor = UiWait.Until(
-            () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGrid")),
-            static element => element is not null && TryRead(() => element.IsAvailable),
-            DesktopControlWaitOptions,
-            "Eremex DataGrid automation anchor was not found by AutomationId.")
-            ?? throw new InvalidOperationException("Eremex DataGrid automation anchor was not found by AutomationId.");
-        var bridgeElement = UiWait.Until(
-            () => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("EremexDemoDataGridAutomationBridge")),
-            static element => element is not null && TryRead(() => element.IsAvailable),
-            DesktopControlWaitOptions,
-            "Eremex DataGrid automation bridge was not found by AutomationId.")
-            ?? throw new InvalidOperationException("Eremex DataGrid automation bridge was not found by AutomationId.");
-
-        var visibleTexts = ReadElementNames(session.MainWindow);
+        string[] columns =
+        [
+            "Key",
+            "Value",
+            "RequiredAmount",
+            "IsApproved",
+            "State",
+            "Product",
+            "ScheduledDate",
+            "ScheduledTime"
+        ];
+        (GridRowSelector Row, string[] Values)[] initialRows =
+        [
+            (firstRow, ["ARM-01", "Value-1", "10", "True", "Open", "Product 42", "2026-09-10", "08:30:00"]),
+            (secondRow, ["ARM-02", "Value-2", "11", "False", "Pending", "Service Contract", "2026-09-11", "09:30:00"]),
+            (thirdRow, ["ARM-03", "Value-3", "12", "True", "Open", "Warehouse North", "2026-09-12", "10:30:00"])
+        ];
 
         using (Assert.Multiple())
         {
-            await Assert.That(eremexAnchor.AutomationId).IsEqualTo("EremexDemoDataGrid");
-            await Assert.That(TryRead(() => bridgeElement.Patterns.Grid.IsSupported)).IsEqualTo(false);
-            await Assert.That(page.EremexDemoDataGrid.AutomationId).IsEqualTo("EremexDemoDataGrid");
-            await Assert.That(page.EremexDemoDataGridAutomationBridge.Rows.Count >= 5).IsEqualTo(true);
-            await Assert.That(page.EremexDemoDataGridAutomationBridge.GetRowByIndex(2)!.Cells[0].Value).IsEqualTo("EX-R3");
-            await Assert.That(ContainsText(visibleTexts, "Eremex DataGrid")).IsEqualTo(true);
-            await Assert.That(page.GridResultLabel.Text).Contains("Grid rows:");
+            foreach (var (row, values) in initialRows)
+            {
+                for (var columnIndex = 0; columnIndex < columns.Length; columnIndex++)
+                {
+                    await Assert.That(GridValueReader.ReadCellText(
+                            page.ArmComplexDataGridControl,
+                            row,
+                            columns[columnIndex]))
+                        .IsEqualTo(values[columnIndex]);
+                }
+            }
+        }
+
+        page.EditGridCellNumber(
+            static candidate => candidate.ArmComplexDataGridControl,
+            firstRow,
+            "RequiredAmount",
+            1000);
+
+        await Assert.That(GridValueReader.ReadCellNumber(
+                page.ArmComplexDataGridControl,
+                firstRow,
+                "RequiredAmount"))
+            .IsEqualTo(1000);
+
+    }
+    [Test]
+    public async Task NativeGridTraversal_WaitsForInitiallyEmptyRows()
+    {
+        var observations = new Queue<string[]>(
+        [
+            [],
+            [],
+            ["row-1"]
+        ]);
+        var waits = 0;
+
+        var rows = NativeGridTraversal.WaitForRows(
+            () => observations.Dequeue(),
+            () => observations.Count > 0,
+            () => waits++);
+
+        await Assert.That(rows).IsEquivalentTo(["row-1"]);
+        await Assert.That(waits).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task NativeRowSnapshots_DistinguishRepeatedAndRecycledRows()
+    {
+        var original = new NativeGridRowSnapshot(
+            ["Repeated caption"], null, new System.Drawing.Rectangle(10, 10, 100, 20),
+            new GridScrollPosition(null, null))
+        {
+            RuntimeId = "row-1", ViewportSignature = "viewport-1"
+        };
+
+        await Assert.That(original.HasSameStableRow(original with { })).IsTrue();
+        await Assert.That(original.HasSameStableRow(original with { RuntimeId = "row-2" })).IsFalse();
+        await Assert.That(original.HasSameStableRow(original with
+        {
+            CellTexts = ["Different item"], ViewportSignature = "viewport-2"
+        })).IsFalse();
+        var uncertain = Assert.Throws<InvalidOperationException>(() => original.HasSameStableRow(original with
+        {
+            ViewportSignature = "viewport-2"
+        }));
+        await Assert.That(uncertain.Message).Contains("identity");
+
+        var positioned = original with { ScrollPosition = new GridScrollPosition(0, 0) };
+        Assert.Throws<InvalidOperationException>(() => positioned.HasSameStableRow(positioned with
+        {
+            ScrollPosition = new GridScrollPosition(0, 20)
+        }));
+
+        var overlapping = positioned with
+        {
+            ObservationIndex = 1,
+            ScrollPosition = new GridScrollPosition(null, 3),
+            Bounds = new System.Drawing.Rectangle(10, -10, 100, 20),
+            ViewportSignature = "viewport-2"
+        };
+        await Assert.That(overlapping.HasSameStableRow(positioned)).IsTrue();
+        await Assert.That(positioned.HasSameStableRow(overlapping)).IsTrue();
+        await Assert.That((overlapping with { Bounds = new System.Drawing.Rectangle(10, 30, 100, 20) })
+            .HasSameStableRow(positioned)).IsFalse();
+        Assert.Throws<InvalidOperationException>(() => (overlapping with { ObservationIndex = 3 }).HasSameStableRow(positioned));
+
+        var indexed = original with { RowIndex = 4 };
+        await Assert.That(indexed.HasSameStableRow(indexed with { RuntimeId = "recreated-peer" })).IsTrue();
+        await Assert.That(indexed.HasSameStableRow(indexed with { RowIndex = 5 })).IsFalse();
+    }
+
+    [Test]
+    public async Task NativeRowSnapshots_NormalizePhysicalProjectionsWithoutMergingRealRows()
+    {
+        var containerProjection = new NativeGridRowSnapshot(
+            ["10", "Item 42"],
+            null,
+            new System.Drawing.Rectangle(10, 20, 400, 28),
+            new GridScrollPosition(null, 0))
+        {
+            RuntimeId = "container-projection",
+            ViewportSignature = "viewport-1",
+            ObservationIndex = 3,
+            RowAutomationValues = new Dictionary<GridRowAutomationProperty, string?>
+            {
+                [GridRowAutomationProperty.ItemStatus] = "10"
+            }
+        };
+        var peerProjection = containerProjection with
+        {
+            RuntimeId = "uia-peer-projection",
+            Bounds = new System.Drawing.Rectangle(11, 21, 398, 26)
+        };
+        var laterPeerProjection = peerProjection with
+        {
+            RuntimeId = "later-uia-peer-projection",
+            ObservationIndex = 4,
+            Bounds = new System.Drawing.Rectangle(0, 23, 450, 20)
+        };
+        var namedSelectorProjection = containerProjection with
+        {
+            RuntimeId = "named-selector-projection",
+            RowAutomationValues = new Dictionary<GridRowAutomationProperty, string?>(),
+            StableValues = ["10"]
+        };
+        var namedSelectorPeer = peerProjection with
+        {
+            CellTexts = ["10"],
+            ObservationIndex = 4,
+            Bounds = new System.Drawing.Rectangle(420, 21, 80, 26),
+            RowAutomationValues = new Dictionary<GridRowAutomationProperty, string?>(),
+            StableValues = ["10"]
+        };
+        var normalizedRows = new List<NativeGridRowSnapshot>();
+        NativeGridRowNormalizer.Append(
+            normalizedRows,
+            [namedSelectorProjection, namedSelectorPeer],
+            static (first, second) => first.HasSameStableRow(second));
+        var separateBusinessRow = containerProjection with
+        {
+            RuntimeId = "separate-business-row",
+            Bounds = new System.Drawing.Rectangle(10, 52, 400, 28)
+        };
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(containerProjection.HasSameStableRow(peerProjection)).IsTrue();
+            await Assert.That(containerProjection.HasSameStableRow(laterPeerProjection)).IsTrue();
+            await Assert.That(normalizedRows).Count().IsEqualTo(1);
+            await Assert.That(containerProjection.HasSameStableRow(separateBusinessRow)).IsFalse();
+            await Assert.That(containerProjection.HasSameStableRow(peerProjection with
+            {
+                CellTexts = ["10", "Different item"]
+            })).IsFalse();
         }
     }
 
     [Test]
-    [NotInParallel("DesktopUi")]
-    public async Task AvaloniaDataGrid_StableAddressFindsVirtualizedRow()
+    public async Task VirtualizedExactItemSelector_ReResolvesReusedContainerBeforeSelection()
     {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        const string expected = "Search result";
+        var neighboring = new ReusableItemContainer("slot-1", "Search result extended");
+        var recycled = new ReusableItemContainer("slot-2", expected);
+        var rolled = new ReusableItemContainer("slot-3", "Search  result rolled");
+        var replacement = new ReusableItemContainer("slot-4", expected);
+        IReadOnlyList<ProjectedItemCandidate> candidates =
+        [
+            new("Search result extended", neighboring),
+            new(expected, recycled),
+            new("Search  result rolled", rolled)
+        ];
+        string? selected = null;
+        var reads = 0;
+        var resolutionsBySnapshot = new Dictionary<int, int>();
+        var candidateCountsBySnapshot = new Dictionary<int, int>();
 
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
-        var page = MainWindowFlaUiPageFactory.Create(session);
+        VirtualizedExactItemSelector.Select(
+            expected,
+            TimeSpan.FromSeconds(1),
+            () =>
+            {
+                reads++;
+                candidateCountsBySnapshot[reads] = candidates.Count;
+                return candidates;
+            },
+            static candidate => candidate.Caption,
+            candidate =>
+            {
+                resolutionsBySnapshot[reads] = resolutionsBySnapshot.GetValueOrDefault(reads) + 1;
+                return candidate.Container;
+            },
+            static container => container.Caption,
+            static container => container.Identity,
+            container =>
+            {
+                if (!ReferenceEquals(container, recycled))
+                {
+                    return;
+                }
 
-        page
-            .SelectTabItem(static candidate => candidate.DataGridTabItem)
-            .EnterText(static candidate => candidate.DataGridRowsInput, "60")
-            .ClickButton(static candidate => candidate.BuildGridButton)
-            .WaitUntilNameEquals(static candidate => candidate.GridResultLabel, "Grid rows: 60")
-            .WaitUntilGridCellEquals(
-                static candidate => candidate.DemoDataGrid,
-                GridRowSelector.ByCell("Row", "R60"),
-                "Value",
-                "184",
-                timeoutMs: 30000)
-            .WaitUntilGridCellEquals(
-                static candidate => candidate.DemoDataGrid,
-                GridRowSelector.ByCell("Row", "R1"),
-                "Value",
-                "7",
-                timeoutMs: 30000);
+                recycled.Caption = neighboring.Caption;
+                candidates =
+                [
+                    new("Search result extended", neighboring),
+                    new("Search result extended", recycled),
+                    new(expected, replacement),
+                    new("Search  result rolled", rolled)
+                ];
+            },
+            container =>
+            {
+                selected = container.Caption;
+                return true;
+            },
+            container =>
+            {
+                if (ReferenceEquals(container, recycled))
+                {
+                    recycled.Caption = neighboring.Caption;
+                }
 
-        var duplicateIdentityCatalog = new GridAutomationCatalog().Add(
-            GridAutomationDefinition.ByAutomationIds("DemoDataGrid", "DemoDataGrid", "DemoDataGrid")
-                .WithColumns(
-                    GridColumnDefinition.Auto("Row"),
-                    GridColumnDefinition.Auto("Value").AsValue(GridCellValueKind.Number),
-                    GridColumnDefinition.Auto("Parity"))
-                .IdentifyRowsBy("Parity"));
-        var duplicateIdentityPage = new MainWindowPage(
-            new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
-                .WithGridAutomation(duplicateIdentityCatalog));
-        var duplicateIdentityException = await Assert.That(() => GridValueReader.ReadCellText(
-                duplicateIdentityPage.DemoDataGrid,
-                GridRowSelector.ByCell("Parity", "Even"),
-                "Value"))
-            .Throws<InvalidOperationException>();
+                selected = container.Caption;
+            });
 
-        await Assert.That(duplicateIdentityException!.Message).Contains("matched");
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected).IsEqualTo(expected);
+            await Assert.That(reads).IsGreaterThanOrEqualTo(2);
+            await Assert.That(resolutionsBySnapshot.All(pair =>
+                    candidateCountsBySnapshot[pair.Key] == pair.Value))
+                .IsTrue();
+        }
     }
 
     [Test]
-    [NotInParallel("DesktopUi")]
-    public async Task VisualGridActions_OpenRowAndEditColor()
+    public async Task GridScrollBoundary_IgnoresUnusableScrollPatternWhenRangeCanMove()
     {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var reached = GridScrollBoundary.IsReached(
+            patternScrollable: false,
+            patternPercent: 0,
+            rangeMinimum: 0,
+            rangeMaximum: 100,
+            rangeValue: 25,
+            forward: true);
 
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
-        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory));
-
-        page
-            .SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
-            .ClickButton(static candidate => candidate.ArmGridBuildButton)
-            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid rows: 3")
-            .OpenGridRow(static candidate => candidate.ArmGridAutomationBridge, 0)
-            .WaitUntilNameEquals(static candidate => candidate.ArmGridStatusLabel, "Grid opened: ARM-01")
-            .EditGridCellColor(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#336699")
-            .WaitUntilGridCellEquals(static candidate => candidate.ArmGridAutomationBridge, 0, 2, "#FF336699");
-
-        await Assert.That(page.ArmGridStatusLabel.Text).IsEqualTo("Grid opened: ARM-01");
+        await Assert.That(reached).IsFalse();
     }
 
     private static string[] ReadElementNames(AutomationElement root)
@@ -419,6 +562,17 @@ public sealed class FlaUiControlResolverTests
         AutomationElement Results,
         AutomationElement ApplyButton,
         AutomationElement CancelButton);
+
+    private sealed record ProjectedItemCandidate(
+        string Caption,
+        ReusableItemContainer Container);
+
+    private sealed class ReusableItemContainer(string identity, string caption)
+    {
+        public string Identity { get; } = identity;
+
+        public string Caption { get; set; } = caption;
+    }
 
     private sealed class CalendarFallbackPage : UiPage
     {

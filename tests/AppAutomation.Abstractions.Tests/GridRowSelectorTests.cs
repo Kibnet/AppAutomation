@@ -124,19 +124,25 @@ public sealed class GridRowSelectorTests
         };
         var nativeGrid = new NativeAddressableGrid(
             nativeRow,
-            ["OrderId", "Status", "Amount"]);
+            ["Order identifier", "Status caption", "Required amount"]);
         var catalog = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds(
                     pagePropertyName: "Orders",
                     captureAutomationId: "OrdersGridVisual",
                     runtimeAutomationId: "OrdersGrid")
                 .WithColumns(
-                    GridColumnDefinition.Map("Code").FromField("OrderId"),
-                    GridColumnDefinition.Auto("Status").DisplayValueFrom("Status.Name"),
+                    GridColumnDefinition.Map("Code")
+                        .FromField("OrderId")
+                        .AtRuntime("Order identifier"),
+                    GridColumnDefinition.Auto("Status")
+                        .AtRuntime("Status caption")
+                        .DisplayValueFrom("Status.Name"),
                     GridColumnDefinition.Auto("Amount")
+                        .AtRuntime("Required amount")
                         .DisplayValueFrom("Amount")
                         .FormatWith("N1", "en-US")
-                        .AsValue(GridCellValueKind.Number))
+                        .AsValue(GridCellValueKind.Number),
+                    GridColumnDefinition.Auto("HiddenNote"))
                 .IdentifyRowsBy("Code"));
         var page = new GridPage(new GridResolver(nativeGrid).WithGridAutomation(catalog));
         nativeGrid.TransientNotFoundResolutions = 2;
@@ -188,9 +194,13 @@ public sealed class GridRowSelectorTests
         var invalidPathCatalog = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
                 .WithColumns(
-                    GridColumnDefinition.Map("Code").FromField("OrderId"),
-                    GridColumnDefinition.Auto("Status").DisplayValueFrom("Status.Caption"),
-                    GridColumnDefinition.Auto("Amount"))
+                    GridColumnDefinition.Map("Code")
+                        .FromField("OrderId")
+                        .AtRuntime("Order identifier"),
+                    GridColumnDefinition.Auto("Status")
+                        .AtRuntime("Status caption")
+                        .DisplayValueFrom("Status.Caption"),
+                    GridColumnDefinition.Auto("Amount").AtRuntime("Required amount"))
                 .IdentifyRowsBy("Code"));
         var invalidPathPage = new GridPage(
             new GridResolver(nativeGrid).WithGridAutomation(invalidPathCatalog));
@@ -199,19 +209,53 @@ public sealed class GridRowSelectorTests
                 GridRowSelector.ByCell("Code", "ITEM-42"),
                 "Status"))
             .Throws<InvalidOperationException>();
+        var displayOnlyGrid = new NativeAddressableGrid(
+            Row("ITEM-54", "Rendered status", "25"),
+            ["OrderId", "Status", "Amount"],
+            isDisplayOnly: true);
+        var displayOnlyCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Auto("Status").DisplayValueFrom("Status.Name"),
+                    GridColumnDefinition.Auto("Amount"))
+                .IdentifyRowsBy("Code"));
+        var displayOnlyPage = new GridPage(
+            new GridResolver(displayOnlyGrid).WithGridAutomation(displayOnlyCatalog));
+        var displayOnlyStatus = GridValueReader.ReadCellText(
+            displayOnlyPage.Orders,
+            GridRowSelector.ByCell("Code", "ITEM-54"),
+            "Status");
+        var unmarkedDisplayGrid = new NativeAddressableGrid(
+            Row("ITEM-55", "Rendered status", "25"),
+            ["OrderId", "Status", "Amount"]);
+        var unmarkedDisplayPage = new GridPage(
+            new GridResolver(unmarkedDisplayGrid).WithGridAutomation(displayOnlyCatalog));
+        var unmarkedDisplayException = await Assert.That(() => GridValueReader.ReadCellText(
+                unmarkedDisplayPage.Orders,
+                GridRowSelector.ByCell("Code", "ITEM-55"),
+                "Status"))
+            .Throws<InvalidOperationException>();
         var localizedNativeGrid = new NativeAddressableGrid(
-            new MutableRow("ITEM-53", "533,60"),
-            ["OrderId", "Amount"]);
+            new MutableRow("ITEM-53", "Да", "533,60 kg"),
+            ["OrderId", "Approved", "Amount"]);
         var localizedCatalog = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
                 .WithColumns(
                     GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Auto("Approved")
+                        .AsValue(GridCellValueKind.Boolean)
+                        .WithBooleanDisplayText("Да", "Нет"),
                     GridColumnDefinition.Auto("Amount")
                         .FormatWith("N2", "ru-RU")
                         .AsValue(GridCellValueKind.Number))
                 .IdentifyRowsBy("Code"));
         var localizedPage = new GridPage(
             new GridResolver(localizedNativeGrid).WithGridAutomation(localizedCatalog));
+        var localizedBoolean = GridValueReader.ReadCellBoolean(
+            localizedPage.Orders,
+            GridRowSelector.ByCell("Code", "ITEM-53"),
+            "Approved");
         var localizedNumber = GridValueReader.ReadCellNumber(
             localizedPage.Orders,
             GridRowSelector.ByCell("Code", "ITEM-53"),
@@ -257,16 +301,51 @@ public sealed class GridRowSelectorTests
             await Assert.That(displayValue.DisplayText).IsEqualTo(amount);
             await Assert.That(displayValue.RawValue).IsEqualTo(20m);
             await Assert.That(nullProjection.IsNull).IsTrue();
-            await Assert.That(metadata.ColumnNames).IsEquivalentTo(["Code", "Status", "Amount"]);
-            await Assert.That(statusAddress!.ColumnName).IsEqualTo("Status");
-            await Assert.That(statusAddress.Row.Conditions[0].ColumnName).IsEqualTo("OrderId");
+            await Assert.That(metadata.ColumnNames).IsEquivalentTo(
+                ["Order identifier", "Status caption", "Required amount"]);
+            await Assert.That(metadata.TryGetColumnIndex("HiddenNote", out _)).IsFalse();
+            await Assert.That(statusAddress!.ColumnName).IsEqualTo("Status caption");
+            await Assert.That(statusAddress.Row.Conditions[0].ColumnName).IsEqualTo("Order identifier");
+            await Assert.That(displayOnlyStatus).IsEqualTo("Rendered status");
+            await Assert.That(unmarkedDisplayException!.Message).Contains("Status.Name");
             await Assert.That(nativeGrid.ResolveRowCallCount).IsGreaterThanOrEqualTo(4);
+            await Assert.That(localizedBoolean).IsTrue();
             await Assert.That(localizedNumber).IsEqualTo(533.6d);
             await Assert.That(ambiguousCultureException!.Message).Contains("culture-ambiguous");
             await Assert.That(ambiguousCultureException.Message).Contains("53360");
             await Assert.That(invalidPathException!.Message).Contains("Orders");
             await Assert.That(invalidPathException.Message).Contains("Status");
             await Assert.That(invalidPathException.Message).Contains("Caption");
+        }
+    }
+
+    [Test]
+    public async Task CatalogGrid_LocalizesBooleanIdentityAndCopiedValue()
+    {
+        var grid = new ActionEditableGrid(
+            "OrdersGrid",
+            [Row("True", "Payload", "10")]);
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Approved")
+                        .AsValue(GridCellValueKind.Boolean)
+                        .WithBooleanDisplayText("Да", "Нет"),
+                    GridColumnDefinition.Auto("Value"),
+                    GridColumnDefinition.Auto("Amount"))
+                .IdentifyRowsBy("Approved"));
+        var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
+        var addressable = (IAddressableGridControl)page.Orders;
+        var selector = GridRowSelector.ByCell("Approved", "Да");
+
+        var resolution = addressable.ResolveRow(selector, 1000);
+        var copied = addressable.CopyCell(new GridCellAddress(selector, "Approved"), 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolution.State).IsEqualTo(GridRowResolutionState.Unique);
+            await Assert.That(copied).IsEqualTo("Да");
+            await Assert.That(grid.IndexedOperationCount).IsEqualTo(1);
         }
     }
 
@@ -283,12 +362,33 @@ public sealed class GridRowSelectorTests
             GridAutomationDefinition.ByAutomationIds("A", "B|AutomationId:C", "Runtime"));
         var delimiterCatalogB = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds("A|AutomationId:B", "C", "Runtime"));
+        var keyboardEditorCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("KeyboardGrid", "KeyboardGrid", "KeyboardGrid")
+                .WithColumns(GridColumnDefinition.Auto("Amount")
+                    .AsValue(GridCellValueKind.Number)
+                    .EditWith(
+                        GridCellEditorKind.Number,
+                        new GridCellEditorParts(
+                            Input: new GridRelativeLocator("AmountInput"),
+                            CommitTarget: new GridRelativeLocator(
+                                "RowCommitTarget",
+                                GridRelativeLocatorScope.Row),
+                            UseKeyboardInput: true))));
+        var defaultEditorCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("KeyboardGrid", "KeyboardGrid", "KeyboardGrid")
+                .WithColumns(GridColumnDefinition.Auto("Amount")
+                    .AsValue(GridCellValueKind.Number)
+                    .EditWith(
+                        GridCellEditorKind.Number,
+                        new GridCellEditorParts(
+                            Input: new GridRelativeLocator("AmountInput")))));
 
         using (Assert.Multiple())
         {
             await Assert.That(first.Count).IsEqualTo(1);
             await Assert.That(first.Fingerprint).IsEqualTo(sameDefinitionInDifferentCatalog.Fingerprint);
             await Assert.That(delimiterCatalogA.Fingerprint).IsNotEqualTo(delimiterCatalogB.Fingerprint);
+            await Assert.That(keyboardEditorCatalog.Fingerprint).IsNotEqualTo(defaultEditorCatalog.Fingerprint);
             await Assert.That(() => first.Add(
                     GridAutomationDefinition.ByAutomationIds("OtherGrid", "OrdersGridVisual", "OtherGridRuntime")))
                 .Throws<ArgumentException>();
@@ -311,13 +411,66 @@ public sealed class GridRowSelectorTests
                         .WithColumns(GridColumnDefinition.Auto("Value")
                             .AsValue((GridCellValueKind)int.MaxValue))))
                 .Throws<ArgumentException>();
+            await Assert.That(() => new GridAutomationCatalog().Add(
+                    GridAutomationDefinition
+                        .ByAutomationIds("InvalidIdentitySource", "InvalidIdentitySource", "InvalidIdentitySource")
+                        .WithColumns(GridColumnDefinition.Auto("Value")
+                            .ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus))))
+                .Throws<ArgumentException>();
+            await Assert.That(() => GridColumnDefinition.Auto("Approved")
+                    .WithBooleanDisplayText("Да", "Да"))
+                .Throws<ArgumentException>();
+            await Assert.That(() => new GridAutomationCatalog().Add(
+                    GridAutomationDefinition
+                        .ByAutomationIds("InvalidBoolean", "InvalidBoolean", "InvalidBoolean")
+                        .WithColumns(GridColumnDefinition.Auto("Approved")
+                            .WithBooleanDisplayText("Да", "Нет"))))
+                .Throws<ArgumentException>();
+            await Assert.That(() => new GridAutomationCatalog().Add(
+                    GridAutomationDefinition
+                        .ByAutomationIds("AmbiguousCommit", "AmbiguousCommit", "AmbiguousCommit")
+                        .WithColumns(GridColumnDefinition.Auto("Amount")
+                            .AsValue(GridCellValueKind.Number)
+                            .EditWith(
+                                GridCellEditorKind.Number,
+                                new GridCellEditorParts(
+                                    ConfirmButton: new GridRelativeLocator("ConfirmButton"),
+                                    CommitTarget: new GridRelativeLocator(
+                                        "RowCommitTarget",
+                                        GridRelativeLocatorScope.Row))))))
+                .Throws<ArgumentException>();
             await Assert.That(() => GridAutomationDefinition
                     .ByAutomationIds("CrossCollision", "CrossCollision", "CrossCollision")
                     .WithColumns(
                         GridColumnDefinition.Map("Code").FromField("Id"),
                         GridColumnDefinition.Map("Id").FromField("Status")))
                 .Throws<ArgumentException>();
+            await Assert.That(() => GridAutomationDefinition
+                    .ByAutomationIds("RuntimeCrossCollision", "RuntimeCrossCollision", "RuntimeCrossCollision")
+                    .WithColumns(
+                        GridColumnDefinition.Map("Code").FromField("Id").AtRuntime("State"),
+                        GridColumnDefinition.Map("State").FromField("Status")))
+                .Throws<ArgumentException>();
         }
+
+        var strictRuntimeGrid = new NativeAddressableGrid(
+            Row("ITEM-1", "10", string.Empty),
+            ["OrderId", "RequiredVolume"],
+            isDisplayOnly: true);
+        var strictRuntimeCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Map("Required")
+                        .FromField("RequiredVolume")
+                        .AtRuntime("Required amount"))
+                .IdentifyRowsBy("Code"));
+        var strictRuntimePage = new GridPage(
+            new GridResolver(strictRuntimeGrid).WithGridAutomation(strictRuntimeCatalog));
+
+        var strictRuntimeException = await Assert.That(() => _ = strictRuntimePage.Orders)
+            .Throws<InvalidOperationException>();
+        await Assert.That(strictRuntimeException!.Message).Contains("Required amount");
     }
 
     [Test]
@@ -679,7 +832,7 @@ public sealed class GridRowSelectorTests
                 if (row.Conditions.All(condition =>
                         condition.ColumnIndex < cells.Count
                         && string.Equals(
-                            cells[condition.ColumnIndex].Value,
+                            ReadExpectedCellText(cells[condition.ColumnIndex], condition.Column),
                             condition.ExpectedText,
                             StringComparison.Ordinal)))
                 {
@@ -689,11 +842,29 @@ public sealed class GridRowSelectorTests
 
             return matches;
         }
+
+        private static string ReadExpectedCellText(
+            IGridCellControl cell,
+            GridRuntimeColumn column)
+        {
+            if (column.ValueKind == GridCellValueKind.Boolean
+                && bool.TryParse(cell.Value, out var boolean)
+                && column.BooleanTrueDisplayText is not null
+                && column.BooleanFalseDisplayText is not null)
+            {
+                return boolean
+                    ? column.BooleanTrueDisplayText
+                    : column.BooleanFalseDisplayText;
+            }
+
+            return cell.Value;
+        }
     }
 
     private sealed class NativeAddressableGrid(
         MutableRow row,
-        IReadOnlyList<string> columnNames)
+        IReadOnlyList<string> columnNames,
+        bool isDisplayOnly = false)
         : ReadOnlyGrid("OrdersGrid", [row]), IAddressableGridControl, IGridColumnMetadataControl
     {
         public IReadOnlyList<string> ColumnNames { get; } = columnNames;
@@ -714,7 +885,7 @@ public sealed class GridRowSelectorTests
             }
 
             return selector.Conditions.Count == 1
-                && string.Equals(selector.Conditions[0].ColumnName, "OrderId", StringComparison.Ordinal)
+                && string.Equals(selector.Conditions[0].ColumnName, ColumnNames[0], StringComparison.Ordinal)
                 && string.Equals(selector.Conditions[0].Value, row.Cells[0].Value, StringComparison.Ordinal)
                     ? GridRowResolution.Unique("native stable address")
                     : GridRowResolution.NotFound("native stable address");
@@ -737,7 +908,8 @@ public sealed class GridRowSelectorTests
             var value = row.Cells[columnIndex].Value;
             return new GridCellValueSnapshot(value, value, GridCellValueKind.Text)
             {
-                ValueSource = row.ValueSource
+                ValueSource = row.ValueSource,
+                IsDisplayOnly = isDisplayOnly
             };
         }
 

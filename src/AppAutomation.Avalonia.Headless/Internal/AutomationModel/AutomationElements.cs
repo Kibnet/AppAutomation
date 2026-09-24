@@ -25,7 +25,7 @@ internal class AutomationElement
 
     public virtual string Name => Ui(() => ReadControlName(Control));
 
-    public bool IsEnabled => Ui(() => Control.IsEnabled);
+    public bool IsEnabled => Ui(() => Control.IsEffectivelyEnabled);
 
     public bool IsAvailable => true;
 
@@ -35,6 +35,12 @@ internal class AutomationElement
 
     public virtual void Click()
     {
+        if (Control is global::Avalonia.Controls.MenuItem menuItem)
+        {
+            new MenuItem(menuItem).Invoke();
+            return;
+        }
+
         Ui(() =>
         {
             switch (Control)
@@ -46,7 +52,16 @@ internal class AutomationElement
                     InvokeButton(button);
                     break;
                 default:
-                    throw new InvalidOperationException($"Control '{Control.GetType().Name}' does not support click interaction.");
+                    var peer = global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(Control);
+                    if (peer is not global::Avalonia.Automation.Provider.IInvokeProvider invokeProvider)
+                    {
+                        throw new InvalidOperationException(
+                            $"Control '{Control.GetType().Name}' does not expose semantic invoke interaction.");
+                    }
+
+                    invokeProvider.Invoke();
+                    Control.Dispatcher.RunJobs();
+                    break;
             }
 
             return true;
@@ -385,14 +400,12 @@ internal class Label : AutomationElement
 
 internal sealed class ListBoxItem
 {
-    internal ListBoxItem(object? item)
+    internal ListBoxItem(string? text)
     {
-        Item = item;
+        Text = text;
     }
 
-    private object? Item { get; }
-
-    public string? Text => Item?.ToString();
+    public string? Text { get; }
 
     public string? Name => Text;
 }
@@ -408,51 +421,42 @@ internal class ListBox : AutomationElement
     public ListBoxItem[] Items => Ui(() =>
     {
         Control.Dispatcher.RunJobs();
-        var values = ReadItems(Native.Items);
-        return values.Select(item => new ListBoxItem(item)).ToArray();
+        return Enumerable.Range(0, Native.Items.Count)
+            .Select(index => new ListBoxItem(ListItemCaptionReader.Read(Native, index))).ToArray();
     });
 
     public string? SelectedItemText => Ui(() =>
     {
         Control.Dispatcher.RunJobs();
-        return Native.SelectedItem?.ToString();
+        return Native.SelectedIndex < 0 ? null : ListItemCaptionReader.Read(Native, Native.SelectedIndex);
     });
 
     public void SelectItem(string itemText)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
-        Ui(() =>
-        {
-            Control.Dispatcher.RunJobs();
-            var normalizedTarget = NormalizeLookupText(itemText);
-            var values = ReadItems(Native.Items);
-            var match = values.FirstOrDefault(candidate =>
-                string.Equals(
-                    NormalizeLookupText(candidate?.ToString()),
-                    normalizedTarget,
-                    StringComparison.OrdinalIgnoreCase));
-            if (match is null)
-            {
-                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
-            }
-
-            Native.SelectedItem = match;
-            Control.Dispatcher.RunJobs();
-            return true;
-        });
+        SelectMatchingItem(itemText, exact: false);
     }
 
     public void SelectItemExact(string itemText)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
+        SelectMatchingItem(itemText, exact: true);
+    }
+
+    private void SelectMatchingItem(string itemText, bool exact)
+    {
         Ui(() =>
         {
             Control.Dispatcher.RunJobs();
-            var values = ReadItems(Native.Items);
-            var matches = values
-                .Where(candidate => string.Equals(candidate?.ToString(), itemText, StringComparison.Ordinal))
+            var target = exact ? itemText : NormalizeLookupText(itemText);
+            var matches = Enumerable.Range(0, Native.Items.Count)
+                .Where(index =>
+                {
+                    var caption = ListItemCaptionReader.Read(Native, index);
+                    return string.Equals(exact ? caption : NormalizeLookupText(caption), target, StringComparison.Ordinal);
+                })
                 .ToArray();
             if (matches.Length == 0)
             {
@@ -464,20 +468,10 @@ internal class ListBox : AutomationElement
                 throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous.");
             }
 
-            Native.SelectedItem = matches[0];
+            Native.SelectedIndex = matches[0];
             Control.Dispatcher.RunJobs();
             return true;
         });
-    }
-
-    private static IReadOnlyList<object?> ReadItems(IEnumerable? enumerable)
-    {
-        if (enumerable is null)
-        {
-            return Array.Empty<object?>();
-        }
-
-        return enumerable.Cast<object?>().ToArray();
     }
 
     private static string NormalizeLookupText(string? value)
@@ -1071,76 +1065,6 @@ internal class Grid : AutomationElement
         });
     }
 
-    public void SetCellValue(int rowIndex, int columnIndex, string value)
-    {
-        Ui(() =>
-        {
-            var items = ReadItems(Native);
-            if (rowIndex < 0 || rowIndex >= items.Length)
-            {
-                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
-            }
-
-            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
-            }
-
-            var path = ReadColumnPath(Native.Columns[columnIndex]);
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
-            }
-
-            WritePropertyPath(items[rowIndex], path, value);
-            return true;
-        });
-    }
-
-    public void ValidateCellValue(int rowIndex, int columnIndex, string value)
-    {
-        Ui(() =>
-        {
-            var items = ReadItems(Native);
-            if (rowIndex < 0 || rowIndex >= items.Length)
-            {
-                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
-            }
-
-            if (columnIndex < 0 || columnIndex >= Native.Columns.Count)
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} was not found.");
-            }
-
-            var path = ReadColumnPath(Native.Columns[columnIndex]);
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                throw new InvalidOperationException($"Grid column {columnIndex} does not expose a writable binding path.");
-            }
-
-            object? owner = items[rowIndex];
-            var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            for (var index = 0; index < segments.Length - 1; index++)
-            {
-                owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
-            }
-
-            if (owner is null || segments.Length == 0)
-            {
-                throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
-            }
-
-            var property = ReadProperty(owner, segments[^1]);
-            if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
-            {
-                throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
-            }
-
-            _ = ConvertText(value, property.PropertyType);
-            return true;
-        });
-    }
-
     public GridCellValueSnapshot ReadCellValue(int rowIndex, int columnIndex)
     {
         return Ui(() =>
@@ -1165,6 +1089,51 @@ internal class Grid : AutomationElement
                 rawValue,
                 InferValueKind(rawValue)) { ValueSource = items[rowIndex] };
         });
+    }
+
+    public GridCellValueSnapshot ReadSourceValue(int rowIndex, string propertyPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyPath);
+        return Ui(() =>
+        {
+            var items = ReadItems(Native);
+            if (rowIndex < 0 || rowIndex >= items.Length)
+            {
+                throw new InvalidOperationException($"Grid row {rowIndex} was not found.");
+            }
+
+            var source = items[rowIndex];
+            var rawValue = source is null
+                ? null
+                : ReadRequiredPropertyPathValue(source, propertyPath);
+            return new GridCellValueSnapshot(
+                Convert.ToString(rawValue, System.Globalization.CultureInfo.InvariantCulture),
+                rawValue,
+                InferValueKind(rawValue))
+            {
+                ValueSource = source
+            };
+        });
+    }
+
+    private static object? ReadRequiredPropertyPathValue(object source, string path)
+    {
+        object? current = source;
+        foreach (var segment in path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (current is null)
+            {
+                return null;
+            }
+
+            var property = ReadProperty(current, segment)
+                ?? throw new InvalidOperationException(
+                    $"Grid source item '{current.GetType().FullName}' does not expose readable property '{segment}' "
+                    + $"from configured path '{path}'.");
+            current = property.GetValue(current);
+        }
+
+        return current;
     }
 
     public GridRow? GetRowByIndex(int index)
@@ -1214,29 +1183,6 @@ internal class Grid : AutomationElement
                 _ => null
             }
             : null;
-    }
-
-    private static void WritePropertyPath(object? item, string path, string value)
-    {
-        object? owner = item;
-        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        for (var index = 0; index < segments.Length - 1; index++)
-        {
-            owner = owner is null ? null : ReadProperty(owner, segments[index])?.GetValue(owner);
-        }
-
-        if (owner is null || segments.Length == 0)
-        {
-            throw new InvalidOperationException($"Grid binding path '{path}' could not be resolved.");
-        }
-
-        var property = ReadProperty(owner, segments[^1]);
-        if (property is null || !property.CanWrite || property.SetMethod is not { IsPublic: true })
-        {
-            throw new InvalidOperationException($"Grid binding path '{path}' is not writable.");
-        }
-
-        property.SetValue(owner, ConvertText(value, property.PropertyType));
     }
 
     private static PropertyInfo? ReadProperty(object owner, string name)
@@ -1289,47 +1235,6 @@ internal class Grid : AutomationElement
         };
     }
 
-    private static object? ConvertText(string value, Type targetType)
-    {
-        var nullableType = Nullable.GetUnderlyingType(targetType);
-        var effectiveType = nullableType ?? targetType;
-        if (nullableType is not null && string.IsNullOrEmpty(value))
-        {
-            return null;
-        }
-
-        if (effectiveType == typeof(string))
-        {
-            return value;
-        }
-
-        if (effectiveType.IsEnum)
-        {
-            return Enum.Parse(effectiveType, value, ignoreCase: false);
-        }
-
-        if (effectiveType == typeof(DateTime))
-        {
-            return DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
-        }
-
-        if (effectiveType == typeof(DateTimeOffset))
-        {
-            return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces);
-        }
-
-        if (effectiveType == typeof(TimeSpan))
-        {
-            return TimeSpan.Parse(value, CultureInfo.InvariantCulture);
-        }
-
-        if (effectiveType == typeof(Guid))
-        {
-            return Guid.Parse(value);
-        }
-
-        return Convert.ChangeType(value, effectiveType, CultureInfo.InvariantCulture);
-    }
 }
 
 internal class DataGridView : Grid

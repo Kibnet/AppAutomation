@@ -563,7 +563,7 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task SearchPickerAdapter_DefersDetachedResultsAndRetainsSelectionAfterClose()
+    public async Task SearchPickerAdapter_DefersDetachedResultsAndReportsUnavailableSelectionSource()
     {
         var searchInput = new FakeTextBoxControl("OrderCustomerSearch_Input");
         var expandButton = new FakeButtonControl("OrderCustomerSearch_OpenButton");
@@ -599,11 +599,12 @@ public sealed class UiControlAdapterTests
         {
             await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
             await Assert.That(innerResolver.ResultsResolveAttemptsBeforeExpand).IsEqualTo(0);
-            await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsEqualTo("АЭРОСКАН ООО");
+            var unavailable = Assert.Throws<UiControlResolutionException>(() => _ = page.OrderCustomerSearch.SelectedItemText);
+            await Assert.That(unavailable.Failure).IsEqualTo(UiControlResolutionFailure.Detached);
         }
 
         searchInput.Text = "Другой клиент";
-        await Assert.That(page.OrderCustomerSearch.SelectedItemText).IsNull();
+        Assert.Throws<UiControlResolutionException>(() => _ = page.OrderCustomerSearch.SelectedItemText);
     }
 
     [Test]

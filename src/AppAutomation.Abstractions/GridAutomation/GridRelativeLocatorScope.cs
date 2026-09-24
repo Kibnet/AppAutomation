@@ -6,5 +6,6 @@ public enum GridRelativeLocatorScope
     Cell = 0,
     EditorRoot = 1,
     DetachedPopup = 2,
-    GridRoot = 3
+    GridRoot = 3,
+    Row = 4
 }

@@ -3,7 +3,6 @@
              xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
              xmlns:editors="clr-namespace:Eremex.AvaloniaUI.Controls.Editors;assembly=Eremex.Avalonia.Controls"
              xmlns:local="clr-namespace:DotnetDebug.Avalonia"
-             xmlns:mxdg="https://schemas.eremexcontrols.net/avalonia/datagrid"
              x:Class="DotnetDebug.Avalonia.ArmDesktopControl"
              x:CompileBindings="False">
   <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -50,6 +49,8 @@
                                           CurrentSelectedChanged="OnArmServerPickerSelected"
                                           ItemList="{Binding ArmServerItems}"
                                           Watermark="Lookup" />
+              <TextBlock MinHeight="20" Text="{Binding #ArmServerSearchPicker.CurrentSelected}"
+                         automation:AutomationProperties.AutomationId="SamplePickerCommittedValue" />
               <Button x:Name="ArmServerPickerClearButton"
                       Content="Clear"
                       Click="OnArmServerPickerClearClick"
@@ -157,149 +158,6 @@
               <Label x:Name="ContextMenuStatusLabel"
                      Content="Context menu idle"
                      automation:AutomationProperties.AutomationId="ContextMenuStatusLabel" />
-            </StackPanel>
-          </Grid>
-        </StackPanel>
-      </Border>
-
-      <Border BorderBrush="#D0D7DE"
-              BorderThickness="1"
-              CornerRadius="4"
-              Padding="12">
-        <StackPanel Spacing="10">
-          <TextBlock Text="Grid actions and editable cells"
-                     FontWeight="SemiBold" />
-          <Grid ColumnDefinitions="2*,*"
-                RowDefinitions="Auto">
-            <StackPanel Grid.Column="0"
-                        Spacing="8">
-              <TextBlock x:Name="ArmEremexDataGridHost"
-                         FontWeight="SemiBold"
-                         Text="Arm Eremex DataGrid"
-                         automation:AutomationProperties.AutomationId="ArmEremexDataGridHost" />
-              <mxdg:DataGridControl x:Name="ArmEremexDataGridControl"
-                                    Height="170"
-                                    ItemsSource="{Binding ArmGridRows}"
-                                    AutoGenerateColumns="False"
-                                    automation:AutomationProperties.AutomationId="ArmEremexDataGridControl">
-                <mxdg:DataGridControl.Columns>
-                  <mxdg:GridColumn FieldName="Key"
-                                   Header="Key" />
-                  <mxdg:GridColumn FieldName="Value"
-                                   Header="Value" />
-                  <mxdg:GridColumn FieldName="Color"
-                                   Header="Color" />
-                  <mxdg:GridColumn FieldName="State"
-                                   Header="State" />
-                </mxdg:DataGridControl.Columns>
-              </mxdg:DataGridControl>
-
-              <Grid Height="126">
-                <ItemsControl x:Name="ArmGridAutomationBridge"
-                              Height="126"
-                              ItemsSource="{Binding ArmGridRows}"
-                              automation:AutomationProperties.AutomationId="ArmGridAutomationBridge">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                      <Grid ColumnDefinitions="90,130,90,130"
-                            Margin="0,1"
-                            DoubleTapped="OnArmGridRowDoubleTapped"
-                            automation:AutomationProperties.AutomationId="{Binding RowAutomationId}">
-                        <TextBlock Grid.Column="0"
-                                   Text="{Binding Key}"
-                                   automation:AutomationProperties.AutomationId="{Binding KeyCellAutomationId}"
-                                   automation:AutomationProperties.Name="{Binding Key}" />
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding Value, Mode=TwoWay}"
-                                 MinHeight="24"
-                                 BorderThickness="0"
-                                 automation:AutomationProperties.AutomationId="{Binding ValueCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding Value}" />
-                        <TextBox Grid.Column="2"
-                                 Text="{Binding Color, Mode=TwoWay}"
-                                 MinHeight="24"
-                                 BorderThickness="0"
-                                 automation:AutomationProperties.AutomationId="{Binding ColorCellAutomationId}"
-                                 automation:AutomationProperties.Name="{Binding Color}" />
-                        <TextBlock Grid.Column="3"
-                                   Text="{Binding State}"
-                                   automation:AutomationProperties.AutomationId="{Binding StateCellAutomationId}"
-                                   automation:AutomationProperties.Name="{Binding State}" />
-                      </Grid>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-
-                <Border Width="230"
-                        Padding="4"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Bottom"
-                        BorderBrush="#666666"
-                        BorderThickness="1"
-                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge"
-                        automation:AutomationProperties.IsControlElementOverride="True">
-                  <Grid ColumnDefinitions="90,130"
-                        DataContext="{Binding GridComboRow}"
-                        automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0">
-                    <TextBlock Grid.Column="0"
-                               Text="{Binding Key}"
-                               automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell0"
-                               automation:AutomationProperties.Name="{Binding Key}" />
-                    <Border Grid.Column="1"
-                            automation:AutomationProperties.AutomationId="GridComboAutomationBridge_Row0_Cell1"
-                            automation:AutomationProperties.IsControlElementOverride="True"
-                            automation:AutomationProperties.Name="{Binding State}">
-                      <ComboBox ItemsSource="{Binding StateOptions}"
-                                automation:AutomationProperties.AutomationId="GridComboStateEditor"
-                                SelectedItem="{Binding State, Mode=TwoWay}"
-                                MinHeight="24" />
-                    </Border>
-                  </Grid>
-                </Border>
-              </Grid>
-            </StackPanel>
-
-            <StackPanel Grid.Column="1"
-                        Margin="12,0,0,0"
-                        Spacing="6">
-              <Button x:Name="ArmGridBuildButton"
-                      Content="Build"
-                      Click="OnArmGridBuildClick"
-                      automation:AutomationProperties.AutomationId="ArmGridBuildButton" />
-              <Button x:Name="ArmGridOpenButton"
-                      Content="Open"
-                      Click="OnArmGridOpenClick"
-                      automation:AutomationProperties.AutomationId="ArmGridOpenButton" />
-              <Button x:Name="ArmGridSortButton"
-                      Content="Sort"
-                      Click="OnArmGridSortClick"
-                      automation:AutomationProperties.AutomationId="ArmGridSortButton" />
-              <Button x:Name="ArmGridLoadMoreButton"
-                      Content="Load more"
-                      Click="OnArmGridLoadMoreClick"
-                      automation:AutomationProperties.AutomationId="ArmGridLoadMoreButton" />
-              <Button x:Name="ArmGridCopyButton"
-                      Content="Copy"
-                      Click="OnArmGridCopyClick"
-                      automation:AutomationProperties.AutomationId="ArmGridCopyButton" />
-              <Button x:Name="ArmGridExportButton"
-                      Content="Export"
-                      Click="OnArmGridExportClick"
-                      automation:AutomationProperties.AutomationId="ArmGridExportButton" />
-              <TextBox x:Name="ArmGridEditValueInput"
-                       Text="Value-1"
-                       automation:AutomationProperties.AutomationId="ArmGridEditValueInput" />
-              <Button x:Name="ArmGridCommitEditButton"
-                      Content="Commit edit"
-                      Click="OnArmGridCommitEditClick"
-                      automation:AutomationProperties.AutomationId="ArmGridCommitEditButton" />
-              <Button x:Name="ArmGridCancelEditButton"
-                      Content="Cancel edit"
-                      Click="OnArmGridCancelEditClick"
-                      automation:AutomationProperties.AutomationId="ArmGridCancelEditButton" />
-              <Label x:Name="ArmGridStatusLabel"
-                     Content="Grid ready"
-                     automation:AutomationProperties.AutomationId="ArmGridStatusLabel" />
             </StackPanel>
           </Grid>
         </StackPanel>
