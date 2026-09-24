@@ -195,6 +195,35 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
+    public async Task CalendarMonthNavigation_RetriesWhenFirstClickDoesNotChangeMonth()
+    {
+        var initialMonth = new DateTime(2026, 9, 1);
+        var displayedMonth = initialMonth;
+        var clickCount = 0;
+
+        var changed = FlaUiCalendarSelection.NavigateMonthWithRetry(
+            () => displayedMonth,
+            () =>
+            {
+                clickCount++;
+                if (clickCount == 2)
+                {
+                    displayedMonth = initialMonth.AddMonths(1);
+                }
+            },
+            initialMonth,
+            TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromMilliseconds(1));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(changed).IsTrue();
+            await Assert.That(clickCount).IsEqualTo(2);
+            await Assert.That(displayedMonth).IsEqualTo(initialMonth.AddMonths(1));
+        }
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task ComplexDataGrid_ThreeRowsResolveAllConfiguredColumns()
     {

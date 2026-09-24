@@ -89,7 +89,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             UiControlType.ToggleButton => new FlaUiToggleButtonControl(FindElement(definition).AsToggleButton()),
             UiControlType.Slider => new FlaUiSliderControl(FindElement(definition).AsSlider()),
             UiControlType.ProgressBar => new FlaUiProgressBarControl(FindElement(definition).AsProgressBar()),
-            UiControlType.Calendar => new FlaUiCalendarControl(FindElement(definition).AsCalendar()),
+            UiControlType.Calendar => new FlaUiCalendarControl(
+                FindElement(definition).AsCalendar(),
+                () => FindElement(definition).AsCalendar()),
             UiControlType.DateTimePicker => new FlaUiDateTimePickerControl(FindElement(definition).AsDateTimePicker()),
             UiControlType.TimePicker => new FlaUiTimePickerControl(FindElement(definition)),
             UiControlType.Expander => new FlaUiExpanderControl(FindElement(definition)),
@@ -2184,10 +2186,20 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public double Value => TryRead(() => Inner.Value);
     }
 
-    private sealed class FlaUiCalendarControl : FlaUiControlBase<Calendar>, ICalendarControl
+    private sealed class FlaUiCalendarControl :
+        FlaUiControlBase<Calendar>,
+        ICalendarControl,
+        ICommittedCalendarSelectionControl
     {
-        public FlaUiCalendarControl(Calendar inner) : base(inner)
+        private readonly Func<Calendar> _resolveCalendar;
+
+        public FlaUiCalendarControl(Calendar inner) : this(inner, () => inner)
         {
+        }
+
+        public FlaUiCalendarControl(Calendar inner, Func<Calendar> resolveCalendar) : base(inner)
+        {
+            _resolveCalendar = resolveCalendar;
         }
 
         public IReadOnlyList<DateTime> SelectedDates =>
@@ -2196,6 +2208,20 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public void SelectDate(DateTime selectedDate)
         {
             FlaUiCalendarSelection.SelectDate(Inner, selectedDate);
+        }
+
+        bool ICommittedCalendarSelectionControl.TrySelectDate(
+            DateTime selectedDate,
+            Func<bool> isSelectionCommitted,
+            TimeSpan selectionTimeout,
+            TimeSpan confirmationTimeout)
+        {
+            return FlaUiCalendarSelection.TrySelectDate(
+                _resolveCalendar,
+                selectedDate,
+                isSelectionCommitted,
+                selectionTimeout,
+                confirmationTimeout);
         }
     }
 

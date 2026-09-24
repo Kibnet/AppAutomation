@@ -89,6 +89,9 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
         IUiControlAvailability,
         IDateTimePickerOperationControl
     {
+        private static readonly TimeSpan CalendarCommitConfirmationTimeout = TimeSpan.FromMilliseconds(250);
+        private const int MaximumCalendarSelectionAttempts = 2;
+
         private readonly string _propertyName;
         private readonly DatePickerParts _parts;
         private readonly IUiControlResolver _resolver;
@@ -137,7 +140,8 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
             if (!string.IsNullOrWhiteSpace(_parts.CalendarLocator))
             {
                 InvokeOpenButton(budget.Remaining);
-                WaitForCalendar(budget.Remaining).SelectDate(expected);
+                SelectCalendarDate(expected, budget);
+
                 if (!string.IsNullOrWhiteSpace(_parts.PopupRootLocator))
                 {
                     WaitForPopupClosure(budget.Remaining);
@@ -162,6 +166,37 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                 actual => actual?.Date == expected,
                 new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(50) },
                 $"Date picker '{_parts.RootLocator}' did not reach expected date '{expected:yyyy-MM-dd}'.");
+        }
+
+        private void SelectCalendarDate(DateTime expected, UiOperationTimeoutBudget budget)
+        {
+            for (var attempt = 0; attempt < MaximumCalendarSelectionAttempts; attempt++)
+            {
+                if (TryReadCommittedDate()?.Date == expected)
+                {
+                    return;
+                }
+
+                var calendar = WaitForCalendar(budget.Remaining);
+                if (calendar is not ICommittedCalendarSelectionControl committedCalendar)
+                {
+                    calendar.SelectDate(expected);
+                    return;
+                }
+
+                var remaining = budget.Remaining;
+                var confirmationTimeout = remaining < CalendarCommitConfirmationTimeout
+                    ? remaining
+                    : CalendarCommitConfirmationTimeout;
+                if (committedCalendar.TrySelectDate(
+                        expected,
+                        () => TryReadCommittedDate()?.Date == expected,
+                        remaining,
+                        confirmationTimeout))
+                {
+                    return;
+                }
+            }
         }
 
         private DateTime? TryReadCommittedDate()
@@ -363,4 +398,13 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
 internal interface IDateTimePickerOperationControl
 {
     void SetSelectedDate(DateTime value, int timeoutMs);
+}
+
+internal interface ICommittedCalendarSelectionControl
+{
+    bool TrySelectDate(
+        DateTime selectedDate,
+        Func<bool> isSelectionCommitted,
+        TimeSpan selectionTimeout,
+        TimeSpan confirmationTimeout);
 }
