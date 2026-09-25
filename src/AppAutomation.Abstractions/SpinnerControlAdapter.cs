@@ -73,52 +73,88 @@ public sealed class SpinnerTextBoxControlAdapter : IUiControlAdapter
             _targetLocatorValue,
             _targetLocatorKind,
             _fallbackToName));
-        return new SpinnerTextBoxControl(definition.LocatorValue, textBox);
+        return new SpinnerTextControl(
+            definition.LocatorValue,
+            () => textBox.Name,
+            () => textBox.IsEnabled,
+            () => (textBox as IUiControlAvailability)?.IsAvailable ?? true,
+            () => textBox.Text,
+            textBox.Enter);
     }
 
-    private sealed class SpinnerTextBoxControl : ISpinnerControl, IUiControlAvailability
+}
+
+internal sealed class SpinnerTextControl : ISpinnerControl, IUiControlAvailability
+{
+    private readonly Func<string> _readName;
+    private readonly Func<bool> _readIsEnabled;
+    private readonly Func<bool> _readIsAvailable;
+    private readonly Func<string?> _readText;
+    private readonly Action<string> _enterText;
+
+    public SpinnerTextControl(
+        string automationId,
+        Func<string> readName,
+        Func<bool> readIsEnabled,
+        Func<bool> readIsAvailable,
+        Func<string?> readText,
+        Action<string> enterText)
     {
-        private readonly ITextBoxControl _textBox;
+        ArgumentException.ThrowIfNullOrWhiteSpace(automationId);
+        ArgumentNullException.ThrowIfNull(readName);
+        ArgumentNullException.ThrowIfNull(readIsEnabled);
+        ArgumentNullException.ThrowIfNull(readIsAvailable);
+        ArgumentNullException.ThrowIfNull(readText);
+        ArgumentNullException.ThrowIfNull(enterText);
 
-        public SpinnerTextBoxControl(string logicalAutomationId, ITextBoxControl textBox)
+        AutomationId = automationId;
+        _readName = readName;
+        _readIsEnabled = readIsEnabled;
+        _readIsAvailable = readIsAvailable;
+        _readText = readText;
+        _enterText = enterText;
+    }
+
+    public string AutomationId { get; }
+
+    public string Name => _readName();
+
+    public bool IsEnabled => _readIsEnabled();
+
+    public bool IsAvailable => _readIsAvailable();
+
+    public double Value
+    {
+        get => SpinnerValueCodec.ParseInvariant(_readText(), AutomationId);
+        set => _enterText(SpinnerValueCodec.FormatInvariant(value));
+    }
+}
+
+internal static class SpinnerValueCodec
+{
+    public static double ParseInvariant(string? text, string automationId)
+    {
+        if (double.TryParse(
+                text?.Trim(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var value)
+            && double.IsFinite(value))
         {
-            AutomationId = logicalAutomationId;
-            _textBox = textBox;
+            return value;
         }
 
-        public string AutomationId { get; }
+        throw new InvalidOperationException(
+            $"Spinner text part '{automationId}' does not contain a finite invariant numeric value.");
+    }
 
-        public string Name => _textBox.Name;
-
-        public bool IsEnabled => _textBox.IsEnabled;
-
-        public bool IsAvailable => (_textBox as IUiControlAvailability)?.IsAvailable ?? true;
-
-        public double Value
+    public static string FormatInvariant(double value)
+    {
+        if (!double.IsFinite(value))
         {
-            get
-            {
-                if (double.TryParse(
-                        _textBox.Text?.Trim(),
-                        NumberStyles.Float,
-                        CultureInfo.InvariantCulture,
-                        out var value))
-                {
-                    return value;
-                }
-
-                throw new InvalidOperationException(
-                    $"Spinner text part '{_textBox.AutomationId}' does not contain an invariant numeric value.");
-            }
-            set
-            {
-                if (!double.IsFinite(value))
-                {
-                    throw new ArgumentOutOfRangeException(nameof(value), value, "Spinner value must be finite.");
-                }
-
-                _textBox.Enter(value.ToString("R", CultureInfo.InvariantCulture));
-            }
+            throw new ArgumentOutOfRangeException(nameof(value), value, "Spinner value must be finite.");
         }
+
+        return value.ToString("R", CultureInfo.InvariantCulture);
     }
 }

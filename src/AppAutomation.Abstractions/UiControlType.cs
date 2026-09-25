@@ -202,5 +202,10 @@ public enum UiControlType
     /// <summary>
     /// A directly addressable menu item. Maps to <see cref="IMenuItemControl"/>.
     /// </summary>
-    MenuItem = 38
+    MenuItem = 38,
+
+    /// <summary>
+    /// A logical collection of repeated composite controls. Maps to <see cref="IMultiItemControlCollection"/>.
+    /// </summary>
+    MultiItemControlCollection = 39
 }

@@ -84,7 +84,8 @@ public partial class App : Application
                 ? RecorderHotkeys.Default
                 : new RecorderHotkeys { Save = saveHotkey },
             AllowNameLocators = false,
-            GridAutomation = SampleGridAutomation.CreateRecorderCatalog()
+            GridAutomation = SampleGridAutomation.CreateRecorderCatalog(),
+            MultiItemControls = SampleMultiItemAutomation.CreateCatalog()
         };
         options.MultiSelectHints.Add(new RecorderMultiSelectHint(
             "MultiSelection",
