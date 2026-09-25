@@ -44,6 +44,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
                         cancelButtonAutomationId: "ArmAccentColorCancelButton",
                         commitMode: ColorPickerCommitMode.Confirm))
                 .WithGridAutomation(SampleGridAutomation.CreateHeadlessCatalog())
+                .WithMultiItemControls(SampleMultiItemAutomation.CreateCatalog())
                 .WithDateRangeFilter(
                     "ArmDateRangeFilter",
                     DateRangeFilterParts.ByAutomationIds(

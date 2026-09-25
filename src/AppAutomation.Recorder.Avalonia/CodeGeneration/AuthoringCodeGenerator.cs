@@ -1454,6 +1454,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SelectListBoxItem => $"Page.SelectListBoxItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetSliderValue => $"Page.SetSliderValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SetSpinnerValue => $"Page.SetSpinnerValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
+            RecordedActionKind.SetMultiItemSpinnerValue => $"Page.SetMultiItemSpinnerValue(static page => page.{propertyName}, \"{EscapeString(step.RepeatedItemKey ?? string.Empty)}\", {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SelectTabItem => $"Page.SelectTabItem(static page => page.{propertyName});",
             RecordedActionKind.SelectTreeItem => $"Page.SelectTreeItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue, step.DateExpression)});",
@@ -1934,7 +1935,14 @@ internal sealed class AuthoringCodeGenerator
 
     private static string FormatDouble(double? value)
     {
-        return (value ?? 0).ToString("G17", CultureInfo.InvariantCulture);
+        return value switch
+        {
+            null => "0",
+            double.NaN => "double.NaN",
+            double.PositiveInfinity => "double.PositiveInfinity",
+            double.NegativeInfinity => "double.NegativeInfinity",
+            _ => value.Value.ToString("G17", CultureInfo.InvariantCulture)
+        };
     }
 
     private static string FormatNullableDouble(double? value)

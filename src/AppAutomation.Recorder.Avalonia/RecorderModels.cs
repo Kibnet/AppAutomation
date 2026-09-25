@@ -70,7 +70,8 @@ public enum RecordedActionKind
     InvokeContextMenuItem = 62,
     CaptureCheckpoint = 63,
     AssertValue = 64,
-    SetGridCellChecked = 65
+    SetGridCellChecked = 65,
+    SetMultiItemSpinnerValue = 66
 }
 
 public enum RecorderAssertionMode
@@ -327,7 +328,8 @@ internal static class RecorderAssertionCapabilities
                 or UiControlType.FolderExport
                 or UiControlType.ShellNavigation
                 or UiControlType.Menu
-                or UiControlType.MenuItem => StateOnly(controlType),
+                or UiControlType.MenuItem
+                or UiControlType.MultiItemControlCollection => StateOnly(controlType),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(controlType),
                 controlType,
@@ -475,7 +477,8 @@ internal sealed record RecordedStep(
     int? GeneratedValueOrdinal = null,
     bool DefinesGeneratedValue = false,
     Guid? ExpectedGeneratedValueId = null,
-    RecorderNumericExpectedExpression? NumericExpectedExpression = null)
+    RecorderNumericExpectedExpression? NumericExpectedExpression = null,
+    string? RepeatedItemKey = null)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 
@@ -530,6 +533,10 @@ internal sealed record SearchPickerSelectionCaptureResult(
     bool IsConfigured,
     bool HasSelection,
     TextBox? SearchInput,
+    StepCreationResult StepResult);
+
+internal sealed record MultiItemSpinnerCaptureResult(
+    bool IsConfigured,
     StepCreationResult StepResult);
 
 internal sealed record SingleSelectCaptureResult(

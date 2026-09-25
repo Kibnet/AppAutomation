@@ -45,6 +45,7 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.EnterSearch
                 or RecordedActionKind.ClearSearch => source is TextBox,
             RecordedActionKind.SetSpinnerValue => source is TextBox or NumericUpDown,
+            RecordedActionKind.SetMultiItemSpinnerValue => SupportsMultiItemSpinnerAction(step, source),
             RecordedActionKind.SetTime => source is TimePicker,
             RecordedActionKind.SetExpanded => source is Expander,
             RecordedActionKind.SetColor => source is Control,
@@ -121,6 +122,75 @@ internal sealed class RecorderStepValidator
             UiControlType.Calendar => source is Calendar,
             _ => false
         };
+    }
+
+    private bool SupportsMultiItemSpinnerAction(RecordedStep step, Control source)
+    {
+        if (step.Control.ControlType != UiControlType.MultiItemControlCollection)
+        {
+            return false;
+        }
+
+        var definitions = _options.MultiItemControls
+            .Where(definition =>
+                string.Equals(
+                    definition.PagePropertyName,
+                    step.Control.ProposedPropertyName,
+                    StringComparison.Ordinal)
+                && definition.CaptureLocatorKind == step.Control.LocatorKind
+                && string.Equals(
+                    definition.CaptureLocatorValue,
+                    step.Control.LocatorValue,
+                    StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (definitions.Length != 1)
+        {
+            return false;
+        }
+
+        var definition = definitions[0];
+        if (HasLocator(source, definition.CaptureLocatorKind, definition.CaptureLocatorValue))
+        {
+            return RecorderMultiItemSpinnerGraphResolver.HasValidCollectionGraph(
+                source,
+                definition,
+                step.RepeatedItemKey,
+                MatchesLocator);
+        }
+
+        if (source is not (TextBox or NumericUpDown)
+            || definition.SpinnerParts is null)
+        {
+            return false;
+        }
+
+        var context = RecorderMultiItemSpinnerGraphResolver.Resolve(
+            source,
+            definition,
+            static (candidate, configuredDefinition) => HasLocator(
+                candidate,
+                configuredDefinition.CaptureLocatorKind,
+                configuredDefinition.CaptureLocatorValue),
+            MatchesLocator);
+        return context.Classification == MultiItemCaptureClassification.ConfiguredValid;
+    }
+
+    private static bool MatchesLocator(Control control, MultiItemRelativeLocator locator) =>
+        HasLocator(control, locator.LocatorKind, locator.LocatorValue)
+        || (locator.FallbackToName
+            && locator.LocatorKind != UiLocatorKind.Name
+            && HasLocator(control, UiLocatorKind.Name, locator.LocatorValue));
+
+    private static bool HasLocator(Control control, UiLocatorKind kind, string value)
+    {
+        var actual = kind switch
+        {
+            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(control),
+            UiLocatorKind.Name => AutomationProperties.GetName(control),
+            _ => null
+        };
+        return string.Equals(actual?.Trim(), value.Trim(), StringComparison.Ordinal);
     }
 
     private static string BuildUnsupportedActionMessage(RecordedActionKind actionKind, Control source)

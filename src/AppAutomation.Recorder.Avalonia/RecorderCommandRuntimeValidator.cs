@@ -125,6 +125,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SetSliderValue => ValidateControlType(step, target, UiControlType.Slider)
                 .Concat(RequireDouble(step, target)),
             RecordedActionKind.SetSpinnerValue => ValidateSpinnerAction(step, target),
+            RecordedActionKind.SetMultiItemSpinnerValue => ValidateMultiItemSpinnerAction(step, target),
             RecordedActionKind.SetTime => ValidateControlType(step, target, UiControlType.TimePicker)
                 .Concat(RequireTime(step, target)),
             RecordedActionKind.SetExpanded => ValidateControlType(step, target, UiControlType.Expander)
@@ -656,9 +657,14 @@ internal sealed class RecorderCommandRuntimeValidator
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
-        return step.DoubleValue.HasValue
+        if (!step.DoubleValue.HasValue)
+        {
+            return [Invalid(target, "payload-missing-double", $"Recorded action '{step.ActionKind}' requires a numeric payload.")];
+        }
+
+        return double.IsFinite(step.DoubleValue.Value)
             ? []
-            : [Invalid(target, "payload-missing-double", $"Recorded action '{step.ActionKind}' requires a numeric payload.")];
+            : [Invalid(target, "payload-invalid-double", $"Recorded action '{step.ActionKind}' requires a finite numeric payload.")];
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireDate(
@@ -815,6 +821,47 @@ internal sealed class RecorderCommandRuntimeValidator
                 "payload-missing-string",
                 $"Recorded action '{step.ActionKind}' requires {payloadName}.")
         ];
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiItemSpinnerAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(
+                     step,
+                     target,
+                     UiControlType.MultiItemControlCollection))
+        {
+            yield return finding;
+        }
+
+        var matches = _recorderOptions.MultiItemControls
+            .Where(definition =>
+                string.Equals(definition.PagePropertyName, step.Control.ProposedPropertyName, StringComparison.Ordinal)
+                && definition.CaptureLocatorKind == step.Control.LocatorKind
+                && string.Equals(definition.CaptureLocatorValue, step.Control.LocatorValue, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            yield return Invalid(
+                target,
+                "multi-item-definition-missing",
+                $"Recorded action '{step.ActionKind}' requires exactly one matching MultiItemControlCatalog definition; found {matches.Length}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(step.RepeatedItemKey))
+        {
+            yield return Invalid(
+                target,
+                "payload-missing-item-key",
+                $"Recorded action '{step.ActionKind}' requires a stable item key.");
+        }
+
+        foreach (var finding in RequireDouble(step, target))
+        {
+            yield return finding;
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> RequireItemValue(

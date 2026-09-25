@@ -128,6 +128,9 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmSaveCloseButton", UiControlType.Button, "ArmSaveCloseButton")]
 [UiControl("ArmCloseButton", UiControlType.Button, "ArmCloseButton")]
 [UiControl("ArmActionStatusLabel", UiControlType.Label, "ArmActionStatusLabel")]
+[UiControl("UnitQuantityEditors", UiControlType.MultiItemControlCollection, "UnitQuantityCollection")]
+[UiControl("UnitQuantityReorderButton", UiControlType.Button, "UnitQuantityReorderButton")]
+[UiControl("UnitQuantityBCommittedValue", UiControlType.Label, "UnitQuantityBCommittedValue")]
 public sealed partial class MainWindowPage : UiPage
 {
     private static UiControlDefinition HistoryOperationPickerDefinition { get; } =

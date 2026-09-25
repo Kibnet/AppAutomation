@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
@@ -79,6 +80,34 @@ public partial class ArmDesktopControl : UserControl
         {
             ArmServerPickerStatusLabel.Content = $"Server selected: {selected}";
         }
+    }
+
+    private void OnUnitQuantityReorderClick(object? sender, RoutedEventArgs e)
+    {
+        if (UnitQuantityCollection.Items.Count < 2)
+        {
+            return;
+        }
+
+        var lastIndex = UnitQuantityCollection.Items.Count - 1;
+        var last = UnitQuantityCollection.Items[lastIndex];
+        UnitQuantityCollection.Items.RemoveAt(lastIndex);
+        UnitQuantityCollection.Items.Insert(0, last);
+    }
+
+    private void OnUnitQuantityInputKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not TextBox input)
+        {
+            return;
+        }
+
+        var committedValue = ReferenceEquals(input, UnitQuantityAInput)
+            ? UnitQuantityACommittedValue
+            : ReferenceEquals(input, UnitQuantityBInput)
+                ? UnitQuantityBCommittedValue
+                : UnitQuantityCCommittedValue;
+        committedValue.Content = input.Text ?? string.Empty;
     }
 
     private void OnArmAccentColorOpenClick(object? sender, RoutedEventArgs e)

@@ -45,6 +45,11 @@ public sealed class AppAutomationRecorderOptions
     /// </summary>
     public GridAutomationCatalog GridAutomation { get; init; } = new();
 
+    /// <summary>
+    /// Gets the provider-neutral repeated-control definitions shared with Headless and FlaUI.
+    /// </summary>
+    public MultiItemControlCatalog MultiItemControls { get; init; } = new();
+
     public IList<RecorderControlHint> ControlHints { get; } = new List<RecorderControlHint>();
 
     public IList<RecorderGridHint> GridHints { get; } = new List<RecorderGridHint>();

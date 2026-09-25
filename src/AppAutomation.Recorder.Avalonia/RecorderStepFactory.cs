@@ -9,7 +9,7 @@ using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
 
-internal sealed class RecorderStepFactory
+internal sealed partial class RecorderStepFactory
 {
     internal const string NoGridActionHintMessage = "Recorder does not have a grid action hint for this source.";
     internal const string NoGridSearchPickerHintMessage = "Recorder does not have a grid search picker hint for this editor.";

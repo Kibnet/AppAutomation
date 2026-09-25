@@ -9,13 +9,12 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using TUnit.Assertions;
 using TUnit.Core;
+using static AppAutomation.TestHost.Avalonia.Tests.HeadlessTestRuntime;
 
 namespace AppAutomation.TestHost.Avalonia.Tests;
 
 public sealed class LaunchContractTests
 {
-    private const string HeadlessRuntimeConstraint = "HeadlessRuntime";
-
     [Test]
     public async Task AutomationLaunchContext_PrefersAmbientOverride_OverEnvironment()
     {
@@ -890,13 +889,6 @@ Console.WriteLine("Fake desktop");
         }
 
         throw new InvalidOperationException("Could not resolve a dotnet host path for the test process.");
-    }
-
-    private static HeadlessSessionScope StartHeadlessRuntime()
-    {
-        var session = HeadlessUnitTestSession.StartNew(typeof(TestAvaloniaApp));
-        HeadlessRuntime.SetSession(session);
-        return new HeadlessSessionScope(session);
     }
 
     private static Window CreateVisualGridWindow(string editableCellValue)
@@ -1864,35 +1856,6 @@ Console.WriteLine("Fake desktop");
     private sealed class PopupContentHost : Control
     {
         public object? PopupContent { get; init; }
-    }
-
-    private sealed class TestAvaloniaApp : global::Avalonia.Application
-    {
-        public override void Initialize()
-        {
-            Styles.Add(new global::Avalonia.Themes.Fluent.FluentTheme());
-            Styles.Add(new global::Avalonia.Markup.Xaml.Styling.StyleInclude(
-                new Uri("avares://AppAutomation.TestHost.Avalonia.Tests"))
-            {
-                Source = new Uri("avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml")
-            });
-        }
-    }
-
-    private sealed class HeadlessSessionScope : IDisposable
-    {
-        private readonly HeadlessUnitTestSession _session;
-
-        public HeadlessSessionScope(HeadlessUnitTestSession session)
-        {
-            _session = session;
-        }
-
-        public void Dispose()
-        {
-            HeadlessRuntime.SetSession(null);
-            _session.Dispose();
-        }
     }
 
     private sealed class TemporaryWorkspace : IDisposable

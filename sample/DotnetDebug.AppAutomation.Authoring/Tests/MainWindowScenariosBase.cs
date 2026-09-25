@@ -39,6 +39,26 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
         await Assert.That(Page.ArmTableSearch.Text).IsEqualTo("orders");
     }
 
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task MultiItemSpinner_UsesStableKeyAfterReorder()
+    {
+        Page
+            .SelectTabItem(static page => page.ArmDesktopTabItem)
+            .SetMultiItemSpinnerValue(
+                static page => page.UnitQuantityEditors,
+                "unit-b",
+                12)
+            .ClickButton(static page => page.UnitQuantityReorderButton)
+            .SetMultiItemSpinnerValue(
+                static page => page.UnitQuantityEditors,
+                "unit-b",
+                18)
+            .WaitUntilNameEquals(static page => page.UnitQuantityBCommittedValue, "18");
+
+        await Assert.That(Page.UnitQuantityBCommittedValue.Name).IsEqualTo("18");
+    }
+
     private const int DelayedStatusTimeoutMs = 10000;
     private const string DelayedStatusReadyText = "Delayed status ready";
 

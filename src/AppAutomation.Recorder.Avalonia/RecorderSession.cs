@@ -4285,6 +4285,14 @@ internal sealed class RecorderSession :
             return;
         }
 
+        var multiItemCapture = _stepFactory.TryCreateMultiItemSpinnerStep(textBox);
+        if (multiItemCapture.IsConfigured)
+        {
+            DiscardPendingSpinnerIfRelated(textBox);
+            AddStep(multiItemCapture.StepResult, textBox, "MultiItemSpinnerValue");
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
     }
 
@@ -4329,7 +4337,40 @@ internal sealed class RecorderSession :
 
         var spinner = _pendingSpinner;
         _pendingSpinner = null;
+        var multiItemCapture = _stepFactory.TryCreateMultiItemSpinnerStep(spinner);
+        if (multiItemCapture.IsConfigured)
+        {
+            DiscardPendingTextIfRelated(spinner);
+            AddStep(multiItemCapture.StepResult, spinner, "MultiItemSpinnerValue");
+            return;
+        }
+
         AddStep(_stepFactory.TryCreateSpinnerStep(spinner), spinner, "SpinnerValue");
+    }
+
+    private void DiscardPendingSpinnerIfRelated(Control source)
+    {
+        if (_pendingSpinner is null
+            || (!AreRelated(_pendingSpinner, source)
+                && !_stepFactory.AreSameMultiItemSpinner(_pendingSpinner, source)))
+        {
+            return;
+        }
+
+        _spinnerDebounceTimer.Stop();
+        _pendingSpinner = null;
+    }
+
+    private void DiscardPendingTextIfRelated(Control source)
+    {
+        if (_pendingTextBox is null
+            || (!AreRelated(_pendingTextBox, source)
+                && !_stepFactory.AreSameMultiItemSpinner(_pendingTextBox, source)))
+        {
+            return;
+        }
+
+        DiscardPendingText();
     }
 
     private void FlushPendingTextIfSwitchingTo(Control? control)
@@ -4340,6 +4381,11 @@ internal sealed class RecorderSession :
         }
 
         if (control is not null && AreRelated(_pendingTextBox, control))
+        {
+            return;
+        }
+
+        if (control is not null && _stepFactory.AreSameMultiItemSpinner(_pendingTextBox, control))
         {
             return;
         }
@@ -4376,6 +4422,11 @@ internal sealed class RecorderSession :
         }
 
         if (control is not null && AreRelated(_pendingSpinner, control))
+        {
+            return;
+        }
+
+        if (control is not null && _stepFactory.AreSameMultiItemSpinner(_pendingSpinner, control))
         {
             return;
         }
@@ -4870,6 +4921,19 @@ internal sealed class RecorderSession :
     private RecordedStep RevalidateStep(RecordedStep step)
     {
         step = RestoreValidationBeforeGraphError(step);
+        if (step.ActionKind == RecordedActionKind.SetMultiItemSpinnerValue
+            && step.ValidationStatus == RecorderValidationStatus.Invalid
+            && !step.CanPersist)
+        {
+            return step with
+            {
+                LastValidationAt = DateTimeOffset.UtcNow,
+                ReviewState = ResolveReviewState(step),
+                FailureCode = ResolveFailureCode(step),
+                RuntimeValidationFindings = Array.Empty<RecorderRuntimeValidationFinding>()
+            };
+        }
+
         if (!_options.Validation.ValidateSelectors)
         {
             var selectorValidationDisabledStep = _runtimeValidator.Validate(step with

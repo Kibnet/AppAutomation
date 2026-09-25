@@ -19,7 +19,10 @@ public sealed class RecorderFullCaptureCoverageTests
             .Where(action => steps.All(step => step.ActionKind != action))
             .ToArray();
         var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
-        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions());
+        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions
+        {
+            MultiItemControls = CreateMultiItemCatalog()
+        });
 
         await Assert.That(missingActions.Length).IsEqualTo(0);
 
@@ -352,6 +355,11 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.SelectComboItem, Descriptor("OperationCombo", UiControlType.ComboBox), StringValue: "GCD"),
             new RecordedStep(RecordedActionKind.SetSliderValue, Descriptor("ScaleSlider", UiControlType.Slider), DoubleValue: 2.5),
             new RecordedStep(RecordedActionKind.SetSpinnerValue, Descriptor("CountSpinner", UiControlType.Spinner), DoubleValue: 7),
+            new RecordedStep(
+                RecordedActionKind.SetMultiItemSpinnerValue,
+                Descriptor("UnitQuantityEditors", UiControlType.MultiItemControlCollection),
+                DoubleValue: 12.5,
+                RepeatedItemKey: "unit-b"),
             new RecordedStep(RecordedActionKind.SelectTabItem, Descriptor("ControlMixTabItem", UiControlType.TabItem)),
             new RecordedStep(RecordedActionKind.SelectTreeItem, Descriptor("NavigationTree", UiControlType.Tree), StringValue: "Orders"),
             new RecordedStep(RecordedActionKind.SetDate, Descriptor("StartDatePicker", UiControlType.DateTimePicker), DateValue: date),
@@ -487,6 +495,25 @@ public sealed class RecorderFullCaptureCoverageTests
             GridCellEditorKind.ComboBox));
         return options;
     }
+
+    private static MultiItemControlCatalog CreateMultiItemCatalog() =>
+        new MultiItemControlCatalog().Add(
+            MultiItemControlDefinition.ByAutomationIds(
+                    "UnitQuantityEditors",
+                    "UnitQuantityEditors",
+                    "UnitQuantityEditors")
+                .WithItems(
+                    MultiItemRelativeLocator.ByAutomationId(
+                        "UnitQuantityItem",
+                        MultiItemRelativeLocatorScope.CollectionRoot),
+                    RepeatedItemKeyDefinition.FromItem(UiAutomationValueProperty.ItemStatus))
+                .WithSpinner(new MultiItemSpinnerParts(
+                    MultiItemRelativeLocator.ByAutomationId(
+                        "QuantityEditor",
+                        MultiItemRelativeLocatorScope.ItemRoot),
+                    MultiItemRelativeLocator.ByAutomationId(
+                        "QuantityEditor_Input",
+                        MultiItemRelativeLocatorScope.ControlRoot))));
 
     private static StackPanel CreateCompositeCoverageRoot(
         out Button dateApplyButton,
