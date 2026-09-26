@@ -4,6 +4,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation.GridAutomation;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
+using AppAutomation.Avalonia.Headless.Session;
 using Avalonia.Automation;
 using Avalonia.VisualTree;
 using AvaloniaControl = Avalonia.Controls.Control;
@@ -16,20 +17,41 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
+    private readonly string _screenshotDirectory;
+    private readonly bool _supportsRenderedFrames;
 
     public HeadlessControlResolver(AvaloniaWindow window)
+        : this(window, null)
+    {
+    }
+
+    public HeadlessControlResolver(AvaloniaWindow window, HeadlessScreenshotOptions? screenshotOptions)
     {
         _window = new Window(window ?? throw new ArgumentNullException(nameof(window)));
         _conditionFactory = new ConditionFactory();
+        _supportsRenderedFrames = HeadlessScreenshotCapture.IsRenderingBackendAvailable(window);
+        var root = screenshotOptions?.ArtifactDirectory
+            ?? new HeadlessScreenshotOptions().ArtifactDirectory;
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        _screenshotDirectory = Path.GetFullPath(root);
+        if (!string.Equals(
+                Path.GetPathRoot(_screenshotDirectory),
+                Path.GetPathRoot(AppContext.BaseDirectory),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "The headless failure artifact directory must be on the same filesystem root as AppContext.BaseDirectory.",
+                nameof(screenshotOptions));
+        }
     }
 
-    public UiRuntimeCapabilities Capabilities { get; } = new(
+    public UiRuntimeCapabilities Capabilities => new(
         AdapterId: "avalonia-headless",
         SupportsGridCellAccess: true,
         SupportsCalendarRangeSelection: false,
         SupportsTreeNodeExpansionState: false,
         SupportsRawNativeHandles: false,
-        SupportsScreenshots: false);
+        SupportsScreenshots: _supportsRenderedFrames && HeadlessScreenshotCapture.IsWindowVisible(_window.Native));
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class
@@ -92,8 +114,8 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         var logicalTree = BuildLogicalTreeSnapshot();
         var controlState = BuildControlStateSnapshot(failureContext.LocatorValue, failureContext.LocatorKind);
 
-        IReadOnlyList<UiFailureArtifact> artifacts =
-        [
+        var artifacts = new List<UiFailureArtifact>
+        {
             new UiFailureArtifact(
                 Kind: "logical-tree",
                 LogicalName: "logical-tree",
@@ -108,9 +130,32 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                 ContentType: "text/plain",
                 IsRequiredByContract: true,
                 InlineTextPreview: controlState)
-        ];
+        };
 
-        return ValueTask.FromResult(artifacts);
+        try
+        {
+            var path = Path.Combine(_screenshotDirectory, Guid.NewGuid().ToString("N"), "window.png");
+            var captured = HeadlessScreenshotCapture.Capture(_window.Native, path);
+            artifacts.Add(new UiFailureArtifact(
+                Kind: "screenshot",
+                LogicalName: "window-screenshot",
+                RelativePath: Path.GetRelativePath(AppContext.BaseDirectory, captured.Path),
+                ContentType: "image/png",
+                IsRequiredByContract: false,
+                InlineTextPreview: $"{captured.Width}x{captured.Height}; {captured.Path}"));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            artifacts.Add(new UiFailureArtifact(
+                Kind: "screenshot-unavailable",
+                LogicalName: "window-screenshot",
+                RelativePath: "artifacts/ui-failures/avalonia-headless/screenshot-unavailable.txt",
+                ContentType: "text/plain",
+                IsRequiredByContract: false,
+                InlineTextPreview: ex.Message));
+        }
+
+        return ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>(artifacts);
     }
 
     private GridRow FindGridRow(UiControlDefinition definition)

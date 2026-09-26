@@ -205,9 +205,53 @@ public abstract class UiTestBase<TSession, TPage>
     }
 
     /// <summary>
-    /// Cleans up the UI session after each test. Called automatically by TUnit.
+    /// Collects artifacts before a failed test's UI session is disposed.
+    /// </summary>
+    protected virtual ValueTask<IReadOnlyList<UiFailureArtifact>> CollectFailureArtifactsAsync(
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>([]);
+
+    /// <summary>
+    /// Collects failure artifacts and then cleans up the UI session. Called automatically by TUnit.
     /// </summary>
     [After(Test)]
+    public async Task CollectAndCleanupUiSessionAsync()
+    {
+        try
+        {
+            var context = TestContext.Current;
+            if (_session is not null && context?.Execution.Result?.State is TestState.Failed or TestState.Timeout)
+            {
+                try
+                {
+                    var artifacts = await CollectFailureArtifactsAsync();
+                    foreach (var artifact in artifacts)
+                    {
+                        var absolutePath = Path.GetFullPath(
+                            artifact.RelativePath,
+                            AppContext.BaseDirectory);
+                        context.Output.WriteLine($"UI failure artifact: {absolutePath}");
+                        if (artifact.Kind == "screenshot" && File.Exists(absolutePath))
+                        {
+                            context.Output.AttachArtifact(absolutePath, artifact.LogicalName, "UI failure screenshot");
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    context.Output.ErrorOutput.WriteLine($"UI failure artifact capture failed: {exception}");
+                }
+            }
+        }
+        finally
+        {
+            CleanupUiSession();
+        }
+    }
+
+    /// <summary>
+    /// Cleans up the UI session, including when called directly by a test.
+    /// </summary>
     public void CleanupUiSession()
     {
         _session?.Dispose();

@@ -12,7 +12,9 @@ public sealed class HeadlessSessionHooks
     [Before(TestSession)]
     public static void SetupSession()
     {
-        _session = HeadlessUnitTestSession.StartNew(typeof(App), AvaloniaTestIsolationLevel.PerAssembly);
+        _session = HeadlessUnitTestSession.StartNew(
+            typeof(RenderedHeadlessAppBuilder),
+            AvaloniaTestIsolationLevel.PerAssembly);
         HeadlessRuntime.SetSession(_session);
     }
 

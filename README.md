@@ -166,7 +166,7 @@ File:
 tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 ```
 
-The generated hooks already call `HeadlessRuntime.SetSession(...)` through `MyAppAppLaunchHost.AvaloniaAppType`. Replace the placeholder app type in `TestHost`, then keep the generated hooks as-is unless your AUT needs custom session lifetime handling.
+The generated hooks start `RenderedHeadlessAppBuilder` and call `HeadlessRuntime.SetSession(...)`. Replace the placeholder `MyAppAppLaunchHost.AvaloniaAppType` in `TestHost`; the builder uses it to enable pixel rendering for screenshots.
 
 ### 4. Describe page objects and shared scenarios
 
@@ -427,6 +427,7 @@ Working reference in this repository:
 ## Next Steps
 
 - Step-by-step consumer flow: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
+- Capture rendered PNGs in headless tests: [docs/appautomation/headless-screenshots.md](docs/appautomation/headless-screenshots.md)
 - Pre-flight checklist: [docs/appautomation/adoption-checklist.md](docs/appautomation/adoption-checklist.md)
 - Canonical project responsibilities: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
 - Selector contract for both runtimes: [docs/appautomation/selector-contract.md](docs/appautomation/selector-contract.md)
@@ -601,7 +602,7 @@ tests/MyApp.AppAutomation.TestHost/MyAppAppLaunchHost.cs
 tests/MyApp.UiTests.Headless/Infrastructure/HeadlessSessionHooks.cs
 ```
 
-Сгенерированные hooks уже вызывают `HeadlessRuntime.SetSession(...)` через `MyAppAppLaunchHost.AvaloniaAppType`. Обычно достаточно заменить placeholder-типа приложения в `TestHost` и оставить hooks без изменений, если AUT не требует особого жизненного цикла сеанса.
+Сгенерированные hooks запускают `RenderedHeadlessAppBuilder` и вызывают `HeadlessRuntime.SetSession(...)`. Замените placeholder `MyAppAppLaunchHost.AvaloniaAppType` в `TestHost`: builder использует его для рендеринга скриншотов.
 
 ### 4. Описать объекты страниц и общие сценарии
 
@@ -879,6 +880,7 @@ Page.WaitUntilGridCellEquals(static page => page.ItemsGrid, row, "State", "Ready
 ## Дальше
 
 - Пошаговый сценарий подключения: [docs/appautomation/quickstart.md](docs/appautomation/quickstart.md)
+- Как сохранить и проверить PNG в headless-тесте: [docs/appautomation/headless-screenshots.md](docs/appautomation/headless-screenshots.md)
 - Проверочный список перед стартом: [docs/appautomation/adoption-checklist.md](docs/appautomation/adoption-checklist.md)
 - Роли проектов в стандартной структуре: [docs/appautomation/project-topology.md](docs/appautomation/project-topology.md)
 - Контракт селекторов для обоих рантаймов: [docs/appautomation/selector-contract.md](docs/appautomation/selector-contract.md)

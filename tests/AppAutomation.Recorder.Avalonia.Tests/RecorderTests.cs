@@ -2522,14 +2522,8 @@ public sealed class RecorderTests
 
         var scrollViewer = overlay.FindControl<ScrollViewer>("StepJournalScrollViewer");
         var journalPanel = overlay.FindControl<Panel>("StepJournalPanel");
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(scrollViewer).IsNotNull();
-            await Assert.That(journalPanel).IsNotNull();
-            await Assert.That(journalPanel!.Children.Count).IsEqualTo(1);
-            await Assert.That(CollectText(journalPanel.Children[0])).Contains("#1");
-        }
+        var initialCount = journalPanel!.Children.Count;
+        var initialText = CollectText(journalPanel.Children[0]);
 
         session.SetJournal(
         [
@@ -2546,20 +2540,14 @@ public sealed class RecorderTests
                 LastValidationAt: DateTimeOffset.UtcNow)
         ]);
         session.RaiseChanged();
-        await DrainUiAsync();
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(journalPanel!.Children.Count).IsEqualTo(2);
-            await Assert.That(CollectText(journalPanel.Children[1])).Contains("#2");
-            await Assert.That(CollectText(journalPanel.Children[1])).Contains("Page.ClickButton(static page => page.RunButton);");
-        }
+        DrainUi();
+        var expandedCount = journalPanel.Children.Count;
+        var expandedText = CollectText(journalPanel.Children[1]);
 
         session.SetJournal([]);
         session.RaiseChanged();
-        await DrainUiAsync();
-
-        await Assert.That(journalPanel!.Children.Count).IsEqualTo(0);
+        DrainUi();
+        var emptyCount = journalPanel.Children.Count;
 
         session.SetJournal(
         [
@@ -2575,13 +2563,22 @@ public sealed class RecorderTests
                 LastValidationAt: DateTimeOffset.UtcNow)
         ]);
         session.RaiseChanged();
-        await DrainUiAsync();
+        DrainUi();
+        var finalCount = journalPanel.Children.Count;
+        var finalText = CollectText(journalPanel.Children[0]);
 
         using (Assert.Multiple())
         {
-            await Assert.That(journalPanel.Children.Count).IsEqualTo(1);
-            await Assert.That(CollectText(journalPanel.Children[0])).Contains("#1");
-            await Assert.That(CollectText(journalPanel.Children[0])).Contains("Page.ClickButton(static page => page.ResetButton);");
+            await Assert.That(scrollViewer).IsNotNull();
+            await Assert.That(initialCount).IsEqualTo(1);
+            await Assert.That(initialText).Contains("#1");
+            await Assert.That(expandedCount).IsEqualTo(2);
+            await Assert.That(expandedText).Contains("#2");
+            await Assert.That(expandedText).Contains("Page.ClickButton(static page => page.RunButton);");
+            await Assert.That(emptyCount).IsEqualTo(0);
+            await Assert.That(finalCount).IsEqualTo(1);
+            await Assert.That(finalText).Contains("#1");
+            await Assert.That(finalText).Contains("Page.ClickButton(static page => page.ResetButton);");
         }
     }
 
@@ -4146,14 +4143,12 @@ public sealed class RecorderTests
         }
     }
 
-    private static Task DrainUiAsync()
+    private static void DrainUi()
     {
         if (Dispatcher.UIThread.CheckAccess())
         {
             Dispatcher.UIThread.RunJobs();
         }
-
-        return Task.CompletedTask;
     }
 
     private static RecorderStepJournalEntry CreateJournalEntry(Guid stepId, string preview)

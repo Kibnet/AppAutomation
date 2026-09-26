@@ -19,6 +19,16 @@ public sealed class DesktopAppSession : IDisposable
 
     public AvaloniaWindow MainWindow { get; }
 
+    /// <summary>
+    /// Saves the current visible headless window frame as a PNG and returns its absolute path.
+    /// Configure Skia rendering before starting the headless test session.
+    /// </summary>
+    public string CaptureScreenshot(string filePath)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return HeadlessScreenshotCapture.Capture(_nativeWindow, filePath).Path;
+    }
+
     public static DesktopAppSession Launch(HeadlessAppLaunchOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);

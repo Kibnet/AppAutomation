@@ -13,9 +13,64 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 [InheritsTests]
 public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<MainWindowHeadlessRuntimeTests.HeadlessRuntimeSession>
 {
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task CaptureScreenshot_AfterNavigation_ShowsCurrentTab()
+    {
+        Page.SelectTabItem(static page => page.ArmDesktopTabItem);
+        var path = Session.Inner.CaptureScreenshot(Path.Combine(
+            AppContext.BaseDirectory,
+            "artifacts", "headless-screenshots", Guid.NewGuid().ToString("N"), "arm-desktop.png"));
+        using var bitmap = new global::Avalonia.Media.Imaging.Bitmap(path);
+        await TUnit.Assertions.Assert.That(bitmap.PixelSize.Width > 200).IsTrue();
+        Console.WriteLine($"Headless screenshot after navigation: {path}");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task IntentionalFailure_CapturesScreenshotOnlyInFailureSmoke()
+    {
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_SCREENSHOT_FAILURE_SMOKE") != "1")
+        {
+            return;
+        }
+
+        await TUnit.Assertions.Assert.That("actual-state").IsEqualTo("expected-state");
+    }
+
     protected override HeadlessRuntimeSession LaunchSession()
     {
-        return new HeadlessRuntimeSession(DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions()));
+        var inner = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        try
+        {
+            HeadlessRuntime.Dispatch(inner.MainWindow.Show);
+            return new HeadlessRuntimeSession(inner);
+        }
+        catch
+        {
+            inner.Dispose();
+            throw;
+        }
+    }
+
+    protected override ValueTask<IReadOnlyList<UiFailureArtifact>> CollectFailureArtifactsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_SCREENSHOT_CAPTURE_ERROR_SMOKE") == "1")
+        {
+            Session.Inner.CaptureScreenshot(AppContext.BaseDirectory);
+        }
+
+        var path = Session.Inner.CaptureScreenshot(Path.Combine(
+            AppContext.BaseDirectory,
+            "artifacts", "ui-failures", "avalonia-headless",
+            Guid.NewGuid().ToString("N"), "test-failure.png"));
+        return ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>(
+        [new UiFailureArtifact(
+            "screenshot", "test-failure",
+            Path.GetRelativePath(AppContext.BaseDirectory, path),
+            "image/png", false, path)]);
     }
 
     protected override MainWindowPage CreatePage(HeadlessRuntimeSession session)
@@ -101,7 +156,18 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
 
         public void Dispose()
         {
-            Inner.Dispose();
+            try
+            {
+                HeadlessRuntime.Dispatch(Inner.MainWindow.Close);
+            }
+            finally
+            {
+                Inner.Dispose();
+                if (Environment.GetEnvironmentVariable("APPAUTOMATION_SCREENSHOT_FAILURE_SMOKE") == "1")
+                {
+                    Console.WriteLine("Headless failure smoke cleanup completed");
+                }
+            }
         }
     }
 }

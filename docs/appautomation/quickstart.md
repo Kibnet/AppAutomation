@@ -92,6 +92,8 @@ return AvaloniaHeadlessLaunchHost.Create(
     static () => MyAppBootstrap.CreateMainWindow());
 ```
 
+The generated Headless project enables Skia rendering and includes `CaptureScreenshotExample`. After wiring the real app type and window factory, run it and open the printed PNG. See [Headless screenshots](headless-screenshots.md) for failure artifacts and existing consumers.
+
 ## 6. Set up minimum `AutomationId` contract
 
 The first iteration should cover only controls from the critical smoke path:
@@ -322,6 +324,8 @@ return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
 return AvaloniaHeadlessLaunchHost.Create(
     static () => MyAppBootstrap.CreateMainWindow());
 ```
+
+Сгенерированный проект Headless включает Skia-рендеринг и тест `CaptureScreenshotExample`. После указания настоящего типа приложения и фабрики окна запустите тест и откройте PNG по выведенному пути. Настройка существующего проекта и снимки при ошибках описаны в [руководстве по скриншотам](headless-screenshots.md).
 
 ## 6. Задайте минимальный контракт `AutomationId`
 
