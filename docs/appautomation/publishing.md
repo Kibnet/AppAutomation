@@ -19,6 +19,8 @@ The following go into the local package folder:
 - `AppAutomation.Tooling`
 - `AppAutomation.Templates`
 
+Each GitHub release also includes `appautomation-skill.zip`: the installable Codex skill with one top-level `appautomation/` directory. `eng/pack-skill.ps1` validates its file list and ZIP layout locally and in PR/release CI.
+
 ## Version Source
 
 Local source of truth:
@@ -27,7 +29,7 @@ Local source of truth:
 
 GitHub release path:
 
-- tag `<version>` or `appautomation-v<version>`
+- tag `v<version>` (preferred for new releases); existing `<version>` and `appautomation-v<version>` tags remain supported by the version resolver
 
 ## Canonical Release Flow
 
@@ -36,6 +38,7 @@ The canonical publish boundary is a GitHub release transition to `published`.
 - create the release/tag first;
 - publish the release;
 - let `.github/workflows/publish-packages.yml` run from the `release.published` event.
+- check that the workflow attached both NuGet packages and `appautomation-skill.zip`, and finished green before reporting the release complete.
 
 If that release-triggered workflow does not appear, use the recovery path below instead of uploading release assets manually.
 
@@ -117,6 +120,7 @@ dotnet build AppAutomation.sln -c Release
 dotnet test AppAutomation.sln -c Release
 pwsh -File eng/pack.ps1 -Configuration Release
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
+pwsh -File eng/pack-skill.ps1
 ```
 
 Publishing without these steps is not considered validated.
@@ -146,6 +150,8 @@ Publishing without these steps is not considered validated.
 - `AppAutomation.Tooling`
 - `AppAutomation.Templates`
 
+Каждый GitHub-релиз также содержит `appautomation-skill.zip`: устанавливаемый скилл Codex с одним корневым каталогом `appautomation/`. `eng/pack-skill.ps1` проверяет перечень файлов и структуру ZIP локально, в PR и в релизном CI.
+
 ## Источник версии
 
 Локальный источник истины:
@@ -154,7 +160,7 @@ Publishing without these steps is not considered validated.
 
 Тег релиза в GitHub:
 
-- тег `<version>` или `appautomation-v<version>`
+- тег `v<version>` (предпочтительно для новых релизов); прежние `<version>` и `appautomation-v<version>` по-прежнему поддерживаются резолвером версии
 
 ## Канонический путь релиза
 
@@ -163,6 +169,7 @@ Publishing without these steps is not considered validated.
 - сначала создайте release/tag;
 - затем опубликуйте release;
 - после этого должен запуститься `.github/workflows/publish-packages.yml` по событию `release.published`.
+- до отчёта о завершённом релизе проверьте зелёный статус workflow и наличие как NuGet-пакетов, так и `appautomation-skill.zip` среди файлов релиза.
 
 Если release-triggered workflow не появился, используйте recovery path ниже, а не загружайте release assets вручную.
 
@@ -244,6 +251,7 @@ dotnet build AppAutomation.sln -c Release
 dotnet test AppAutomation.sln -c Release
 pwsh -File eng/pack.ps1 -Configuration Release
 pwsh -File eng/smoke-consumer.ps1 -Configuration Release
+pwsh -File eng/pack-skill.ps1
 ```
 
 Публикация без этих шагов не считается подтверждённой.

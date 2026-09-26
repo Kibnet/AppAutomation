@@ -84,6 +84,10 @@ jobs:
         shell: pwsh
         run: pwsh -File eng/smoke-consumer.ps1 -Configuration Release -Version '${{ steps.version.outputs.full }}' -SkipPack
 
+      - name: Validate and pack Codex skill
+        shell: pwsh
+        run: pwsh -File eng/pack-skill.ps1
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -205,4 +209,21 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               throw "gh release upload failed for $($package.FullName)"
             }
+          }
+
+      - name: Attach Codex skill to GitHub release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $skillArchive = Join-Path (Get-Location) 'artifacts/appautomation-skill.zip'
+          if (-not (Test-Path -LiteralPath $skillArchive -PathType Leaf)) {
+            throw "Skill archive was not found: $skillArchive"
+          }
+          & gh release upload $env:RELEASE_TAG $skillArchive --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "gh release upload failed for $skillArchive"
           }

@@ -42,6 +42,30 @@ Supported baseline:
 
 Full matrix: [docs/appautomation/compatibility.md](docs/appautomation/compatibility.md)
 
+## Codex skill for AppAutomation
+
+The [AppAutomation skill](skills/appautomation/SKILL.md) guides an agent from an Avalonia project with no UI tests to a working `Authoring`/`Headless`/`FlaUI` setup, shared user scenarios, diagnostics, and visual review using real PNGs from Headless tests. It is an **agent workflow**; the NuGet packages, template, and CLI below are still required in the consumer project. Invoke it as `$appautomation`, for example: “`$appautomation Add a Headless UI test for the login flow and show me the resulting screen.`”
+
+Install the skill for the current Codex user from the [latest release](https://github.com/Kibnet/AppAutomation/releases/latest) in PowerShell:
+
+```powershell
+$appAutoSkillsRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\skills"
+} else {
+    Join-Path $env:CODEX_HOME "skills"
+}
+$appAutoSkillDir = Join-Path $appAutoSkillsRoot "appautomation"
+if (Test-Path -LiteralPath $appAutoSkillDir) { throw "AppAutomation skill already exists: $appAutoSkillDir" }
+$appAutoArchive = Join-Path ([System.IO.Path]::GetTempPath()) ("appautomation-skill-" + [Guid]::NewGuid().ToString("N") + ".zip")
+Invoke-WebRequest "https://github.com/Kibnet/AppAutomation/releases/latest/download/appautomation-skill.zip" -OutFile $appAutoArchive
+New-Item -ItemType Directory -Path $appAutoSkillsRoot -Force | Out-Null
+Expand-Archive -LiteralPath $appAutoArchive -DestinationPath $appAutoSkillsRoot
+if (-not (Test-Path -LiteralPath (Join-Path $appAutoSkillDir "SKILL.md"))) { throw "Skill archive layout is invalid" }
+Get-Content -LiteralPath (Join-Path $appAutoSkillDir "SKILL.md") -TotalCount 5
+```
+
+For a pinned version, replace `/latest/download/` with `/download/v1.8.0/` (or another published tag). To update, inspect and preserve any local edits in `$appAutoSkillDir`, remove only that skill directory, then repeat the installation. Codex discovers the installed skill on the next turn/new session.
+
 ## Fast Path
 
 The commands below use the latest version available from your configured feed.
@@ -477,6 +501,30 @@ tests/
 | Инструмент командной строки | `.NET tool`, команда `appautomation` |
 
 Полная матрица: [docs/appautomation/compatibility.md](docs/appautomation/compatibility.md)
+
+## Скилл AppAutomation для Codex
+
+[Скилл AppAutomation](skills/appautomation/SKILL.md) помогает агенту пройти путь от Avalonia-проекта без UI-тестов до работающей структуры `Authoring`/`Headless`/`FlaUI`, общих пользовательских сценариев, диагностики и визуальной проверки по реальным PNG из Headless-тестов. Это **инструкция для агента**; пакеты NuGet, шаблон и CLI из быстрого старта ниже всё равно нужны проекту-потребителю. Вызовите `$appautomation`, например: «`$appautomation Добавь Headless UI-тест для входа и покажи снимок получившегося экрана`».
+
+Установка скилла для текущего пользователя Codex из [последнего релиза](https://github.com/Kibnet/AppAutomation/releases/latest) в PowerShell:
+
+```powershell
+$appAutoSkillsRoot = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\skills"
+} else {
+    Join-Path $env:CODEX_HOME "skills"
+}
+$appAutoSkillDir = Join-Path $appAutoSkillsRoot "appautomation"
+if (Test-Path -LiteralPath $appAutoSkillDir) { throw "AppAutomation skill already exists: $appAutoSkillDir" }
+$appAutoArchive = Join-Path ([System.IO.Path]::GetTempPath()) ("appautomation-skill-" + [Guid]::NewGuid().ToString("N") + ".zip")
+Invoke-WebRequest "https://github.com/Kibnet/AppAutomation/releases/latest/download/appautomation-skill.zip" -OutFile $appAutoArchive
+New-Item -ItemType Directory -Path $appAutoSkillsRoot -Force | Out-Null
+Expand-Archive -LiteralPath $appAutoArchive -DestinationPath $appAutoSkillsRoot
+if (-not (Test-Path -LiteralPath (Join-Path $appAutoSkillDir "SKILL.md"))) { throw "Skill archive layout is invalid" }
+Get-Content -LiteralPath (Join-Path $appAutoSkillDir "SKILL.md") -TotalCount 5
+```
+
+Для закреплённой версии замените `/latest/download/` на `/download/v1.8.0/` (или другой опубликованный тег). Для обновления сначала проверьте и сохраните локальные правки в `$appAutoSkillDir`, удалите только этот каталог скилла и повторите установку. Codex обнаружит установленный скилл на следующем ходе или в новой сессии.
 
 ## Быстрый старт
 
