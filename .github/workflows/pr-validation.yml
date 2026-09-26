@@ -29,6 +29,10 @@ jobs:
       - name: Test
         run: dotnet test --solution AppAutomation.sln -c Release --no-build
 
+      - name: Verify headless failure screenshot
+        shell: pwsh
+        run: pwsh -File eng/test-headless-failure-capture.ps1 -Configuration Release
+
       - name: Pack
         shell: pwsh
         run: pwsh -File eng/pack.ps1 -Configuration Release

@@ -13,7 +13,7 @@ public static class HeadlessSessionHooks
     public static void SetupSession()
     {
         _session = HeadlessUnitTestSession.StartNew(
-            SampleAppAppLaunchHost.AvaloniaAppType,
+            typeof(RenderedHeadlessAppBuilder),
             AvaloniaTestIsolationLevel.PerAssembly);
         HeadlessRuntime.SetSession(_session);
     }

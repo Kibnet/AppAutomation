@@ -143,7 +143,7 @@ public static Type AvaloniaAppType => throw new NotImplementedException(
         "Reference your Avalonia App type here, for example typeof(MyApp.Desktop.App).");
 "@,
 @"
-public static Type AvaloniaAppType => typeof(${ConsumerName}AppLaunchHost);
+public static Type AvaloniaAppType => typeof(ConsumerHeadlessSmokeApp);
 "@)
 
     $updated = $updated.Replace("REPLACE_WITH_YOUR_SOLUTION.sln", "$ConsumerName.sln")
@@ -157,13 +157,27 @@ public static Type AvaloniaAppType => typeof(${ConsumerName}AppLaunchHost);
 "@,
 @"
         return AvaloniaHeadlessLaunchHost.Create(
-            static () => throw new NotSupportedException(
-                "Replace the generated headless bootstrap with your AUT bootstrap before running UI sessions."));
+            static () => new Avalonia.Controls.Window
+            {
+                Width = 120,
+                Height = 90,
+                Content = new Avalonia.Controls.Border
+                {
+                    Background = Avalonia.Media.Brushes.CornflowerBlue
+                }
+            });
 "@)
 
     if ($updated -eq $contents) {
         throw "Generated TestHost scaffold did not contain the expected placeholders: $launchHostPath"
     }
+
+    $updated += @"
+
+public sealed class ConsumerHeadlessSmokeApp : Avalonia.Application
+{
+}
+"@
 
     Set-Content -Path $launchHostPath -Value $updated -Encoding UTF8
 }
@@ -460,6 +474,19 @@ $templateFlaUiProject = Join-Path $templateWorkspace "tests\$templateConsumerNam
 
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateHeadlessProject)
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateHeadlessProject, "-c", $Configuration, "--no-restore")
+Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @(
+    "run", "--no-build", "--project", $templateHeadlessProject, "-c", $Configuration,
+    "--", "--treenode-filter", "/*/*/MainWindowHeadlessTests/CaptureScreenshotExample", "--maximum-parallel-tests", "1")
+$screenshotRoot = Join-Path $templateWorkspace "tests\$templateConsumerName.UiTests.Headless\bin\$Configuration\net8.0\artifacts\headless-screenshots"
+$screenshots = @(Get-ChildItem -LiteralPath $screenshotRoot -Recurse -Filter "*.png" -File -ErrorAction SilentlyContinue)
+if ($screenshots.Count -ne 1) {
+    throw "Generated consumer screenshot smoke expected one PNG in $screenshotRoot; found $($screenshots.Count)."
+}
+$pngBytes = [System.IO.File]::ReadAllBytes($screenshots[0].FullName)
+if ($pngBytes.Length -le 100 -or [Convert]::ToHexString($pngBytes[0..7]) -ne "89504E470D0A1A0A") {
+    throw "Generated consumer screenshot is not a valid PNG: $($screenshots[0].FullName)"
+}
+Write-Host "Generated consumer screenshot: $($screenshots[0].FullName)"
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("restore", $templateFlaUiProject)
 Invoke-Dotnet -WorkingDirectory $templateWorkspace -Arguments @("build", $templateFlaUiProject, "-c", $Configuration, "--no-restore")
 

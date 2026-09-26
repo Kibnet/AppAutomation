@@ -17,6 +17,44 @@ public sealed class LaunchContractTests
     private const string HeadlessRuntimeConstraint = "HeadlessRuntime";
 
     [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task FakeHeadlessDrawing_DoesNotClaimScreenshots()
+    {
+        await Assert.That(typeof(HeadlessControlResolver).GetConstructor([typeof(Window)])).IsNotNull();
+        using var headless = StartHeadlessRuntime();
+        using var session = DesktopAppSession.Launch(AvaloniaHeadlessLaunchHost.Create(
+            () => new Window { Width = 80, Height = 60 }));
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var path = Path.Combine(AppContext.BaseDirectory, "artifacts", "fake-headless", Guid.NewGuid().ToString("N"), "window.png");
+
+        await Assert.That(resolver.Capabilities.SupportsScreenshots).IsFalse();
+        HeadlessRuntime.Dispatch(session.MainWindow.Show);
+        await Assert.That(resolver.Capabilities.SupportsScreenshots).IsFalse();
+        if (OperatingSystem.IsWindows())
+        {
+            var otherRoot = Path.GetPathRoot(AppContext.BaseDirectory)!.StartsWith("C:", StringComparison.OrdinalIgnoreCase)
+                ? @"D:\"
+                : @"C:\";
+            await Assert.That(() => new HeadlessControlResolver(session.MainWindow, new HeadlessScreenshotOptions
+            {
+                ArtifactDirectory = Path.Combine(otherRoot, "headless-failures")
+            })).Throws<ArgumentException>();
+        }
+        await Assert.That(() => session.CaptureScreenshot(path)).Throws<InvalidOperationException>();
+        await Assert.That(File.Exists(path)).IsFalse();
+        var failureContext = new UiFailureContext(
+            "Capture", "avalonia-headless", TimeSpan.Zero,
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            resolver.Capabilities, []);
+        var artifacts = await resolver.CollectAsync(failureContext);
+        await Assert.That(artifacts.Select(static artifact => artifact.Kind).ToArray())
+            .Contains("screenshot-unavailable");
+        await Assert.That(artifacts.Select(static artifact => artifact.Kind).ToArray())
+            .Contains("logical-tree");
+        HeadlessRuntime.Dispatch(session.MainWindow.Close);
+    }
+
+    [Test]
     public async Task AutomationLaunchContext_PrefersAmbientOverride_OverEnvironment()
     {
         var ambient = new AutomationLaunchContext("AmbientScenario", @"C:\ambient.json", source: "ambient-test");

@@ -22,6 +22,7 @@ Recommended test-solution topology:
 Full setup guide:
 
 - Quickstart: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/quickstart.md
+- Headless screenshots: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/headless-screenshots.md
 - Project topology: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/project-topology.md
 - Publishing: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/publishing.md
 
@@ -53,5 +54,6 @@ Full setup guide:
 Полное руководство по настройке:
 
 - Краткое руководство: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/quickstart.md
+- Скриншоты в Headless: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/headless-screenshots.md
 - Структура проектов: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/project-topology.md
 - Публикация: https://github.com/Kibnet/AppAutomation/blob/main/docs/appautomation/publishing.md
