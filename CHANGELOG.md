@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-27
+
+### Added
+
+- Add rendered PNG capture from Avalonia Headless UI tests, including explicit `CaptureScreenshot(...)`, failure diagnostics, and sample/template test hooks for screenshot artifacts.
+- Add the `appautomation` Codex skill for adopting and running AppAutomation UI tests in Avalonia consumer projects, with guidance for visual acceptance and showing screenshots to users.
+- Package the skill as `appautomation-skill.zip` in GitHub releases and document installation in the English and Russian README.
+
+## [1.7.0] - 2026-09-25
+
 ### Added
 
 - Add provider-neutral Recorder destination discovery and pre-record selection for existing source `partial` scenario classes, with generic support, compact scan feedback, canonical per-destination scenario files, and legacy preset compatibility.

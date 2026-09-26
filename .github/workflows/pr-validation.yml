@@ -20,6 +20,10 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Validate Codex skill archive
+        shell: pwsh
+        run: pwsh -File eng/pack-skill.ps1
+
       - name: Restore
         run: dotnet restore AppAutomation.sln
 
