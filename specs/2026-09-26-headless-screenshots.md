@@ -211,6 +211,7 @@ UI dispatcher учитывается; sample automation IDs и UX не меня�
 | `src/AppAutomation.TUnit/UiTestBase.cs` | Optional pre-dispose failure hook | Assertion failures |
 | `sample/DotnetDebug.AppAutomation.Avalonia.Headless.Tests/**` | Bootstrap, capture/error tests, override | Реальное sample evidence |
 | Isolated negative-runner/fake-render fixtures в test tree, соответствующие csproj/sln при необходимости | Проверка lifecycle и режимов | Процессная изоляция |
+| `tests/AppAutomation.Recorder.Avalonia.Tests/RecorderTests.cs` (delivery validation fix) | Считать UI state до async assertions в одном flaky тесте | Разблокировать обязательный полный CI gate после поручения merge; product behavior не меняется |
 | `src/AppAutomation.Templates/content/AppAutomation.Avalonia.Consumer/**` | Builder, hook, capture example, next steps | Новый потребитель |
 | `Directory.Packages.props`, затронутые csproj при необходимости | Avalonia.Skia текущей версии | Явные rendering dependencies |
 | `eng/smoke-consumer.ps1`, связанные template checks | Реальный PNG в generated consumer: synthetic Avalonia App/Window вместо нынешнего non-runnable TestHost placeholder; запуск screenshot-сценария | Защита bootstrap/scaffold; одного build недостаточно |
@@ -331,6 +332,13 @@ UI dispatcher учитывается; sample automation IDs и UX не меня�
 
 - Stop decision: **NEEDS-FIX**, не объявлять полный QUEST PASS. Внутри утверждённого screenshot scope дополнительных нарушений после fix/re-review не обнаружено; обязательный AC7 остаётся явно незакрытым. Человеческого design-решения не требуется. Не было commit/push/PR/release.
 
+### Delivery validation после поручения «Влей в мастер»
+
+- Статус: **PASS**, заменяет временное `NEEDS-FIX` первого post-EXEC review выше. Отдельный узкий коммит `c99ed60` стабилизировал только Recorder-тест `Overlay_RendersStepNumbers_AndResetsAutoscrollStateAfterEmptyJournal`: значения Avalonia-контролов считываются до первого асинхронного assertion, поэтому queued UI jobs выполняются на потоке, создавшем overlay. Код Recorder и поведение AUT не менялись. Полный Recorder suite после fix локально прошёл 309/309 (`artifacts/recorder-suite-fix.log`).
+- Scope/Evidence и Contract re-review: проверены staged diff Recorder-теста, `git diff --check`, локальный полный Recorder suite и GitHub PR #32 на `c99ed6003946edb3f06ba4a68a73b9930cb7d78e`. [PR Validation run 36274850721](https://github.com/Kibnet/AppAutomation/actions/runs/36274850721) завершился успешно: Release build, полный solution Test **640/640**, failure screenshot smoke, pack и generated consumer smoke. Таким образом AC7 закрыт на чистом Windows runner; локальные красные логи выше сохранены как evidence среды/первого прохода, а не названы зелёными.
+- Adversarial и Role-Based re-review: Recorder fix не ослабляет assertions — проверяются прежние counts и тексты в четырёх состояниях журнала; проверки выполняются после всех UI действий. Tester/delivery подтвердили полный CI, developer проверил отсутствие product-code diff в fix. Локальный FlaUI flake не воспроизвёлся в успешном CI; устойчивость FlaUI на этой машине остаётся отдельным низкоприоритетным риском, не блокирующим проверенный PR. Посторонний `emxLicense.cs` остался untracked и не вошёл в PR.
+- User-Observable Completion Gate: AC1–AC6 и визуальные PNG подтверждены выше, AC7 подтверждён 640/640 и остальными CI шагами. Video fallback сохраняется: headless окно не имеет desktop surface, а целевой результат — PNG. Новых обязательных незакрытых условий нет. Stop decision: **PASS для слияния PR #32**, если состояние PR и head commit перед merge не изменятся. Коммит SPEC только фиксирует уже полученное evidence; повторного полного локального тестирования документация не требует.
+
 ## Approval
 
 Фраза «Спеку подтверждаю» получена от пользователя 2026-09-27; фаза EXEC разрешена только в пределах этой SPEC.
@@ -343,3 +351,4 @@ UI dispatcher учитывается; sample automation IDs и UX не меня�
 | SPEC / review и re-review | Закрыты paths, Show/Close, executable consumer smoke, async cleanup | Отдельная inspector review + основной adversarial fallback; linter PASS, rubric 30/30; runtime validation впереди | Получить exact approval | Ожидается «Спеку подтверждаю» | Эта SPEC |
 | EXEC / переход | Exact approval получен, реализация screenshot feature разрешена | Scope AC1–AC7 без публикации/релиза | Код, тесты, template и docs | «Спеку подтверждаю» | Эта SPEC |
 | EXEC / validation и review | AC1–AC6 проверены; HIGH ABI и MEDIUM capability/evidence исправлены | Build 0 errors, headless 64/64, TestHost 25/25, failure controls, pack, consumer PNG; полный solution test красный на Recorder/FlaUI | Отчёт с незакрытым AC7, отдельная стабилизация общего gate | Дополнительного выбора нет | Логи `artifacts/*final4.log`, PNG sample/consumer, эта SPEC |
+| DELIVERY / повторный gate | По поручению «Влей в мастер» исправлен только Recorder test thread affinity, исходный scope функции не изменён | Локально Recorder 309/309; PR #32 CI `36274850721`: 640/640, failure PNG, pack, consumer smoke PASS | Зафиксировать результат в SPEC и слить проверенный head | «Влей в мастер» | Коммит `c99ed60`, PR #32, CI run 36274850721 |
