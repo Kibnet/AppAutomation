@@ -37,6 +37,7 @@ namespace Sample.Pages;
 [UiControl("AccentColor", UiControlType.ColorPicker, "AccentColor")]
 [UiControl("MainMenu", UiControlType.Menu, "MainMenu")]
 [UiControl("RefreshMenuItem", UiControlType.MenuItem, "RefreshMenuItem")]
+[UiControl("UnitQuantityEditors", UiControlType.MultiItemControlCollection, "UnitQuantityCollection")]
 public sealed partial class MainWindowPage : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
@@ -72,6 +73,7 @@ public sealed partial class MainWindowPage : UiPage
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IColorPickerControl AccentColor => Resolve<global::AppAutomation.Abstractions.IColorPickerControl>(MainWindowPageDefinitions.AccentColor);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuControl MainMenu => Resolve<global::AppAutomation.Abstractions.IMenuControl>(MainWindowPageDefinitions.MainMenu);");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMenuItemControl RefreshMenuItem => Resolve<global::AppAutomation.Abstractions.IMenuItemControl>(MainWindowPageDefinitions.RefreshMenuItem);");
+            await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.IMultiItemControlCollection UnitQuantityEditors => Resolve<global::AppAutomation.Abstractions.IMultiItemControlCollection>(MainWindowPageDefinitions.UnitQuantityEditors);");
             await Assert.That(generatedSources).Contains("namespace Sample.Authoring.Generated;");
             await Assert.That(generatedSources).Contains("public sealed class SampleAuthoringManifestProvider");
             await Assert.That(generatedSources).Contains("global::Sample.Pages.MainWindowPageDefinitions.Page");

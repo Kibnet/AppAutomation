@@ -1358,7 +1358,8 @@ public static partial class UiPageExtensions
                         lastObservedValue = control is null
                             ? "<not found: selector returned null>"
                             : DescribeResolvedControl<TControl>(control);
-                        return control is not null;
+                        return control is not null
+                            && (control is not IUiControlAvailability availability || availability.IsAvailable);
                     }
                     catch (Exception ex) when (IsRetryableResolveFailure(ex))
                     {

@@ -48,6 +48,7 @@ internal static class MainWindowFlaUiPageFactory
                         historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
                         historyRootAutomationId: "ArmTableSearchHistoryRoot"))
                 .WithGridAutomation(SampleGridAutomation.CreateFlaUiCatalog())
+                .WithMultiItemControls(SampleMultiItemAutomation.CreateCatalog())
                 .WithComboBoxFilter(
                     "ArmStatusFilter",
                     ComboBoxFilterParts.ByAutomationIds(

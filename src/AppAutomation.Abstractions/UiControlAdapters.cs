@@ -581,7 +581,9 @@ public static partial class UiControlResolverExtensions
         return resolver.WithAdaptersFromAssembly(typeof(IUiControlAdapter).Assembly);
     }
 
-    private sealed class AdapterAwareUiControlResolver : IUiControlResolver
+    private sealed class AdapterAwareUiControlResolver :
+        IUiControlResolver,
+        IMultiItemControlRuntimeResolver
     {
         private readonly IUiControlResolver _innerResolver;
         private readonly IReadOnlyList<IUiControlAdapter> _adapters;
@@ -613,6 +615,31 @@ public static partial class UiControlResolverExtensions
             }
 
             return _innerResolver.Resolve<TControl>(definition);
+        }
+
+        public ISpinnerControl ResolveMultiItemSpinner(
+            MultiItemControlDefinition definition,
+            string itemKey,
+            int timeoutMs)
+        {
+            if (_innerResolver is not IMultiItemControlRuntimeResolver runtimeResolver)
+            {
+                throw new NotSupportedException(
+                    $"Runtime adapter '{Capabilities.AdapterId}' does not support multi-item controls.");
+            }
+
+            return runtimeResolver.ResolveMultiItemSpinner(definition, itemKey, timeoutMs);
+        }
+
+        public MultiItemControlState ReadMultiItemCollectionState(MultiItemControlDefinition definition)
+        {
+            if (_innerResolver is not IMultiItemControlRuntimeResolver runtimeResolver)
+            {
+                throw new NotSupportedException(
+                    $"Runtime adapter '{Capabilities.AdapterId}' does not support multi-item controls.");
+            }
+
+            return runtimeResolver.ReadMultiItemCollectionState(definition);
         }
     }
 }
