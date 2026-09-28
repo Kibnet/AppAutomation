@@ -7,13 +7,14 @@ namespace DotnetDebug.AppAutomation.Configuration;
 /// </summary>
 public static class SampleGridAutomation
 {
-    public static GridAutomationCatalog CreateRecorderCatalog() => CreateCatalog();
+    public static GridAutomationCatalog CreateRecorderCatalog() => CreateCatalog(useKeyboardInputForNumbers: true);
 
-    public static GridAutomationCatalog CreateHeadlessCatalog() => CreateCatalog();
+    public static GridAutomationCatalog CreateHeadlessCatalog() => CreateCatalog(useKeyboardInputForNumbers: true);
 
-    public static GridAutomationCatalog CreateFlaUiCatalog() => CreateCatalog();
+    public static GridAutomationCatalog CreateFlaUiCatalog(bool useKeyboardInputForNumbers = true) =>
+        CreateCatalog(useKeyboardInputForNumbers);
 
-    private static GridAutomationCatalog CreateCatalog()
+    private static GridAutomationCatalog CreateCatalog(bool useKeyboardInputForNumbers)
     {
         return new GridAutomationCatalog()
             .Add(
@@ -47,7 +48,7 @@ public static class SampleGridAutomation
                                      CommitTarget: new GridRelativeLocator(
                                          "ArmGridRowCommitTarget",
                                          GridRelativeLocatorScope.Row),
-                                     UseKeyboardInput: true)),
+                                     UseKeyboardInput: useKeyboardInputForNumbers)),
                         GridColumnDefinition.Auto("IsApproved")
                             .AtRuntime("Approved")
                             .AsValue(GridCellValueKind.Boolean)

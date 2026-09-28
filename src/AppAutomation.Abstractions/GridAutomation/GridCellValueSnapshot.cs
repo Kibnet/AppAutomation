@@ -10,6 +10,8 @@ public sealed record GridCellValueSnapshot(
 
     public string? CultureName { get; init; }
 
+    internal string? FormatString { get; init; }
+
     /// <summary>
     /// Indicates that the provider already read the displayed UI value and has no model source.
     /// Declarative display projection and formatting must not be applied again; typed conversion

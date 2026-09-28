@@ -192,8 +192,24 @@ public static class GridValueReader
 
 internal static class GridValueConversion
 {
-    private const System.Globalization.NumberStyles SupportedNumberStyles =
-        System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowExponent;
+    public static bool TryConvertNumberDouble(
+        GridCellValueSnapshot snapshot,
+        out double value,
+        out string? diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (GridNumericText.TryConvertFiniteDouble(snapshot.RawValue, out value))
+        {
+            diagnostic = null;
+            return true;
+        }
+
+        return GridNumericText.TryParse(
+            snapshot.DisplayText,
+            snapshot.CultureName,
+            out value,
+            out diagnostic);
+    }
 
     public static bool TryConvertNumber(
         GridCellValueSnapshot snapshot,
@@ -201,18 +217,15 @@ internal static class GridValueConversion
         out string? diagnostic)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (TryConvertTypedNumber(snapshot.RawValue, out value))
+        if (GridNumericText.TryConvertFiniteDecimal(snapshot.RawValue, out value))
         {
             diagnostic = null;
             return true;
         }
 
-        return TryConvertText(
-            snapshot,
-            "number",
-            static (string text, System.Globalization.CultureInfo culture, out decimal parsed) =>
-                decimal.TryParse(text, SupportedNumberStyles, culture, out parsed)
-                || TryExtractNumberToken(text, culture, out parsed),
+        return GridNumericText.TryParseDecimal(
+            snapshot.DisplayText,
+            snapshot.CultureName,
             out value,
             out diagnostic);
     }
@@ -346,77 +359,6 @@ internal static class GridValueConversion
         string text,
         System.Globalization.CultureInfo culture,
         out TValue value);
-
-    private static bool TryConvertTypedNumber(object? rawValue, out decimal value)
-    {
-        switch (rawValue)
-        {
-            case byte number:
-                value = number;
-                return true;
-            case sbyte number:
-                value = number;
-                return true;
-            case short number:
-                value = number;
-                return true;
-            case ushort number:
-                value = number;
-                return true;
-            case int number:
-                value = number;
-                return true;
-            case uint number:
-                value = number;
-                return true;
-            case long number:
-                value = number;
-                return true;
-            case ulong number:
-                value = number;
-                return true;
-            case float number when float.IsFinite(number):
-                value = (decimal)number;
-                return true;
-            case double number when double.IsFinite(number):
-                value = (decimal)number;
-                return true;
-            case decimal number:
-                value = number;
-                return true;
-            default:
-                value = default;
-                return false;
-        }
-    }
-
-    private static bool TryExtractNumberToken(
-        string text,
-        System.Globalization.CultureInfo culture,
-        out decimal value)
-    {
-        var matches = System.Text.RegularExpressions.Regex.Matches(
-                text,
-                @"[+-]?\d[\d\s\u00A0\u202F.,']*")
-            .Select(static match => match.Value.Trim())
-            .Where(static token => token.Length > 0)
-            .Take(2)
-            .ToArray();
-        if (matches.Length != 1)
-        {
-            value = default;
-            return false;
-        }
-
-        var groupSeparator = culture.NumberFormat.NumberGroupSeparator;
-        var normalized = new string(matches[0]
-                .SelectMany(character => char.IsWhiteSpace(character) || character is '\u00A0' or '\u202F' or '\''
-                    ? groupSeparator
-                    : character.ToString())
-                .ToArray())
-            .Trim();
-        return decimal.TryParse(normalized, SupportedNumberStyles, culture, out value);
-    }
 
     private static IReadOnlyList<System.Globalization.CultureInfo> CandidateCultures()
     {

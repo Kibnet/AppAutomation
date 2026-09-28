@@ -250,6 +250,8 @@ public sealed class RecorderFullCaptureCoverageTests
         var numberEditResult = factory.TryCreateGridEditStep(numberEditButton);
         var dateEditResult = factory.TryCreateGridEditStep(dateEditButton);
         var comboEditResult = factory.TryCreateGridEditStep(comboEditButton);
+        var numberPreview = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null)
+            .GeneratePreview(numberEditResult.Step!);
 
         using (Assert.Multiple())
         {
@@ -278,7 +280,11 @@ public sealed class RecorderFullCaptureCoverageTests
 
             await Assert.That(numberEditResult.Success).IsEqualTo(true);
             await Assert.That(numberEditResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.EditGridCellNumber);
-            await Assert.That(numberEditResult.Step.DoubleValue).IsEqualTo(12.75);
+            await Assert.That(numberEditResult.Step.DoubleValue).IsEqualTo(533.6);
+            await Assert.That(numberEditResult.Step.NumericInputText).IsEqualTo("533,60");
+            await Assert.That(numberEditResult.Step.NumericInputCultureName).IsEqualTo("ru-RU");
+            await Assert.That(numberPreview).Contains("numericInputText: \"533,60\"");
+            await Assert.That(numberPreview).Contains("numericInputCultureName: \"ru-RU\"");
 
             await Assert.That(dateEditResult.Success).IsEqualTo(true);
             await Assert.That(dateEditResult.Step!.ActionKind).IsEqualTo(RecordedActionKind.EditGridCellDate);
@@ -478,7 +484,10 @@ public sealed class RecorderFullCaptureCoverageTests
             "GridNumberValue",
             0,
             2,
-            GridCellEditorKind.Number));
+            GridCellEditorKind.Number)
+        {
+            NumericInputCultureName = "ru-RU"
+        });
         options.GridEditHints.Add(new RecorderGridEditHint(
             "GridDateCommitButton",
             "EditableGrid",
@@ -547,7 +556,7 @@ public sealed class RecorderFullCaptureCoverageTests
         var folderCancelButton = Button("ExportCancelButton");
         textEditValue = TextBox("GridTextValue", "Edited");
         textEditButton = Button("GridTextCommitButton");
-        var numberEditValue = TextBox("GridNumberValue", "12.75");
+        var numberEditValue = TextBox("GridNumberValue", "533,60");
         numberEditButton = Button("GridNumberCommitButton");
         dateEditValue = DatePicker("GridDateValue", new DateTime(2026, 4, 28));
         dateEditButton = Button("GridDateCommitButton");

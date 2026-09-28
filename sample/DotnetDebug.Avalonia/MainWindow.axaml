@@ -411,7 +411,7 @@
                     </Grid>
                 </StackPanel>
 
-                <Grid Grid.Row="2" RowDefinitions="Auto,120,Auto,190" RowSpacing="6">
+                <Grid Grid.Row="2" RowDefinitions="Auto,120,Auto,190,Auto" RowSpacing="6">
                     <TextBlock Grid.Row="0" FontSize="14" FontWeight="SemiBold" Text="Avalonia DataGrid" />
                     <DataGrid x:Name="DemoDataGrid"
                               Grid.Row="1"
@@ -437,6 +437,10 @@
                                                 Binding="{Binding Parity}" />
                         </DataGrid.Columns>
                     </DataGrid>
+                    <TextBlock x:Name="ArmGridLastNumericInputText"
+                               Grid.Row="4"
+                               automation:AutomationProperties.AutomationId="ArmGridLastNumericInputText"
+                               Text="" />
 
                     <TextBlock Grid.Row="2"
                                FontSize="14"

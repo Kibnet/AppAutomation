@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace AppAutomation.Abstractions;
 
 /// <summary>Describes one logical grid column and its optional source/value mapping.</summary>
@@ -87,15 +85,15 @@ public sealed record GridColumnDefinition
     public GridColumnDefinition FormatWith(string formatString, string? cultureName = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(formatString);
-        if (!string.IsNullOrWhiteSpace(cultureName))
+        if (cultureName is not null)
         {
-            _ = CultureInfo.GetCultureInfo(cultureName.Trim());
+            GridNumericText.ValidateCultureName(cultureName, nameof(cultureName));
         }
 
         return this with
         {
             FormatString = formatString,
-            CultureName = string.IsNullOrWhiteSpace(cultureName) ? null : cultureName.Trim()
+            CultureName = cultureName is { Length: > 0 } ? cultureName.Trim() : cultureName
         };
     }
 

@@ -24,6 +24,20 @@ internal sealed class RecorderStepValidator
             return step;
         }
 
+        if (step.ActionKind == RecordedActionKind.EditGridCellNumber
+            && step.NumericInputText is not null
+            && (!step.DoubleValue.HasValue
+                || !double.IsFinite(step.DoubleValue.Value)
+                || !GridNumericText.Represents(
+                    step.NumericInputText,
+                    step.DoubleValue.Value,
+                    step.NumericInputCultureName)))
+        {
+            return MarkInvalid(
+                step,
+                "Recorded numeric input text does not represent the canonical grid-cell value.");
+        }
+
         if (source is null)
         {
             return MarkInvalid(step, "Recorder lost the source control before validation.");

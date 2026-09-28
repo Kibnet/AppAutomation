@@ -1506,8 +1506,8 @@ internal sealed class AuthoringCodeGenerator
                 ? $"Page.EditGridCellText(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellText(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellNumber => HasNamedGridRow(step)
-                ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
-                : $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
+                ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellNumberArguments(step)});"
+                : $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellNumberArguments(step)});",
             RecordedActionKind.EditGridCellDate => HasNamedGridRow(step)
                 ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
@@ -1853,6 +1853,25 @@ internal sealed class AuthoringCodeGenerator
         return value is null or GridCellEditCommitMode.Commit
             ? string.Empty
             : $", GridCellEditCommitMode.{value.Value}";
+    }
+
+    private static string FormatOptionalGridCellNumberArguments(RecordedStep step)
+    {
+        if (string.IsNullOrEmpty(step.NumericInputText))
+        {
+            return FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode);
+        }
+
+        var inputText = EscapeString(step.NumericInputText)
+            .Replace("\u00A0", "\\u00A0", StringComparison.Ordinal)
+            .Replace("\u202F", "\\u202F", StringComparison.Ordinal);
+        var commitMode = step.GridCellEditCommitMode is null or GridCellEditCommitMode.Commit
+            ? string.Empty
+            : $", commitMode: GridCellEditCommitMode.{step.GridCellEditCommitMode.Value}";
+        var cultureName = step.NumericInputCultureName is null
+            ? string.Empty
+            : $", numericInputCultureName: \"{EscapeString(step.NumericInputCultureName)}\"";
+        return $", numericInputText: \"{inputText}\"{cultureName}{commitMode}";
     }
 
     private static bool HasNamedGridRow(RecordedStep step)

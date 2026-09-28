@@ -77,6 +77,7 @@ public sealed partial class HeadlessControlResolver
             int timeoutMs)
         {
             ArgumentNullException.ThrowIfNull(address);
+            ArgumentNullException.ThrowIfNull(request);
             EditCell(MapRow(address.Row), ResolveRuntimeColumn(address.ColumnName), request, timeoutMs);
         }
 
@@ -144,17 +145,12 @@ public sealed partial class HeadlessControlResolver
                         match.Item,
                         match.RowIndex,
                         column));
-            var editRequest = new GridCellEditRequest(
+            var editRequest = GridCellEditRequestValidation.CreateIndexedRequest(
                 match.RowIndex,
                 column.RuntimeColumnIndex ?? column.ColumnIndex,
-                request.Value,
-                request.EditorKind,
-                request.CommitMode,
-                request.SearchText)
-            {
-                TimeoutMs = timeoutMs,
-                EditorParts = request.EditorParts ?? column.EditorParts
-            };
+                request,
+                timeoutMs,
+                request.EditorParts ?? column.EditorParts);
             var transactionCompleted = false;
             try
             {
@@ -283,9 +279,6 @@ public sealed partial class HeadlessControlResolver
         public void EditCell(GridCellEditRequest request)
         {
             ArgumentNullException.ThrowIfNull(request);
-            ArgumentOutOfRangeException.ThrowIfNegative(request.RowIndex);
-            ArgumentOutOfRangeException.ThrowIfNegative(request.ColumnIndex);
-            ArgumentNullException.ThrowIfNull(request.Value);
 
             var cell = FindVisualCell(request.RowIndex, request.ColumnIndex)
                 ?? throw new InvalidOperationException(
@@ -679,6 +672,7 @@ public sealed partial class HeadlessControlResolver
         private static bool TryWriteTypedEditor(global::Avalonia.Controls.Control control, GridCellEditRequest request)
         {
             if (request.EditorKind == GridCellEditorKind.Number
+                && request.NumericInput is null
                 && HeadlessGridRuntimeAccess.TrySetNumericEditorValue(control, request.Value))
             {
                 return true;
@@ -709,9 +703,12 @@ public sealed partial class HeadlessControlResolver
                         or GridCellEditorKind.Time
                         or GridCellEditorKind.Color
                         or GridCellEditorKind.ComboBox:
-                    textBox.Text = request.EditorKind == GridCellEditorKind.Color
-                        ? ColorValue.Normalize(request.Value)
-                        : request.Value;
+                    textBox.Text = request.EditorKind switch
+                    {
+                        GridCellEditorKind.Color => ColorValue.Normalize(request.Value),
+                        GridCellEditorKind.Number => request.NumericInput?.Text ?? request.Value,
+                        _ => request.Value
+                    };
                     return true;
                 default:
                     return false;

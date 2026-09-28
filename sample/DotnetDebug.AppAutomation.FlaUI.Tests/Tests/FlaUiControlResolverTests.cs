@@ -5,6 +5,7 @@ using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
 using DotnetDebug.AppAutomation.Authoring.Pages;
+using DotnetDebug.AppAutomation.Configuration;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
@@ -285,6 +286,64 @@ public sealed class FlaUiControlResolverTests
             .IsEqualTo(1000);
 
     }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ComplexDataGrid_FormattedNumberInputsPreserveGroupingAndNumericValue()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+        var page = MainWindowFlaUiPageFactory.Create(
+            session,
+            SampleGridAutomation.CreateFlaUiCatalog(useKeyboardInputForNumbers: false));
+        var firstRow = GridRowSelector.ByCell("Key", "ARM-01");
+        var secondRow = GridRowSelector.ByCell("Key", "ARM-02");
+        var thirdRow = GridRowSelector.ByCell("Key", "ARM-03");
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EditGridCellNumber(
+                static candidate => candidate.ArmComplexDataGridControl,
+                firstRow,
+                "RequiredAmount",
+                500d,
+                numericInputText: "500")
+            .EditGridCellNumber(
+                static candidate => candidate.ArmComplexDataGridControl,
+                secondRow,
+                "RequiredAmount",
+                1200d,
+                numericInputText: "1\u00A0200")
+            .EditGridCellNumber(
+                static candidate => candidate.ArmComplexDataGridControl,
+                thirdRow,
+                "RequiredAmount",
+                10001d,
+                numericInputText: "10\u00A0001");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(GridValueReader.ReadCellNumber(
+                    page.ArmComplexDataGridControl,
+                    firstRow,
+                    "RequiredAmount"))
+                .IsEqualTo(500d);
+            await Assert.That(GridValueReader.ReadCellNumber(
+                    page.ArmComplexDataGridControl,
+                    secondRow,
+                    "RequiredAmount"))
+                .IsEqualTo(1200d);
+            await Assert.That(GridValueReader.ReadCellNumber(
+                    page.ArmComplexDataGridControl,
+                    thirdRow,
+                    "RequiredAmount"))
+                .IsEqualTo(10001d);
+            await Assert.That(page.ArmGridLastNumericInputText.Text).IsEqualTo("10\u00A0001");
+        }
+    }
+
     [Test]
     public async Task NativeGridTraversal_WaitsForInitiallyEmptyRows()
     {

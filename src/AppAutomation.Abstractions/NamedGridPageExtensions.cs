@@ -172,6 +172,34 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowSelector,
+            columnName,
+            value,
+            editorKind,
+            commitMode,
+            searchText,
+            numericInputText: null,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    private static TSelf EditGridCellCore<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        string value,
+        GridCellEditorKind editorKind,
+        GridCellEditCommitMode commitMode,
+        string? searchText,
+        string? numericInputText,
+        string? numericInputCultureName,
+        int timeoutMs)
+        where TSelf : UiPage
+    {
         ArgumentNullException.ThrowIfNull(rowSelector);
         ArgumentException.ThrowIfNullOrWhiteSpace(columnName);
         ArgumentNullException.ThrowIfNull(value);
@@ -183,7 +211,10 @@ public static partial class UiPageExtensions
                 value,
                 editorKind,
                 commitMode,
-                searchText);
+                searchText)
+            {
+                NumericInput = CreateGridNumericInput(value, numericInputText, numericInputCultureName)
+            };
             return ExecuteAddressableGridEdit(
                 page,
                 selector,
@@ -203,7 +234,8 @@ public static partial class UiPageExtensions
             commitMode,
             searchText)
         {
-            TimeoutMs = timeoutMs
+            TimeoutMs = timeoutMs,
+            NumericInput = CreateGridNumericInput(value, numericInputText, numericInputCultureName)
         };
         return ExecuteGridCellEdit(
             page,
@@ -211,7 +243,7 @@ public static partial class UiPageExtensions
             request,
             timeoutMs,
             nameof(EditGridCell),
-            candidate => TryReadNamedGridCellValue(candidate, rowSelector, columnIndex));
+            candidate => ReadNamedGridCellSnapshot(candidate, rowSelector, columnIndex));
     }
 
     /// <summary>
@@ -243,7 +275,7 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
-        return EditGridCell(
+        return EditGridCellCore(
             page,
             selector,
             rowSelector,
@@ -251,6 +283,66 @@ public static partial class UiPageExtensions
             value.ToString("G17", CultureInfo.InvariantCulture),
             GridCellEditorKind.Number,
             commitMode,
+            searchText: null,
+            numericInputText: null,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a named numeric cell while preserving the user-entered text for physical input.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        double value,
+        string numericInputText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowSelector,
+            columnName,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            searchText: null,
+            numericInputText: numericInputText,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a named numeric cell while preserving culture-specific user-entered text for physical input.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        double value,
+        string numericInputText,
+        string numericInputCultureName,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowSelector,
+            columnName,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            searchText: null,
+            numericInputText: numericInputText,
+            numericInputCultureName: numericInputCultureName,
             timeoutMs: timeoutMs);
     }
 
@@ -409,6 +501,7 @@ public static partial class UiPageExtensions
         int timeoutMs)
         where TSelf : UiPage
     {
+        GridCellEditRequestValidation.Validate(request);
         var actionName = nameof(EditGridCell);
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
@@ -540,9 +633,7 @@ public static partial class UiPageExtensions
         return request.EditorKind switch
         {
             GridCellEditorKind.Number =>
-                decimal.TryParse(request.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var expectedNumber)
-                && TryConvertGridNumber(actual, out var actualNumber)
-                && actualNumber == expectedNumber,
+                GridNumericPostcondition.Matches(actual, request.Value, request.NumericInput),
             GridCellEditorKind.Date =>
                 DateTime.TryParseExact(request.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var expectedDate)
                 && TryConvertGridDate(actual.RawValue, actual.DisplayText, out var actualDate)
@@ -557,16 +648,6 @@ public static partial class UiPageExtensions
                 && actualChecked == expectedChecked,
             _ => string.Equals(actual.DisplayText, request.Value, StringComparison.Ordinal)
         };
-    }
-
-    private static bool TryConvertGridNumber(GridCellValueSnapshot snapshot, out decimal value)
-    {
-        if (GridValueConversion.TryConvertNumber(snapshot, out value, out var diagnostic))
-        {
-            return true;
-        }
-
-        throw new InvalidOperationException(diagnostic);
     }
 
     private static bool TryConvertGridDate(object? rawValue, string? displayText, out DateTime value)
@@ -686,5 +767,29 @@ public static partial class UiPageExtensions
             1 => TryReadGridCellValue(grid, matches[0], columnIndex),
             _ => $"<ambiguous row; matches={matches.Count}>"
         };
+    }
+
+    private static GridCellValueSnapshot ReadNamedGridCellSnapshot(
+        IGridControl grid,
+        GridRowSelector rowSelector,
+        int columnIndex)
+    {
+        var matches = GridRuntimeResolver.FindMatchingRowIndexes(grid, rowSelector);
+        if (matches.Count != 1)
+        {
+            var diagnostic = matches.Count == 0
+                ? $"<missing row; rows={grid.Rows.Count}>"
+                : $"<ambiguous row; matches={matches.Count}>";
+            return new GridCellValueSnapshot(diagnostic, diagnostic) { IsDisplayOnly = true };
+        }
+
+        var row = grid.GetRowByIndex(matches[0]);
+        if (row is null || columnIndex >= row.Cells.Count)
+        {
+            var diagnostic = $"<missing cell {matches[0]},{columnIndex}>";
+            return new GridCellValueSnapshot(diagnostic, diagnostic) { IsDisplayOnly = true };
+        }
+
+        return GridRuntimeResolver.ReadCellSnapshot(grid, row.Cells[columnIndex], columnIndex);
     }
 }

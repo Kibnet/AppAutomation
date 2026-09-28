@@ -484,6 +484,10 @@ internal sealed record RecordedStep(
 
     public string? GridTargetColumnName { get; init; }
 
+    public string? NumericInputText { get; init; }
+
+    public string? NumericInputCultureName { get; init; }
+
     public RecorderStepValidationState? ValidationBeforeGraphError { get; init; }
 }
 

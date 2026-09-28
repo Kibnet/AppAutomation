@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using AppAutomation.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -620,6 +621,203 @@ public sealed class UiPageExtensionsTests
             await Assert.That(grid.Requests[6].EditorKind).IsEqualTo(GridCellEditorKind.Color);
             await Assert.That(grid.Requests[6].Value).IsEqualTo("#FF336699");
         }
+    }
+
+    [Test]
+    public async Task GridCellNumberEdit_PreservesFormattedInputTextInRuntimeRequest()
+    {
+        var cell = new MutableFakeGridCellControl("10");
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl([cell])]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        page.EditGridCellNumber(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            0,
+            10001d,
+            numericInputText: "10\u00A0001");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(grid.Requests.Single().Value).IsEqualTo("10001");
+            await Assert.That(grid.Requests.Single().NumericInput?.Text).IsEqualTo("10\u00A0001");
+            await Assert.That(cell.Value).IsEqualTo("10\u00A0001");
+        }
+    }
+
+    [Test]
+    public async Task GridCellNumberEdit_RejectsFormattedTextForDifferentNumber()
+    {
+        var cell = new MutableFakeGridCellControl("10");
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl([cell])]);
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        var exception = await Assert.That(() => page.EditGridCellNumber(
+                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                0,
+                0,
+                1200d,
+                numericInputText: "999"))
+            .Throws<ArgumentException>();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception!.ParamName).IsEqualTo("numericInputText");
+            await Assert.That(grid.Requests).IsEmpty();
+        }
+    }
+
+    [Test]
+    public async Task GridCellNumberEdit_MatchesInvariantResultUnderDifferentInputCulture()
+    {
+        var previousCulture = CultureInfo.CurrentCulture;
+        var previousUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("de-DE");
+            var cell = new MutableFakeGridCellControl("0");
+            var grid = new FakeEditableGridControl(
+                "EremexDemoDataGridAutomationBridge",
+                [new FakeGridRowControl([cell])],
+                useCanonicalNumberOutput: true);
+            var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+            page.EditGridCellNumber(
+                static candidate => candidate.EremexDemoDataGridAutomationBridge,
+                0,
+                0,
+                1.234d,
+                numericInputText: "1,234",
+                numericInputCultureName: "de-DE");
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(cell.Value).IsEqualTo("1.234");
+                await Assert.That(grid.Requests.Single().NumericInput?.CultureName).IsEqualTo("de-DE");
+            }
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
+    }
+
+    [Test]
+    public async Task GridCellNumberEdit_MatchesRoundedDisplayUsingConfiguredFormat()
+    {
+        var cell = new MutableFakeGridCellControl("0");
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl([cell])],
+            afterEdit: static (editedCell, _) =>
+                editedCell.SemanticSnapshot = new GridCellValueSnapshot(
+                    "1.23",
+                    null,
+                    GridCellValueKind.Number)
+                {
+                    CultureName = "en-US",
+                    IsDisplayOnly = true
+                });
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds(
+                    "EremexDemoDataGridAutomationBridge",
+                    "EremexDemoDataGridAutomationBridge",
+                    "EremexDemoDataGridAutomationBridge")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Amount")
+                        .FormatWith("N2", "en-US")
+                        .AsValue(GridCellValueKind.Number)
+                        .EditWith(GridCellEditorKind.Number)));
+        var page = new GridPage(
+            new FakeResolver(("EremexDemoDataGridAutomationBridge", grid))
+                .WithGridAutomation(catalog));
+
+        page.EditGridCellNumber(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            0,
+            1.234d);
+
+        await Assert.That(grid.Requests.Single().Value).IsEqualTo("1.234");
+    }
+
+    [Test]
+    public async Task GridCellNumberEdit_UsesDisplayCultureForAmbiguousFormattedResult()
+    {
+        var cell = new MutableFakeGridCellControl("0");
+        var grid = new FakeEditableGridControl(
+            "EremexDemoDataGridAutomationBridge",
+            [new FakeGridRowControl([cell])],
+            afterEdit: static (editedCell, _) =>
+                editedCell.SemanticSnapshot = new GridCellValueSnapshot(
+                    "1.234",
+                    null,
+                    GridCellValueKind.Number)
+                {
+                    CultureName = "de-DE",
+                    IsDisplayOnly = true
+                });
+        var page = new GridPage(new FakeResolver(("EremexDemoDataGridAutomationBridge", grid)));
+
+        page.EditGridCellNumber(
+            static candidate => candidate.EremexDemoDataGridAutomationBridge,
+            0,
+            0,
+            1234d,
+            numericInputText: "1.234",
+            numericInputCultureName: "de-DE");
+
+        await Assert.That(cell.ValueSnapshot.DisplayText).IsEqualTo("1.234");
+    }
+
+    [Test]
+    public async Task GridEditRequests_PreservePositionalContractAndRejectInconsistentNumericInput()
+    {
+        var indexed = new GridCellEditRequest(
+            RowIndex: 0,
+            ColumnIndex: 1,
+            Value: "1200",
+            EditorKind: GridCellEditorKind.Number);
+        var stable = new GridCellValueEditRequest(
+            Value: "1200",
+            EditorKind: GridCellEditorKind.Number);
+        var incompatible = indexed with
+        {
+            NumericInput = new GridNumericInput(999d, "999", CultureInfo.InvariantCulture.Name)
+        };
+        var (rowIndex, columnIndex, value, editorKind, commitMode, searchText) = indexed;
+        var (stableValue, stableEditorKind, _, _) = stable;
+
+        var exception = await Assert.That(() => GridCellEditRequestValidation.Validate(incompatible))
+            .Throws<ArgumentException>();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(exception!.ParamName).IsEqualTo("numericInput");
+            await Assert.That(rowIndex).IsEqualTo(0);
+            await Assert.That(columnIndex).IsEqualTo(1);
+            await Assert.That(value).IsEqualTo("1200");
+            await Assert.That(editorKind).IsEqualTo(GridCellEditorKind.Number);
+            await Assert.That(commitMode).IsEqualTo(GridCellEditCommitMode.Commit);
+            await Assert.That(searchText).IsNull();
+            await Assert.That(stableValue).IsEqualTo("1200");
+            await Assert.That(stableEditorKind).IsEqualTo(GridCellEditorKind.Number);
+        }
+    }
+
+    [Test]
+    public async Task GridNumericInput_ReportsInvalidCultureParameter()
+    {
+        var exception = await Assert.That(() => new GridNumericInput(1200d, "1 200", "invalid culture!"))
+            .Throws<ArgumentException>();
+
+        await Assert.That(exception!.ParamName).IsEqualTo("cultureName");
     }
 
     [Test]
@@ -1767,9 +1965,18 @@ public sealed class UiPageExtensionsTests
 
     private sealed class FakeEditableGridControl : FakeGridControl, IEditableGridControl
     {
-        public FakeEditableGridControl(string automationId, IReadOnlyList<IGridRowControl> rows)
+        private readonly bool _useCanonicalNumberOutput;
+        private readonly Action<MutableFakeGridCellControl, GridCellEditRequest>? _afterEdit;
+
+        public FakeEditableGridControl(
+            string automationId,
+            IReadOnlyList<IGridRowControl> rows,
+            bool useCanonicalNumberOutput = false,
+            Action<MutableFakeGridCellControl, GridCellEditRequest>? afterEdit = null)
             : base(automationId, rows)
         {
+            _useCanonicalNumberOutput = useCanonicalNumberOutput;
+            _afterEdit = afterEdit;
         }
 
         public List<GridCellEditRequest> Requests { get; } = [];
@@ -1784,7 +1991,28 @@ public sealed class UiPageExtensionsTests
 
             var cell = GetRowByIndex(request.RowIndex)?.Cells[request.ColumnIndex] as MutableFakeGridCellControl
                 ?? throw new InvalidOperationException("Editable fake grid cell was not found.");
-            cell.Value = request.Value;
+            cell.Value = request.EditorKind == GridCellEditorKind.Number
+                ? _useCanonicalNumberOutput
+                    ? request.Value
+                    : request.NumericInput?.Text ?? request.Value
+                : request.Value;
+            if (request.EditorKind == GridCellEditorKind.Number
+                && _useCanonicalNumberOutput
+                && double.TryParse(
+                    request.Value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var numericValue))
+            {
+                cell.SemanticSnapshot = new GridCellValueSnapshot(
+                    request.Value,
+                    numericValue,
+                    GridCellValueKind.Number)
+                {
+                    CultureName = CultureInfo.InvariantCulture.Name
+                };
+            }
+            _afterEdit?.Invoke(cell, request);
         }
     }
 
@@ -1795,7 +2023,7 @@ public sealed class UiPageExtensionsTests
 
     private sealed record FakeGridCellControl(string Value) : IGridCellControl;
 
-    private sealed class MutableFakeGridCellControl : IGridCellControl
+    private sealed class MutableFakeGridCellControl : IGridCellControl, IGridCellValueControl
     {
         public MutableFakeGridCellControl(string value)
         {
@@ -1803,6 +2031,11 @@ public sealed class UiPageExtensionsTests
         }
 
         public string Value { get; set; }
+
+        public GridCellValueSnapshot? SemanticSnapshot { get; set; }
+
+        public GridCellValueSnapshot ValueSnapshot =>
+            SemanticSnapshot ?? new GridCellValueSnapshot(Value, Value) { IsDisplayOnly = true };
     }
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;

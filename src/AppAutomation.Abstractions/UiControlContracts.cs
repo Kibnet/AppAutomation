@@ -1120,6 +1120,11 @@ public sealed record GridCellEditRequest(
     /// Optional cell-scoped parts for composite or templated editors.
     /// </summary>
     public GridCellEditorParts? EditorParts { get; init; }
+
+    /// <summary>
+    /// Optional validated user-entered numeric representation for a physical input path.
+    /// </summary>
+    public GridNumericInput? NumericInput { get; init; }
 }
 
 /// <summary>

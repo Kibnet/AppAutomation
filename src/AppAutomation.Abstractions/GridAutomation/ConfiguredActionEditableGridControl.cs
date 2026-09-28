@@ -31,5 +31,9 @@ internal sealed class ConfiguredActionEditableGridControl :
 
     public void Export() => _actionGrid.Export();
 
-    public void EditCell(GridCellEditRequest request) => _editableGrid.EditCell(request);
+    public void EditCell(GridCellEditRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _editableGrid.EditCell(request);
+    }
 }

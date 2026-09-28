@@ -2062,6 +2062,34 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value,
+            editorKind,
+            commitMode,
+            searchText,
+            numericInputText: null,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    private static TSelf EditGridCellCore<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditorKind editorKind,
+        GridCellEditCommitMode commitMode,
+        string? searchText,
+        string? numericInputText,
+        string? numericInputCultureName,
+        int timeoutMs)
+        where TSelf : UiPage
+    {
         ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
         ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
         ArgumentNullException.ThrowIfNull(value);
@@ -2074,7 +2102,8 @@ public static partial class UiPageExtensions
             commitMode,
             searchText)
         {
-            TimeoutMs = timeoutMs
+            TimeoutMs = timeoutMs,
+            NumericInput = CreateGridNumericInput(value, numericInputText, numericInputCultureName)
         };
 
         return ExecuteGridCellEdit(page, selector, request, timeoutMs, nameof(EditGridCell));
@@ -2117,7 +2146,7 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
-        return EditGridCell(
+        return EditGridCellCore(
             page,
             selector,
             rowIndex,
@@ -2125,6 +2154,66 @@ public static partial class UiPageExtensions
             value.ToString("G17", CultureInfo.InvariantCulture),
             GridCellEditorKind.Number,
             commitMode,
+            searchText: null,
+            numericInputText: null,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a numeric grid cell while preserving the user-entered text for physical input.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        double value,
+        string numericInputText,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            searchText: null,
+            numericInputText: numericInputText,
+            numericInputCultureName: null,
+            timeoutMs: timeoutMs);
+    }
+
+    /// <summary>
+    /// Edits a numeric grid cell while preserving culture-specific user-entered text for physical input.
+    /// </summary>
+    public static TSelf EditGridCellNumber<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        double value,
+        string numericInputText,
+        string numericInputCultureName,
+        GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        return EditGridCellCore(
+            page,
+            selector,
+            rowIndex,
+            columnIndex,
+            value.ToString("G17", CultureInfo.InvariantCulture),
+            GridCellEditorKind.Number,
+            commitMode,
+            searchText: null,
+            numericInputText: numericInputText,
+            numericInputCultureName: numericInputCultureName,
             timeoutMs: timeoutMs);
     }
 
@@ -2745,16 +2834,17 @@ public static partial class UiPageExtensions
         GridCellEditRequest request,
         int timeoutMs,
         string actionName,
-        Func<IGridControl, string?>? observedValueFactory = null)
+        Func<IGridControl, GridCellValueSnapshot>? observedValueFactory = null)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(request);
+        GridCellEditRequestValidation.Validate(request);
 
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
         var grid = Resolve(selector, page);
         observedValueFactory ??= candidate =>
-            TryReadGridCellValue(candidate, request.RowIndex, request.ColumnIndex);
+            ReadGridCellSnapshot(candidate, request.RowIndex, request.ColumnIndex);
         var originalValue = observedValueFactory(grid);
         try
         {
@@ -2775,27 +2865,81 @@ public static partial class UiPageExtensions
                 startedAtUtc,
                 $"Grid '{grid.AutomationId}' failed to edit cell [{request.RowIndex},{request.ColumnIndex}].",
                 expectedValue: DescribeGridCellEditRequest(request),
-                lastObservedValueFactory: () => observedValueFactory(grid),
+                lastObservedValueFactory: () => observedValueFactory(grid).DisplayText,
                 actionName,
                 ex);
         }
 
         var expectedValue = request.CommitMode == GridCellEditCommitMode.Commit
             ? request.Value
-            : originalValue;
+            : originalValue.DisplayText;
         WaitUntil(
             page,
             selector,
-            () => string.Equals(
+            () => MatchesExpectedGridCellValue(
                 observedValueFactory(grid),
-                expectedValue,
-                StringComparison.Ordinal),
+                originalValue,
+                request),
             timeoutMs,
             $"Grid '{grid.AutomationId}' cell [{request.RowIndex},{request.ColumnIndex}] did not reach expected edit result.",
             expectedValue: expectedValue,
-            lastObservedValueFactory: () => observedValueFactory(grid),
+            lastObservedValueFactory: () => observedValueFactory(grid).DisplayText,
             actionName);
         return page;
+    }
+
+    private static bool MatchesExpectedGridCellValue(
+        GridCellValueSnapshot actualValue,
+        GridCellValueSnapshot originalValue,
+        GridCellEditRequest request)
+    {
+        if (request.CommitMode == GridCellEditCommitMode.Cancel)
+        {
+            return actualValue.IsNull == originalValue.IsNull
+                && string.Equals(actualValue.DisplayText, originalValue.DisplayText, StringComparison.Ordinal);
+        }
+
+        if (request.EditorKind != GridCellEditorKind.Number)
+        {
+            return string.Equals(actualValue.DisplayText, request.Value, StringComparison.Ordinal);
+        }
+
+        return GridNumericPostcondition.Matches(actualValue, request.Value, request.NumericInput);
+    }
+
+    private static GridNumericInput? CreateGridNumericInput(
+        string canonicalValue,
+        string? numericInputText,
+        string? numericInputCultureName)
+    {
+        if (numericInputText is null)
+        {
+            if (numericInputCultureName is not null)
+            {
+                throw new ArgumentException(
+                    "A numeric input culture requires numeric input text.",
+                    nameof(numericInputCultureName));
+            }
+
+            return null;
+        }
+
+        GridNumericText.ValidateCultureName(numericInputCultureName, nameof(numericInputCultureName));
+        if (!GridNumericText.TryParse(canonicalValue, CultureInfo.InvariantCulture, out var numericValue))
+        {
+            throw new ArgumentException(
+                $"Canonical numeric value '{canonicalValue}' is not valid.",
+                nameof(canonicalValue));
+        }
+
+        try
+        {
+            return new GridNumericInput(numericValue, numericInputText, numericInputCultureName);
+        }
+        catch (ArgumentException exception) when (exception.ParamName == "text")
+        {
+            throw new ArgumentException(exception.Message, nameof(numericInputText), exception);
+        }
     }
 
     private static string DescribeGridCellEditRequest(GridCellEditRequest request)
@@ -2805,19 +2949,26 @@ public static partial class UiPageExtensions
 
     private static string? TryReadGridCellValue(IGridControl grid, int rowIndex, int columnIndex)
     {
+        return ReadGridCellSnapshot(grid, rowIndex, columnIndex).DisplayText;
+    }
+
+    private static GridCellValueSnapshot ReadGridCellSnapshot(IGridControl grid, int rowIndex, int columnIndex)
+    {
         var row = grid.GetRowByIndex(rowIndex);
         if (row is null)
         {
-            return $"<missing row {rowIndex}; rows={grid.Rows.Count}>";
+            var missingRow = $"<missing row {rowIndex}; rows={grid.Rows.Count}>";
+            return new GridCellValueSnapshot(missingRow, missingRow) { IsDisplayOnly = true };
         }
 
         var cells = row.Cells;
         if (columnIndex >= cells.Count)
         {
-            return $"<missing cell {rowIndex},{columnIndex}; cells={cells.Count}>";
+            var missingCell = $"<missing cell {rowIndex},{columnIndex}; cells={cells.Count}>";
+            return new GridCellValueSnapshot(missingCell, missingCell) { IsDisplayOnly = true };
         }
 
-        return cells[columnIndex].Value;
+        return GridRuntimeResolver.ReadCellSnapshot(grid, cells[columnIndex], columnIndex);
     }
 
     private static TSelf WaitUntilText<TSelf, TControl>(

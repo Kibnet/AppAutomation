@@ -187,7 +187,11 @@ public sealed class GridColumnMetadataAdapter : IUiControlAdapter
             _editableGrid = inner;
         }
 
-        public void EditCell(GridCellEditRequest request) => _editableGrid.EditCell(request);
+        public void EditCell(GridCellEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            _editableGrid.EditCell(request);
+        }
     }
 
     private sealed class ActionEditableGridWithColumns : GridWithColumns, IGridUserActionControl, IEditableGridControl
@@ -215,6 +219,10 @@ public sealed class GridColumnMetadataAdapter : IUiControlAdapter
 
         public void Export() => _actionGrid.Export();
 
-        public void EditCell(GridCellEditRequest request) => _editableGrid.EditCell(request);
+        public void EditCell(GridCellEditRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            _editableGrid.EditCell(request);
+        }
     }
 }
