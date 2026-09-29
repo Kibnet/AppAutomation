@@ -13,6 +13,27 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 {
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task ClipboardCopy_ReusesCurrentRuntimeText()
+    {
+        Page.EnterText(static page => page.NumbersInput, "Item 42");
+        var copiedValue = Page.NumbersInput.Text ?? string.Empty;
+
+        try
+        {
+            await Page.CopyTextToClipboardAsync(copiedValue);
+            Page.SelectTabItem(static page => page.ControlMixTabItem);
+            Page.EnterText(static page => page.MixInput, copiedValue);
+
+            await Assert.That(Page.MixInput.Text).IsEqualTo("Item 42");
+        }
+        finally
+        {
+            await Page.CopyTextToClipboardAsync(string.Empty);
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task Checkpoint_ReadsTheSameLogicalValueWithoutRequiredIntermediateActions()
     {
         Page.EnterText(static page => page.NumbersInput, "checkpoint value");

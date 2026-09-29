@@ -110,7 +110,9 @@ internal sealed class RecorderCommandRuntimeValidator
     {
         return step.ActionKind switch
         {
-            RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue =>
+            RecordedActionKind.CaptureCheckpoint
+                or RecordedActionKind.CaptureCopiedValue
+                or RecordedActionKind.AssertValue =>
                 ValidateSemanticValue(step, target),
             RecordedActionKind.EnterText => ValidateTextAction(step, target),
             RecordedActionKind.ClickButton => ValidateControlType(step, target, UiControlType.Button),

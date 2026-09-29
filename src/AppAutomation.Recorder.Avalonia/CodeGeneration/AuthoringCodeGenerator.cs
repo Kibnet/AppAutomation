@@ -262,9 +262,12 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var invalidSemanticStep = skippedSteps.FirstOrDefault(static step =>
-            step.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.AssertValue
+            step.ActionKind is RecordedActionKind.CaptureCheckpoint
+                or RecordedActionKind.CaptureCopiedValue
+                or RecordedActionKind.AssertValue
             || step.GeneratedValueId is not null
-            || step.ExpectedGeneratedValueId is not null);
+            || step.ExpectedGeneratedValueId is not null
+            || step.InputCopiedValueId is not null);
         if (invalidSemanticStep is not null)
         {
             return RecorderSaveResult.Failed(
@@ -391,6 +394,7 @@ internal sealed class AuthoringCodeGenerator
                 controlInfo!.PropertyName,
                 graphValidation.CheckpointVariables,
                 graphValidation.GeneratedValueVariables,
+                graphValidation.CopiedValueVariables,
                 graphValidation.GeneratedValueSeriesVariable,
                 propertyNamesByControlKey));
         }
@@ -404,6 +408,8 @@ internal sealed class AuthoringCodeGenerator
 
         var containsAssertions = persistableSteps.Any(
             static step => step.ActionKind == RecordedActionKind.AssertValue);
+        var requiresAsync = containsAssertions || persistableSteps.Any(
+            static step => step.ActionKind == RecordedActionKind.CaptureCopiedValue);
         var containsRelativeDates = persistableSteps.Any(HasRelativeDateExpression);
 
         Directory.CreateDirectory(target.OutputDirectory);
@@ -459,6 +465,7 @@ internal sealed class AuthoringCodeGenerator
                 saveTarget.MethodName,
                 renderedStatements,
                 containsAssertions,
+                requiresAsync,
                 containsRelativeDates,
                 isAutosave: saveKind == AuthoringSaveKind.Autosave,
                 autosaveDestinationId: autosaveDestinationId,
@@ -471,6 +478,7 @@ internal sealed class AuthoringCodeGenerator
                      saveTarget.MethodName,
                      renderedStatements,
                      containsAssertions,
+                     requiresAsync,
                      containsRelativeDates,
                      cancellationToken,
                      out var mergedScenarioSource,
@@ -618,6 +626,7 @@ internal sealed class AuthoringCodeGenerator
                 step.Control.ProposedPropertyName,
                 graphValidation.CheckpointVariables,
                 graphValidation.GeneratedValueVariables,
+                graphValidation.CopiedValueVariables,
                 graphValidation.GeneratedValueSeriesVariable));
         }
 
@@ -660,6 +669,7 @@ internal sealed class AuthoringCodeGenerator
             step.Control.ProposedPropertyName,
             checkpointVariables,
             graphValidation.GeneratedValueVariables,
+            graphValidation.CopiedValueVariables,
             graphValidation.GeneratedValueSeriesVariable);
         return step.DefinesGeneratedValue && graphValidation.GeneratedValueSeriesVariable is { } seriesVariable
             ? $"var {seriesVariable} = RecordedValueGenerator.Start();{Environment.NewLine}{statement}"
@@ -1181,6 +1191,7 @@ internal sealed class AuthoringCodeGenerator
         string methodName,
         IReadOnlyList<string> renderedStatements,
         bool containsAssertions,
+        bool requiresAsync,
         bool containsRelativeDates,
         CancellationToken cancellationToken,
         out string? mergedSource,
@@ -1251,6 +1262,7 @@ internal sealed class AuthoringCodeGenerator
             methodName,
             renderedStatements,
             containsAssertions,
+            requiresAsync,
             containsRelativeDates,
             isAutosave: false,
             autosaveDestinationId: null,
@@ -1262,7 +1274,7 @@ internal sealed class AuthoringCodeGenerator
             .Single();
         var updatedClass = existingClass.AddMembers(generatedMethod);
         var updatedRoot = root.ReplaceNode(existingClass, updatedClass);
-        if (containsAssertions && !HasUsingDirective(updatedRoot, "System.Threading.Tasks"))
+        if (requiresAsync && !HasUsingDirective(updatedRoot, "System.Threading.Tasks"))
         {
             updatedRoot = updatedRoot.AddUsings(
                 SyntaxFactory.UsingDirective(SyntaxFactory.ParseName("System.Threading.Tasks")));
@@ -1298,6 +1310,7 @@ internal sealed class AuthoringCodeGenerator
         string methodName,
         IReadOnlyList<string> renderedStatements,
         bool containsAssertions,
+        bool requiresAsync,
         bool containsRelativeDates,
         bool isAutosave,
         string? autosaveDestinationId,
@@ -1316,9 +1329,13 @@ internal sealed class AuthoringCodeGenerator
             builder.AppendLine("using System;");
         }
 
-        if (containsAssertions)
+        if (requiresAsync)
         {
             builder.AppendLine("using System.Threading.Tasks;");
+        }
+
+        if (containsAssertions)
+        {
             builder.AppendLine("using TUnit.Assertions;");
             builder.AppendLine("using TUnit.Assertions.Extensions;");
         }
@@ -1343,7 +1360,7 @@ internal sealed class AuthoringCodeGenerator
         builder.AppendLine("    [Test]");
         builder.AppendLine("    [NotInParallel(DesktopUiConstraint)]");
         builder.Append("    public ");
-        if (containsAssertions)
+        if (requiresAsync)
         {
             builder.Append("async Task ");
         }
@@ -1427,6 +1444,7 @@ internal sealed class AuthoringCodeGenerator
         string propertyName,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable,
         IReadOnlyDictionary<string, string>? controlPropertyNames = null)
     {
@@ -1436,6 +1454,10 @@ internal sealed class AuthoringCodeGenerator
                 step,
                 propertyName,
                 checkpointVariables),
+            RecordedActionKind.CaptureCopiedValue => GenerateCopiedValueStatement(
+                step,
+                propertyName,
+                copiedValueVariables),
             RecordedActionKind.AssertValue => GenerateAssertionStatement(
                 step,
                 propertyName,
@@ -1446,6 +1468,7 @@ internal sealed class AuthoringCodeGenerator
                 step,
                 propertyName,
                 generatedValueVariables,
+                copiedValueVariables,
                 generatedValueSeriesVariable),
             RecordedActionKind.ClickButton => $"Page.ClickButton(static page => page.{propertyName});",
             RecordedActionKind.SetChecked => $"Page.SetChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
@@ -1726,8 +1749,20 @@ internal sealed class AuthoringCodeGenerator
         RecordedStep step,
         string propertyName,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable)
     {
+        if (step.InputCopiedValueId is { } copiedValueId)
+        {
+            if (!copiedValueVariables.TryGetValue(copiedValueId, out var copiedVariableName))
+            {
+                throw new InvalidOperationException(
+                    $"EnterText references unvalidated copied value '{copiedValueId}'.");
+            }
+
+            return $"Page.EnterText(static page => page.{propertyName}, {copiedVariableName});";
+        }
+
         if (step.GeneratedValueId is not { } generatedValueId)
         {
             return $"Page.EnterText(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");";
@@ -1752,6 +1787,21 @@ internal sealed class AuthoringCodeGenerator
         }
 
         return $"var {variableName} = {generatedValueSeriesVariable}.Create({step.GeneratedValueOrdinal.Value});{Environment.NewLine}{enterText}";
+    }
+
+    private static string GenerateCopiedValueStatement(
+        RecordedStep step,
+        string propertyName,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables)
+    {
+        if (step.CopiedValueId is not { } copiedValueId
+            || !copiedValueVariables.TryGetValue(copiedValueId, out var variableName))
+        {
+            throw new InvalidOperationException("Copied value definition was not validated.");
+        }
+
+        var valueExpression = GenerateValueExpression(step, propertyName);
+        return $"var {variableName} = {valueExpression} ?? string.Empty;{Environment.NewLine}await Page.CopyTextToClipboardAsync({variableName});";
     }
 
     private static string GenerateValueExpression(RecordedStep step, string propertyName)

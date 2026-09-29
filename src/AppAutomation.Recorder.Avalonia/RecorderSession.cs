@@ -22,6 +22,7 @@ internal sealed class RecorderSession :
     IRecorderStepReorderSessionDetails,
     IRecorderCheckpointSessionDetails,
     IRecorderGeneratedValueSessionDetails,
+    IRecorderCopiedValueSessionDetails,
     IRecorderRelativeDateSessionDetails,
     IRecorderScenarioPathDetails,
     IRecorderScenarioSelectionDetails
@@ -84,6 +85,12 @@ internal sealed class RecorderSession :
     private string? _completedGeneratedValueText;
     private RecordedValueSeries? _recordingGeneratedValueSeries;
     private int _lastGeneratedValueOrdinal;
+    private Control? _pendingCopiedValueTargetControl;
+    private IReadOnlyList<Control> _pendingCopiedValueTargetCandidates = Array.Empty<Control>();
+    private bool _isCopiedValueTargetSelectionActive;
+    private RecorderCopiedValueOption? _activeCopiedValue;
+    private TextBox? _pendingCopiedValuePasteTarget;
+    private Guid? _pendingCopiedValuePasteId;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
     private Control? _recentKeyboardControl;
@@ -248,6 +255,8 @@ internal sealed class RecorderSession :
 
     public event EventHandler<RecorderGeneratedValueTargetSelectedEventArgs>? GeneratedValueTargetSelected;
 
+    public event EventHandler<RecorderCopiedValueTargetSelectedEventArgs>? CopiedValueTargetSelected;
+
     internal event EventHandler? ExportRequested;
 
     internal event EventHandler? HotkeysChanged;
@@ -262,11 +271,15 @@ internal sealed class RecorderSession :
 
     public IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues => CreateGeneratedValueOptions();
 
+    public IReadOnlyList<RecorderCopiedValueOption> CopiedValues => CreateCopiedValueOptions();
+
     public bool IsCheckTargetSelectionActive => _isCheckTargetSelectionActive;
 
     public bool IsNumericOperandTargetSelectionActive => _isNumericOperandTargetSelectionActive;
 
     public bool IsGeneratedValueTargetSelectionActive => _isGeneratedValueTargetSelectionActive;
+
+    public bool IsCopiedValueTargetSelectionActive => _isCopiedValueTargetSelectionActive;
 
     public string LatestPreview { get; private set; } = string.Empty;
 
@@ -380,6 +393,8 @@ internal sealed class RecorderSession :
         CancelCheckTargetSelectionCore();
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
+        ClearPendingCopiedValuePaste();
         FlushPendingState();
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
@@ -403,6 +418,8 @@ internal sealed class RecorderSession :
         CancelCheckTargetSelectionCore();
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
+        ClearPendingCopiedValuePaste();
         FlushPendingState();
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
@@ -410,6 +427,7 @@ internal sealed class RecorderSession :
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
         _steps.Clear();
+        _activeCopiedValue = null;
         _recordingGeneratedValueSeries = null;
         _lastGeneratedValueOrdinal = 0;
         LatestPreview = string.Empty;
@@ -523,6 +541,9 @@ internal sealed class RecorderSession :
         CancelCheckTargetSelectionCore();
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
+        ClearPendingCopiedValuePaste();
+        _activeCopiedValue = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
         _observationTimer?.Stop();
@@ -708,6 +729,7 @@ internal sealed class RecorderSession :
             .Select(static step => step.GeneratedValueOrdinal ?? 0)
             .DefaultIfEmpty()
             .Max();
+        RefreshActiveCopiedValue();
         if (!string.IsNullOrWhiteSpace(result.DraftIdentity))
         {
             _autosaveDraftIdentity = result.DraftIdentity;
@@ -1341,10 +1363,12 @@ internal sealed class RecorderSession :
             case TextBox textBox:
                 textBox.PropertyChanged += OnTextBoxPropertyChanged;
                 textBox.LostFocus += OnTextBoxLostFocus;
+                textBox.PastingFromClipboard += OnTextBoxPastingFromClipboard;
                 return () =>
                 {
                     textBox.PropertyChanged -= OnTextBoxPropertyChanged;
                     textBox.LostFocus -= OnTextBoxLostFocus;
+                    textBox.PastingFromClipboard -= OnTextBoxPastingFromClipboard;
                 };
             case ComboBox comboBox:
                 comboBox.SelectionChanged += OnComboBoxSelectionChanged;
@@ -1454,6 +1478,20 @@ internal sealed class RecorderSession :
             return;
         }
 
+        if (_isCopiedValueTargetSelectionActive)
+        {
+            var positionRoot = _inputRoot ?? _window;
+            _pendingCopiedValueTargetCandidates = ResolveCheckTargetCandidates(
+                source,
+                positionRoot,
+                e.GetPosition(positionRoot));
+            _pendingCopiedValueTargetControl = _pendingCopiedValueTargetCandidates.Count > 0
+                ? _pendingCopiedValueTargetCandidates[0]
+                : ResolveInteractionOwner(source) ?? source;
+            e.Handled = true;
+            return;
+        }
+
         var control = ResolveInteractionOwner(source);
         var isRightButtonPressed = e.GetCurrentPoint(_inputRoot ?? _window).Properties.IsRightButtonPressed;
         if (isRightButtonPressed)
@@ -1509,6 +1547,15 @@ internal sealed class RecorderSession :
             var candidates = _pendingGeneratedValueTargetCandidates;
             e.Handled = true;
             CompleteGeneratedValueTargetSelection(target, candidates);
+            return;
+        }
+
+        if (_isCopiedValueTargetSelectionActive && _pendingCopiedValueTargetControl is not null)
+        {
+            var target = _pendingCopiedValueTargetControl;
+            var candidates = _pendingCopiedValueTargetCandidates;
+            e.Handled = true;
+            CompleteCopiedValueTargetSelection(target, candidates);
         }
     }
 
@@ -1528,6 +1575,11 @@ internal sealed class RecorderSession :
         if (textBox is null)
         {
             return;
+        }
+
+        if (ReferenceEquals(textBox, _pendingCopiedValuePasteTarget))
+        {
+            ClearPendingCopiedValuePaste();
         }
 
         if (ReferenceEquals(textBox, _completedGeneratedValueInput))
@@ -1551,12 +1603,14 @@ internal sealed class RecorderSession :
     {
         if ((_isCheckTargetSelectionActive
              || _isNumericOperandTargetSelectionActive
-             || _isGeneratedValueTargetSelectionActive)
+             || _isGeneratedValueTargetSelectionActive
+             || _isCopiedValueTargetSelectionActive)
             && e.Key == Key.Escape)
         {
             CancelCheckTargetSelectionCore();
             CancelNumericOperandTargetSelectionCore();
             CancelGeneratedValueTargetSelectionCore();
+            CancelCopiedValueTargetSelectionCore();
             e.Handled = true;
             return;
         }
@@ -2561,6 +2615,26 @@ internal sealed class RecorderSession :
         RestartTextDebounceUnlessCompositeSelection(textBox);
     }
 
+    private void OnTextBoxPastingFromClipboard(object? sender, RoutedEventArgs e)
+    {
+        if (_state != RecorderSessionState.Recording
+            || sender is not TextBox textBox
+            || _activeCopiedValue is null
+            || ShouldSuppressTemplateTextEntry(textBox))
+        {
+            return;
+        }
+
+        _pendingCopiedValuePasteTarget = textBox;
+        _pendingCopiedValuePasteId = _activeCopiedValue.CopiedValueId;
+    }
+
+    internal void RegisterCopiedValuePasteForTesting(TextBox textBox)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+        OnTextBoxPastingFromClipboard(textBox, new RoutedEventArgs(TextBox.PastingFromClipboardEvent));
+    }
+
     private bool CapturePendingColorPickerInput(TextBox textBox)
     {
         var matchingHints = _options.ColorPickerHints
@@ -2818,6 +2892,7 @@ internal sealed class RecorderSession :
 
         CancelNumericOperandTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
         _pendingCheckTargetControl = null;
         _pendingCheckTargetCandidates = Array.Empty<Control>();
         _isCheckTargetSelectionActive = true;
@@ -2837,6 +2912,7 @@ internal sealed class RecorderSession :
 
         CancelCheckTargetSelectionCore();
         CancelGeneratedValueTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
         _pendingNumericOperandTargetControl = null;
         _pendingNumericOperandTargetCandidates = Array.Empty<Control>();
         _isNumericOperandTargetSelectionActive = true;
@@ -3120,6 +3196,7 @@ internal sealed class RecorderSession :
 
         CancelCheckTargetSelectionCore();
         CancelNumericOperandTargetSelectionCore();
+        CancelCopiedValueTargetSelectionCore();
         _pendingGeneratedValueTargetControl = null;
         _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
         _requestedGeneratedValueId = generatedValueId;
@@ -3224,6 +3301,66 @@ internal sealed class RecorderSession :
         {
             _lastGeneratedValueOrdinal = Math.Max(_lastGeneratedValueOrdinal, selection.GeneratedValue.Ordinal);
         }
+    }
+
+    public void BeginCopiedValueTargetSelection()
+    {
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        CancelCheckTargetSelectionCore();
+        CancelNumericOperandTargetSelectionCore();
+        CancelGeneratedValueTargetSelectionCore();
+        _pendingCopiedValueTargetControl = null;
+        _pendingCopiedValueTargetCandidates = Array.Empty<Control>();
+        _isCopiedValueTargetSelectionActive = true;
+    }
+
+    public void CancelCopiedValueTargetSelection()
+    {
+        CancelCopiedValueTargetSelectionCore();
+    }
+
+    internal bool SelectCopiedValueTargetForTesting(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!_isCopiedValueTargetSelectionActive)
+        {
+            return false;
+        }
+
+        CompleteCopiedValueTargetSelection(ResolveInteractionOwner(source) ?? source, [source]);
+        return true;
+    }
+
+    public void ApplyCopiedValue(RecorderCopiedValueTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (_state != RecorderSessionState.Recording || IsBusy)
+        {
+            return;
+        }
+
+        var result = _stepFactory.TryCreateCopiedValueStep(
+            selection.TargetSelection.ValueSnapshot,
+            selection.CopiedValue);
+        if (!AddStep(result, selection.TargetSelection.Target, "CopiedValue"))
+        {
+            return;
+        }
+
+        _activeCopiedValue = selection.CopiedValue;
+    }
+
+    public void RejectCopiedValue(string message)
+    {
+        SetStatus(
+            string.IsNullOrWhiteSpace(message)
+                ? "The selected value could not be copied to the clipboard."
+                : message,
+            RecorderValidationStatus.Invalid);
     }
 
     public void CaptureGeneratedValueAssertion(
@@ -3350,6 +3487,63 @@ internal sealed class RecorderSession :
                     selected.Control.ProposedPropertyName)));
     }
 
+    private void CompleteCopiedValueTargetSelection(
+        Control target,
+        IReadOnlyList<Control>? visualCandidates)
+    {
+        CancelCopiedValueTargetSelectionCore();
+        var targetSelection = ResolveCheckTargetSelection(target, visualCandidates);
+        if (!targetSelection.CanCaptureAssertions
+            || targetSelection.ValueSnapshot is null
+            || !string.IsNullOrWhiteSpace(targetSelection.ValueDescriptionError))
+        {
+            SetStatus(
+                targetSelection.ValueDescriptionError
+                    ?? "The selected control does not expose one readable text value.",
+                RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var description = targetSelection.ValueSnapshot.Description;
+        if (description.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText))
+        {
+            SetStatus(
+                "Copy value supports text-bearing controls and grid cells only.",
+                RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        var copiedValue = CreateNextCopiedValueOption(
+            targetSelection.ValueSnapshot,
+            description.CurrentValueText);
+        CopiedValueTargetSelected?.Invoke(
+            this,
+            new RecorderCopiedValueTargetSelectedEventArgs(
+                new RecorderCopiedValueTargetSelection(targetSelection, copiedValue)));
+    }
+
+    private RecorderCopiedValueOption CreateNextCopiedValueOption(
+        RecorderSemanticValueSnapshot snapshot,
+        string previewValue)
+    {
+        var graphValidation = RecorderScenarioGraphValidator.Validate(
+            _steps.Where(static step => !step.IsIgnored && step.CanPersist).ToArray());
+        var reservedNames = graphValidation.CheckpointVariables.Values
+            .Concat(graphValidation.GeneratedValueVariables.Values)
+            .Concat(graphValidation.CopiedValueVariables.Values)
+            .ToHashSet(StringComparer.Ordinal);
+        var controlName = snapshot.Prototype.Control.ProposedPropertyName;
+        var variableName = RecorderNaming.CreateCopiedValueVariableName(
+            $"copied{controlName}",
+            reservedNames);
+        return new RecorderCopiedValueOption(
+            Guid.NewGuid(),
+            variableName,
+            snapshot.Description.ValueKind,
+            controlName,
+            previewValue);
+    }
+
     private RecorderGeneratedValueOption CreateNextGeneratedValueOption()
     {
         var ordinal = _lastGeneratedValueOrdinal + 1;
@@ -3357,6 +3551,7 @@ internal sealed class RecorderSession :
             _steps.Where(static step => !step.IsIgnored && step.CanPersist).ToArray());
         var reservedNames = graphValidation.CheckpointVariables.Values
             .Concat(graphValidation.GeneratedValueVariables.Values)
+            .Concat(graphValidation.CopiedValueVariables.Values)
             .ToHashSet(StringComparer.Ordinal);
         var variableName = RecorderNaming.CreateGeneratedValueVariableName(
             $"generatedValue{ordinal}",
@@ -3469,6 +3664,19 @@ internal sealed class RecorderSession :
         _pendingGeneratedValueTargetCandidates = Array.Empty<Control>();
         _requestedGeneratedValueId = null;
         _isGeneratedValueTargetSelectionActive = false;
+    }
+
+    private void CancelCopiedValueTargetSelectionCore()
+    {
+        _pendingCopiedValueTargetControl = null;
+        _pendingCopiedValueTargetCandidates = Array.Empty<Control>();
+        _isCopiedValueTargetSelectionActive = false;
+    }
+
+    private void ClearPendingCopiedValuePaste()
+    {
+        _pendingCopiedValuePasteTarget = null;
+        _pendingCopiedValuePasteId = null;
     }
 
     private List<Control> ResolveCheckTargetCandidates(
@@ -4033,6 +4241,9 @@ internal sealed class RecorderSession :
             step.GeneratedValueOrdinal?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.DefinesGeneratedValue,
             step.ExpectedGeneratedValueId?.ToString("N") ?? string.Empty,
+            step.CopiedValueId?.ToString("N") ?? string.Empty,
+            step.CopiedValueVariableName ?? string.Empty,
+            step.InputCopiedValueId?.ToString("N") ?? string.Empty,
             CreateNumericExpressionFingerprint(step.NumericExpectedExpression),
             step.HasExpectedLiteral,
             step.CanPersist);
@@ -4280,6 +4491,10 @@ internal sealed class RecorderSession :
         }
 
         var textBox = _pendingTextBox;
+        var copiedValueId = ReferenceEquals(textBox, _pendingCopiedValuePasteTarget)
+            ? _pendingCopiedValuePasteId
+            : null;
+        ClearPendingCopiedValuePaste();
         _pendingTextBox = null;
         _pendingTextValue = null;
         if (ShouldSuppressTemplateTextEntry(textBox))
@@ -4298,6 +4513,21 @@ internal sealed class RecorderSession :
             DiscardPendingSpinnerIfRelated(textBox);
             AddStep(multiItemCapture.StepResult, textBox, "MultiItemSpinnerValue");
             return;
+        }
+
+        if (copiedValueId is { } copiedId)
+        {
+            var copiedValue = CreateCopiedValueOptions()
+                .FirstOrDefault(option => option.CopiedValueId == copiedId);
+            if (copiedValue is not null
+                && string.Equals(textBox.Text, copiedValue.PreviewValue, StringComparison.Ordinal))
+            {
+                AddStep(
+                    _stepFactory.TryCreateCopiedTextEntryStep(textBox, copiedValue),
+                    textBox,
+                    "CopiedValueTextEntry");
+                return;
+            }
         }
 
         AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
@@ -5044,6 +5274,15 @@ internal sealed class RecorderSession :
                 + (checkpoint?.VariableName ?? step.CheckpointVariableName ?? "checkpointValue");
         }
 
+        if (step.ActionKind == RecordedActionKind.CaptureCopiedValue)
+        {
+            var copiedValue = step.CopiedValueId is { } copiedValueId
+                ? CreateCopiedValueOptions().FirstOrDefault(candidate => candidate.CopiedValueId == copiedValueId)
+                : null;
+            return $"Copy {step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)} to the clipboard as "
+                + (copiedValue?.VariableName ?? step.CopiedValueVariableName ?? "copiedValue");
+        }
+
         if (step.ActionKind == RecordedActionKind.AssertValue)
         {
             var target = $"{step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)}";
@@ -5086,6 +5325,14 @@ internal sealed class RecorderSession :
             return step.DefinesGeneratedValue
                 ? $"Generate {generatedValue?.VariableName ?? step.GeneratedValueVariableName ?? "value"} and enter it into {step.Control.ProposedPropertyName}"
                 : $"Enter generated value {generatedValue?.VariableName ?? step.GeneratedValueVariableName ?? "value"} into {step.Control.ProposedPropertyName}";
+        }
+
+        if (step.ActionKind == RecordedActionKind.EnterText
+            && step.InputCopiedValueId is { } inputCopiedValueId)
+        {
+            var copiedValue = CreateCopiedValueOptions()
+                .FirstOrDefault(candidate => candidate.CopiedValueId == inputCopiedValueId);
+            return $"Enter copied value {copiedValue?.VariableName ?? "copiedValue"} into {step.Control.ProposedPropertyName}";
         }
 
         return step.ValidationStatus switch
@@ -5292,6 +5539,38 @@ internal sealed class RecorderSession :
             .ToArray();
     }
 
+    private IReadOnlyList<RecorderCopiedValueOption> CreateCopiedValueOptions()
+    {
+        var graphSteps = _steps
+            .Where(static step => !step.IsIgnored && step.CanPersist)
+            .ToArray();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
+        return graphSteps
+            .Where(static step => step.ActionKind == RecordedActionKind.CaptureCopiedValue
+                && step.CopiedValueId is not null
+                && step.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
+            .Select(step => new RecorderCopiedValueOption(
+                step.CopiedValueId!.Value,
+                graphValidation.CopiedValueVariables.TryGetValue(
+                    step.CopiedValueId.Value,
+                    out var variableName)
+                    ? variableName
+                    : step.CopiedValueVariableName ?? "copiedValue",
+                step.ValueKind!.Value,
+                step.Control.ProposedPropertyName,
+                step.StringValue ?? string.Empty))
+            .ToArray();
+    }
+
+    private void RefreshActiveCopiedValue()
+    {
+        _activeCopiedValue = CreateCopiedValueOptions().LastOrDefault();
+        if (_activeCopiedValue is null)
+        {
+            ClearPendingCopiedValuePaste();
+        }
+    }
+
     private RecorderScenarioGraphValidationResult ApplyScenarioGraphValidation()
     {
         for (var index = 0; index < _steps.Count; index++)
@@ -5312,6 +5591,7 @@ internal sealed class RecorderSession :
         var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
         if (graphValidation.Success)
         {
+            RefreshActiveCopiedValue();
             return graphValidation;
         }
 
@@ -5342,6 +5622,7 @@ internal sealed class RecorderSession :
             };
         }
 
+        RefreshActiveCopiedValue();
         return graphValidation;
     }
 

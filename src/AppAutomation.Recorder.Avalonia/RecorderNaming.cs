@@ -67,6 +67,15 @@ internal static class RecorderNaming
             keywordPrefix: "generated");
     }
 
+    public static string CreateCopiedValueVariableName(string? proposedName, ISet<string> reservedNames)
+    {
+        return CreateVariableName(
+            proposedName,
+            reservedNames,
+            fallback: "CopiedValue",
+            keywordPrefix: "copied");
+    }
+
     private static string CreateVariableName(
         string? proposedName,
         ISet<string> reservedNames,

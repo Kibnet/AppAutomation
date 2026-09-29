@@ -104,6 +104,23 @@ internal interface IRecorderGeneratedValueSessionDetails
         RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal);
 }
 
+internal interface IRecorderCopiedValueSessionDetails
+{
+    event EventHandler<RecorderCopiedValueTargetSelectedEventArgs>? CopiedValueTargetSelected;
+
+    IReadOnlyList<RecorderCopiedValueOption> CopiedValues { get; }
+
+    bool IsCopiedValueTargetSelectionActive { get; }
+
+    void BeginCopiedValueTargetSelection();
+
+    void CancelCopiedValueTargetSelection();
+
+    void ApplyCopiedValue(RecorderCopiedValueTargetSelection selection);
+
+    void RejectCopiedValue(string message);
+}
+
 internal interface IRecorderRelativeDateSessionDetails
 {
     bool TryGetDateConfiguration(
@@ -153,6 +170,16 @@ internal sealed class RecorderGeneratedValueTargetSelectedEventArgs(
     RecorderGeneratedValueTargetSelection selection) : EventArgs
 {
     public RecorderGeneratedValueTargetSelection Selection { get; } = selection;
+}
+
+internal sealed record RecorderCopiedValueTargetSelection(
+    RecorderCheckTargetSelection TargetSelection,
+    RecorderCopiedValueOption CopiedValue);
+
+internal sealed class RecorderCopiedValueTargetSelectedEventArgs(
+    RecorderCopiedValueTargetSelection selection) : EventArgs
+{
+    public RecorderCopiedValueTargetSelection Selection { get; } = selection;
 }
 
 internal enum RecorderStepMoveDirection

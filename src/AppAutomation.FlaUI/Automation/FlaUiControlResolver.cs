@@ -17,7 +17,7 @@ using NumberStyles = System.Globalization.NumberStyles;
 
 namespace AppAutomation.FlaUI.Automation;
 
-public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector
+public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime
 {
     private const uint WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageKeyUp = 0x0101;
@@ -44,7 +44,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         SupportsCalendarRangeSelection: true,
         SupportsTreeNodeExpansionState: true,
         SupportsRawNativeHandles: true,
-        SupportsScreenshots: true);
+        SupportsScreenshots: true,
+        SupportsClipboardWrite: true);
+
+    public Task SetTextAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return WindowsClipboard.SetTextAsync(text, cancellationToken);
+    }
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class

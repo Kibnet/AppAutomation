@@ -51,6 +51,7 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderScenarioSelectionDetails? _scenarioSelectionDetails;
     private IRecorderCheckpointSessionDetails? _checkpointDetails;
     private IRecorderGeneratedValueSessionDetails? _generatedValueDetails;
+    private IRecorderCopiedValueSessionDetails? _copiedValueDetails;
     private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
     private RecorderCalculatedAssertionDraft? _calculatedAssertionDraft;
     private int _renderedJournalEntryCount;
@@ -65,6 +66,8 @@ internal sealed partial class RecorderOverlay : UserControl
     public event EventHandler? ExportRequested;
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
+
+    internal Func<string, Task>? ClipboardWriterForTesting { get; set; }
 
     internal Control? LastDateExpressionEditorForTesting { get; private set; }
 
@@ -82,6 +85,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _scenarioSelectionDetails = session as IRecorderScenarioSelectionDetails;
         _checkpointDetails = session as IRecorderCheckpointSessionDetails;
         _generatedValueDetails = session as IRecorderGeneratedValueSessionDetails;
+        _copiedValueDetails = session as IRecorderCopiedValueSessionDetails;
         _relativeDateDetails = session as IRecorderRelativeDateSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
@@ -130,6 +134,11 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_generatedValueDetails is not null)
         {
             _generatedValueDetails.GeneratedValueTargetSelected += OnGeneratedValueTargetSelected;
+        }
+
+        if (_copiedValueDetails is not null)
+        {
+            _copiedValueDetails.CopiedValueTargetSelected += OnCopiedValueTargetSelected;
         }
 
         Refresh();
@@ -395,7 +404,9 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private void OnGenerateValueClick(object? sender, RoutedEventArgs e)
     {
-        if (_generateValueButton is null || _generatedValueDetails is null)
+        if (_generateValueButton is null
+            || _generatedValueDetails is null
+            || _copiedValueDetails is null)
         {
             return;
         }
@@ -405,20 +416,20 @@ internal sealed partial class RecorderOverlay : UserControl
 
     private MenuFlyout CreateGeneratedValueMenu()
     {
-        if (_generatedValueDetails is null)
+        if (_generatedValueDetails is null || _copiedValueDetails is null)
         {
-            throw new InvalidOperationException("Recorder generated-value details are not attached.");
+            throw new InvalidOperationException("Recorder value details are not attached.");
         }
 
-        var menu = new MenuFlyout();
+        var generate = new MenuItem { Header = "Generate value" };
         var create = new MenuItem { Header = "New value" };
         create.Click += (_, _) => _generatedValueDetails.BeginGeneratedValueTargetSelection();
-        menu.Items.Add(create);
+        var generateItems = new List<object> { create };
 
         var existingValues = _generatedValueDetails.GeneratedValues;
         if (existingValues.Count > 0)
         {
-            menu.Items.Add(new Separator());
+            generateItems.Add(new Separator());
         }
 
         foreach (var generatedValue in existingValues)
@@ -430,13 +441,55 @@ internal sealed partial class RecorderOverlay : UserControl
             };
             reuse.Click += (_, _) =>
                 _generatedValueDetails.BeginGeneratedValueTargetSelection(generatedValue.GeneratedValueId);
-            menu.Items.Add(reuse);
+            generateItems.Add(reuse);
         }
 
-        return menu;
+        generate.ItemsSource = generateItems;
+        var copy = new MenuItem { Header = "Copy value" };
+        copy.Click += (_, _) => _copiedValueDetails.BeginCopiedValueTargetSelection();
+        return new MenuFlyout
+        {
+            ItemsSource = new object[] { generate, copy }
+        };
     }
 
     internal MenuFlyout CreateGeneratedValueMenuForTesting() => CreateGeneratedValueMenu();
+
+    private void OnCopiedValueTargetSelected(
+        object? sender,
+        RecorderCopiedValueTargetSelectedEventArgs e)
+    {
+        RunOnUiThread(() => _ = CopySelectedValueAsync(e.Selection));
+    }
+
+    private async Task CopySelectedValueAsync(RecorderCopiedValueTargetSelection selection)
+    {
+        if (_copiedValueDetails is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (ClipboardWriterForTesting is { } testWriter)
+            {
+                await testWriter(selection.CopiedValue.PreviewValue);
+            }
+            else
+            {
+                var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
+                    ?? throw new InvalidOperationException("The recorder window does not expose a clipboard.");
+                await clipboard.SetTextAsync(selection.CopiedValue.PreviewValue);
+            }
+
+            _copiedValueDetails.ApplyCopiedValue(selection);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _copiedValueDetails.RejectCopiedValue(
+                $"The selected value could not be copied to the clipboard: {exception.Message}");
+        }
+    }
 
     private void OnGeneratedValueTargetSelected(
         object? sender,
@@ -1435,10 +1488,11 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             _generateValueButton.IsEnabled = !isBusy
                 && _session.State == RecorderSessionState.Recording
-                && _generatedValueDetails is not null;
+                && _generatedValueDetails is not null
+                && _copiedValueDetails is not null;
             ToolTip.SetTip(
                 _generateValueButton,
-                "Create a new runtime value or reuse one already generated in this scenario.");
+                "Generate, reuse, or copy a runtime value for this scenario.");
         }
 
         if (_stepCounter is not null)

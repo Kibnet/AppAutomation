@@ -7,9 +7,10 @@ internal static class HeadlessTestRuntime
 {
     public const string HeadlessRuntimeConstraint = "HeadlessRuntime";
 
-    public static IDisposable StartHeadlessRuntime()
+    public static IDisposable StartHeadlessRuntime(
+        AvaloniaTestIsolationLevel isolationLevel = AvaloniaTestIsolationLevel.PerTest)
     {
-        var session = HeadlessUnitTestSession.StartNew(typeof(TestAvaloniaApp));
+        var session = HeadlessUnitTestSession.StartNew(typeof(TestAvaloniaApp), isolationLevel);
         HeadlessRuntime.SetSession(session);
         return new HeadlessSessionScope(session);
     }

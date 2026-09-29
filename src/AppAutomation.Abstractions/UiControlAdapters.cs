@@ -583,7 +583,8 @@ public static partial class UiControlResolverExtensions
 
     private sealed class AdapterAwareUiControlResolver :
         IUiControlResolver,
-        IMultiItemControlRuntimeResolver
+        IMultiItemControlRuntimeResolver,
+        IUiClipboardRuntime
     {
         private readonly IUiControlResolver _innerResolver;
         private readonly IReadOnlyList<IUiControlAdapter> _adapters;
@@ -640,6 +641,17 @@ public static partial class UiControlResolverExtensions
             }
 
             return runtimeResolver.ReadMultiItemCollectionState(definition);
+        }
+
+        public Task SetTextAsync(string text, CancellationToken cancellationToken = default)
+        {
+            if (_innerResolver is not IUiClipboardRuntime clipboardRuntime)
+            {
+                throw new NotSupportedException(
+                    $"Runtime adapter '{Capabilities.AdapterId}' does not support writing text to the clipboard.");
+            }
+
+            return clipboardRuntime.SetTextAsync(text, cancellationToken);
         }
     }
 }

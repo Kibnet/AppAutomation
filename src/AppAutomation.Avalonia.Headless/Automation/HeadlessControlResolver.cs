@@ -6,6 +6,8 @@ using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Session;
 using Avalonia.Automation;
+using Avalonia.Input.Platform;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaControl = Avalonia.Controls.Control;
 using AvaloniaTemplatedControl = Avalonia.Controls.Primitives.TemplatedControl;
@@ -13,7 +15,7 @@ using AvaloniaWindow = Avalonia.Controls.Window;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
 
-public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector
+public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
@@ -51,7 +53,22 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         SupportsCalendarRangeSelection: false,
         SupportsTreeNodeExpansionState: false,
         SupportsRawNativeHandles: false,
-        SupportsScreenshots: _supportsRenderedFrames && HeadlessScreenshotCapture.IsWindowVisible(_window.Native));
+        SupportsScreenshots: _supportsRenderedFrames && HeadlessScreenshotCapture.IsWindowVisible(_window.Native),
+        SupportsClipboardWrite: true);
+
+    public async Task SetTextAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var writeTask = HeadlessRuntime.Dispatch(() =>
+        {
+            var clipboard = _window.Native.Clipboard
+                ?? throw new InvalidOperationException("The headless window does not expose a clipboard.");
+            return clipboard.SetTextAsync(text);
+        }, cancellationToken);
+        await writeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class

@@ -122,7 +122,7 @@
                     <Button x:Name="GenerateValueButton"
                             Grid.Column="6"
                             Padding="10,4"
-                            Content="Generate value"
+                            Content="Value"
                             automation:AutomationProperties.AutomationId="RecorderGenerateValueButton" />
                     <TextBlock x:Name="StepCounter"
                                Grid.Column="7"

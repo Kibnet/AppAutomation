@@ -37,6 +37,7 @@ public sealed class RecorderFullCaptureCoverageTests
                 var rendersExpectedShape = step.ActionKind switch
                 {
                     RecordedActionKind.CaptureCheckpoint => preview.Contains("var ", StringComparison.Ordinal),
+                    RecordedActionKind.CaptureCopiedValue => preview.Contains("CopyTextToClipboardAsync", StringComparison.Ordinal),
                     RecordedActionKind.AssertValue => preview.Contains("Assert.That", StringComparison.Ordinal),
                     _ => preview.Contains($"Page.{step.ActionKind}(", StringComparison.Ordinal)
                 };
@@ -352,6 +353,7 @@ public sealed class RecorderFullCaptureCoverageTests
     private static IReadOnlyList<RecordedStep> CreateActionCoverageSteps()
     {
         var date = new DateTime(2026, 4, 28);
+        var copiedValueId = Guid.NewGuid();
         return
         [
             new RecordedStep(RecordedActionKind.EnterText, Descriptor("SearchBox", UiControlType.TextBox), StringValue: "alpha"),
@@ -433,6 +435,14 @@ public sealed class RecorderFullCaptureCoverageTests
                 ValueAccessorKind: RecorderValueAccessorKind.Text,
                 CheckpointId: Guid.NewGuid(),
                 CheckpointVariableName: "valueBeforeAction"),
+            new RecordedStep(
+                RecordedActionKind.CaptureCopiedValue,
+                Descriptor("CopiedValueLabel", UiControlType.Label),
+                StringValue: "Copied value",
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CopiedValueId: copiedValueId,
+                CopiedValueVariableName: "copiedValueLabel"),
             new RecordedStep(
                 RecordedActionKind.AssertValue,
                 Descriptor("ValueLabel", UiControlType.Label),
