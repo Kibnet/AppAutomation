@@ -8,4 +8,6 @@ public sealed record GridCellValueEditRequest(
     string? SearchText = null)
 {
     public GridCellEditorParts? EditorParts { get; init; }
+
+    public GridNumericInput? NumericInput { get; init; }
 }

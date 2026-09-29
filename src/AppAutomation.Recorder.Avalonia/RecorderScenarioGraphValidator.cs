@@ -290,9 +290,15 @@ internal static class RecorderScenarioGraphValidator
                 $"Assertion step {index + 1} has an unsupported arithmetic operation '{expression.Operation}'.");
         }
 
-        if (actualKind != RecorderValueKind.Number
-            || step.ValueAccessorKind != RecorderValueAccessorKind.NumericValue
-            || comparisonKind != RecorderComparisonKind.Equal)
+        if (comparisonKind != RecorderComparisonKind.Equal
+            || !RecorderNumericValueContract.TryCreateGridReference(
+                step.Control,
+                actualKind,
+                step.ValueAccessorKind!.Value,
+                step.GridRowConditions,
+                step.GridTargetColumnName,
+                out _,
+                out _))
         {
             return RecorderGraphStepValidationResult.Invalid(
                 $"Assertion step {index + 1} can use a calculated expected value only with an equal numeric assertion.");
@@ -360,7 +366,8 @@ internal static class RecorderScenarioGraphValidator
         var sourceCount = (operand.LiteralValue.HasValue ? 1 : 0)
             + (operand.CheckpointId.HasValue ? 1 : 0)
             + (operand.Control is not null ? 1 : 0)
-            + (operand.ValueAccessorKind.HasValue ? 1 : 0);
+            + (operand.ValueAccessorKind.HasValue ? 1 : 0)
+            + (operand.GridValueReference is not null ? 1 : 0);
         return sourceCount == 1
                && operand.LiteralValue is { } value
                && double.IsFinite(value)
@@ -378,7 +385,8 @@ internal static class RecorderScenarioGraphValidator
         var sourceCount = (operand.LiteralValue.HasValue ? 1 : 0)
             + (operand.CheckpointId.HasValue ? 1 : 0)
             + (operand.Control is not null ? 1 : 0)
-            + (operand.ValueAccessorKind.HasValue ? 1 : 0);
+            + (operand.ValueAccessorKind.HasValue ? 1 : 0)
+            + (operand.GridValueReference is not null ? 1 : 0);
         if (sourceCount != 1 || operand.CheckpointId is not { } checkpointId || checkpointId == Guid.Empty)
         {
             return RecorderGraphStepValidationResult.Invalid(
@@ -407,24 +415,21 @@ internal static class RecorderScenarioGraphValidator
             + (operand.Control is not null ? 1 : 0);
         if (sourceCount != 1
             || operand.Control is not { } control
-            || operand.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+            || operand.ValueAccessorKind is not { } accessorKind
+            || !RecorderNumericValueContract.TryCreateGridReference(
+                control,
+                RecorderValueKind.Number,
+                accessorKind,
+                operand.GridValueReference?.RowConditions,
+                operand.GridValueReference?.TargetColumnName,
+                out _,
+                out _))
         {
             return RecorderGraphStepValidationResult.Invalid(
                 $"Assertion step {index + 1} {operandName} control does not expose a numeric value.");
         }
 
-        if (!Enum.IsDefined(control.ControlType))
-        {
-            return RecorderGraphStepValidationResult.Invalid(
-                $"Assertion step {index + 1} {operandName} control has an unsupported control type '{control.ControlType}'.");
-        }
-
-        var capability = RecorderAssertionCapabilities.Get(control.ControlType);
-        return capability.ValueKinds.Contains(RecorderValueKind.Number)
-               && capability.AccessorKinds.Contains(RecorderValueAccessorKind.NumericValue)
-            ? RecorderGraphStepValidationResult.Valid
-            : RecorderGraphStepValidationResult.Invalid(
-                $"Assertion step {index + 1} {operandName} control does not expose a numeric value.");
+        return RecorderGraphStepValidationResult.Valid;
     }
 
     private static RecorderGraphStepValidationResult ValidateGeneratedValueExpectation(

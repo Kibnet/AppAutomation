@@ -76,15 +76,39 @@ public partial class MainWindow : Window
         }
     }
 
-    private static void OnArmComplexGridCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
+    private void OnArmComplexGridCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
     {
         var popupEditor = e.EditingElement is PopupEditor directEditor
             ? directEditor
             : e.EditingElement.GetVisualDescendants().OfType<PopupEditor>().FirstOrDefault();
+        var spinEditor = e.EditingElement is SpinEditor directSpinEditor
+            ? directSpinEditor
+            : e.EditingElement.GetVisualDescendants().OfType<SpinEditor>().FirstOrDefault();
+        if (spinEditor?.RealEditor is Control numericInput)
+        {
+            ArmGridLastNumericInputText.Text = TryReadText(numericInput) ?? string.Empty;
+        }
+
         if (popupEditor?.IsPopupOpen == true)
         {
             e.Cancel = true;
         }
+    }
+
+    private static string? TryReadText(Control control)
+    {
+        if (control is TextBox textBox)
+        {
+            return textBox.Text;
+        }
+
+        var property = control.GetType()
+            .GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+            .FirstOrDefault(static candidate =>
+                string.Equals(candidate.Name, "Text", StringComparison.Ordinal)
+                && candidate.CanRead
+                && candidate.GetIndexParameters().Length == 0);
+        return property?.GetValue(control) as string;
     }
 
     private void OnArmGridDateEditorLoaded(object? sender, RoutedEventArgs e)

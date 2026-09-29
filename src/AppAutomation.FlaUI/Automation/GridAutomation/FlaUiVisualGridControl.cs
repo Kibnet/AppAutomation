@@ -202,17 +202,11 @@ public sealed partial class FlaUiControlResolver
                             address.Row,
                             Stopwatch.StartNew(),
                             timeout).Cells[columnIndex],
-                    new GridCellEditRequest(
+                    GridCellEditRequestValidation.CreateIndexedRequest(
                         0,
                         columnIndex,
-                        request.Value,
-                        request.EditorKind,
-                        request.CommitMode,
-                        request.SearchText)
-                    {
-                        TimeoutMs = nativeRemaining,
-                        EditorParts = request.EditorParts
-                    });
+                        request,
+                        nativeRemaining));
                 return;
             }
 
@@ -959,17 +953,12 @@ public sealed partial class FlaUiControlResolver
                         row,
                         Stopwatch.StartNew(),
                         timeout).Cells[nativeRuntimeColumnIndex],
-                    new GridCellEditRequest(
+                    GridCellEditRequestValidation.CreateIndexedRequest(
                         0,
                         nativeRuntimeColumnIndex,
-                        request.Value,
-                        request.EditorKind,
-                        request.CommitMode,
-                        request.SearchText)
-                    {
-                        TimeoutMs = nativeRemaining,
-                        EditorParts = request.EditorParts ?? column.EditorParts
-                    });
+                        request,
+                        nativeRemaining,
+                        request.EditorParts ?? column.EditorParts));
                 return;
             }
 
@@ -985,17 +974,12 @@ public sealed partial class FlaUiControlResolver
             EditResolvedCell(
                 cell,
                 timeout => FindVisualCellWithTraversal(rowIndex, runtimeColumnIndex, timeout),
-                new GridCellEditRequest(
+                GridCellEditRequestValidation.CreateIndexedRequest(
                     rowIndex,
                     runtimeColumnIndex,
-                    request.Value,
-                    request.EditorKind,
-                    request.CommitMode,
-                    request.SearchText)
-                {
-                    TimeoutMs = remaining,
-                    EditorParts = request.EditorParts ?? column.EditorParts
-                });
+                    request,
+                    remaining,
+                    request.EditorParts ?? column.EditorParts));
         }
 
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
@@ -1040,9 +1024,6 @@ public sealed partial class FlaUiControlResolver
         public void EditCell(GridCellEditRequest request)
         {
             ArgumentNullException.ThrowIfNull(request);
-            ArgumentOutOfRangeException.ThrowIfNegative(request.RowIndex);
-            ArgumentOutOfRangeException.ThrowIfNegative(request.ColumnIndex);
-            ArgumentNullException.ThrowIfNull(request.Value);
             if (request.TimeoutMs <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(request), "Grid edit timeout must be positive.");
@@ -1664,13 +1645,16 @@ public sealed partial class FlaUiControlResolver
             AutomationElement materializedEditor,
             GridCellEditRequest request)
         {
-            var explicitInput = materializedEditor
-                ?? ResolveEditorPart(cell, request.EditorParts?.Input);
+            var explicitInput = ResolveEditorPart(cell, request.EditorParts?.Input)
+                ?? (TryRead(() => materializedEditor.ControlType) == ControlType.Edit
+                    ? materializedEditor
+                    : null);
             if (request.EditorKind == GridCellEditorKind.Number
+                && request.NumericInput is null
                 && request.EditorParts?.UseKeyboardInput != true)
             {
-                var spinner = explicitInput is not null && TryRead(() => explicitInput.ControlType) == ControlType.Spinner
-                    ? explicitInput
+                var spinner = TryRead(() => materializedEditor.ControlType) == ControlType.Spinner
+                    ? materializedEditor
                     : new[] { cell }.Concat(FindAutomationDescendants(cell))
                         .FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Spinner);
                 if (spinner is not null
@@ -1690,13 +1674,17 @@ public sealed partial class FlaUiControlResolver
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a writable text editor.");
             }
 
-            if (request.EditorParts?.UseKeyboardInput == true)
+            if (request.NumericInput is not null
+                || request.EditorParts?.UseKeyboardInput == true)
             {
                 EnterGridTextWithKeyboard(input, request);
                 return;
             }
 
-            new FlaUiTextBoxControl(input.AsTextBox()).Enter(request.Value);
+            new FlaUiTextBoxControl(input.AsTextBox()).Enter(
+                request.EditorKind == GridCellEditorKind.Number
+                    ? request.NumericInput?.Text ?? request.Value
+                    : request.Value);
         }
 
         private void EnterGridTextWithKeyboard(
@@ -1712,7 +1700,10 @@ public sealed partial class FlaUiControlResolver
                 return true;
             });
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-            Keyboard.Type(request.Value);
+            var inputText = request.EditorKind == GridCellEditorKind.Number
+                ? request.NumericInput?.Text ?? request.Value
+                : request.Value;
+            Keyboard.Type(inputText);
 
             var stopwatch = Stopwatch.StartNew();
             string? lastActual = null;
@@ -1733,7 +1724,7 @@ public sealed partial class FlaUiControlResolver
             while (stopwatch.ElapsedMilliseconds < request.TimeoutMs);
 
             throw new InvalidOperationException(
-                $"Grid editor input '{TryRead(() => input.AutomationId)}' did not receive keyboard value '{request.Value}'. "
+                $"Grid editor input '{TryRead(() => input.AutomationId)}' did not receive keyboard value '{inputText}'. "
                 + $"Last observed text: '{lastActual ?? "<unavailable>"}'.");
         }
 
@@ -1751,18 +1742,13 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            var normalizedActual = string.Concat(actual.Where(static character => !char.IsWhiteSpace(character)));
-            return decimal.TryParse(
-                    normalizedActual,
-                    NumberStyles.Number,
-                    CultureInfo.CurrentCulture,
-                    out var actualNumber)
-                && decimal.TryParse(
-                    request.Value,
-                    NumberStyles.Number,
-                    CultureInfo.InvariantCulture,
-                    out var expectedNumber)
-                && actualNumber == expectedNumber;
+            return GridNumericText.TryParse(
+                    actual,
+                    request.NumericInput?.CultureName,
+                    out var actualNumber,
+                    out _)
+                && GridNumericText.TryParse(request.Value, CultureInfo.InvariantCulture, out var expectedNumber)
+                && actualNumber.Equals(expectedNumber);
         }
 
         private void EditDateCell(AutomationElement cell, GridCellEditRequest request)

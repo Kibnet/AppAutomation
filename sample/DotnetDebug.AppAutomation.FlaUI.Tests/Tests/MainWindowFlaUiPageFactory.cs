@@ -8,7 +8,9 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 internal static class MainWindowFlaUiPageFactory
 {
-    public static MainWindowPage Create(DesktopAppSession session)
+    public static MainWindowPage Create(
+        DesktopAppSession session,
+        GridAutomationCatalog? gridAutomation = null)
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -47,7 +49,7 @@ internal static class MainWindowFlaUiPageFactory
                         "ArmTableSearchHistoryItemButton",
                         historyOpenButtonAutomationId: "ArmTableSearchHistoryOpenButton",
                         historyRootAutomationId: "ArmTableSearchHistoryRoot"))
-                .WithGridAutomation(SampleGridAutomation.CreateFlaUiCatalog())
+                .WithGridAutomation(gridAutomation ?? SampleGridAutomation.CreateFlaUiCatalog())
                 .WithMultiItemControls(SampleMultiItemAutomation.CreateCatalog())
                 .WithComboBoxFilter(
                     "ArmStatusFilter",

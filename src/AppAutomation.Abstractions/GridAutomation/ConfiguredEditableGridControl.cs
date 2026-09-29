@@ -15,5 +15,9 @@ internal sealed class ConfiguredEditableGridControl : ConfiguredGridControl, IEd
         _inner = inner;
     }
 
-    public void EditCell(GridCellEditRequest request) => _inner.EditCell(request);
+    public void EditCell(GridCellEditRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _inner.EditCell(request);
+    }
 }

@@ -148,7 +148,8 @@ public sealed partial class FlaUiControlResolver
                     SelectNativeSearchPicker(cell, candidates, request, RemainingMilliseconds(budget, timeoutMs));
                     break;
                 case GridCellEditorKind.Number:
-                    if (!TrySetNativeSpinner(cell, candidates, request))
+                    if (request.NumericInput is not null
+                        || !TrySetNativeSpinner(cell, candidates, request))
                     {
                         EnterNativeGridText(cell, candidates, request);
                     }
@@ -163,10 +164,18 @@ public sealed partial class FlaUiControlResolver
                     SetNativeTime(cell, candidates, request);
                     break;
                 case GridCellEditorKind.Color:
+                    var normalizedColorRequest = new GridCellValueEditRequest(
+                        ColorValue.Normalize(request.Value),
+                        request.EditorKind,
+                        request.CommitMode,
+                        request.SearchText)
+                    {
+                        EditorParts = request.EditorParts
+                    };
                     EnterNativeGridText(
                         cell,
                         candidates,
-                        request with { Value = ColorValue.Normalize(request.Value) });
+                        normalizedColorRequest);
                     break;
                 default:
                     throw new System.NotSupportedException(
@@ -612,10 +621,16 @@ public sealed partial class FlaUiControlResolver
             IEnumerable<AutomationElement> candidates,
             GridCellValueEditRequest request)
         {
-            var input = ResolveNativeEditorPart(cell, request.EditorParts?.Input)
-                ?? candidates.FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Edit)
+            var configuredInput = ResolveNativeEditorPart(cell, request.EditorParts?.Input);
+            var input = configuredInput is not null
+                    && TryRead(() => configuredInput.ControlType) == ControlType.Edit
+                ? configuredInput
+                : candidates.FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Edit)
                 ?? throw new InvalidOperationException("The active grid cell does not expose a writable text editor.");
-            new FlaUiTextBoxControl(input.AsTextBox()).Enter(request.Value);
+            new FlaUiTextBoxControl(input.AsTextBox()).Enter(
+                request.EditorKind == GridCellEditorKind.Number
+                    ? request.NumericInput?.Text ?? request.Value
+                    : request.Value);
         }
 
         private bool TrySetNativeSpinner(

@@ -4058,7 +4058,14 @@ internal sealed class RecorderSession :
             operand.CheckpointId?.ToString("N") ?? string.Empty,
             operand.Control?.LocatorKind.ToString() ?? string.Empty,
             operand.Control?.LocatorValue ?? string.Empty,
-            operand.ValueAccessorKind?.ToString() ?? string.Empty);
+            operand.ValueAccessorKind?.ToString() ?? string.Empty,
+            operand.GridValueReference?.TargetColumnName ?? string.Empty,
+            operand.GridValueReference is null
+                ? string.Empty
+                : string.Join(
+                    ";",
+                    operand.GridValueReference.RowConditions.Select(static condition =>
+                        $"{condition.ColumnName}={condition.Value}")));
     }
 
     private static string ResolveStepStatusMessage(RecordedStep step, string? fallbackMessage)

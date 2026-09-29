@@ -1921,6 +1921,7 @@ internal sealed partial class RecorderStepFactory
             editorKind.Value,
             metadata,
             logicalColumnName,
+            column?.CultureName,
             commitMode,
             out var prototypeError);
         if (prototype is null)
@@ -2532,16 +2533,15 @@ internal sealed partial class RecorderStepFactory
         }
 
         var candidate = CreateCandidate(snapshot);
-        if (candidate.ValueKind != RecorderValueKind.Number
-            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        if (!TryCreateNumericValueReference(candidate, out var gridValueReference, out error))
         {
-            error = "Selected operand does not expose a numeric value.";
             return false;
         }
 
         operand = RecorderNumericOperand.FromControl(
             candidate.Control,
-            candidate.ValueAccessorKind);
+            candidate.ValueAccessorKind,
+            gridValueReference);
         error = string.Empty;
         return true;
     }
@@ -2558,11 +2558,9 @@ internal sealed partial class RecorderStepFactory
         }
 
         var candidate = CreateCandidate(snapshot);
-        if (candidate.ValueKind != RecorderValueKind.Number
-            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        if (!TryCreateNumericValueReference(candidate, out _, out var error))
         {
-            return StepCreationResult.Unsupported(
-                "A calculated expected value can only be used with a numeric control.");
+            return StepCreationResult.Unsupported(error);
         }
 
         var step = CreateSemanticValueStep(
@@ -2571,6 +2569,21 @@ internal sealed partial class RecorderStepFactory
             comparisonKind: RecorderComparisonKind.Equal,
             numericExpectedExpression: expression);
         return CreateStepFromSnapshot(snapshot, step, "Added calculated numeric assertion.");
+    }
+
+    private static bool TryCreateNumericValueReference(
+        SemanticValueCandidate candidate,
+        out RecorderGridValueReference? gridValueReference,
+        out string error)
+    {
+        return RecorderNumericValueContract.TryCreateGridReference(
+            candidate.Control,
+            candidate.ValueKind,
+            candidate.ValueAccessorKind,
+            candidate.GridContext?.RowConditions,
+            candidate.GridContext?.TargetColumnName,
+            out gridValueReference,
+            out error);
     }
 
     private static bool TryNormalizeCheckpointComparison(
@@ -6885,6 +6898,7 @@ internal sealed partial class RecorderStepFactory
         GridCellEditorKind editorKind,
         RecorderGridCellMetadata metadata,
         string logicalColumnName,
+        string? cultureName,
         GridCellEditCommitMode commitMode,
         out string error)
     {
@@ -6915,9 +6929,15 @@ internal sealed partial class RecorderStepFactory
                 };
 
             case GridCellEditorKind.Number:
-                var numberSource = FindRelatedControl<NumericUpDown>(source) as Control
+                var numberValueSource = FindRelatedControl<NumericUpDown>(source) as Control
                     ?? FindRelatedControl<TextBox>(source);
-                if (numberSource is null || !TryReadNumericValue(numberSource, out var number))
+                if (numberValueSource is null
+                    || !TryReadNumericValue(
+                        numberValueSource,
+                        source,
+                        cultureName,
+                        out var number,
+                        out var numericInputText))
                 {
                     error = $"Grid column '{logicalColumnName}' does not expose a numeric editor value.";
                     return null;
@@ -6927,7 +6947,9 @@ internal sealed partial class RecorderStepFactory
                 return common with
                 {
                     ActionKind = RecordedActionKind.EditGridCellNumber,
-                    DoubleValue = number
+                    DoubleValue = number,
+                    NumericInputText = numericInputText,
+                    NumericInputCultureName = numericInputText is null ? null : cultureName
                 };
 
             case GridCellEditorKind.Date:
@@ -7090,7 +7112,12 @@ internal sealed partial class RecorderStepFactory
         RecorderGridEditHint hint)
     {
         if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
-            || !TryReadNumericValue(valueControl, out var value))
+            || !TryReadNumericValue(
+                valueControl,
+                valueControl,
+                hint.NumericInputCultureName,
+                out var value,
+                out var numericInputText))
         {
             return StepCreationResult.Unsupported("Grid numeric edit hint value locator does not expose a numeric value.");
         }
@@ -7104,7 +7131,13 @@ internal sealed partial class RecorderStepFactory
                 Warning: warning,
                 RowIndex: hint.RowIndex,
                 ColumnIndex: hint.ColumnIndex,
-                GridCellEditCommitMode: hint.CommitMode),
+                GridCellEditCommitMode: hint.CommitMode)
+            {
+                NumericInputText = numericInputText,
+                NumericInputCultureName = numericInputText is null
+                    ? null
+                    : hint.NumericInputCultureName
+            },
             warning,
             hint.TargetGridLocatorValue,
             hint.TargetGridLocatorKind,
@@ -7479,32 +7512,109 @@ internal sealed partial class RecorderStepFactory
 
     private static bool TryReadNumericValue(Control control, out double value)
     {
-        if (control is TextBox textBox)
+        return TryReadNumericValue(control, out value, out _);
+    }
+
+    private static bool TryReadNumericValue(
+        Control control,
+        out double value,
+        out string? numericInputText)
+    {
+        return TryReadNumericValue(
+            control,
+            control,
+            cultureName: null,
+            out value,
+            out numericInputText);
+    }
+
+    private static bool TryReadNumericValue(
+        Control valueSource,
+        Control physicalTextSource,
+        string? cultureName,
+        out double value,
+        out string? numericInputText)
+    {
+        var visibleText = TryReadPhysicalNumericText(physicalTextSource, valueSource);
+        foreach (var candidate in EnumerateRelatedControls(valueSource))
         {
-            return double.TryParse(
-                textBox.Text,
-                System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out value);
+            if (!TryReadNumericControlValue(candidate, out value))
+            {
+                continue;
+            }
+
+            numericInputText = GridNumericText.PreserveNonCanonicalInput(
+                visibleText,
+                value,
+                cultureName);
+            return true;
         }
 
-        var valueProperty = control.GetType().GetProperty("Value");
-        var propertyValue = valueProperty?.GetValue(control);
-        switch (propertyValue)
+        if (GridNumericText.TryParse(visibleText, cultureName, out value, out _))
         {
-            case double doubleValue:
-                value = doubleValue;
-                return true;
-            case decimal decimalValue:
-                value = (double)decimalValue;
-                return true;
-            case int intValue:
-                value = intValue;
-                return true;
-            default:
-                value = default;
-                return false;
+            numericInputText = GridNumericText.PreserveNonCanonicalInput(
+                visibleText,
+                value,
+                cultureName);
+            return true;
         }
+
+        value = default;
+        numericInputText = null;
+        return false;
+    }
+
+    private static string? TryReadPhysicalNumericText(Control source, Control valueSource)
+    {
+        if (source is TextBox sourceTextBox)
+        {
+            return sourceTextBox.Text;
+        }
+
+        if (FindRelatedControl<TextBox>(source) is { } relatedTextBox)
+        {
+            return relatedTextBox.Text;
+        }
+
+        return EnumerateDescendantControls(valueSource)
+            .OfType<TextBox>()
+            .Select(static textBox => textBox.Text)
+            .FirstOrDefault(static text => !string.IsNullOrWhiteSpace(text));
+    }
+
+    private static bool TryReadNumericControlValue(Control control, out double value)
+    {
+        for (var type = control.GetType(); type is not null; type = type.BaseType)
+        {
+            var valueProperty = type
+                .GetProperties(
+                    System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.DeclaredOnly)
+                .FirstOrDefault(static property =>
+                    string.Equals(property.Name, "Value", StringComparison.Ordinal)
+                    && property.CanRead
+                    && property.GetIndexParameters().Length == 0);
+            if (valueProperty is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (GridNumericText.TryConvertFiniteDouble(valueProperty.GetValue(control), out value))
+                {
+                    return true;
+                }
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                // A broken editor getter must not block the text fallback.
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private bool MatchesDateRangeTextPart(TextBox textBox)

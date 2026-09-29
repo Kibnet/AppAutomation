@@ -725,6 +725,23 @@ public sealed class RecorderCheckpointAssertionTests
                             Descriptor("AdjustmentValue", UiControlType.Spinner),
                             RecorderValueAccessorKind.NumericValue),
                         RecorderNumericOperand.FromLiteral(2))),
+                new RecordedStep(
+                    RecordedActionKind.AssertValue,
+                    Descriptor("ItemsGrid", UiControlType.Grid),
+                    ValueKind: RecorderValueKind.Number,
+                    ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+                    ComparisonKind: RecorderComparisonKind.Equal,
+                    NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                        RecorderArithmeticOperation.Add,
+                        RecorderNumericOperand.FromControl(
+                            Descriptor("ItemsGrid", UiControlType.Grid),
+                            RecorderValueAccessorKind.GridCellValue,
+                            GridReference("ITEM-10")),
+                        RecorderNumericOperand.FromLiteral(2)))
+                {
+                    GridRowConditions = [new RecordedGridRowCondition("Key", "ITEM-20")],
+                    GridTargetColumnName = "RequiredAmount"
+                },
                 LiteralAssertion(
                     Descriptor("EnabledCheck", UiControlType.CheckBox),
                     RecorderValueKind.Boolean,
@@ -800,6 +817,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(scenarioSource).Contains(".IsEquivalentTo(");
             await Assert.That(scenarioSource)
                 .Contains("Page.CalculatedAmount.Value).IsEqualTo(Page.AdjustmentValue.Value - 2)");
+            await Assert.That(scenarioSource).Contains(
+                "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-20\"), \"RequiredAmount\")).IsEqualTo(GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-10\"), \"RequiredAmount\") + 2)");
             await Assert.That(scenarioSource).DoesNotContain("global::TUnit.Assertions");
             await Assert.That(scenarioSource).DoesNotContain("WaitUntilTextEquals");
             await Assert.That(CountOccurrences(controlsSource, "ObservedValue")).IsEqualTo(2);
@@ -1056,6 +1075,39 @@ public sealed class RecorderCheckpointAssertionTests
                     RecorderNumericOperand.FromLiteral(0)),
                 StepId: Guid.NewGuid())
         ]);
+        var validGridOperand = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Add,
+                    RecorderNumericOperand.FromControl(
+                        Descriptor("ItemsGrid", UiControlType.Grid),
+                        RecorderValueAccessorKind.GridCellValue,
+                        GridReference("ITEM-10")),
+                    RecorderNumericOperand.FromLiteral(1)),
+                StepId: Guid.NewGuid())
+        ]);
+        var missingGridAddress = RecorderScenarioGraphValidator.Validate(
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("RemainingQuantity", UiControlType.Spinner),
+                ValueKind: RecorderValueKind.Number,
+                ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                    RecorderArithmeticOperation.Add,
+                    RecorderNumericOperand.FromControl(
+                        Descriptor("ItemsGrid", UiControlType.Grid),
+                        RecorderValueAccessorKind.GridCellValue),
+                    RecorderNumericOperand.FromLiteral(1)),
+                StepId: Guid.NewGuid())
+        ]);
 
         using (Assert.Multiple())
         {
@@ -1069,6 +1121,64 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(invalidLiteral.Error).Contains("invalid left numeric literal");
             await Assert.That(literalDivisionByZero.Success).IsFalse();
             await Assert.That(literalDivisionByZero.Error).Contains("divide by a literal zero");
+            await Assert.That(validGridOperand.Success).IsTrue();
+            await Assert.That(missingGridAddress.Success).IsFalse();
+            await Assert.That(missingGridAddress.Error).Contains("numeric value");
+        }
+    }
+
+    [Test]
+    public async Task Autosave_RoundTripsCalculatedGridValueReferences()
+    {
+        using var directory = new TemporaryDirectory();
+        var filePath = Path.Combine(directory.Path, "calculated-grid.autosave.cs");
+        var step = new RecordedStep(
+            RecordedActionKind.AssertValue,
+            Descriptor("ItemsGrid", UiControlType.Grid),
+            ValueKind: RecorderValueKind.Number,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+            ComparisonKind: RecorderComparisonKind.Equal,
+            NumericExpectedExpression: new RecorderNumericExpectedExpression(
+                RecorderArithmeticOperation.Subtract,
+                RecorderNumericOperand.FromControl(
+                    Descriptor("ItemsGrid", UiControlType.Grid),
+                    RecorderValueAccessorKind.GridCellValue,
+                    GridReference("ITEM-10")),
+                RecorderNumericOperand.FromControl(
+                    Descriptor("ItemsGrid", UiControlType.Grid),
+                    RecorderValueAccessorKind.GridCellValue,
+                    GridReference("ITEM-20"))),
+            StepId: Guid.NewGuid())
+        {
+            GridRowConditions = [new RecordedGridRowCondition("Key", "ITEM-30")],
+            GridTargetColumnName = "RequiredAmount"
+        };
+        var state = new RecorderAutosaveState(
+            "Calculated grid values",
+            "calculated-grid-draft",
+            "Autosave_CalculatedGridValues",
+            DateTimeOffset.UtcNow,
+            [step]);
+        await File.WriteAllTextAsync(
+            filePath,
+            RecorderAutosaveStateSerializer.CreateMarker(state) + Environment.NewLine);
+
+        var read = RecorderAutosaveStateSerializer.TryRead(filePath, out var restoredState, out var error);
+        var restoredStep = restoredState?.Steps.Single();
+        var graph = RecorderScenarioGraphValidator.Validate([restoredStep!]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(read).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(restoredStep).IsNotNull();
+            await Assert.That(restoredStep!.GridRowConditions)
+                .IsEquivalentTo([new RecordedGridRowCondition("Key", "ITEM-30")]);
+            await Assert.That(restoredStep.NumericExpectedExpression!.Left.GridValueReference!.RowConditions)
+                .IsEquivalentTo([new RecordedGridRowCondition("Key", "ITEM-10")]);
+            await Assert.That(restoredStep.NumericExpectedExpression.Right.GridValueReference!.RowConditions)
+                .IsEquivalentTo([new RecordedGridRowCondition("Key", "ITEM-20")]);
+            await Assert.That(graph.Success).IsTrue();
         }
     }
 
@@ -1762,4 +1872,9 @@ public sealed class RecorderCheckpointAssertionTests
             FallbackToName: false,
             AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
             Warning: null);
+
+    private static RecorderGridValueReference GridReference(string key) =>
+        new(
+            [new RecordedGridRowCondition("Key", key)],
+            "RequiredAmount");
 }

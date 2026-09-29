@@ -15,7 +15,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
-using Avalonia.Threading;
 using Microsoft.Extensions.Logging;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -2540,13 +2539,11 @@ public sealed class RecorderTests
                 LastValidationAt: DateTimeOffset.UtcNow)
         ]);
         session.RaiseChanged();
-        DrainUi();
         var expandedCount = journalPanel.Children.Count;
         var expandedText = CollectText(journalPanel.Children[1]);
 
         session.SetJournal([]);
         session.RaiseChanged();
-        DrainUi();
         var emptyCount = journalPanel.Children.Count;
 
         session.SetJournal(
@@ -2563,7 +2560,6 @@ public sealed class RecorderTests
                 LastValidationAt: DateTimeOffset.UtcNow)
         ]);
         session.RaiseChanged();
-        DrainUi();
         var finalCount = journalPanel.Children.Count;
         var finalText = CollectText(journalPanel.Children[0]);
 
@@ -4140,14 +4136,6 @@ public sealed class RecorderTests
             }
 
             await Task.Delay(10);
-        }
-    }
-
-    private static void DrainUi()
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-        {
-            Dispatcher.UIThread.RunJobs();
         }
     }
 

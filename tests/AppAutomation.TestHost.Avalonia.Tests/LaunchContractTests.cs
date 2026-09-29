@@ -401,6 +401,51 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_FormattedNumberInputsPreserveGroupingAndNumericValue()
+    {
+        using var headless = StartHeadlessRuntime();
+        var rows = new List<RuntimeGridRow>
+        {
+            new(10, new RuntimeReference("Item 10"), 10m, RuntimeGridState.Pending),
+            new(20, new RuntimeReference("Item 20"), 20m, RuntimeGridState.Ready),
+            new(30, new RuntimeReference("Item 30"), 30m, RuntimeGridState.Pending)
+        };
+        var window = HeadlessRuntime.Dispatch(() => CreateRuntimeGridWindow(rows));
+        var page = new RuntimeGridPage(
+            new HeadlessControlResolver(window).WithGridAutomation(CreateRuntimeGridCatalog()));
+
+        page
+            .EditGridCellNumber(
+                static candidate => candidate.RuntimeGrid,
+                GridRowSelector.ByCell("PositionNumber", "10"),
+                "Required",
+                500d,
+                numericInputText: "500")
+            .EditGridCellNumber(
+                static candidate => candidate.RuntimeGrid,
+                GridRowSelector.ByCell("PositionNumber", "20"),
+                "Required",
+                1200d,
+                numericInputText: "1\u00A0200")
+            .EditGridCellNumber(
+                static candidate => candidate.RuntimeGrid,
+                GridRowSelector.ByCell("PositionNumber", "30"),
+                "Required",
+                10001d,
+                numericInputText: "10\u00A0001");
+
+        var grid = HeadlessRuntime.Dispatch(() => (RuntimeGridHost)window.Content!);
+        using (Assert.Multiple())
+        {
+            await Assert.That(rows.Select(static row => row.RequiredVolume).ToArray())
+                .IsEquivalentTo(new decimal[] { 500m, 1200m, 10001m });
+            await Assert.That(grid.PostedInputTexts)
+                .IsEquivalentTo(new[] { "500", "1\u00A0200", "10\u00A0001" });
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessDataGrid_UsesHiddenIdentityAndRealEditTransaction()
     {
         using var headless = StartHeadlessRuntime();
@@ -1586,6 +1631,8 @@ Console.WriteLine("Fake desktop");
 
         public int PostEditorCalls { get; private set; }
 
+        public List<string> PostedInputTexts { get; } = [];
+
         private decimal? _postedRequiredVolume;
 
         public void MaterializeFirstRow()
@@ -1637,11 +1684,16 @@ Console.WriteLine("Fake desktop");
         public void PostEditor()
         {
             PostEditorCalls++;
+            if (ActiveEditor is TextBox currentEditor)
+            {
+                PostedInputTexts.Add(currentEditor.Text ?? string.Empty);
+            }
+
             if (FocusedItem is not RuntimeGridRow row
                 || FocusedColumn?.FieldName != "RequiredVolume"
                 || ActiveEditor is not TextBox editor
                 || !decimal.TryParse(
-                    editor.Text,
+                    string.Concat((editor.Text ?? string.Empty).Where(static character => !char.IsWhiteSpace(character))),
                     System.Globalization.NumberStyles.Number,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var value))

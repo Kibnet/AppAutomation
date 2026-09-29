@@ -391,6 +391,59 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
+    public async Task GridCatalog_NumericCellsSupportCalculatedTargetAndOperands()
+    {
+        using var fixture = new CalculatedGridAssertionFixture();
+        var details = (IRecorderCheckpointSessionDetails)fixture.Session;
+        RecorderCheckTargetSelection? targetSelection = null;
+        fixture.Session.CheckTargetSelected += (_, eventArgs) => targetSelection = eventArgs.Selection;
+        fixture.Session.BeginCheckTargetSelection();
+        fixture.Session.SelectCheckTargetForTesting(fixture.TargetEditor);
+
+        RecorderNumericOperandTargetSelection? operandSelection = null;
+        details.NumericOperandTargetSelected += (_, eventArgs) => operandSelection = eventArgs.Selection;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.TextCell);
+        var rejectedOperand = operandSelection;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.LeftEditor);
+        var leftOperand = operandSelection?.Operand;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.RightEditor);
+        var rightOperand = operandSelection?.Operand;
+
+        details.CaptureCalculatedAssertion(
+            targetSelection!,
+            new RecorderNumericExpectedExpression(
+                RecorderArithmeticOperation.Subtract,
+                leftOperand!,
+                rightOperand!));
+
+        var entry = fixture.Session.StepJournal.Single();
+        var preview = fixture.Session.ExportPreview();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(targetSelection!.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Number);
+            await Assert.That(targetSelection.ValueSnapshot!.Prototype.ValueAccessorKind)
+                .IsEqualTo(RecorderValueAccessorKind.GridCellValue);
+            await Assert.That(targetSelection.ValueSnapshot.Prototype.Control.LocatorValue).IsEqualTo("ItemsGrid");
+            await Assert.That(rejectedOperand!.Operand).IsNull();
+            await Assert.That(rejectedOperand.Error).Contains("numeric value");
+            await Assert.That(leftOperand).IsNotNull();
+            await Assert.That(rightOperand).IsNotNull();
+            await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(preview).IsEqualTo(
+                "await Assert.That(GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-30\"), \"RequiredAmount\")).IsEqualTo("
+                + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-10\"), \"RequiredAmount\") - "
+                + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-20\"), \"RequiredAmount\"));");
+            await Assert.That(preview).DoesNotContain("TargetAmountEditor");
+            await Assert.That(preview).DoesNotContain("LeftAmountEditor");
+            await Assert.That(preview).DoesNotContain("RightAmountEditor");
+        }
+    }
+
+    [Test]
     public async Task GridCatalog_RejectsCaptureWithoutStableRowIdentity()
     {
         var fixture = new CatalogGridCaptureFixture(includeRowIdentity: false);
@@ -459,6 +512,113 @@ public sealed class RecorderStableGridSelectorTests
             await Assert.That(result.Step.RowIndex).IsNull();
             await Assert.That(result.Step.ColumnIndex).IsNull();
             await Assert.That(preview).Contains($"Page.{generatedMethod}(static page => page.ItemsGrid");
+        }
+    }
+
+    [Test]
+    [Arguments("500", "ru-RU", 500d, "")]
+    [Arguments("533,60", "ru-RU", 533.6d, "533,60")]
+    public async Task GridCatalog_RecordsLocalizedNumberFromTextEditor(
+        string editorText,
+        string cultureName,
+        double expectedValue,
+        string expectedGeneratedInput)
+    {
+        var fixture = new CatalogGridActionFixture(
+            GridCellEditorKind.Number,
+            numericText: editorText,
+            numericCultureName: cultureName);
+
+        var result = fixture.Capture();
+        var preview = CreateGenerator().GeneratePreview(result.Step!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.ActionKind).IsEqualTo(RecordedActionKind.EditGridCellNumber);
+            await Assert.That(result.Step.DoubleValue).IsEqualTo(expectedValue);
+            if (expectedGeneratedInput.Length == 0)
+            {
+                await Assert.That(result.Step.NumericInputText).IsNull();
+                await Assert.That(preview).DoesNotContain("numericInputText:");
+            }
+            else
+            {
+                await Assert.That(result.Step.NumericInputText).IsEqualTo(editorText);
+                await Assert.That(preview).Contains($"numericInputText: \"{expectedGeneratedInput}\"");
+                await Assert.That(result.Step.NumericInputCultureName).IsEqualTo(cultureName);
+                await Assert.That(preview).Contains($"numericInputCultureName: \"{cultureName}\"");
+            }
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_PreservesFormattedTextFromNativeNumericUpDown()
+    {
+        var fixture = new CatalogGridActionFixture(
+            GridCellEditorKind.Number,
+            numericText: "1\u00A0200",
+            numericValue: 1200m,
+            numericCultureName: "ru-RU",
+            useNativeNumericUpDown: true);
+
+        var result = fixture.Capture();
+        var preview = CreateGenerator().GeneratePreview(result.Step!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.DoubleValue).IsEqualTo(1200d);
+            await Assert.That(result.Step.NumericInputText).IsEqualTo("1\u00A0200");
+            await Assert.That(preview).Contains("numericInputText: \"1\\u00A0200\"");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_RejectsInvalidNumberText()
+    {
+        var result = new CatalogGridActionFixture(
+                GridCellEditorKind.Number,
+                numericText: "not a number")
+            .Capture();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsFalse();
+            await Assert.That(result.Message).Contains("does not expose a numeric editor value");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_PrefersParentNumericValueAndDropsStaleText()
+    {
+        var result = new CatalogGridActionFixture(
+                GridCellEditorKind.Number,
+                numericText: "999",
+                numericValue: 1200m)
+            .Capture();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.DoubleValue).IsEqualTo(1200d);
+            await Assert.That(result.Step.NumericInputText).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_RejectsMismatchingRecordedNumericInputText()
+    {
+        var captured = new CatalogGridActionFixture(GridCellEditorKind.Number).Capture().Step!;
+        var validated = new RecorderStepValidator(new AppAutomationRecorderOptions()).Validate(
+            captured with { NumericInputText = "999" },
+            new TextBox());
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(validated.CanPersist).IsFalse();
+            await Assert.That(validated.ValidationStatus).IsEqualTo(RecorderValidationStatus.Invalid);
+            await Assert.That(validated.ValidationMessage).Contains("does not represent the canonical");
         }
     }
 
@@ -1221,14 +1381,107 @@ public sealed class RecorderStableGridSelectorTests
         }
     }
 
+    private sealed class CalculatedGridAssertionFixture : IDisposable
+    {
+        public CalculatedGridAssertionFixture()
+        {
+            var rows = new[]
+            {
+                new CatalogItemRow("ITEM-10", 10.5m),
+                new CatalogItemRow("ITEM-20", 20.5m),
+                new CatalogItemRow("ITEM-30", 30.5m)
+            };
+            var root = new StackPanel();
+            var sourceGrid = new GridHost { ItemsSource = rows };
+            var runtimeGrid = new Border();
+            AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
+
+            LeftEditor = AddNumericCell(sourceGrid, rows[0], "LeftAmountEditor");
+            RightEditor = AddNumericCell(sourceGrid, rows[1], "RightAmountEditor");
+            TargetEditor = AddNumericCell(sourceGrid, rows[2], "TargetAmountEditor");
+            TextCell = AddTextCell(sourceGrid, rows[0]);
+            root.Children.Add(sourceGrid);
+            root.Children.Add(runtimeGrid);
+
+            var definition = GridAutomationDefinition
+                .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Key"),
+                    GridColumnDefinition.Map("RequiredAmount")
+                        .FromField("RequiredQuantity")
+                        .AsValue(GridCellValueKind.Number))
+                .IdentifyRowsBy("Key");
+            var options = new AppAutomationRecorderOptions
+            {
+                GridAutomation = new GridAutomationCatalog().Add(definition),
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+            Session = new RecorderSession(
+                RecorderTestWindow.CreateStub(),
+                options,
+                validationRootProvider: () => root,
+                attachWindowHandlers: false);
+            Session.Start();
+        }
+
+        public RecorderSession Session { get; }
+
+        public TextBox LeftEditor { get; }
+
+        public TextBox RightEditor { get; }
+
+        public TextBox TargetEditor { get; }
+
+        public TextBlock TextCell { get; }
+
+        public void Dispose() => Session.Dispose();
+
+        private static TextBox AddNumericCell(GridHost grid, CatalogItemRow row, string automationId)
+        {
+            var context = new CatalogCellContext(
+                row,
+                new GridColumnContext("RequiredQuantity"),
+                row.RequiredQuantity);
+            var cell = new Border { DataContext = context };
+            var editor = new TextBox
+            {
+                Text = row.RequiredQuantity.ToString(),
+                DataContext = context
+            };
+            AutomationProperties.SetAutomationId(editor, automationId);
+            cell.Child = editor;
+            grid.Children.Add(cell);
+            return editor;
+        }
+
+        private static TextBlock AddTextCell(GridHost grid, CatalogItemRow row)
+        {
+            var context = new CatalogCellContext(
+                row,
+                new GridColumnContext("Key"),
+                row.Key);
+            var cell = new Border { DataContext = context };
+            var text = new TextBlock { Text = row.Key, DataContext = context };
+            cell.Child = text;
+            grid.Children.Add(cell);
+            return text;
+        }
+    }
+
     private sealed class CatalogGridActionFixture
     {
         private readonly RecorderStepFactory _factory;
         private readonly Control _editor;
 
-        public CatalogGridActionFixture(GridCellEditorKind editorKind)
+        public CatalogGridActionFixture(
+            GridCellEditorKind editorKind,
+            string? numericText = null,
+            decimal? numericValue = null,
+            string? numericCultureName = null,
+            bool useNativeNumericUpDown = false)
         {
-            var value = CreateValue(editorKind);
+            var value = CreateValue(editorKind, numericText, numericValue, useNativeNumericUpDown);
             var row = new CatalogActionRow("ITEM-42", value.RawValue);
             var context = new CatalogActionCellContext(
                 row,
@@ -1237,13 +1490,14 @@ public sealed class RecorderStableGridSelectorTests
             var root = new StackPanel();
             var sourceGrid = new GridHost { ItemsSource = new[] { row } };
             var cell = new Border { DataContext = context };
-            _editor = value.Editor;
+            _editor = value.CaptureSource ?? value.Editor;
             _editor.DataContext = context;
+            value.Editor.DataContext = context;
             var runtimeGrid = new Border();
 
             AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
             AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
-            cell.Child = _editor;
+            cell.Child = value.Editor;
             sourceGrid.Children.Add(cell);
             root.Children.Add(sourceGrid);
             root.Children.Add(runtimeGrid);
@@ -1253,6 +1507,7 @@ public sealed class RecorderStableGridSelectorTests
                 .WithColumns(
                     GridColumnDefinition.Auto("Key"),
                     GridColumnDefinition.Auto("Value")
+                        .FormatWith("G", numericCultureName)
                         .AsValue(value.ValueKind)
                         .EditWith(editorKind))
                 .IdentifyRowsBy("Key");
@@ -1269,7 +1524,11 @@ public sealed class RecorderStableGridSelectorTests
             return _factory.TryCreateGridCellEditStep(_editor).StepResult;
         }
 
-        private static CatalogActionValue CreateValue(GridCellEditorKind editorKind)
+        private static CatalogActionValue CreateValue(
+            GridCellEditorKind editorKind,
+            string? numericText,
+            decimal? numericValue,
+            bool useNativeNumericUpDown)
         {
             return editorKind switch
             {
@@ -1277,6 +1536,14 @@ public sealed class RecorderStableGridSelectorTests
                     new TextBox { Text = "Updated" },
                     "Updated",
                     GridCellValueKind.Text),
+                GridCellEditorKind.Number when numericText is not null && numericValue.HasValue =>
+                    useNativeNumericUpDown
+                        ? CreateNativeNumber(numericText, numericValue.Value)
+                        : CreateValueBackedNumber(numericText, numericValue.Value),
+                GridCellEditorKind.Number when numericText is not null => new CatalogActionValue(
+                    new TextBox { Text = numericText },
+                    numericText,
+                    GridCellValueKind.Number),
                 GridCellEditorKind.Number => new CatalogActionValue(
                     new NumericUpDown { Value = 12.5m },
                     12.5m,
@@ -1299,6 +1566,24 @@ public sealed class RecorderStableGridSelectorTests
                     GridCellValueKind.Color),
                 _ => throw new ArgumentOutOfRangeException(nameof(editorKind), editorKind, null)
             };
+        }
+
+        private static CatalogActionValue CreateValueBackedNumber(string text, decimal value)
+        {
+            var input = new TextBox { Text = text };
+            var editor = new ValueBackedNumericEditor
+            {
+                Value = value,
+                Content = input
+            };
+            return new CatalogActionValue(editor, value, GridCellValueKind.Number, input);
+        }
+
+        private static CatalogActionValue CreateNativeNumber(string text, decimal value)
+        {
+            var input = new TextBox { Text = text };
+            var editor = new LogicalChildNumericUpDown(input) { Value = value };
+            return new CatalogActionValue(editor, value, GridCellValueKind.Number);
         }
     }
 
@@ -1442,7 +1727,21 @@ public sealed class RecorderStableGridSelectorTests
     private sealed record CatalogActionValue(
         Control Editor,
         object? RawValue,
-        GridCellValueKind ValueKind);
+        GridCellValueKind ValueKind,
+        Control? CaptureSource = null);
+
+    private sealed class ValueBackedNumericEditor : ContentControl
+    {
+        public decimal Value { get; init; }
+    }
+
+    private sealed class LogicalChildNumericUpDown : NumericUpDown
+    {
+        public LogicalChildNumericUpDown(TextBox input)
+        {
+            LogicalChildren.Add(input);
+        }
+    }
 
     private sealed record CatalogCellContext(
         CatalogItemRow Row,

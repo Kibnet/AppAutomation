@@ -227,6 +227,7 @@ internal class ConfiguredGridControl :
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        GridCellEditRequestValidation.Validate(request);
         var columnIndex = ResolveColumnIndex(address.ColumnName);
         if (ShouldUseIndexedGrid(address.Row, columnIndex))
         {
@@ -273,18 +274,12 @@ internal class ConfiguredGridControl :
         }
 
         var rowIndex = ResolveUniqueRowIndex(address.Row);
-        _editableGrid.EditCell(
-            new GridCellEditRequest(
-                rowIndex,
-                columnIndex,
-                request.Value,
-                request.EditorKind,
-                request.CommitMode,
-                request.SearchText)
-            {
-                TimeoutMs = timeoutMs,
-                EditorParts = request.EditorParts ?? _columns[columnIndex].EditorParts
-            });
+        _editableGrid.EditCell(GridCellEditRequestValidation.CreateIndexedRequest(
+            rowIndex,
+            columnIndex,
+            request,
+            timeoutMs,
+            request.EditorParts ?? _columns[columnIndex].EditorParts));
     }
 
     public void OpenRow(GridRowSelector row, int timeoutMs)

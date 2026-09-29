@@ -232,7 +232,14 @@ public sealed record RecorderGridEditHint(
     UiLocatorKind SourceLocatorKind = UiLocatorKind.AutomationId,
     UiLocatorKind TargetGridLocatorKind = UiLocatorKind.AutomationId,
     UiLocatorKind ValueLocatorKind = UiLocatorKind.AutomationId,
-    bool TargetFallbackToName = false);
+    bool TargetFallbackToName = false)
+{
+    /// <summary>
+    /// Gets the culture used to interpret and reproduce a formatted numeric editor value.
+    /// Null requires an unambiguous value; an empty string explicitly selects invariant culture.
+    /// </summary>
+    public string? NumericInputCultureName { get; init; }
+}
 
 public sealed record RecorderSearchPickerHint(
     string LocatorValue,

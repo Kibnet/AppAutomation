@@ -64,6 +64,10 @@ internal static class RecorderCaptureDiagnostics
         builder.Append("  Payload.ItemValue: ").Append(NullIfWhiteSpace(step.ItemValue) ?? "<null/empty>").AppendLine();
         builder.Append("  Payload.BoolValue: ").Append(step.BoolValue?.ToString() ?? "<null>").AppendLine();
         builder.Append("  Payload.DoubleValue: ").Append(step.DoubleValue?.ToString(CultureInfo.InvariantCulture) ?? "<null>").AppendLine();
+        builder.Append("  Payload.NumericInputText: ").Append(NullIfWhiteSpace(step.NumericInputText) ?? "<null/empty>").AppendLine();
+        builder.Append("  Payload.NumericInputCultureName: ")
+            .Append(DescribeNumericCulture(step.NumericInputCultureName))
+            .AppendLine();
         builder.Append("  Payload.DateValue: ").Append(step.DateValue?.ToString("O", CultureInfo.InvariantCulture) ?? "<null>").AppendLine();
         builder.Append("  Payload.IntValue: ").Append(step.IntValue?.ToString(CultureInfo.InvariantCulture) ?? "<null>").AppendLine();
         builder.Append("  Payload.RowIndex: ").Append(step.RowIndex?.ToString(CultureInfo.InvariantCulture) ?? "<null>").AppendLine();
@@ -72,6 +76,13 @@ internal static class RecorderCaptureDiagnostics
         builder.Append("  CanPersist: ").Append(step.CanPersist).AppendLine();
         builder.Append("  ValidationMessage: ").Append(NullIfWhiteSpace(step.ValidationMessage) ?? "<none>").AppendLine();
     }
+
+    private static string DescribeNumericCulture(string? cultureName) => cultureName switch
+    {
+        null => "<unspecified>",
+        "" => "<invariant>",
+        _ => cultureName
+    };
 
     private static void AppendFindings(StringBuilder builder, IReadOnlyList<RecorderRuntimeValidationFinding> findings)
     {

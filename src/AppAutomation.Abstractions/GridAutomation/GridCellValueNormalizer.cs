@@ -13,40 +13,41 @@ internal static class GridCellValueNormalizer
             ? InferValueKind(column.EditorKind)
             : snapshot.ValueKind);
         var cultureName = column.CultureName ?? snapshot.CultureName;
+        var configuredSnapshot = snapshot with
+        {
+            ValueKind = kind,
+            CultureName = cultureName,
+            FormatString = column.FormatString
+        };
         if (snapshot.IsDisplayOnly)
         {
-            return NormalizeTypedValue(snapshot with { ValueKind = kind, CultureName = cultureName }, column);
+            return NormalizeTypedValue(configuredSnapshot, column);
         }
 
         if (snapshot.IsNull && string.IsNullOrWhiteSpace(column.DisplayValuePath))
         {
-            return snapshot with
+            return configuredSnapshot with
             {
-                ValueKind = kind,
-                CultureName = cultureName
+                ValueKind = kind
             };
         }
 
         var projectedValue = ResolveProjectedValue(gridPropertyName, snapshot, column);
         if (projectedValue is null && !string.IsNullOrWhiteSpace(column.DisplayValuePath))
         {
-            return snapshot with
+            return configuredSnapshot with
             {
                 RawValue = null,
-                DisplayText = null,
-                ValueKind = kind,
-                CultureName = cultureName
+                DisplayText = null
             };
         }
 
-        var normalized = NormalizeTypedValue(snapshot with
+        var normalized = NormalizeTypedValue(configuredSnapshot with
         {
             DisplayText = string.IsNullOrWhiteSpace(column.DisplayValuePath)
                 ? snapshot.DisplayText
                 : Convert.ToString(projectedValue, ResolveCulture(column)),
-            RawValue = projectedValue,
-            ValueKind = kind,
-            CultureName = cultureName
+            RawValue = projectedValue
         }, column);
         return normalized with
         {

@@ -82,6 +82,54 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
+    public async Task NamedNumberEdit_PreservesFormattedInputTextInRuntimeRequest()
+    {
+        var fixture = new GridFixture(Row("ORD-1", "Draft", "10"));
+
+        fixture.CreatePage().EditGridCellNumber(
+            static page => page.Orders,
+            GridRowSelector.ByCell("OrderId", "ORD-1"),
+            "Amount",
+            1200d,
+            numericInputText: "1\u00A0200");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fixture.Grid.LastRequest!.Value).IsEqualTo("1200");
+            await Assert.That(fixture.Grid.LastRequest.NumericInput?.Text).IsEqualTo("1\u00A0200");
+            await Assert.That(fixture.Rows[0].Cells[2].Value).IsEqualTo("1\u00A0200");
+        }
+    }
+
+    [Test]
+    public async Task NamedNumberEdit_MatchesRoundedCommittedValueUsingCanonicalDouble()
+    {
+        var fixture = new GridFixture(Row("ORD-1", "Draft", "0"));
+        fixture.Grid.AfterEdit = _ =>
+        {
+            var cell = (MutableCell)fixture.Rows[0].Cells[2];
+            cell.Value = "533,60";
+            cell.SemanticSnapshot = new GridCellValueSnapshot(
+                "533,60",
+                533.6m,
+                GridCellValueKind.Number)
+            {
+                CultureName = "ru-RU"
+            };
+        };
+
+        fixture.CreatePage().EditGridCellNumber(
+            static page => page.Orders,
+            GridRowSelector.ByCell("OrderId", "ORD-1"),
+            "Amount",
+            533.6d,
+            numericInputText: "533,60",
+            numericInputCultureName: "ru-RU");
+
+        await Assert.That(fixture.Grid.LastRequest!.Value).IsEqualTo("533.60000000000002");
+    }
+
+    [Test]
     public async Task CatalogGrid_ReResolvesStableAddressForActionAndPostcondition()
     {
         var fixture = new GridFixture(
@@ -749,7 +797,9 @@ public sealed class GridRowSelectorTests
             if (request.CommitMode == GridCellEditCommitMode.Commit
                 && GetRowByIndex(request.RowIndex)?.Cells[request.ColumnIndex] is MutableCell cell)
             {
-                cell.Value = request.Value;
+                cell.Value = request.EditorKind == GridCellEditorKind.Number
+                    ? request.NumericInput?.Text ?? request.Value
+                    : request.Value;
             }
 
             AfterEdit?.Invoke(request);
@@ -796,17 +846,11 @@ public sealed class GridRowSelectorTests
             int timeoutMs)
         {
             IndexedOperationCount++;
-            EditCell(new GridCellEditRequest(
+            EditCell(GridCellEditRequestValidation.CreateIndexedRequest(
                 ResolveUniqueIndex(row),
                 column.ColumnIndex,
-                request.Value,
-                request.EditorKind,
-                request.CommitMode,
-                request.SearchText)
-            {
-                TimeoutMs = timeoutMs,
-                EditorParts = request.EditorParts
-            });
+                request,
+                timeoutMs));
         }
 
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
