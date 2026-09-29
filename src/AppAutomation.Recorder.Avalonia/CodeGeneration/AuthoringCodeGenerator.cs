@@ -1682,7 +1682,11 @@ internal sealed class AuthoringCodeGenerator
             RecorderNumericOperandKind.Checkpoint => throw new InvalidOperationException(
                 $"Calculated assertion references unvalidated checkpoint '{operand.CheckpointId}'."),
             RecorderNumericOperandKind.Control when operand.Control is { } control =>
-                GenerateNumericControlOperand(control, operand.ValueAccessorKind, controlPropertyNames),
+                GenerateNumericControlOperand(
+                    control,
+                    operand.ValueAccessorKind,
+                    operand.GridValueReference,
+                    controlPropertyNames),
             _ => throw new InvalidOperationException(
                 $"Calculated assertion contains an invalid numeric operand '{operand.Kind}'.")
         };
@@ -1691,14 +1695,9 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateNumericControlOperand(
         RecordedControlDescriptor control,
         RecorderValueAccessorKind? accessorKind,
+        RecorderGridValueReference? gridValueReference,
         IReadOnlyDictionary<string, string>? controlPropertyNames)
     {
-        if (accessorKind != RecorderValueAccessorKind.NumericValue)
-        {
-            throw new InvalidOperationException(
-                $"Control operand '{control.ProposedPropertyName}' does not expose a numeric value.");
-        }
-
         var propertyName = control.ProposedPropertyName;
         if (controlPropertyNames is not null)
         {
@@ -1710,7 +1709,17 @@ internal sealed class AuthoringCodeGenerator
             }
         }
 
-        return $"Page.{propertyName}.Value";
+        return accessorKind switch
+        {
+            RecorderValueAccessorKind.NumericValue when gridValueReference is null =>
+                $"Page.{propertyName}.Value",
+            RecorderValueAccessorKind.GridCellValue when gridValueReference is not null =>
+                $"GridValueReader.ReadCellNumber(Page.{propertyName}, "
+                + $"{FormatGridRowSelector(gridValueReference.RowConditions)}, "
+                + $"\"{EscapeString(gridValueReference.TargetColumnName)}\")",
+            _ => throw new InvalidOperationException(
+                $"Control operand '{control.ProposedPropertyName}' does not expose a valid numeric value reference.")
+        };
     }
 
     private static string GenerateEnterTextStatement(
@@ -1883,6 +1892,11 @@ internal sealed class AuthoringCodeGenerator
     {
         var conditions = step.GridRowConditions
             ?? throw new InvalidOperationException("Named grid step does not contain row conditions.");
+        return FormatGridRowSelector(conditions);
+    }
+
+    private static string FormatGridRowSelector(IReadOnlyList<RecordedGridRowCondition> conditions)
+    {
         if (conditions.Count == 0)
         {
             throw new InvalidOperationException("Named grid step does not contain row conditions.");

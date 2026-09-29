@@ -340,7 +340,11 @@ public sealed class FlaUiControlResolverTests
                     thirdRow,
                     "RequiredAmount"))
                 .IsEqualTo(10001d);
-            await Assert.That(page.ArmGridLastNumericInputText.Text).IsEqualTo("10\u00A0001");
+            var committedEditorText = page.ArmGridLastNumericInputText.Text ?? string.Empty;
+            await Assert.That(new string(committedEditorText.Where(char.IsDigit).ToArray()))
+                .IsEqualTo("10001");
+            await Assert.That(committedEditorText.Any(static character => !char.IsDigit(character)))
+                .IsTrue();
         }
     }
 

@@ -2533,16 +2533,15 @@ internal sealed partial class RecorderStepFactory
         }
 
         var candidate = CreateCandidate(snapshot);
-        if (candidate.ValueKind != RecorderValueKind.Number
-            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        if (!TryCreateNumericValueReference(candidate, out var gridValueReference, out error))
         {
-            error = "Selected operand does not expose a numeric value.";
             return false;
         }
 
         operand = RecorderNumericOperand.FromControl(
             candidate.Control,
-            candidate.ValueAccessorKind);
+            candidate.ValueAccessorKind,
+            gridValueReference);
         error = string.Empty;
         return true;
     }
@@ -2559,11 +2558,9 @@ internal sealed partial class RecorderStepFactory
         }
 
         var candidate = CreateCandidate(snapshot);
-        if (candidate.ValueKind != RecorderValueKind.Number
-            || candidate.ValueAccessorKind != RecorderValueAccessorKind.NumericValue)
+        if (!TryCreateNumericValueReference(candidate, out _, out var error))
         {
-            return StepCreationResult.Unsupported(
-                "A calculated expected value can only be used with a numeric control.");
+            return StepCreationResult.Unsupported(error);
         }
 
         var step = CreateSemanticValueStep(
@@ -2572,6 +2569,21 @@ internal sealed partial class RecorderStepFactory
             comparisonKind: RecorderComparisonKind.Equal,
             numericExpectedExpression: expression);
         return CreateStepFromSnapshot(snapshot, step, "Added calculated numeric assertion.");
+    }
+
+    private static bool TryCreateNumericValueReference(
+        SemanticValueCandidate candidate,
+        out RecorderGridValueReference? gridValueReference,
+        out string error)
+    {
+        return RecorderNumericValueContract.TryCreateGridReference(
+            candidate.Control,
+            candidate.ValueKind,
+            candidate.ValueAccessorKind,
+            candidate.GridContext?.RowConditions,
+            candidate.GridContext?.TargetColumnName,
+            out gridValueReference,
+            out error);
     }
 
     private static bool TryNormalizeCheckpointComparison(

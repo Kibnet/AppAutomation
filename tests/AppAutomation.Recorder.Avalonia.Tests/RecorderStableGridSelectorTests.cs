@@ -391,6 +391,59 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
+    public async Task GridCatalog_NumericCellsSupportCalculatedTargetAndOperands()
+    {
+        using var fixture = new CalculatedGridAssertionFixture();
+        var details = (IRecorderCheckpointSessionDetails)fixture.Session;
+        RecorderCheckTargetSelection? targetSelection = null;
+        fixture.Session.CheckTargetSelected += (_, eventArgs) => targetSelection = eventArgs.Selection;
+        fixture.Session.BeginCheckTargetSelection();
+        fixture.Session.SelectCheckTargetForTesting(fixture.TargetEditor);
+
+        RecorderNumericOperandTargetSelection? operandSelection = null;
+        details.NumericOperandTargetSelected += (_, eventArgs) => operandSelection = eventArgs.Selection;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.TextCell);
+        var rejectedOperand = operandSelection;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.LeftEditor);
+        var leftOperand = operandSelection?.Operand;
+        details.BeginNumericOperandTargetSelection();
+        fixture.Session.SelectNumericOperandTargetForTesting(fixture.RightEditor);
+        var rightOperand = operandSelection?.Operand;
+
+        details.CaptureCalculatedAssertion(
+            targetSelection!,
+            new RecorderNumericExpectedExpression(
+                RecorderArithmeticOperation.Subtract,
+                leftOperand!,
+                rightOperand!));
+
+        var entry = fixture.Session.StepJournal.Single();
+        var preview = fixture.Session.ExportPreview();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(targetSelection!.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Number);
+            await Assert.That(targetSelection.ValueSnapshot!.Prototype.ValueAccessorKind)
+                .IsEqualTo(RecorderValueAccessorKind.GridCellValue);
+            await Assert.That(targetSelection.ValueSnapshot.Prototype.Control.LocatorValue).IsEqualTo("ItemsGrid");
+            await Assert.That(rejectedOperand!.Operand).IsNull();
+            await Assert.That(rejectedOperand.Error).Contains("numeric value");
+            await Assert.That(leftOperand).IsNotNull();
+            await Assert.That(rightOperand).IsNotNull();
+            await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(preview).IsEqualTo(
+                "await Assert.That(GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-30\"), \"RequiredAmount\")).IsEqualTo("
+                + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-10\"), \"RequiredAmount\") - "
+                + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-20\"), \"RequiredAmount\"));");
+            await Assert.That(preview).DoesNotContain("TargetAmountEditor");
+            await Assert.That(preview).DoesNotContain("LeftAmountEditor");
+            await Assert.That(preview).DoesNotContain("RightAmountEditor");
+        }
+    }
+
+    [Test]
     public async Task GridCatalog_RejectsCaptureWithoutStableRowIdentity()
     {
         var fixture = new CatalogGridCaptureFixture(includeRowIdentity: false);
@@ -1325,6 +1378,94 @@ public sealed class RecorderStableGridSelectorTests
                     GridColumnDefinition.Map("RequiredAmount")
                         .FromField("RequiredQuantity")
                         .AsValue(GridCellValueKind.Number));
+        }
+    }
+
+    private sealed class CalculatedGridAssertionFixture : IDisposable
+    {
+        public CalculatedGridAssertionFixture()
+        {
+            var rows = new[]
+            {
+                new CatalogItemRow("ITEM-10", 10.5m),
+                new CatalogItemRow("ITEM-20", 20.5m),
+                new CatalogItemRow("ITEM-30", 30.5m)
+            };
+            var root = new StackPanel();
+            var sourceGrid = new GridHost { ItemsSource = rows };
+            var runtimeGrid = new Border();
+            AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
+            AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
+
+            LeftEditor = AddNumericCell(sourceGrid, rows[0], "LeftAmountEditor");
+            RightEditor = AddNumericCell(sourceGrid, rows[1], "RightAmountEditor");
+            TargetEditor = AddNumericCell(sourceGrid, rows[2], "TargetAmountEditor");
+            TextCell = AddTextCell(sourceGrid, rows[0]);
+            root.Children.Add(sourceGrid);
+            root.Children.Add(runtimeGrid);
+
+            var definition = GridAutomationDefinition
+                .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                .WithColumns(
+                    GridColumnDefinition.Auto("Key"),
+                    GridColumnDefinition.Map("RequiredAmount")
+                        .FromField("RequiredQuantity")
+                        .AsValue(GridCellValueKind.Number))
+                .IdentifyRowsBy("Key");
+            var options = new AppAutomationRecorderOptions
+            {
+                GridAutomation = new GridAutomationCatalog().Add(definition),
+                Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
+            };
+            Session = new RecorderSession(
+                RecorderTestWindow.CreateStub(),
+                options,
+                validationRootProvider: () => root,
+                attachWindowHandlers: false);
+            Session.Start();
+        }
+
+        public RecorderSession Session { get; }
+
+        public TextBox LeftEditor { get; }
+
+        public TextBox RightEditor { get; }
+
+        public TextBox TargetEditor { get; }
+
+        public TextBlock TextCell { get; }
+
+        public void Dispose() => Session.Dispose();
+
+        private static TextBox AddNumericCell(GridHost grid, CatalogItemRow row, string automationId)
+        {
+            var context = new CatalogCellContext(
+                row,
+                new GridColumnContext("RequiredQuantity"),
+                row.RequiredQuantity);
+            var cell = new Border { DataContext = context };
+            var editor = new TextBox
+            {
+                Text = row.RequiredQuantity.ToString(),
+                DataContext = context
+            };
+            AutomationProperties.SetAutomationId(editor, automationId);
+            cell.Child = editor;
+            grid.Children.Add(cell);
+            return editor;
+        }
+
+        private static TextBlock AddTextCell(GridHost grid, CatalogItemRow row)
+        {
+            var context = new CatalogCellContext(
+                row,
+                new GridColumnContext("Key"),
+                row.Key);
+            var cell = new Border { DataContext = context };
+            var text = new TextBlock { Text = row.Key, DataContext = context };
+            cell.Child = text;
+            grid.Children.Add(cell);
+            return text;
         }
     }
 

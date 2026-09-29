@@ -403,7 +403,8 @@ internal sealed record RecorderNumericOperand(
     double? LiteralValue = null,
     Guid? CheckpointId = null,
     RecordedControlDescriptor? Control = null,
-    RecorderValueAccessorKind? ValueAccessorKind = null)
+    RecorderValueAccessorKind? ValueAccessorKind = null,
+    RecorderGridValueReference? GridValueReference = null)
 {
     public static RecorderNumericOperand FromLiteral(double value) =>
         new(RecorderNumericOperandKind.Literal, LiteralValue: value);
@@ -413,12 +414,18 @@ internal sealed record RecorderNumericOperand(
 
     public static RecorderNumericOperand FromControl(
         RecordedControlDescriptor control,
-        RecorderValueAccessorKind valueAccessorKind) =>
+        RecorderValueAccessorKind valueAccessorKind,
+        RecorderGridValueReference? gridValueReference = null) =>
         new(
             RecorderNumericOperandKind.Control,
             Control: control ?? throw new ArgumentNullException(nameof(control)),
-            ValueAccessorKind: valueAccessorKind);
+            ValueAccessorKind: valueAccessorKind,
+            GridValueReference: gridValueReference);
 }
+
+internal sealed record RecorderGridValueReference(
+    IReadOnlyList<RecordedGridRowCondition> RowConditions,
+    string TargetColumnName);
 
 internal sealed record RecorderNumericExpectedExpression(
     RecorderArithmeticOperation Operation,
