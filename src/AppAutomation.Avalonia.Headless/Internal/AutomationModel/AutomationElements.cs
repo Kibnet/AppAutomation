@@ -359,6 +359,18 @@ internal class TextBox : AutomationElement
             return true;
         });
     }
+
+    public void PasteFromClipboard()
+    {
+        Ui(() =>
+        {
+            Native.Focus();
+            Native.SelectAll();
+            Native.Paste();
+            Control.Dispatcher.RunJobs();
+            return true;
+        });
+    }
 }
 
 internal class Button : AutomationElement

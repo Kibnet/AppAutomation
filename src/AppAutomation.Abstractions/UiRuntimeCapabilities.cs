@@ -13,12 +13,16 @@ namespace AppAutomation.Abstractions;
 /// <param name="SupportsTreeNodeExpansionState">Indicates if the adapter can read/set tree node expansion state.</param>
 /// <param name="SupportsRawNativeHandles">Indicates if the adapter exposes raw platform window handles.</param>
 /// <param name="SupportsScreenshots">Indicates if the adapter can capture screenshots for diagnostics.</param>
-/// <param name="SupportsClipboardWrite">Indicates if the adapter can write plain text to its clipboard.</param>
 public sealed record UiRuntimeCapabilities(
     string AdapterId,
     bool SupportsGridCellAccess = false,
     bool SupportsCalendarRangeSelection = false,
     bool SupportsTreeNodeExpansionState = false,
     bool SupportsRawNativeHandles = false,
-    bool SupportsScreenshots = false,
-    bool SupportsClipboardWrite = false);
+    bool SupportsScreenshots = false)
+{
+    /// <summary>
+    /// Gets a value indicating whether the adapter can write and paste plain text through its clipboard.
+    /// </summary>
+    public bool SupportsClipboardText { get; init; }
+}

@@ -67,8 +67,6 @@ internal sealed partial class RecorderOverlay : UserControl
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
 
-    internal Func<string, Task>? ClipboardWriterForTesting { get; set; }
-
     internal Control? LastDateExpressionEditorForTesting { get; private set; }
 
     internal void RefreshForTesting()
@@ -274,9 +272,19 @@ internal sealed partial class RecorderOverlay : UserControl
             _checkpointDetails.CancelCheckTargetSelection();
             e.Handled = true;
         }
+        else if (_checkpointDetails?.IsNumericOperandTargetSelectionActive == true)
+        {
+            _checkpointDetails.CancelNumericOperandTargetSelection();
+            e.Handled = true;
+        }
         else if (_generatedValueDetails?.IsGeneratedValueTargetSelectionActive == true)
         {
             _generatedValueDetails.CancelGeneratedValueTargetSelection();
+            e.Handled = true;
+        }
+        else if (_copiedValueDetails?.IsCopiedValueTargetSelectionActive == true)
+        {
+            _copiedValueDetails.CancelCopiedValueTargetSelection();
             e.Handled = true;
         }
     }
@@ -455,40 +463,24 @@ internal sealed partial class RecorderOverlay : UserControl
 
     internal MenuFlyout CreateGeneratedValueMenuForTesting() => CreateGeneratedValueMenu();
 
-    private void OnCopiedValueTargetSelected(
+    private async void OnCopiedValueTargetSelected(
         object? sender,
         RecorderCopiedValueTargetSelectedEventArgs e)
-    {
-        RunOnUiThread(() => _ = CopySelectedValueAsync(e.Selection));
-    }
-
-    private async Task CopySelectedValueAsync(RecorderCopiedValueTargetSelection selection)
     {
         if (_copiedValueDetails is null)
         {
             return;
         }
 
-        try
-        {
-            if (ClipboardWriterForTesting is { } testWriter)
+        await _copiedValueDetails.CommitCopiedValueAsync(
+            e.Selection,
+            async (text, cancellationToken) =>
             {
-                await testWriter(selection.CopiedValue.PreviewValue);
-            }
-            else
-            {
+                cancellationToken.ThrowIfCancellationRequested();
                 var clipboard = TopLevel.GetTopLevel(this)?.Clipboard
                     ?? throw new InvalidOperationException("The recorder window does not expose a clipboard.");
-                await clipboard.SetTextAsync(selection.CopiedValue.PreviewValue);
-            }
-
-            _copiedValueDetails.ApplyCopiedValue(selection);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            _copiedValueDetails.RejectCopiedValue(
-                $"The selected value could not be copied to the clipboard: {exception.Message}");
-        }
+                await clipboard.SetTextAsync(text);
+            });
     }
 
     private void OnGeneratedValueTargetSelected(
@@ -1456,7 +1448,11 @@ internal sealed partial class RecorderOverlay : UserControl
         if (_saveButton is not null)
         {
             _saveButton.IsEnabled = !isBusy && CanPersistSelectedScenario();
-            _saveButton.Content = isBusy ? "Saving..." : "Save";
+            _saveButton.Content = isBusy
+                ? string.IsNullOrWhiteSpace(_sessionDetails?.BusyDescription)
+                    ? "Busy..."
+                    : _sessionDetails.BusyDescription
+                : "Save";
         }
 
         if (_exportButton is not null)

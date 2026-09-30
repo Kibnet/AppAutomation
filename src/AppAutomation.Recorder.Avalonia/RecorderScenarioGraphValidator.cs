@@ -57,6 +57,13 @@ internal static class RecorderScenarioGraphValidator
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            if (step.GeneratedValueId is not null && step.InputCopiedValueId is not null)
+            {
+                stepErrors[step.StepId] =
+                    $"Text input step {index + 1} cannot use a generated value and a copied value at the same time.";
+                continue;
+            }
+
             if (step.GeneratedValueId is not null)
             {
                 var generatedValueValidation = ValidateGeneratedValue(

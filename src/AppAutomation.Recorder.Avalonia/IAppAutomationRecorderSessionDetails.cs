@@ -116,9 +116,10 @@ internal interface IRecorderCopiedValueSessionDetails
 
     void CancelCopiedValueTargetSelection();
 
-    void ApplyCopiedValue(RecorderCopiedValueTargetSelection selection);
-
-    void RejectCopiedValue(string message);
+    Task CommitCopiedValueAsync(
+        RecorderCopiedValueTargetSelection selection,
+        Func<string, CancellationToken, Task> clipboardWriter,
+        CancellationToken cancellationToken = default);
 }
 
 internal interface IRecorderRelativeDateSessionDetails

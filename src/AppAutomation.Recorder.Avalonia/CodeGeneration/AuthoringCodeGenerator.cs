@@ -1760,7 +1760,7 @@ internal sealed class AuthoringCodeGenerator
                     $"EnterText references unvalidated copied value '{copiedValueId}'.");
             }
 
-            return $"Page.EnterText(static page => page.{propertyName}, {copiedVariableName});";
+            return $"await Page.PasteTextFromClipboardAsync(static page => page.{propertyName}, {copiedVariableName});";
         }
 
         if (step.GeneratedValueId is not { } generatedValueId)

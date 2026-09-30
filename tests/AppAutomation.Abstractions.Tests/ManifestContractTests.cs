@@ -45,15 +45,23 @@ public sealed class ManifestContractTests
     public async Task RuntimeCapabilities_DefaultFlagsAreDisabled()
     {
         var capabilities = new UiRuntimeCapabilities("flaui");
+        var (
+            adapterId,
+            supportsGridCellAccess,
+            supportsCalendarRangeSelection,
+            supportsTreeNodeExpansionState,
+            supportsRawNativeHandles,
+            supportsScreenshots) = capabilities;
 
         using (Assert.Multiple())
         {
-            await Assert.That(capabilities.AdapterId).IsEqualTo("flaui");
-            await Assert.That(capabilities.SupportsGridCellAccess).IsEqualTo(false);
-            await Assert.That(capabilities.SupportsCalendarRangeSelection).IsEqualTo(false);
-            await Assert.That(capabilities.SupportsTreeNodeExpansionState).IsEqualTo(false);
-            await Assert.That(capabilities.SupportsRawNativeHandles).IsEqualTo(false);
-            await Assert.That(capabilities.SupportsScreenshots).IsEqualTo(false);
+            await Assert.That(adapterId).IsEqualTo("flaui");
+            await Assert.That(supportsGridCellAccess).IsEqualTo(false);
+            await Assert.That(supportsCalendarRangeSelection).IsEqualTo(false);
+            await Assert.That(supportsTreeNodeExpansionState).IsEqualTo(false);
+            await Assert.That(supportsRawNativeHandles).IsEqualTo(false);
+            await Assert.That(supportsScreenshots).IsEqualTo(false);
+            await Assert.That(capabilities.SupportsClipboardText).IsEqualTo(false);
         }
     }
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add provider-neutral clipboard text copy through `IUiClipboardRuntime` and real paste through `IClipboardPasteTarget`, with Recorder-generated replay and shared Avalonia Headless/FlaUI support.
+
 ## [1.8.0] - 2026-09-27
 
 ### Added

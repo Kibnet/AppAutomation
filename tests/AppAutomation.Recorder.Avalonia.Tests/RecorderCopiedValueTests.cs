@@ -22,25 +22,23 @@ public sealed class RecorderCopiedValueTests
 
         session.BeginCopiedValueTargetSelection();
         session.SelectCopiedValueTargetForTesting(source);
-        session.ApplyCopiedValue(selection!);
+        await session.CommitCopiedValueAsync(selection!, static (_, _) => Task.CompletedTask);
 
         session.RegisterCopiedValuePasteForTesting(target);
         session.RegisterKeyboardInputForTesting(target);
         target.Text = "Search result";
         session.FlushPendingStateForTesting();
 
-        var preview = session.ExportPreview();
         using (Assert.Multiple())
         {
             await Assert.That(session.StepCount).IsEqualTo(2);
             await Assert.That(session.PersistableStepCount).IsEqualTo(2);
             await Assert.That(session.CopiedValues.Count).IsEqualTo(1);
-            await Assert.That(preview).Contains("var copiedSourceValue = Page.SourceValue.Text ?? string.Empty;");
-            await Assert.That(preview).Contains("await Page.CopyTextToClipboardAsync(copiedSourceValue);");
-            await Assert.That(preview).Contains(
-                "Page.EnterText(static page => page.TargetValue, copiedSourceValue);");
-            await Assert.That(preview).DoesNotContain(
-                "Page.EnterText(static page => page.TargetValue, \"Search result\");");
+            await Assert.That(session.StepJournal[0].StatusMessage)
+                .Contains("Copy SourceValue.Text");
+            await Assert.That(session.StepJournal[1].StatusMessage)
+                .Contains("Enter copied value");
+            await Assert.That(session.StepJournal[1].CanPersist).IsTrue();
         }
     }
 
@@ -57,7 +55,7 @@ public sealed class RecorderCopiedValueTests
         session.RefreshObservedControlsForTesting();
         session.BeginCopiedValueTargetSelection();
         session.SelectCopiedValueTargetForTesting(source);
-        session.ApplyCopiedValue(selection!);
+        await session.CommitCopiedValueAsync(selection!, static (_, _) => Task.CompletedTask);
 
         session.RegisterCopiedValuePasteForTesting(target);
         session.RegisterKeyboardInputForTesting(target);
@@ -98,6 +96,153 @@ public sealed class RecorderCopiedValueTests
     }
 
     [Test]
+    public async Task CopiedValueGraph_RejectsInputWithGeneratedAndCopiedSources()
+    {
+        var copiedValueId = Guid.NewGuid();
+        var conflictingUse = CopiedValueUse("TargetValue", copiedValueId) with
+        {
+            GeneratedValueId = Guid.NewGuid()
+        };
+
+        var validation = RecorderScenarioGraphValidator.Validate(
+            [CopiedValueDefinition("SourceValue", copiedValueId), conflictingUse]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(validation.Success).IsFalse();
+            await Assert.That(validation.StepErrors[conflictingUse.StepId])
+                .Contains("cannot use a generated value and a copied value at the same time");
+        }
+    }
+
+    [Test]
+    public async Task ClipboardCommit_SerializesChoicesAndBlocksStopOrClearUntilStepExists()
+    {
+        var source = TextBox("SourceValue", "Search result");
+        using var session = CreateSession(source);
+        RecorderCopiedValueTargetSelection? selection = null;
+        session.CopiedValueTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.BeginCopiedValueTargetSelection();
+        session.SelectCopiedValueTargetForTesting(source);
+        var releaseWrite = new TaskCompletionSource();
+        var writeCount = 0;
+
+        var firstCommit = session.CommitCopiedValueAsync(
+            selection!,
+            (_, _) =>
+            {
+                writeCount++;
+                return releaseWrite.Task;
+            });
+        var nextAction = RecorderTestSteps.CreateButtonClick("NextAction");
+        session.AddRecordedStepForTesting(nextAction);
+        var secondCommit = session.CommitCopiedValueAsync(
+            selection!,
+            (_, _) =>
+            {
+                writeCount++;
+                return Task.CompletedTask;
+            });
+        session.Stop();
+        session.Clear();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(writeCount).IsEqualTo(1);
+            await Assert.That(session.State).IsEqualTo(RecorderSessionState.Recording);
+            await Assert.That(session.StepCount).IsEqualTo(2);
+            await Assert.That(session.StepJournal[0].StatusMessage)
+                .Contains("Copy SourceValue.Text");
+            await Assert.That(session.StepJournal[1].StepId).IsEqualTo(nextAction.StepId);
+        }
+
+        releaseWrite.SetResult();
+        await Task.WhenAll(firstCommit, secondCommit);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepCount).IsEqualTo(2);
+            await Assert.That(session.CopiedValues.Count).IsEqualTo(1);
+            await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task ClipboardCommit_RollsBackReservedStepWhenClipboardWriteFails()
+    {
+        var source = TextBox("SourceValue", "Search result");
+        using var session = CreateSession(source);
+        RecorderCopiedValueTargetSelection? selection = null;
+        session.CopiedValueTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.BeginCopiedValueTargetSelection();
+        session.SelectCopiedValueTargetForTesting(source);
+
+        await session.CommitCopiedValueAsync(
+            selection!,
+            static (_, _) => throw new InvalidOperationException("Clipboard unavailable"));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepCount).IsEqualTo(0);
+            await Assert.That(session.CopiedValues).IsEmpty();
+            await Assert.That(session.LatestStatus).Contains("Clipboard unavailable");
+        }
+    }
+
+    [Test]
+    public async Task ClipboardCommit_DisposeCancelsContinuationWithoutEventsOrAutosave()
+    {
+        var source = TextBox("SourceValue", "Search result");
+        var autosaveCount = 0;
+        var session = CreateSession(
+            source,
+            autosaveOperation: (steps, _, _) =>
+            {
+                autosaveCount++;
+                return Task.FromResult(RecorderSaveResult.Completed(
+                    "Autosaved.",
+                    pageFilePath: null,
+                    scenarioFilePath: null,
+                    persistedStepCount: steps.Count,
+                    skippedStepCount: 0));
+            });
+        RecorderCopiedValueTargetSelection? selection = null;
+        session.CopiedValueTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+        session.BeginCopiedValueTargetSelection();
+        session.SelectCopiedValueTargetForTesting(source);
+        var releaseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commit = session.CommitCopiedValueAsync(
+            selection!,
+            (_, _) => releaseWrite.Task);
+        var transientStep = RecorderTestSteps.CreateButtonClick("TransientAction");
+        session.AddRecordedStepForTesting(transientStep);
+        session.RemoveStep(transientStep.StepId);
+
+        var eventCount = 0;
+        session.SessionChanged += (_, _) => eventCount++;
+        session.Dispose();
+        var stepCountAfterDispose = session.StepCount;
+        var statusAfterDispose = session.LatestStatus;
+
+        releaseWrite.SetResult();
+        await commit;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(eventCount).IsEqualTo(0);
+            await Assert.That(autosaveCount).IsEqualTo(0);
+            await Assert.That(session.StepCount).IsEqualTo(stepCountAfterDispose);
+            await Assert.That(session.LatestStatus).IsEqualTo(statusAfterDispose);
+        }
+    }
+
+    [Test]
     public async Task Save_CopiedValueGraphGeneratesCompilableAsyncScenario()
     {
         using var project = RecorderScenarioDestinationProject.Create(
@@ -132,7 +277,7 @@ public sealed class RecorderCopiedValueTests
             await Assert.That(source).Contains(
                 "await Page.CopyTextToClipboardAsync(copiedSourceValue);");
             await Assert.That(source).Contains(
-                "Page.EnterText(static page => page.TargetValue, copiedSourceValue);");
+                "await Page.PasteTextFromClipboardAsync(static page => page.TargetValue, copiedSourceValue);");
             await Assert.That(compileErrors).IsEmpty();
         }
     }
@@ -144,7 +289,9 @@ public sealed class RecorderCopiedValueTests
         return textBox;
     }
 
-    private static RecorderSession CreateSession(Control root)
+    private static RecorderSession CreateSession(
+        Control root,
+        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? autosaveOperation = null)
     {
         return new RecorderSession(
             RecorderTestWindow.CreateStub(),
@@ -158,7 +305,8 @@ public sealed class RecorderCopiedValueTests
                 }
             },
             validationRootProvider: () => root,
-            attachWindowHandlers: false);
+            attachWindowHandlers: false,
+            autosaveOperation: autosaveOperation);
     }
 
     private static RecordedStep CopiedValueDefinition(string automationId, Guid copiedValueId) =>

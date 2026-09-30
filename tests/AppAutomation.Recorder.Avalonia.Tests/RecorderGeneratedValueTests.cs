@@ -218,31 +218,15 @@ public sealed class RecorderGeneratedValueTests
     }
 
     [Test]
-    public async Task Overlay_OffersGeneratedValueModeAndCancelLeavesJournalUntouched()
+    public async Task Overlay_OffersValueModesAndGeneratedCancelLeavesJournalUntouched()
     {
         var input = TextBox("GeneratedValueTarget");
-        var copiedSource = TextBox("CopiedValueSource");
-        copiedSource.Text = "Item 42";
-        var root = new StackPanel { Children = { input, copiedSource } };
+        var root = new StackPanel { Children = { input } };
         using var session = CreateSession(root);
         session.Start();
         RecorderGeneratedValueTargetSelection? selection = null;
         session.GeneratedValueTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
-        string? clipboardText = null;
-        var failClipboardWrite = true;
-        var overlay = new RecorderOverlay
-        {
-            ClipboardWriterForTesting = text =>
-            {
-                if (failClipboardWrite)
-                {
-                    throw new InvalidOperationException("Clipboard unavailable");
-                }
-
-                clipboardText = text;
-                return Task.CompletedTask;
-            }
-        };
+        var overlay = new RecorderOverlay();
         overlay.Attach(session, new AppAutomationRecorderOptions());
         overlay.RefreshForTesting();
         var generateButton = overlay.FindControl<Button>("GenerateValueButton");
@@ -268,29 +252,6 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(session.IsGeneratedValueTargetSelectionActive).IsFalse();
             await Assert.That(session.StepCount).IsEqualTo(0);
             await Assert.That(string.IsNullOrEmpty(input.Text)).IsTrue();
-        }
-
-        copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        session.SelectCopiedValueTargetForTesting(copiedSource);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(session.StepCount).IsEqualTo(0);
-            await Assert.That(session.LatestStatus).Contains("Clipboard unavailable");
-        }
-
-        failClipboardWrite = false;
-        copy.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        session.SelectCopiedValueTargetForTesting(copiedSource);
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(clipboardText).IsEqualTo("Item 42");
-            await Assert.That(session.StepCount).IsEqualTo(1);
-            await Assert.That(session.CopiedValues.Count).IsEqualTo(1);
-            await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
-            await Assert.That(session.StepJournal[0].Preview)
-                .Contains("Page.CopyTextToClipboardAsync");
         }
     }
 

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using AppAutomation.FlaUI.Automation;
 
@@ -5,110 +6,116 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests;
 
 public sealed class WindowsClipboardTests
 {
-    private const uint UnicodeTextFormat = 13;
+    [Test]
+    public async Task SetTextAsync_UsesConfiguredOwnerAndClosesClipboard()
+    {
+        using var native = new FakeWindowsClipboardNative();
+        var owner = new IntPtr(42);
+
+        await WindowsClipboard.SetTextAsync(
+            owner,
+            "Item 42",
+            native,
+            CancellationToken.None);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(native.Owner).IsEqualTo(owner);
+            await Assert.That(native.Text).IsEqualTo("Item 42");
+            await Assert.That(native.CloseCount).IsEqualTo(1);
+        }
+    }
 
     [Test]
-    [NotInParallel("DesktopUi")]
-    public async Task SetTextAsync_WritesUnicodeTextToSystemClipboard()
+    public async Task OwnerWindow_BelongsToAutomationProcess()
     {
-        var expected = $"AppAutomation-{Guid.NewGuid():N}";
+        var owner = WindowsClipboardOwnerWindow.Handle;
+        _ = GetWindowThreadProcessId(owner, out var processId);
 
-        try
+        using (Assert.Multiple())
         {
-            await WindowsClipboard.SetTextAsync(expected, CancellationToken.None);
-
-            await Assert.That(await ReadTextAsync()).IsEqualTo(expected);
+            await Assert.That(owner).IsNotEqualTo(IntPtr.Zero);
+            await Assert.That(processId).IsEqualTo((uint)Environment.ProcessId);
         }
-        finally
+    }
+
+    [Test]
+    public async Task SetTextAsync_ReportsCloseFailureAfterSuccessfulWrite()
+    {
+        using var native = new FakeWindowsClipboardNative { CloseSucceeds = false };
+
+        var exception = await Assert.ThrowsAsync<Win32Exception>(() =>
+            WindowsClipboard.SetTextAsync(
+                new IntPtr(42),
+                "Item 42",
+                native,
+                CancellationToken.None));
+
+        await Assert.That(exception!.Message).Contains("could not be closed");
+    }
+
+    private sealed class FakeWindowsClipboardNative : IWindowsClipboardNative, IDisposable
+    {
+        private readonly List<IntPtr> _allocations = [];
+
+        public IntPtr Owner { get; private set; }
+        public string? Text { get; private set; }
+        public int CloseCount { get; private set; }
+        public bool CloseSucceeds { get; init; } = true;
+
+        public bool OpenClipboard(IntPtr owner)
         {
-            if (string.Equals(await ReadTextAsync(), expected, StringComparison.Ordinal))
+            Owner = owner;
+            return true;
+        }
+
+        public bool CloseClipboard()
+        {
+            CloseCount++;
+            return CloseSucceeds;
+        }
+
+        public bool EmptyClipboard() => true;
+
+        public IntPtr SetClipboardData(uint format, IntPtr memory)
+        {
+            Text = Marshal.PtrToStringUni(memory);
+            return memory;
+        }
+
+        public IntPtr GlobalAlloc(uint flags, nuint bytes)
+        {
+            var memory = Marshal.AllocHGlobal(checked((int)bytes));
+            _allocations.Add(memory);
+            return memory;
+        }
+
+        public IntPtr GlobalLock(IntPtr memory) => memory;
+        public bool GlobalUnlock(IntPtr memory) => true;
+
+        public IntPtr GlobalFree(IntPtr memory)
+        {
+            if (_allocations.Remove(memory))
             {
-                Clear();
+                Marshal.FreeHGlobal(memory);
             }
-        }
-    }
 
-    private static async Task<string?> ReadTextAsync()
-    {
-        for (var attempt = 0; attempt < 10; attempt++)
+            return IntPtr.Zero;
+        }
+
+        public int GetLastError() => 5;
+
+        public void Dispose()
         {
-            if (OpenClipboard(IntPtr.Zero))
+            foreach (var memory in _allocations)
             {
-                try
-                {
-                    if (!IsClipboardFormatAvailable(UnicodeTextFormat))
-                    {
-                        return null;
-                    }
-
-                    var memory = GetClipboardData(UnicodeTextFormat);
-                    var pointer = memory == IntPtr.Zero ? IntPtr.Zero : GlobalLock(memory);
-                    if (pointer == IntPtr.Zero)
-                    {
-                        return null;
-                    }
-
-                    try
-                    {
-                        return Marshal.PtrToStringUni(pointer);
-                    }
-                    finally
-                    {
-                        _ = GlobalUnlock(memory);
-                    }
-                }
-                finally
-                {
-                    _ = CloseClipboard();
-                }
+                Marshal.FreeHGlobal(memory);
             }
 
-            await Task.Delay(20);
-        }
-
-        return null;
-    }
-
-    private static void Clear()
-    {
-        if (!OpenClipboard(IntPtr.Zero))
-        {
-            return;
-        }
-
-        try
-        {
-            _ = EmptyClipboard();
-        }
-        finally
-        {
-            _ = CloseClipboard();
+            _allocations.Clear();
         }
     }
 
     [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool OpenClipboard(IntPtr owner);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseClipboard();
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsClipboardFormatAvailable(uint format);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr GetClipboardData(uint format);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool EmptyClipboard();
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GlobalLock(IntPtr memory);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalUnlock(IntPtr memory);
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 }

@@ -53,8 +53,10 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         SupportsCalendarRangeSelection: false,
         SupportsTreeNodeExpansionState: false,
         SupportsRawNativeHandles: false,
-        SupportsScreenshots: _supportsRenderedFrames && HeadlessScreenshotCapture.IsWindowVisible(_window.Native),
-        SupportsClipboardWrite: true);
+        SupportsScreenshots: _supportsRenderedFrames && HeadlessScreenshotCapture.IsWindowVisible(_window.Native))
+    {
+        SupportsClipboardText = true
+    };
 
     public async Task SetTextAsync(string text, CancellationToken cancellationToken = default)
     {
@@ -938,7 +940,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         }
     }
 
-    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, ITextBoxControl
+    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, IClipboardPasteTarget
     {
         public HeadlessTextBoxControl(TextBox inner) : base(inner)
         {
@@ -953,6 +955,14 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public void Enter(string value)
         {
             Inner.Enter(value);
+        }
+
+        public Task PasteFromClipboardAsync(int timeoutMs, CancellationToken cancellationToken = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            cancellationToken.ThrowIfCancellationRequested();
+            Inner.PasteFromClipboard();
+            return Task.CompletedTask;
         }
     }
 
