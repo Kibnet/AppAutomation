@@ -218,7 +218,7 @@ public sealed class RecorderGeneratedValueTests
     }
 
     [Test]
-    public async Task Overlay_OffersGeneratedValueModeAndCancelLeavesJournalUntouched()
+    public async Task Overlay_OffersValueModesAndGeneratedCancelLeavesJournalUntouched()
     {
         var input = TextBox("GeneratedValueTarget");
         var root = new StackPanel { Children = { input } };
@@ -231,7 +231,9 @@ public sealed class RecorderGeneratedValueTests
         overlay.RefreshForTesting();
         var generateButton = overlay.FindControl<Button>("GenerateValueButton");
         var menu = overlay.CreateGeneratedValueMenuForTesting();
-        var create = menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "New value"));
+        var generate = menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "Generate value"));
+        var copy = menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "Copy value"));
+        var create = generate.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "New value"));
 
         create.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         session.SelectGeneratedValueTargetForTesting(input);
@@ -245,6 +247,8 @@ public sealed class RecorderGeneratedValueTests
         {
             await Assert.That(generateButton).IsNotNull();
             await Assert.That(generateButton!.IsEnabled).IsTrue();
+            await Assert.That(generateButton.Content).IsEqualTo("Value");
+            await Assert.That(copy.IsEnabled).IsTrue();
             await Assert.That(session.IsGeneratedValueTargetSelectionActive).IsFalse();
             await Assert.That(session.StepCount).IsEqualTo(0);
             await Assert.That(string.IsNullOrEmpty(input.Text)).IsTrue();

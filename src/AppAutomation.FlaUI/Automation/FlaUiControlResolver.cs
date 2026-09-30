@@ -17,7 +17,7 @@ using NumberStyles = System.Globalization.NumberStyles;
 
 namespace AppAutomation.FlaUI.Automation;
 
-public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector
+public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime
 {
     private const uint WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageKeyUp = 0x0101;
@@ -44,7 +44,16 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         SupportsCalendarRangeSelection: true,
         SupportsTreeNodeExpansionState: true,
         SupportsRawNativeHandles: true,
-        SupportsScreenshots: true);
+        SupportsScreenshots: true)
+    {
+        SupportsClipboardText = true
+    };
+
+    public Task SetTextAsync(string text, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return WindowsClipboard.SetTextAsync(text, cancellationToken);
+    }
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class
@@ -79,7 +88,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         object resolved = definition.ControlType switch
         {
-            UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox()),
+            UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox(), _window),
             UiControlType.Button => new FlaUiButtonControl(FindElement(definition).AsButton()),
             UiControlType.Label => new FlaUiLabelControl(FindElement(definition).AsLabel()),
             UiControlType.ListBox => new FlaUiListBoxControl(FindElement(definition).AsListBox()),
@@ -713,10 +722,13 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, ITextBoxControl
+    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget
     {
-        public FlaUiTextBoxControl(TextBox inner) : base(inner)
+        private readonly Window? _ownerWindow;
+
+        public FlaUiTextBoxControl(TextBox inner, Window? ownerWindow = null) : base(inner)
         {
+            _ownerWindow = ownerWindow;
         }
 
         public string Text
@@ -736,6 +748,42 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             Inner.EnterText(value);
+        }
+
+        public Task PasteFromClipboardAsync(int timeoutMs, CancellationToken cancellationToken = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            cancellationToken.ThrowIfCancellationRequested();
+            (_ownerWindow ?? FindContainingWindow(Inner))?.SetForeground();
+            Inner.Focus();
+            _ = UiWait.Until(
+                () => TryRead(() => Inner.Properties.HasKeyboardFocus.Value) == true,
+                static hasFocus => hasFocus,
+                new UiWaitOptions
+                {
+                    Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+                    PollInterval = TimeSpan.FromMilliseconds(25)
+                },
+                $"Text control '{AutomationId}' did not receive keyboard focus before clipboard paste.",
+                cancellationToken);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_V);
+            return Task.CompletedTask;
+        }
+
+        private static Window? FindContainingWindow(AutomationElement element)
+        {
+            for (var current = TryRead(() => element.Parent);
+                 current is not null;
+                 current = TryRead(() => current.Parent))
+            {
+                if (TryRead(() => current.ControlType) == ControlType.Window)
+                {
+                    return TryRead(current.AsWindow);
+                }
+            }
+
+            return null;
         }
     }
 

@@ -342,6 +342,50 @@ internal sealed partial class RecorderStepFactory
             locatorResult.Message);
     }
 
+    internal StepCreationResult TryCreateCopiedTextEntryStep(
+        TextBox textBox,
+        RecorderCopiedValueOption copiedValue)
+    {
+        ArgumentNullException.ThrowIfNull(textBox);
+        ArgumentNullException.ThrowIfNull(copiedValue);
+
+        if (TryResolveSearchControlHint(textBox, out _)
+            || MatchesSearchPickerTextPart(textBox)
+            || MatchesGridSearchPickerTextPart(textBox)
+            || ShouldSuppressCompositeTextEntry(textBox))
+        {
+            return StepCreationResult.Unsupported(
+                "Copied values are not supported for an internal part of a composite control.");
+        }
+
+        var locatorResult = _selectorResolver.Resolve(textBox, UiControlType.TextBox);
+        if (!locatorResult.Success || locatorResult.Control is null)
+        {
+            return StepCreationResult.Unsupported(locatorResult.Message);
+        }
+
+        var descriptor = locatorResult.Control;
+        if (descriptor.ControlType != UiControlType.TextBox
+            || TryResolveActionHint(textBox, descriptor) != RecorderActionHint.None)
+        {
+            return StepCreationResult.Unsupported(
+                "Copied values can only be entered into a logical ITextBoxControl.");
+        }
+
+        return CreateStep(
+            textBox,
+            new RecordedStep(
+                RecordedActionKind.EnterText,
+                descriptor,
+                StringValue: copiedValue.PreviewValue,
+                Warning: descriptor.Warning,
+                ValidationStatus: locatorResult.ValidationStatus,
+                ValidationMessage: locatorResult.ValidationMessage,
+                CanPersist: locatorResult.CanPersist,
+                InputCopiedValueId: copiedValue.CopiedValueId),
+            locatorResult.Message);
+    }
+
     public StepCreationResult TryCreateComboBoxStep(ComboBox comboBox)
     {
         ArgumentNullException.ThrowIfNull(comboBox);
@@ -2406,6 +2450,30 @@ internal sealed partial class RecorderStepFactory
                 ? snapshot.Description.SuggestedCheckpointName
                 : variableName.Trim());
         return CreateStepFromSnapshot(snapshot, step, "Remembered semantic value for replay-time checkpoint.");
+    }
+
+    internal StepCreationResult TryCreateCopiedValueStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderCopiedValueOption copiedValue)
+    {
+        ArgumentNullException.ThrowIfNull(copiedValue);
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
+        }
+
+        if (snapshot.Description.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText))
+        {
+            return StepCreationResult.Unsupported("Copy value supports text-bearing controls and grid cells only.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        var step = CreateSemanticValueStep(RecordedActionKind.CaptureCopiedValue, candidate) with
+        {
+            CopiedValueId = copiedValue.CopiedValueId,
+            CopiedValueVariableName = copiedValue.VariableName
+        };
+        return CreateStepFromSnapshot(snapshot, step, "Captured text for replay-time clipboard copy.");
     }
 
     internal StepCreationResult TryCreateCheckpointAssertionStep(

@@ -4,6 +4,7 @@ internal sealed record RecorderScenarioGraphValidationResult(
     bool Success,
     IReadOnlyDictionary<Guid, string> CheckpointVariables,
     IReadOnlyDictionary<Guid, string> GeneratedValueVariables,
+    IReadOnlyDictionary<Guid, string> CopiedValueVariables,
     string? GeneratedValueSeriesVariable,
     IReadOnlyDictionary<Guid, string> StepErrors,
     string? Error)
@@ -12,12 +13,14 @@ internal sealed record RecorderScenarioGraphValidationResult(
         string error,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable,
         IReadOnlyDictionary<Guid, string> stepErrors) =>
         new(
             false,
             checkpointVariables,
             generatedValueVariables,
+            copiedValueVariables,
             generatedValueSeriesVariable,
             stepErrors,
             error);
@@ -25,11 +28,13 @@ internal sealed record RecorderScenarioGraphValidationResult(
     public static RecorderScenarioGraphValidationResult Valid(
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable) =>
         new(
             true,
             checkpointVariables,
             generatedValueVariables,
+            copiedValueVariables,
             generatedValueSeriesVariable,
             new Dictionary<Guid, string>(),
             null);
@@ -44,6 +49,7 @@ internal static class RecorderScenarioGraphValidator
         var checkpointVariables = new Dictionary<Guid, string>();
         var checkpointValueKinds = new Dictionary<Guid, RecorderValueKind>();
         var generatedValueVariables = new Dictionary<Guid, string>();
+        var copiedValueVariables = new Dictionary<Guid, string>();
         var generatedValueOrdinals = new HashSet<int>();
         var reservedNames = new HashSet<string>(StringComparer.Ordinal);
         var stepErrors = new Dictionary<Guid, string>();
@@ -51,6 +57,13 @@ internal static class RecorderScenarioGraphValidator
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            if (step.GeneratedValueId is not null && step.InputCopiedValueId is not null)
+            {
+                stepErrors[step.StepId] =
+                    $"Text input step {index + 1} cannot use a generated value and a copied value at the same time.";
+                continue;
+            }
+
             if (step.GeneratedValueId is not null)
             {
                 var generatedValueValidation = ValidateGeneratedValue(
@@ -62,6 +75,33 @@ internal static class RecorderScenarioGraphValidator
                 if (!generatedValueValidation.IsValid)
                 {
                     stepErrors[step.StepId] = generatedValueValidation.Error;
+                }
+            }
+
+            if (step.ActionKind == RecordedActionKind.CaptureCopiedValue)
+            {
+                var copiedValueValidation = ValidateCopiedValueDefinition(
+                    step,
+                    index,
+                    copiedValueVariables,
+                    reservedNames);
+                if (!copiedValueValidation.IsValid)
+                {
+                    stepErrors[step.StepId] = copiedValueValidation.Error;
+                }
+
+                continue;
+            }
+
+            if (step.InputCopiedValueId is not null)
+            {
+                var copiedValueValidation = ValidateCopiedValueUse(
+                    step,
+                    index,
+                    copiedValueVariables);
+                if (!copiedValueValidation.IsValid)
+                {
+                    stepErrors[step.StepId] = copiedValueValidation.Error;
                 }
             }
 
@@ -104,13 +144,66 @@ internal static class RecorderScenarioGraphValidator
             ? RecorderScenarioGraphValidationResult.Valid(
                 checkpointVariables,
                 generatedValueVariables,
+                copiedValueVariables,
                 generatedValueSeriesVariable)
             : RecorderScenarioGraphValidationResult.Failed(
                 stepErrors.Values.First(),
                 checkpointVariables,
                 generatedValueVariables,
+                copiedValueVariables,
                 generatedValueSeriesVariable,
                 stepErrors);
+    }
+
+    private static RecorderGraphStepValidationResult ValidateCopiedValueDefinition(
+        RecordedStep step,
+        int index,
+        Dictionary<Guid, string> variables,
+        HashSet<string> reservedNames)
+    {
+        if (step.CopiedValueId is not { } copiedValueId || copiedValueId == Guid.Empty)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Copied value step {index + 1} does not have a stable copied value id.");
+        }
+
+        if (variables.ContainsKey(copiedValueId))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Copied value id '{copiedValueId}' is defined more than once.");
+        }
+
+        if (step.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText)
+            || step.ValueAccessorKind is null)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Copied value step {index + 1} does not define a readable text value.");
+        }
+
+        variables.Add(
+            copiedValueId,
+            RecorderNaming.CreateCopiedValueVariableName(
+                step.CopiedValueVariableName,
+                reservedNames));
+        return RecorderGraphStepValidationResult.Valid;
+    }
+
+    private static RecorderGraphStepValidationResult ValidateCopiedValueUse(
+        RecordedStep step,
+        int index,
+        IReadOnlyDictionary<Guid, string> variables)
+    {
+        if (step.ActionKind != RecordedActionKind.EnterText)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Copied value use {index + 1} must be an EnterText action.");
+        }
+
+        var copiedValueId = step.InputCopiedValueId!.Value;
+        return copiedValueId != Guid.Empty && variables.ContainsKey(copiedValueId)
+            ? RecorderGraphStepValidationResult.Valid
+            : RecorderGraphStepValidationResult.Invalid(
+                $"Copied value use {index + 1} references a missing or later copied value '{copiedValueId}'.");
     }
 
     private static RecorderGraphStepValidationResult ValidateGeneratedValue(

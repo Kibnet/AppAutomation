@@ -71,7 +71,8 @@ public enum RecordedActionKind
     CaptureCheckpoint = 63,
     AssertValue = 64,
     SetGridCellChecked = 65,
-    SetMultiItemSpinnerValue = 66
+    SetMultiItemSpinnerValue = 66,
+    CaptureCopiedValue = 67
 }
 
 public enum RecorderAssertionMode
@@ -379,6 +380,13 @@ internal sealed record RecorderGeneratedValueOption(
     int Ordinal,
     string PreviewValue);
 
+internal sealed record RecorderCopiedValueOption(
+    Guid CopiedValueId,
+    string VariableName,
+    RecorderValueKind ValueKind,
+    string ControlName,
+    string PreviewValue);
+
 internal sealed record RecordedControlDescriptor(
     string ProposedPropertyName,
     UiControlType ControlType,
@@ -485,7 +493,10 @@ internal sealed record RecordedStep(
     bool DefinesGeneratedValue = false,
     Guid? ExpectedGeneratedValueId = null,
     RecorderNumericExpectedExpression? NumericExpectedExpression = null,
-    string? RepeatedItemKey = null)
+    string? RepeatedItemKey = null,
+    Guid? CopiedValueId = null,
+    string? CopiedValueVariableName = null,
+    Guid? InputCopiedValueId = null)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 

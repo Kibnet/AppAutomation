@@ -19,4 +19,10 @@ public sealed record UiRuntimeCapabilities(
     bool SupportsCalendarRangeSelection = false,
     bool SupportsTreeNodeExpansionState = false,
     bool SupportsRawNativeHandles = false,
-    bool SupportsScreenshots = false);
+    bool SupportsScreenshots = false)
+{
+    /// <summary>
+    /// Gets a value indicating whether the adapter can write and paste plain text through its clipboard.
+    /// </summary>
+    public bool SupportsClipboardText { get; init; }
+}
