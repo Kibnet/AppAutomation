@@ -87,6 +87,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("ArmStatusFilterStatusLabel", UiControlType.Label, "ArmStatusFilterStatusLabel")]
 [UiControl("ArmComplexDataGridControl", UiControlType.Grid, "ArmComplexDataGridControl")]
 [UiControl("ArmGridLastNumericInputText", UiControlType.Label, "ArmGridLastNumericInputText")]
+[UiControl("SaveArmGridProductButton", UiControlType.Button, "SaveArmGridProductButton")]
 [UiControl("ArmDateRangeFrom", UiControlType.DateTimePicker, "ArmDateRangeFrom")]
 [UiControl("ArmDateRangeTo", UiControlType.DateTimePicker, "ArmDateRangeTo")]
 [UiControl("ArmDateRangeOpenButton", UiControlType.Button, "ArmDateRangeOpenButton")]

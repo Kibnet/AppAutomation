@@ -250,6 +250,10 @@ internal static class RecorderAssertionCapabilities
                 controlType,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text),
+            UiControlType.Button => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
             UiControlType.ListBox => Value(
                 controlType,
                 RecorderValueKind.Text,
@@ -320,7 +324,6 @@ internal static class RecorderAssertionCapabilities
                 RecorderValueKind.Color,
                 RecorderValueAccessorKind.Color),
             UiControlType.AutomationElement
-                or UiControlType.Button
                 or UiControlType.Tab
                 or UiControlType.Tree
                 or UiControlType.DataGridViewRow

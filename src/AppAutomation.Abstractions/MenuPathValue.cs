@@ -11,11 +11,19 @@ public static class MenuPathValue
 {
     internal static string? TryGetVisibleCaption(object? value, string? fallback = null)
     {
+        var text = TryGetVisibleText(value, fallback);
+        return text is null
+            ? null
+            : ToVisibleCaption(text);
+    }
+
+    internal static string? TryGetVisibleText(object? value, string? fallback = null)
+    {
         var text = TryExtractVisibleText(value, new HashSet<object>(ReferenceEqualityComparer.Instance), depth: 0)
             ?? fallback;
         return string.IsNullOrWhiteSpace(text)
             ? null
-            : ToVisibleCaption(text.Trim());
+            : text.Trim();
     }
 
     /// <summary>

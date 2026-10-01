@@ -129,6 +129,7 @@ internal static class GridCellMetadataExtractor
         if (fields.Count == 0
             && rows.Count == 1
             && definition is not null
+            && !IsNativeDataGrid(gridRoot)
             && TryResolveConfiguredVisualColumn(
                 source,
                 gridRoot,
@@ -173,14 +174,15 @@ internal static class GridCellMetadataExtractor
             ? visualPath[cellOwnerIndex - 1]
             : cellOwner;
         var column = definition?.FindColumnBySourceField(sourceField);
-        var raw = rawValues.Count > 0
-            ? rawValues[0]
-            : TryReadPath(
-                selectedRow.Row,
-                column?.DisplayValuePath ?? column?.SourceFieldName ?? sourceField,
-                out var displayedRowValue)
-                ? displayedRowValue
-                : null;
+        var rowValuePath = column?.DisplayValuePath ?? column?.SourceFieldName ?? sourceField;
+        var hasRowValue = TryReadPath(selectedRow.Row, rowValuePath, out var displayedRowValue);
+        var raw = IsNativeDataGrid(gridRoot) && hasRowValue
+            ? displayedRowValue
+            : rawValues.Count > 0
+                ? rawValues[0]
+                : hasRowValue
+                    ? displayedRowValue
+                    : null;
 
         metadata = new RecorderGridCellMetadata(
             selectedRow.Row,
@@ -288,6 +290,24 @@ internal static class GridCellMetadataExtractor
         return result;
     }
 
+    public static IReadOnlyList<Control> ReadMaterializedCellControls(Control grid)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+
+        var cells = new List<Control>();
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        foreach (var candidate in grid
+                     .GetVisualDescendants()
+                     .OfType<Control>()
+                     .Prepend(grid))
+        {
+            AddControlProperty(candidate, "FocusedCell", cells, visited);
+            AddControlSequence(candidate, "GetCells", cells, visited);
+        }
+
+        return cells;
+    }
+
     public static bool TryReadPath(object source, string propertyPath, out object? value)
     {
         return GridPropertyValueReader.TryReadPath(source, propertyPath, out value);
@@ -315,6 +335,63 @@ internal static class GridCellMetadataExtractor
         return GridPropertyValueReader.TryReadProperty(source, propertyName, out value);
     }
 
+    private static void AddControlProperty(
+        object source,
+        string propertyName,
+        List<Control> controls,
+        HashSet<Control> visited)
+    {
+        if (TryReadProperty(source, propertyName, out var value)
+            && value is Control control
+            && visited.Add(control))
+        {
+            controls.Add(control);
+        }
+    }
+
+    private static void AddControlSequence(
+        object source,
+        string methodName,
+        List<Control> controls,
+        HashSet<Control> visited)
+    {
+        var method = source.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, methodName, StringComparison.Ordinal)
+                && candidate.GetParameters().Length == 0);
+        if (method is null)
+        {
+            return;
+        }
+
+        object? value;
+        try
+        {
+            value = method.Invoke(source, null);
+        }
+        catch (TargetInvocationException)
+        {
+            return;
+        }
+        catch (MethodAccessException)
+        {
+            return;
+        }
+
+        if (value is not IEnumerable sequence)
+        {
+            return;
+        }
+
+        foreach (var control in sequence.OfType<Control>())
+        {
+            if (visited.Add(control))
+            {
+                controls.Add(control);
+            }
+        }
+    }
+
     private static RecorderNativeGridColumn? TryResolveNativeColumnFromSource(
         Control source,
         Control grid)
@@ -322,19 +399,72 @@ internal static class GridCellMetadataExtractor
         var columns = ReadNativeColumns(grid);
         foreach (var current in EnumeratePath(source, grid))
         {
-            if (!TryReadProperty(current, "Column", out var value) || value is null)
+            if (TryReadProperty(current, "Column", out var value)
+                && value is not null)
             {
-                continue;
+                var publicMatch = columns.FirstOrDefault(candidate => ReferenceEquals(candidate.Column, value));
+                if (publicMatch is not null)
+                {
+                    return publicMatch;
+                }
             }
 
-            var match = columns.FirstOrDefault(candidate => ReferenceEquals(candidate.Column, value));
-            if (match is not null)
+            if (TryReadDeclaredProperty(current, "OwningColumn", out var owningColumn)
+                && owningColumn is not null)
             {
-                return match;
+                var owningMatch = columns.FirstOrDefault(candidate => ReferenceEquals(candidate.Column, owningColumn));
+                if (owningMatch is not null)
+                {
+                    return owningMatch;
+                }
+            }
+
+            if (TryReadDeclaredProperty(current, "ColumnIndex", out var columnIndexValue)
+                && columnIndexValue is int columnIndex)
+            {
+                var indexMatch = columns.FirstOrDefault(candidate => candidate.Index == columnIndex);
+                if (indexMatch is not null)
+                {
+                    return indexMatch;
+                }
             }
         }
 
         return null;
+    }
+
+    private static bool TryReadDeclaredProperty(
+        object source,
+        string propertyName,
+        out object? value)
+    {
+        var property = source.GetType()
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, propertyName, StringComparison.Ordinal)
+                && candidate.CanRead
+                && candidate.GetIndexParameters().Length == 0);
+        if (property is null)
+        {
+            value = null;
+            return false;
+        }
+
+        try
+        {
+            value = property.GetValue(source);
+            return true;
+        }
+        catch (TargetInvocationException)
+        {
+            value = null;
+            return false;
+        }
+        catch (MethodAccessException)
+        {
+            value = null;
+            return false;
+        }
     }
 
     private static bool TryResolveConfiguredVisualColumn(

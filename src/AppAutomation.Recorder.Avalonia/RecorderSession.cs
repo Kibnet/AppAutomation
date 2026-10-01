@@ -2956,6 +2956,25 @@ internal sealed class RecorderSession :
         return true;
     }
 
+    internal bool SelectCheckTargetAtForTesting(
+        Control eventSource,
+        Control positionRoot,
+        Point position)
+    {
+        ArgumentNullException.ThrowIfNull(eventSource);
+        ArgumentNullException.ThrowIfNull(positionRoot);
+        if (!IsCheckTargetSelectionActive)
+        {
+            return false;
+        }
+
+        var candidates = ResolveCheckTargetCandidates(eventSource, positionRoot, position);
+        CompleteCheckTargetSelection(
+            candidates.FirstOrDefault() ?? ResolveInteractionOwner(eventSource) ?? eventSource,
+            candidates);
+        return true;
+    }
+
     public void CaptureCheckpoint(string? variableName = null)
     {
         CaptureCheckpoint(PrepareSemanticCaptureTarget(), variableName);
@@ -3742,15 +3761,156 @@ internal sealed class RecorderSession :
         Point position)
     {
         var rootIsAttached = TopLevel.GetTopLevel(positionRoot) is not null;
+        var visualCandidates = positionRoot
+            .GetVisualsAt(position)
+            .OfType<Control>()
+            .Concat(EnumerateGeometricCandidates(positionRoot, position));
         return ResolveCheckTargetCandidatesCore(
             eventTarget,
             positionRoot
                 .GetInputElementsAt(position, enabledElementsOnly: false)
                 .OfType<Control>(),
-            positionRoot
-                .GetVisualsAt(position)
-                .OfType<Control>(),
+            visualCandidates,
             requireAttachedVisual: rootIsAttached);
+    }
+
+    private IEnumerable<Control> EnumerateGeometricCandidates(
+        Control positionRoot,
+        Point position)
+    {
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        foreach (var candidate in EnumerateCandidateControlTrees(positionRoot))
+        {
+            if (!ContainsPosition(positionRoot, position, candidate))
+            {
+                continue;
+            }
+
+            if (visited.Add(candidate))
+            {
+                yield return candidate;
+            }
+
+            foreach (var cell in _stepFactory.ReadMaterializedGridCellControls(candidate))
+            {
+                if (ContainsPosition(positionRoot, position, cell) && visited.Add(cell))
+                {
+                    yield return cell;
+                }
+            }
+        }
+
+        // A disabled editor inside a read-only cell can be absent from Avalonia's hit-test
+        // result. Docking controls may then report their own container as the pointer
+        // source. Resolve registered grids independently so the materialized cell remains
+        // the semantic target without making invisible playback bridges selectable.
+        foreach (var grid in _stepFactory.ReadConfiguredGridRoots())
+        {
+            if (!ContainsPosition(positionRoot, position, grid))
+            {
+                continue;
+            }
+
+            if (visited.Add(grid))
+            {
+                yield return grid;
+            }
+
+            foreach (var cell in _stepFactory.ReadMaterializedGridCellControls(grid))
+            {
+                if (ContainsPosition(positionRoot, position, cell) && visited.Add(cell))
+                {
+                    yield return cell;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<Control> EnumerateCandidateControlTrees(Control positionRoot)
+    {
+        var pendingRoots = new Queue<Control>();
+        var expandedRoots = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        var yielded = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        pendingRoots.Enqueue(positionRoot);
+        if (TopLevel.GetTopLevel(positionRoot) is Control topLevel
+            && !ReferenceEquals(topLevel, positionRoot))
+        {
+            pendingRoots.Enqueue(topLevel);
+        }
+
+        while (pendingRoots.Count > 0)
+        {
+            var root = pendingRoots.Dequeue();
+            if (!expandedRoots.Add(root))
+            {
+                continue;
+            }
+
+            var visualControls = root
+                .GetVisualDescendants()
+                .OfType<Control>()
+                .Prepend(root)
+                .ToArray();
+            var visualSet = visualControls.ToHashSet<Control>(ReferenceEqualityComparer.Instance);
+            foreach (var visual in visualControls)
+            {
+                if (yielded.Add(visual))
+                {
+                    yield return visual;
+                }
+            }
+
+            foreach (var logical in root.GetLogicalDescendants().OfType<Control>())
+            {
+                if (yielded.Add(logical))
+                {
+                    yield return logical;
+                }
+
+                if (!visualSet.Contains(logical))
+                {
+                    pendingRoots.Enqueue(logical);
+                }
+            }
+        }
+    }
+
+    private static bool ContainsPosition(
+        Control positionRoot,
+        Point position,
+        Control candidate)
+    {
+        var localBounds = new Rect(0, 0, candidate.Bounds.Width, candidate.Bounds.Height);
+        if (positionRoot.TranslatePoint(position, candidate) is { } localPosition)
+        {
+            return localBounds.Contains(localPosition);
+        }
+
+        if (TopLevel.GetTopLevel(positionRoot) is not null
+            && TopLevel.GetTopLevel(candidate) is not null)
+        {
+            var screenPosition = positionRoot.PointToScreen(position);
+            return localBounds.Contains(candidate.PointToClient(screenPosition));
+        }
+
+        var candidateVisualRoot = candidate;
+        while (candidateVisualRoot.GetVisualParent() is Control visualParent)
+        {
+            candidateVisualRoot = visualParent;
+        }
+
+        if (ReferenceEquals(candidateVisualRoot, candidate)
+            || !positionRoot.GetLogicalDescendants().OfType<Control>().Any(control =>
+                ReferenceEquals(control, candidateVisualRoot)))
+        {
+            return false;
+        }
+
+        var visualRootPosition = new Point(
+            position.X - candidateVisualRoot.Bounds.X,
+            position.Y - candidateVisualRoot.Bounds.Y);
+        return candidateVisualRoot.TranslatePoint(visualRootPosition, candidate) is { } nestedPosition
+            && localBounds.Contains(nestedPosition);
     }
 
     private List<Control> ResolveCheckTargetCandidates(
@@ -3778,7 +3938,7 @@ internal sealed class RecorderSession :
             .Where(static candidate => candidate is not null)
             .Select(static candidate => candidate!)
             .Where(candidate => visitedSpatial.Add(candidate))
-            .Where(candidate => IsCaptureHitCandidate(candidate, requireAttachedVisual))
+            .Where(candidate => IsCaptureVisualCandidate(candidate, requireAttachedVisual))
             .Where(candidate => !IsPlaybackOnlyGridSurface(candidate))
             .ToArray();
         var leafCandidates = spatialCandidates
@@ -3786,19 +3946,27 @@ internal sealed class RecorderSession :
                 !ReferenceEquals(candidate, other)
                 && IsAncestorOrSelf(candidate, other)))
             .ToArray();
-        var selected = leafCandidates.FirstOrDefault()
-            ?? spatialCandidates.FirstOrDefault();
-        if (selected is null)
+        var selectedPaths = leafCandidates.Length > 0
+            ? leafCandidates
+            : spatialCandidates.Take(1).ToArray();
+        if (selectedPaths.Length == 0)
         {
             return [];
         }
 
         var candidates = new List<Control>();
         var visitedPath = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        AddCheckTargetAndRelations(
-            ResolveInteractionOwner(selected) ?? selected,
-            candidates,
-            visitedPath);
+        foreach (var selected in selectedPaths)
+        {
+            var selectedOwner = _stepFactory.IsCatalogGridCell(selected)
+                ? selected
+                : ResolveInteractionOwner(selected) ?? selected;
+            AddCheckTargetAndRelations(
+                selectedOwner,
+                candidates,
+                visitedPath);
+        }
+
         return candidates;
     }
 
@@ -3827,9 +3995,9 @@ internal sealed class RecorderSession :
         return false;
     }
 
-    private static bool IsCaptureHitCandidate(Control candidate, bool requireAttachedVisual)
+    private static bool IsCaptureVisualCandidate(Control candidate, bool requireAttachedVisual)
     {
-        if (!candidate.IsVisible || !candidate.IsHitTestVisible)
+        if (!candidate.IsVisible)
         {
             return false;
         }
@@ -3857,7 +4025,7 @@ internal sealed class RecorderSession :
         return true;
     }
 
-    private static void AddCheckTargetAndRelations(
+    private void AddCheckTargetAndRelations(
         Control? source,
         ICollection<Control> candidates,
         ISet<Control> visited)
@@ -3878,6 +4046,12 @@ internal sealed class RecorderSession :
             }
 
             candidates.Add(current);
+            if (_stepFactory.IsCatalogGridCell(current)
+                || _stepFactory.IsConfiguredGridRoot(current))
+            {
+                continue;
+            }
+
             if (current.GetVisualParent() is Control visualParent)
             {
                 queue.Enqueue(visualParent);

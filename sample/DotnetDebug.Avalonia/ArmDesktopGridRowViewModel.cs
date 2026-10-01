@@ -11,6 +11,7 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
     private decimal _requiredAmount;
     private bool _isApproved;
     private string _product;
+    private bool _isProductEditable = true;
     private DateTime? _scheduledDate;
     private TimeSpan? _scheduledTime;
 
@@ -72,6 +73,12 @@ public sealed class ArmDesktopGridRowViewModel : INotifyPropertyChanged
     {
         get => _product;
         set => SetProperty(ref _product, value);
+    }
+
+    public bool IsProductEditable
+    {
+        get => _isProductEditable;
+        set => SetProperty(ref _isProductEditable, value);
     }
 
     public DateTime? ScheduledDate

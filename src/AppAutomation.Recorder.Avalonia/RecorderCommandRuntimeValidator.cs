@@ -286,7 +286,7 @@ internal sealed class RecorderCommandRuntimeValidator
     {
         return (controlType, valueKind, accessorKind) switch
         {
-            (UiControlType.TextBox or UiControlType.Label or UiControlType.Search,
+            (UiControlType.TextBox or UiControlType.Label or UiControlType.Button or UiControlType.Search,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text) => true,
             (UiControlType.SearchPicker or UiControlType.ComboBox or UiControlType.ListBox,

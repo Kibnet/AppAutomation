@@ -103,6 +103,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnSaveArmGridProductClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel.SelectedArmGridRow is { } row)
+        {
+            row.IsProductEditable = false;
+        }
+    }
+
     private static string? TryReadText(Control control)
     {
         if (control is TextBox textBox)

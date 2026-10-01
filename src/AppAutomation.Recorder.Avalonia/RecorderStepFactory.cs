@@ -557,6 +557,53 @@ internal sealed partial class RecorderStepFactory
             && FindGridDefinition(hint) is not null;
     }
 
+    internal IReadOnlyList<Control> ReadMaterializedGridCellControls(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var isConfiguredGridRoot = _options.GridAutomation.Any(definition =>
+            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
+            && string.Equals(
+                definition.CaptureLocatorValue,
+                locatorValue,
+                StringComparison.Ordinal));
+        if (!isConfiguredGridRoot)
+        {
+            return Array.Empty<Control>();
+        }
+
+        return GridCellMetadataExtractor.ReadMaterializedCellControls(source);
+    }
+
+    internal IReadOnlyList<Control> ReadConfiguredGridRoots()
+    {
+        var roots = new List<Control>();
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        foreach (var definition in _options.GridAutomation)
+        {
+            if (TryFindControl(
+                    definition.CaptureLocatorValue,
+                    definition.CaptureLocatorKind,
+                    out var grid)
+                && visited.Add(grid))
+            {
+                roots.Add(grid);
+            }
+        }
+
+        return roots;
+    }
+
+    internal bool IsConfiguredGridRoot(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return _options.GridAutomation.Any(definition =>
+            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
+            && string.Equals(
+                definition.CaptureLocatorValue,
+                locatorValue,
+                StringComparison.Ordinal));
+    }
+
     public bool ShouldSuppressCatalogGridTextEntry(TextBox textBox)
     {
         ArgumentNullException.ThrowIfNull(textBox);
@@ -3869,7 +3916,7 @@ internal sealed partial class RecorderStepFactory
         var accessorKind = capabilities.AccessorKinds.Single();
         var resolvedCandidate = accessorKind switch
         {
-            RecorderValueAccessorKind.Text when source is TextBox or TextBlock or Label =>
+            RecorderValueAccessorKind.Text when source is TextBox or TextBlock or Label or Button =>
                 new SemanticValueCandidate(
                     locator.Control,
                     valueKind,
@@ -4892,7 +4939,9 @@ internal sealed partial class RecorderStepFactory
             TextBox textBox => textBox.Text,
             TextBlock textBlock => textBlock.Text,
             Label label => label.Content?.ToString(),
-            Button button => button.Content?.ToString(),
+            Button button => MenuPathValue.TryGetVisibleText(
+                button.Content,
+                AutomationProperties.GetName(button)),
             ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
             ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
             _ => AutomationProperties.GetName(control)

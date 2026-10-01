@@ -99,6 +99,11 @@ public sealed class ServerSearchComboBox : PopupEditor
                 .OfType<ToggleButton>()
                 .FirstOrDefault(static candidate => candidate.Name == "PART_PopupOpenButton");
 
+        if (SearchText is null && CurrentSelected is not null)
+        {
+            SearchText = CurrentSelected.ToString();
+        }
+
         if (_input is not null)
         {
             _input.Text = SearchText ?? CurrentSelected?.ToString() ?? string.Empty;
@@ -226,15 +231,23 @@ public sealed class ServerSearchComboBox : PopupEditor
 
     private void OnInputTextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_synchronizing || _input is null)
+        if (_synchronizing || _input is null || !_canOpenFromTextChanges)
         {
+            return;
+        }
+
+        var inputText = _input.Text ?? string.Empty;
+        if (CurrentSelected is not null
+            && string.Equals(inputText, CurrentSelected.ToString(), StringComparison.Ordinal))
+        {
+            SearchText = inputText;
             return;
         }
 
         _synchronizing = true;
         try
         {
-            SearchText = _input.Text ?? string.Empty;
+            SearchText = inputText;
             CurrentSelected = null;
         }
         finally

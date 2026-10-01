@@ -12,6 +12,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _gridOpenMarker = "No row opened";
     private string _dataGridErrorText = string.Empty;
     private DataGridRowViewModel? _selectedDataGridRow;
+    private ArmDesktopGridRowViewModel? _selectedArmGridRow;
 
     public MainWindowViewModel()
     {
@@ -66,6 +67,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     ];
 
     public IReadOnlyList<string> ArmGridStateOptions { get; } = ["Open", "Pending", "Closed"];
+
+    public ArmDesktopGridRowViewModel? SelectedArmGridRow
+    {
+        get => _selectedArmGridRow;
+        set => SetProperty(ref _selectedArmGridRow, value);
+    }
 
     public ObservableCollection<MultiSelectItemViewModel> MultiSelectItems { get; }
 
