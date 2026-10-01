@@ -1160,24 +1160,35 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
         }
 
-        if (!TryResolveDialogHint(source, out var hint, out var actionKind))
+        if (!TryResolveDialogHint(
+                source,
+                out var hint,
+                out var actionKind,
+                out var buttonLocator,
+                out var error))
         {
-            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
+            return StepCreationResult.Unsupported(error);
         }
 
-        var warning = $"Recorded dialog action '{actionKind}' from configured parts.";
         var descriptor = CreateCompositeDescriptor(
             hint.LocatorValue,
             UiControlType.Dialog,
             hint.LocatorKind,
             hint.FallbackToName,
             source,
-            warning);
+            warning: null);
 
         return CreateStep(
             source,
-            new RecordedStep(actionKind, descriptor, Warning: warning),
-            warning);
+            new RecordedStep(actionKind, descriptor, StringValue: buttonLocator));
+    }
+
+    public bool IsDialogAction(Control? source)
+    {
+        return source is not null
+            && _options.DialogHints.Any(candidate =>
+                candidate.Parts.EnumerateRegisteredButtonLocators()
+                    .Any(locator => MatchesLocator(source, candidate.Parts.LocatorKind, locator)));
     }
 
     public StepCreationResult TryCreateNotificationActionStep(Control? source)
@@ -5292,37 +5303,60 @@ internal sealed partial class RecorderStepFactory
     private bool TryResolveDialogHint(
         Control source,
         out RecorderDialogHint hint,
-        out RecordedActionKind actionKind)
+        out RecordedActionKind actionKind,
+        out string? buttonLocator,
+        out string error)
     {
+        var matches = new List<(RecorderDialogHint Hint, RecordedActionKind ActionKind, string? ButtonLocator)>();
         foreach (var candidate in _options.DialogHints)
         {
             var parts = candidate.Parts;
-            if (MatchesLocator(source, parts.LocatorKind, parts.ConfirmButtonLocator))
+            if (!string.IsNullOrWhiteSpace(parts.ConfirmButtonLocator)
+                && MatchesLocator(source, parts.LocatorKind, parts.ConfirmButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.ConfirmDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.ConfirmDialog, null));
             }
 
             if (!string.IsNullOrWhiteSpace(parts.CancelButtonLocator)
                 && MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.CancelDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.CancelDialog, null));
             }
 
             if (!string.IsNullOrWhiteSpace(parts.DismissButtonLocator)
                 && MatchesLocator(source, parts.LocatorKind, parts.DismissButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.DismissDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.DismissDialog, null));
             }
+
+            if (parts.ButtonLocators is null)
+            {
+                continue;
+            }
+
+            foreach (var locator in parts.ButtonLocators.Where(static locator => !string.IsNullOrWhiteSpace(locator)))
+            {
+                var normalizedLocator = locator.Trim();
+                if (MatchesLocator(source, parts.LocatorKind, normalizedLocator))
+                {
+                    matches.Add((candidate, RecordedActionKind.InvokeDialogButton, normalizedLocator));
+                }
+            }
+        }
+
+        if (matches.Count == 1)
+        {
+            (hint, actionKind, buttonLocator) = matches[0];
+            error = string.Empty;
+            return true;
         }
 
         hint = null!;
         actionKind = default;
+        buttonLocator = null;
+        error = matches.Count == 0
+            ? "Recorder does not have a dialog hint for this button."
+            : "The selected dialog button matches more than one configured action. Register each dialog button locator exactly once.";
         return false;
     }
 

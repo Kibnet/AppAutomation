@@ -875,23 +875,27 @@ public sealed class UiControlAdapterTests
         var confirmButton = new FakeButtonControl("ConfirmDeleteButton");
         var cancelButton = new FakeButtonControl("CancelDeleteButton");
         var dismissButton = new FakeButtonControl("DismissDeleteButton");
+        var addButton = new FakeButtonControl("AddDeleteButton");
         var resolver = new FakeResolver(
             ("DeleteDialogMessage", message),
             ("ConfirmDeleteButton", confirmButton),
             ("CancelDeleteButton", cancelButton),
-            ("DismissDeleteButton", dismissButton))
+            ("DismissDeleteButton", dismissButton),
+            ("AddDeleteButton", addButton))
             .WithDialog(
                 "DeleteDialog",
                 DialogControlParts.ByAutomationIds(
                     "DeleteDialogMessage",
                     "ConfirmDeleteButton",
                     cancelButtonAutomationId: "CancelDeleteButton",
-                    dismissButtonAutomationId: "DismissDeleteButton"));
+                    dismissButtonAutomationId: "DismissDeleteButton",
+                    additionalButtonAutomationIds: ["AddDeleteButton"]));
         var page = new WorkflowPage(resolver);
 
         page.DeleteDialog.Complete();
         page.DeleteDialog.Complete(DialogActionKind.Cancel);
         page.DeleteDialog.Complete(DialogActionKind.Dismiss);
+        ((IAddressableDialogControl)page.DeleteDialog).InvokeButton("AddDeleteButton");
 
         using (Assert.Multiple())
         {
@@ -899,6 +903,7 @@ public sealed class UiControlAdapterTests
             await Assert.That(confirmButton.InvokeCount).IsEqualTo(1);
             await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
             await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(addButton.InvokeCount).IsEqualTo(1);
         }
     }
 

@@ -259,33 +259,79 @@ public sealed record NumericRangeFilterParts(
 /// Configuration for composing a modal dialog from individual UI controls.
 /// </summary>
 /// <param name="MessageLocator">The locator for the dialog message label.</param>
-/// <param name="ConfirmButtonLocator">The locator for the confirm button.</param>
+/// <param name="ConfirmButtonLocator">Optional locator for the confirm button.</param>
 /// <param name="CancelButtonLocator">Optional locator for the cancel button.</param>
 /// <param name="DismissButtonLocator">Optional locator for the dismiss/close button.</param>
 /// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
 /// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
+/// <param name="ButtonLocators">Optional locators for buttons without canonical confirm/cancel/dismiss semantics.</param>
 public sealed record DialogControlParts(
     string MessageLocator,
-    string ConfirmButtonLocator,
+    string? ConfirmButtonLocator = null,
     string? CancelButtonLocator = null,
     string? DismissButtonLocator = null,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
-    bool FallbackToName = true)
+    bool FallbackToName = true,
+    IReadOnlyList<string>? ButtonLocators = null)
 {
     /// <summary>
     /// Creates a <see cref="DialogControlParts"/> configuration using automation IDs.
     /// </summary>
     public static DialogControlParts ByAutomationIds(
         string messageAutomationId,
-        string confirmButtonAutomationId,
+        string? confirmButtonAutomationId = null,
         string? cancelButtonAutomationId = null,
-        string? dismissButtonAutomationId = null)
+        string? dismissButtonAutomationId = null,
+        IReadOnlyList<string>? additionalButtonAutomationIds = null)
     {
         return new DialogControlParts(
             messageAutomationId,
             confirmButtonAutomationId,
             cancelButtonAutomationId,
-            dismissButtonAutomationId);
+            dismissButtonAutomationId,
+            ButtonLocators: additionalButtonAutomationIds);
+    }
+
+    /// <summary>
+    /// Creates a dialog configuration whose buttons are addressed only by stable automation IDs.
+    /// </summary>
+    public static DialogControlParts ByButtonAutomationIds(
+        string messageAutomationId,
+        params string[] buttonAutomationIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageAutomationId);
+        ArgumentNullException.ThrowIfNull(buttonAutomationIds);
+        return new DialogControlParts(
+            messageAutomationId,
+            ButtonLocators: buttonAutomationIds);
+    }
+
+    internal IEnumerable<string> EnumerateRegisteredButtonLocators()
+    {
+        if (!string.IsNullOrWhiteSpace(ConfirmButtonLocator))
+        {
+            yield return ConfirmButtonLocator;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CancelButtonLocator))
+        {
+            yield return CancelButtonLocator;
+        }
+
+        if (!string.IsNullOrWhiteSpace(DismissButtonLocator))
+        {
+            yield return DismissButtonLocator;
+        }
+
+        if (ButtonLocators is null)
+        {
+            yield break;
+        }
+
+        foreach (var locator in ButtonLocators.Where(static locator => !string.IsNullOrWhiteSpace(locator)))
+        {
+            yield return locator;
+        }
     }
 }
 
@@ -1524,7 +1570,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         return new DialogControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class DialogControl : IDialogControl, IReadableTextControl
+    private sealed class DialogControl : IAddressableDialogControl, IReadableTextControl
     {
         private readonly DialogControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1558,6 +1604,23 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             button.Invoke();
         }
 
+        public void InvokeButton(string buttonLocator)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(buttonLocator);
+            var normalizedLocator = buttonLocator.Trim();
+            var matches = _parts.EnumerateRegisteredButtonLocators()
+                .Count(locator => string.Equals(locator, normalizedLocator, StringComparison.Ordinal));
+            if (matches != 1)
+            {
+                throw new NotSupportedException(
+                    matches == 0
+                        ? $"Dialog '{AutomationId}' does not register button locator '{normalizedLocator}'."
+                        : $"Dialog '{AutomationId}' registers button locator '{normalizedLocator}' more than once.");
+            }
+
+            ResolveButton("Button", normalizedLocator, actionKind: null).Invoke();
+        }
+
         private string? TryReadMessageText()
         {
             try
@@ -1575,7 +1638,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
         }
 
-        private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind actionKind)
+        private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind? actionKind)
         {
             if (string.IsNullOrWhiteSpace(locatorValue))
             {

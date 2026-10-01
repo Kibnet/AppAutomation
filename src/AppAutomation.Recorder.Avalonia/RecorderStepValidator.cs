@@ -119,6 +119,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog
+                or RecordedActionKind.InvokeDialogButton
                 or RecordedActionKind.DismissNotification
                 or RecordedActionKind.OpenOrActivateShellPane
                 or RecordedActionKind.ActivateShellPane => true,

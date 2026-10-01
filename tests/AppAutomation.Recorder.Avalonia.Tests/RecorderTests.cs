@@ -449,6 +449,7 @@ public sealed class RecorderTests
             new RecordedStep(RecordedActionKind.ConfirmDialog, dialogDescriptor),
             new RecordedStep(RecordedActionKind.CancelDialog, dialogDescriptor),
             new RecordedStep(RecordedActionKind.DismissDialog, dialogDescriptor),
+            new RecordedStep(RecordedActionKind.InvokeDialogButton, dialogDescriptor, StringValue: "DeleteDialogAddButton"),
             new RecordedStep(RecordedActionKind.DismissNotification, notificationDescriptor),
             new RecordedStep(RecordedActionKind.OpenOrActivateShellPane, shellDescriptor, StringValue: "Customers"),
             new RecordedStep(RecordedActionKind.ActivateShellPane, shellDescriptor, StringValue: "Orders")
@@ -480,6 +481,7 @@ public sealed class RecorderTests
             await Assert.That(scenarioSource.Contains("Page.ConfirmDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.CancelDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.DismissDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.InvokeDialogButton(static page => page.DeleteDialog, \"DeleteDialogAddButton\");", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.DismissNotification(static page => page.ExportToast);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.OpenOrActivateShellPane(static page => page.Shell, \"Customers\");", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.ActivateShellPane(static page => page.Shell, \"Orders\");", StringComparison.Ordinal)).IsEqualTo(true);
@@ -2156,11 +2158,17 @@ public sealed class RecorderTests
     {
         var options = CreateCompositeRecorderOptions();
         var root = new StackPanel();
+        var dialogRoot = new StackPanel();
         var confirmButton = new Button { Content = "Yes" };
+        var addButton = new Button { Content = "Add" };
         var dismissNotificationButton = new Button { Content = "Close" };
+        AutomationProperties.SetAutomationId(dialogRoot, "DeleteDialog");
         AutomationProperties.SetAutomationId(confirmButton, "DeleteDialogConfirmButton");
+        AutomationProperties.SetAutomationId(addButton, "DeleteDialogAddButton");
         AutomationProperties.SetAutomationId(dismissNotificationButton, "ExportToastDismissButton");
-        root.Children.Add(confirmButton);
+        dialogRoot.Children.Add(confirmButton);
+        dialogRoot.Children.Add(addButton);
+        root.Children.Add(dialogRoot);
         root.Children.Add(dismissNotificationButton);
 
         var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
@@ -2168,13 +2176,19 @@ public sealed class RecorderTests
 
         session.Start();
         session.CaptureButtonClickForTesting(confirmButton);
+        session.CaptureButtonClickForTesting(addButton);
         session.CaptureButtonClickForTesting(dismissNotificationButton);
 
         using (Assert.Multiple())
         {
-            await Assert.That(details.StepJournal.Count).IsEqualTo(2);
+            await Assert.That(details.StepJournal.Count).IsEqualTo(3);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.ConfirmDialog(static page => page.DeleteDialog);");
-            await Assert.That(details.StepJournal[1].Preview).Contains("Page.DismissNotification(static page => page.ExportToast);");
+            await Assert.That(details.StepJournal[1].Preview).Contains(
+                "Page.InvokeDialogButton(static page => page.DeleteDialog, \"DeleteDialogAddButton\");");
+            await Assert.That(details.StepJournal[1].Preview.Contains("CancelDialog", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[1].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(details.StepJournal[1].CanPersist).IsEqualTo(true);
+            await Assert.That(details.StepJournal[2].Preview).Contains("Page.DismissNotification(static page => page.ExportToast);");
         }
     }
 
@@ -4351,7 +4365,8 @@ public sealed class RecorderTests
                 "DeleteDialogMessage",
                 "DeleteDialogConfirmButton",
                 cancelButtonAutomationId: "DeleteDialogCancelButton",
-                dismissButtonAutomationId: "DeleteDialogDismissButton")));
+                dismissButtonAutomationId: "DeleteDialogDismissButton",
+                additionalButtonAutomationIds: ["DeleteDialogAddButton"])));
         options.NotificationHints.Add(new RecorderNotificationHint(
             "ExportToast",
             NotificationControlParts.ByAutomationIds(

@@ -1553,6 +1553,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.DismissDialog => $"Page.DismissDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
+            RecordedActionKind.InvokeDialogButton => $"Page.InvokeDialogButton(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.DismissNotification => $"Page.DismissNotification(static page => page.{propertyName});",
             RecordedActionKind.OpenOrActivateShellPane => $"Page.OpenOrActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ActivateShellPane => $"Page.ActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",

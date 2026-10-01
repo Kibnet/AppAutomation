@@ -2308,8 +2308,9 @@ internal sealed class RecorderSession :
         }
 
         var dialogResult = _stepFactory.TryCreateDialogActionStep(source);
-        if (TryRecordCompositeStep(dialogResult, source, "DialogAction", clearPendingInput: false))
+        if (_stepFactory.IsDialogAction(source))
         {
+            AddStep(dialogResult, source, "DialogAction");
             return true;
         }
 

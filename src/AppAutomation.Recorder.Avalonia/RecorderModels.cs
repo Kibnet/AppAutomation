@@ -73,7 +73,8 @@ public enum RecordedActionKind
     SetGridCellChecked = 65,
     SetMultiItemSpinnerValue = 66,
     CaptureCopiedValue = 67,
-    SelectGridRow = 68
+    SelectGridRow = 68,
+    InvokeDialogButton = 69
 }
 
 public enum RecorderAssertionMode

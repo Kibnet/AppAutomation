@@ -863,6 +863,44 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Invokes a configured dialog button by its stable locator.
+    /// </summary>
+    public static TSelf InvokeDialogButton<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string buttonLocator,
+        string? expectedMessageContains = null,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buttonLocator);
+        if (expectedMessageContains is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(expectedMessageContains);
+        }
+
+        var normalizedLocator = buttonLocator.Trim();
+        return ExecuteDialog(
+            page,
+            selector,
+            expectedMessageContains,
+            timeoutMs,
+            nameof(InvokeDialogButton),
+            dialog =>
+            {
+                if (dialog is not IAddressableDialogControl addressableDialog)
+                {
+                    throw new NotSupportedException(
+                        $"Dialog '{dialog.AutomationId}' does not support buttons addressed by locator.");
+                }
+
+                addressableDialog.InvokeButton(normalizedLocator);
+            },
+            $"button locator '{normalizedLocator}'",
+            DescribeDialogButton(normalizedLocator, expectedMessageContains));
+    }
+
+    /// <summary>
     /// Waits until a notification contains the expected text.
     /// </summary>
     public static TSelf WaitUntilNotificationContains<TSelf>(
@@ -2509,6 +2547,28 @@ public static partial class UiPageExtensions
         string actionName)
         where TSelf : UiPage
     {
+        return ExecuteDialog(
+            page,
+            selector,
+            expectedMessageContains,
+            timeoutMs,
+            actionName,
+            dialog => dialog.Complete(actionKind),
+            $"action '{actionKind}'",
+            DescribeDialogAction(actionKind, expectedMessageContains));
+    }
+
+    private static TSelf ExecuteDialog<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, IDialogControl>> selector,
+        string? expectedMessageContains,
+        int timeoutMs,
+        string actionName,
+        Action<IDialogControl> invoke,
+        string operationDescription,
+        string expectedValue)
+        where TSelf : UiPage
+    {
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
         var dialog = Resolve(selector, page);
@@ -2537,7 +2597,7 @@ public static partial class UiPageExtensions
                     actionName);
             }
 
-            dialog.Complete(actionKind);
+            invoke(dialog);
         }
         catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
         {
@@ -2546,8 +2606,8 @@ public static partial class UiPageExtensions
                 selector,
                 timeout,
                 startedAtUtc,
-                $"Dialog '{dialog.AutomationId}' failed to complete action '{actionKind}'.",
-                expectedValue: DescribeDialogAction(actionKind, expectedMessageContains),
+                $"Dialog '{dialog.AutomationId}' failed to complete {operationDescription}.",
+                expectedValue,
                 lastObservedValueFactory: () => dialog.MessageText,
                 actionName,
                 ex);
@@ -2712,6 +2772,13 @@ public static partial class UiPageExtensions
         return string.IsNullOrWhiteSpace(expectedMessageContains)
             ? actionKind.ToString()
             : $"{actionKind}: message contains '{expectedMessageContains}'";
+    }
+
+    private static string DescribeDialogButton(string buttonLocator, string? expectedMessageContains)
+    {
+        return string.IsNullOrWhiteSpace(expectedMessageContains)
+            ? $"Button locator='{buttonLocator}'"
+            : $"Button locator='{buttonLocator}': message contains '{expectedMessageContains}'";
     }
 
     private static string DescribeFolderExportRequest(

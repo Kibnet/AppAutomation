@@ -229,6 +229,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
+            RecordedActionKind.InvokeDialogButton => ValidateDialogButtonAction(step, target),
             RecordedActionKind.DismissNotification => ValidateControlType(step, target, UiControlType.Notification),
             RecordedActionKind.OpenOrActivateShellPane
                 or RecordedActionKind.ActivateShellPane => ValidateControlType(step, target, UiControlType.ShellNavigation)
@@ -627,6 +628,59 @@ internal sealed class RecorderCommandRuntimeValidator
         UiControlType expected)
     {
         return ValidateControlType(step, target, [expected]);
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateDialogButtonAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(step, target, UiControlType.Dialog))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in RequireString(step, target, allowEmpty: false, "dialog button locator"))
+        {
+            yield return finding;
+        }
+
+        if (string.IsNullOrWhiteSpace(step.StringValue))
+        {
+            yield break;
+        }
+
+        var matchingHints = _recorderOptions.DialogHints
+            .Where(hint =>
+                hint.LocatorKind == step.Control.LocatorKind
+                && string.Equals(
+                    hint.LocatorValue.Trim(),
+                    step.Control.LocatorValue.Trim(),
+                    StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matchingHints.Length != 1)
+        {
+            yield return Invalid(
+                target,
+                "dialog-hint-ambiguous",
+                matchingHints.Length == 0
+                    ? $"Dialog '{step.Control.LocatorValue}' does not have a matching recorder hint."
+                    : $"Dialog '{step.Control.LocatorValue}' has more than one matching recorder hint.");
+            yield break;
+        }
+
+        var normalizedLocator = step.StringValue.Trim();
+        var matches = matchingHints[0].Parts.EnumerateRegisteredButtonLocators()
+            .Count(locator => string.Equals(locator.Trim(), normalizedLocator, StringComparison.Ordinal));
+        if (matches != 1)
+        {
+            yield return Invalid(
+                target,
+                "dialog-button-locator-invalid",
+                matches == 0
+                    ? $"Dialog '{step.Control.LocatorValue}' does not register button locator '{normalizedLocator}'."
+                    : $"Dialog '{step.Control.LocatorValue}' registers button locator '{normalizedLocator}' more than once.");
+        }
     }
 
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateControlType(

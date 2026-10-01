@@ -19,10 +19,17 @@ public sealed class RecorderFullCaptureCoverageTests
             .Where(action => steps.All(step => step.ActionKind != action))
             .ToArray();
         var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
-        var validator = new RecorderCommandRuntimeValidator(new AppAutomationRecorderOptions
+        var validationOptions = new AppAutomationRecorderOptions
         {
             MultiItemControls = CreateMultiItemCatalog()
-        });
+        };
+        validationOptions.DialogHints.Add(new RecorderDialogHint(
+            "DeleteDialog",
+            DialogControlParts.ByAutomationIds(
+                "DeleteDialogMessage",
+                "DeleteDialogConfirmButton",
+                additionalButtonAutomationIds: ["DeleteDialogAddButton"])));
+        var validator = new RecorderCommandRuntimeValidator(validationOptions);
 
         await Assert.That(missingActions.Length).IsEqualTo(0);
 
@@ -407,6 +414,7 @@ public sealed class RecorderFullCaptureCoverageTests
             new RecordedStep(RecordedActionKind.ConfirmDialog, Descriptor("DeleteDialog", UiControlType.Dialog)),
             new RecordedStep(RecordedActionKind.CancelDialog, Descriptor("DeleteDialog", UiControlType.Dialog)),
             new RecordedStep(RecordedActionKind.DismissDialog, Descriptor("DeleteDialog", UiControlType.Dialog)),
+            new RecordedStep(RecordedActionKind.InvokeDialogButton, Descriptor("DeleteDialog", UiControlType.Dialog), StringValue: "DeleteDialogAddButton"),
             new RecordedStep(RecordedActionKind.DismissNotification, Descriptor("ExportToast", UiControlType.Notification)),
             new RecordedStep(RecordedActionKind.OpenOrActivateShellPane, Descriptor("Shell", UiControlType.ShellNavigation), StringValue: "Customers"),
             new RecordedStep(RecordedActionKind.ActivateShellPane, Descriptor("Shell", UiControlType.ShellNavigation), StringValue: "Orders"),
