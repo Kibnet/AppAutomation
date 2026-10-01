@@ -59,6 +59,27 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
+    public async Task SelectGridRow_UsesStableIdentityAfterReorder()
+    {
+        var fixture = new GridFixture(
+            Row("ORD-1", "Draft", "10"),
+            Row("ORD-2", "Ready", "20"),
+            Row("ORD-3", "New", "30"));
+        fixture.Rows.Reverse();
+
+        fixture.CreateCatalogPage().SelectGridRow(
+            static page => page.Orders,
+            GridRowSelector.ByCell("Code", "ORD-2"),
+            timeoutMs: 250);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(fixture.Grid.SelectedOrderId).IsEqualTo("ORD-2");
+            await Assert.That(fixture.Grid.OpenedOrderId).IsNull();
+        }
+    }
+
+    [Test]
     public async Task NamedEdit_FollowsRowWhenEditChangesItsPosition()
     {
         var fixture = new GridFixture(
@@ -755,13 +776,16 @@ public sealed class GridRowSelectorTests
     }
 
     private sealed class ActionEditableGrid(string automationId, IReadOnlyList<MutableRow> rows)
-        : ReadOnlyGrid(automationId, rows), IGridUserActionControl, IEditableGridControl, IIndexedAddressableGridControl
+        : ReadOnlyGrid(automationId, rows), IGridUserActionControl, IEditableGridControl,
+            IIndexedAddressableGridControl, IIndexedGridRowSelectionControl
     {
         public Action<GridCellEditRequest>? AfterEdit { get; set; }
 
         public GridCellEditRequest? LastRequest { get; private set; }
 
         public string? OpenedOrderId { get; private set; }
+
+        public string? SelectedOrderId { get; private set; }
 
         public string? CopiedValue { get; private set; }
 
@@ -857,6 +881,12 @@ public sealed class GridRowSelectorTests
         {
             IndexedOperationCount++;
             OpenRow(ResolveUniqueIndex(row));
+        }
+
+        public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            IndexedOperationCount++;
+            SelectedOrderId = GetRowByIndex(ResolveUniqueIndex(row))?.Cells[0].Value;
         }
 
         private int ResolveUniqueIndex(GridIndexedRowSelector row)

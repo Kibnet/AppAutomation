@@ -1516,6 +1516,10 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.OpenGridRow => HasNamedGridRow(step)
                 ? $"Page.OpenGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});"
                 : $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
+            RecordedActionKind.SelectGridRow when HasNamedGridRow(step) =>
+                $"Page.SelectGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});",
+            RecordedActionKind.SelectGridRow =>
+                throw new InvalidOperationException("SelectGridRow requires a stable named row selector."),
             RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
             RecordedActionKind.CopyGridCell => HasNamedGridRow(step)

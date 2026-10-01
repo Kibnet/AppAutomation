@@ -45,6 +45,8 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("SelectGridRowButton", UiControlType.Button, "SelectGridRowButton")]
 [UiControl("GridResultLabel", UiControlType.Label, "GridResultLabel")]
 [UiControl("GridSelectionLabel", UiControlType.Label, "GridSelectionLabel")]
+[UiControl("DataGridSelectionActionButton", UiControlType.Button, "DataGridSelectionActionButton")]
+[UiControl("GridOpenMarkerLabel", UiControlType.Label, "GridOpenMarkerLabel")]
 [UiControl("DataGridErrorText", UiControlType.Label, "DataGridErrorText")]
 [UiControl("CalendarTabItem", UiControlType.TabItem, "CalendarTabItem")]
 [UiControl("DemoCalendar", UiControlType.Calendar, "DemoCalendar")]

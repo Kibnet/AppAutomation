@@ -3351,7 +3351,23 @@ public sealed class RecorderTests
         var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
         var options = CreateOptions(directory.Path, scenarioName: "Recovery Flow");
         var firstStep = CreateRecordedButtonStep(Guid.NewGuid(), "FirstButton");
-        var secondStep = CreateRecordedButtonStep(Guid.NewGuid(), "SecondButton");
+        var secondStep = new RecordedStep(
+            RecordedActionKind.SelectGridRow,
+            new RecordedControlDescriptor(
+                "OrdersGrid",
+                UiControlType.Grid,
+                "OrdersGrid",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: "Avalonia.Controls.DataGrid",
+                Warning: null),
+            StepId: Guid.NewGuid())
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("OrderId", "ORD-42")
+            ]
+        };
 
         var firstResult = await generator.AutosaveAsync(CreateWindowStub(), options, [firstStep], outputDirectoryOverride: null);
         var secondResult = await generator.AutosaveAsync(CreateWindowStub(), options, [firstStep, secondStep], outputDirectoryOverride: null);
@@ -3375,9 +3391,10 @@ public sealed class RecorderTests
             await Assert.That(scenarioSource).Contains("AppAutomation recorder autosave recovery file.");
             await Assert.That(scenarioSource).Contains("public void Autosave_RecoveryFlow_");
             await Assert.That(scenarioSource).Contains("Page.ClickButton(static page => page.FirstButton);");
-            await Assert.That(scenarioSource).Contains("Page.ClickButton(static page => page.SecondButton);");
+            await Assert.That(scenarioSource).Contains(
+                "Page.SelectGridRow(static page => page.OrdersGrid, GridRowSelector.ByCell(\"OrderId\", \"ORD-42\"));");
             await Assert.That(pageSource).Contains("[UiControl(\"FirstButton\", UiControlType.Button, \"FirstButton\", FallbackToName = false)]");
-            await Assert.That(pageSource).Contains("[UiControl(\"SecondButton\", UiControlType.Button, \"SecondButton\", FallbackToName = false)]");
+            await Assert.That(pageSource).Contains("[UiControl(\"OrdersGrid\", UiControlType.Grid, \"OrdersGrid\", FallbackToName = false)]");
         }
     }
 

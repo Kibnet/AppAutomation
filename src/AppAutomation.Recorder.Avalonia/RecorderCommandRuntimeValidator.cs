@@ -189,6 +189,9 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCoordinates(step, target, requireTargetColumn: false)),
+            RecordedActionKind.SelectGridRow => ValidateGridUserAction(step, target)
+                .Concat(RequireNamedGridRow(step, target))
+                .Concat(RequireNoGridTargetColumn(step, target)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
                 .Concat(RequireString(step, target, allowEmpty: false, "grid column name")),
             RecordedActionKind.ScrollGridToEnd => ValidateGridUserAction(step, target),
@@ -722,6 +725,21 @@ internal sealed class RecorderCommandRuntimeValidator
         RecorderRuntimeValidationTarget target)
     {
         return RequireGridCoordinates(step, target, requireTargetColumn: true);
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireNoGridTargetColumn(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return string.IsNullOrWhiteSpace(step.GridTargetColumnName)
+            ? []
+            :
+            [
+                Invalid(
+                    target,
+                    "payload-unexpected-grid-target-column",
+                    "Grid row selection must not contain a target column.")
+            ];
     }
 
     private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(

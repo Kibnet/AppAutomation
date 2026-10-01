@@ -13,6 +13,8 @@ public sealed partial class HeadlessControlResolver
         IEditableGridControl,
         IIndexedAddressableGridControl,
         IAddressableGridControl,
+        IGridRowSelectionControl,
+        IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl
     {
         private readonly AutomationElement _searchRoot;
@@ -83,6 +85,9 @@ public sealed partial class HeadlessControlResolver
 
         public void OpenRow(GridRowSelector row, int timeoutMs) =>
             OpenRow(MapRow(row), timeoutMs);
+
+        public void SelectRow(GridRowSelector row, int timeoutMs) =>
+            SelectRow(MapRow(row), timeoutMs);
 
         public GridRowResolution ResolveRow(GridIndexedRowSelector row, int timeoutMs)
         {
@@ -274,6 +279,36 @@ public sealed partial class HeadlessControlResolver
 
             throw new NotSupportedException(
                 $"Visual grid '{AutomationId}' does not expose a provider-neutral row activation action in Headless runtime.");
+        }
+
+        public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "select grid row");
+            var match = ResolveUniqueRow(row, budget.RemainingMilliseconds);
+            EnsureVisualRow(match);
+            if (match.Item is null)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' resolved the stable row without its source item; selection cannot be confirmed.");
+            }
+
+            var selected = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                HeadlessGridRuntimeAccess.SelectRow(Inner.Control, match.Item));
+            while (selected)
+            {
+                if (AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                        HeadlessGridRuntimeAccess.IsRowSelected(Inner.Control, match.Item)))
+                {
+                    return;
+                }
+
+                Thread.Sleep(Math.Min(20, budget.RemainingMilliseconds));
+            }
+
+            throw new InvalidOperationException(
+                $"Grid '{AutomationId}' did not confirm selection of the stable row within {timeoutMs} ms.");
         }
 
         public void EditCell(GridCellEditRequest request)

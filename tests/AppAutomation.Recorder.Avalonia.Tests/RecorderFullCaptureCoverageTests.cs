@@ -395,6 +395,10 @@ public sealed class RecorderFullCaptureCoverageTests
             },
             new RecordedStep(RecordedActionKind.WaitUntilGridCellEquals, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0, ColumnIndex: 1, StringValue: "EX-13"),
             new RecordedStep(RecordedActionKind.SearchAndSelect, Descriptor("HistoryOperationPicker", UiControlType.SearchPicker), StringValue: "least", ItemValue: "Least Common Multiple"),
+            new RecordedStep(RecordedActionKind.SelectGridRow, Descriptor("OrdersGrid", UiControlType.Grid))
+            {
+                GridRowConditions = [new RecordedGridRowCondition("OrderId", "ORD-42")]
+            },
             new RecordedStep(RecordedActionKind.OpenGridRow, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0),
             new RecordedStep(RecordedActionKind.SortGridByColumn, Descriptor("OrdersGrid", UiControlType.Grid), StringValue: "Value"),
             new RecordedStep(RecordedActionKind.ScrollGridToEnd, Descriptor("OrdersGrid", UiControlType.Grid)),

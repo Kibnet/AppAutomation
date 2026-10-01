@@ -127,6 +127,33 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
+    /// Selects the uniquely matching logical row without opening it.
+    /// </summary>
+    public static TSelf SelectGridRow<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        int timeoutMs = 5000)
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(rowSelector);
+        var grid = Resolve(selector, page);
+        if (grid is not IGridRowSelectionControl selectableGrid)
+        {
+            throw new NotSupportedException(
+                $"Grid '{grid.AutomationId}' does not expose provider-neutral row selection.");
+        }
+
+        return ExecuteAddressableGridAction(
+            page,
+            selector,
+            timeoutMs,
+            nameof(SelectGridRow),
+            budget => selectableGrid.SelectRow(rowSelector, budget.RemainingMilliseconds),
+            _ => GridRuntimeResolver.DescribeRowSelector(rowSelector));
+    }
+
+    /// <summary>
     /// Copies a named cell from the uniquely selected row.
     /// </summary>
     public static TSelf CopyGridCell<TSelf>(

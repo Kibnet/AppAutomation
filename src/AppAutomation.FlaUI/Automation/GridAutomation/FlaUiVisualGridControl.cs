@@ -24,6 +24,8 @@ public sealed partial class FlaUiControlResolver
         IEditableGridControl,
         IIndexedAddressableGridControl,
         IAddressableGridControl,
+        IGridRowSelectionControl,
+        IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl
     {
         private readonly Window _searchRoot;
@@ -236,6 +238,98 @@ public sealed partial class FlaUiControlResolver
             }
 
             OpenRow(MapRow(row), timeoutMs);
+        }
+
+        public void SelectRow(GridRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            if (HasNativeDataRows())
+            {
+                var target = ResolveNativeRowForSelection(row, stopwatch, timeoutMs).Element;
+                SelectAndConfirmGridRow(
+                    target,
+                    FindGridRoot(),
+                    RemainingGridMilliseconds(stopwatch, timeoutMs),
+                    $"Grid '{AutomationId}' row '{GridRuntimeResolver.DescribeRowSelector(row)}'");
+                return;
+            }
+
+            SelectRow(MapRow(row), timeoutMs);
+        }
+
+        private NativeFlaUiRow ResolveNativeRowForSelection(
+            GridRowSelector selector,
+            Stopwatch stopwatch,
+            int timeoutMs)
+        {
+            var selectorColumnIndexes = selector.Conditions
+                .Select(condition => ResolveNamedColumnIndex(condition.ColumnName))
+                .Distinct()
+                .ToArray();
+            var scroll = FindGridScrollState();
+
+            NativeFlaUiRow? TryResolveCurrentViewport(IReadOnlyList<NativeFlaUiRow> visibleRows)
+            {
+                var snapshots = new List<NativeGridRowSnapshot>();
+                AppendNativeRows(
+                    snapshots,
+                    visibleRows,
+                    ReadGridScrollPosition(FindGridScrollState()),
+                    selectorColumnIndexes,
+                    Array.Empty<GridRowAutomationProperty>());
+                if (!NativeGridVisibleResolution.TryResolve(
+                        hasDeclaredUniqueIdentity: true,
+                        snapshots,
+                        visibleRows,
+                        candidate => NativeRowMatches(candidate, selector),
+                        candidate => NativeRowMatches(candidate, selector),
+                        out var visibleMatches,
+                        out var liveVisibleMatch))
+                {
+                    return null;
+                }
+
+                if (visibleMatches.Length != 1 || liveVisibleMatch is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' visible stable selector matched {visibleMatches.Length} logical rows; expected exactly one.");
+                }
+
+                return liveVisibleMatch;
+            }
+
+            var currentRows = TakePrefetchedNativeRows();
+            if (TryResolveCurrentViewport(currentRows) is { } currentMatch)
+            {
+                return currentMatch;
+            }
+
+            MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
+            scroll = FindGridScrollState();
+            while (stopwatch.ElapsedMilliseconds < timeoutMs)
+            {
+                var visibleRows = TakePrefetchedNativeRows();
+                if (TryResolveCurrentViewport(visibleRows) is { } match)
+                {
+                    return match;
+                }
+
+                var signature = CreateNativeRowSignature(visibleRows);
+                if (!MoveGridScrollForward(
+                        scroll,
+                        stopwatch,
+                        timeoutMs,
+                        signature,
+                        EstimateNativeScrollIncrement(visibleRows)))
+                {
+                    break;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"Grid '{AutomationId}' did not materialize stable row '{GridRuntimeResolver.DescribeRowSelector(selector)}' within the operation timeout.");
         }
 
         private bool HasNativeDataRows()
@@ -1019,6 +1113,36 @@ public sealed partial class FlaUiControlResolver
             throw new InvalidOperationException(
                 $"Grid '{AutomationId}' stable row could not be opened by double-click.",
                 exception);
+        }
+
+        public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            AutomationElement target;
+            if (HasNativeDataRows())
+            {
+                target = ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
+            }
+            else
+            {
+                var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
+                target = FindVisualCellWithTraversal(
+                        rowIndex,
+                        0,
+                        RemainingGridMilliseconds(stopwatch, timeoutMs))
+                    ?? ReadRows().FirstOrDefault(candidate =>
+                        ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == rowIndex)
+                    ?? throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' stable row was resolved but is not visible after bounded traversal.");
+            }
+
+            SelectAndConfirmGridRow(
+                target,
+                FindGridRoot(),
+                RemainingGridMilliseconds(stopwatch, timeoutMs),
+                $"Grid '{AutomationId}' stable row");
         }
 
         public void EditCell(GridCellEditRequest request)
@@ -3870,6 +3994,216 @@ public sealed partial class FlaUiControlResolver
             return false;
         }
     }
+
+    private static void SelectAndConfirmGridRow(
+        AutomationElement target,
+        AutomationElement? selectionContainer,
+        int timeoutMs,
+        string description)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        TryScrollIntoView(target);
+        AutomationElement? selectable = null;
+        for (var current = target; current is not null; current = TryRead(() => current.Parent))
+        {
+            if (TryRead(() => current.Patterns.SelectionItem.IsSupported))
+            {
+                selectable = current;
+                break;
+            }
+        }
+        if (!TryConfirmGridRowSelection(
+                target,
+                selectable,
+                selectionContainer,
+                allowContainerFocusFallback: false,
+                out _))
+        {
+            try
+            {
+                if (selectable is not null)
+                {
+                    selectable.Patterns.SelectionItem.Pattern.Select();
+                }
+                else
+                {
+                    TryFocus(target);
+                    MoveMouseToVisibleGridRowPoint(target, selectionContainer);
+                    Mouse.LeftClick();
+                }
+            }
+            catch
+            {
+                TryFocus(selectable ?? target);
+                MoveMouseToVisibleGridRowPoint(selectable ?? target, selectionContainer);
+                Mouse.LeftClick();
+            }
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        var selectionStateWasReadable = false;
+        while (stopwatch.ElapsedMilliseconds < timeoutMs)
+        {
+            if (TryConfirmGridRowSelection(
+                    target,
+                    selectable,
+                    selectionContainer,
+                    allowContainerFocusFallback: true,
+                    out var currentStateWasReadable))
+            {
+                return;
+            }
+            selectionStateWasReadable |= currentStateWasReadable;
+
+            Thread.Sleep(Math.Max(
+                1,
+                Math.Min(25, timeoutMs - (int)stopwatch.ElapsedMilliseconds)));
+        }
+
+        if (!selectionStateWasReadable)
+        {
+            throw new System.NotSupportedException(
+                $"{description} exposes neither a readable SelectionItem pattern nor a readable grid selection; selection cannot be confirmed.");
+        }
+
+        throw new InvalidOperationException(
+            $"{description} did not confirm its selected state within {timeoutMs} ms. "
+            + DescribeGridSelectionEvidence(target, selectionContainer));
+    }
+
+    private static string DescribeGridSelectionEvidence(
+        AutomationElement target,
+        AutomationElement? selectionContainer)
+    {
+        var focused = TryRead(() => target.Automation.FocusedElement());
+        return $"targetType={TryRead(() => target.ControlType)}; "
+            + $"targetBounds={TryRead(() => target.BoundingRectangle)}; "
+            + $"focusedType={TryRead(() => focused?.ControlType)}; "
+            + $"focusedBounds={TryRead(() => focused?.BoundingRectangle)}; "
+            + $"containerType={TryRead(() => selectionContainer?.ControlType)}.";
+    }
+
+    private static void MoveMouseToVisibleGridRowPoint(
+        AutomationElement row,
+        AutomationElement? selectionContainer)
+    {
+        var rowBounds = TryRead(() => row.BoundingRectangle);
+        var visibleBounds = selectionContainer is null
+            ? rowBounds
+            : System.Drawing.Rectangle.Intersect(
+                rowBounds,
+                TryRead(() => selectionContainer.BoundingRectangle));
+        if (visibleBounds.Width <= 0 || visibleBounds.Height <= 0)
+        {
+            MoveMouseImmediatelyTo(row);
+            return;
+        }
+
+        Mouse.Position = new System.Drawing.Point(
+            visibleBounds.Left + Math.Min(12, Math.Max(1, visibleBounds.Width / 2)),
+            visibleBounds.Top + Math.Max(1, visibleBounds.Height / 2));
+    }
+
+    private static bool TryConfirmGridRowSelection(
+        AutomationElement target,
+        AutomationElement? selectable,
+        AutomationElement? selectionContainer,
+        bool allowContainerFocusFallback,
+        out bool selectionStateWasReadable)
+    {
+        selectionStateWasReadable = false;
+        if (selectable is not null
+            && TryRead(() => selectable.Patterns.SelectionItem.IsSupported))
+        {
+            selectionStateWasReadable = true;
+            if (TryRead(() => selectable.Patterns.SelectionItem.Pattern.IsSelected.Value))
+            {
+                return true;
+            }
+        }
+
+        AutomationElement[]? selectedElements = null;
+        if (selectionContainer is not null
+            && TryRead(() => selectionContainer.Patterns.Selection.IsSupported))
+        {
+            selectedElements = TryRead(() => selectionContainer.Patterns.Selection.Pattern.Selection.Value);
+            selectionStateWasReadable |= selectedElements is not null;
+        }
+
+        if (selectedElements is null && selectionContainer is not null)
+        {
+            selectedElements = TryRead(() => selectionContainer
+                .AsGrid()
+                .SelectedItems
+                .Select(static row => (AutomationElement)row)
+                .ToArray());
+            selectionStateWasReadable |= selectedElements is not null;
+        }
+
+        if (selectedElements?.Any(selected =>
+            IsSameAutomationElement(selected, target)
+            || IsAutomationAncestor(target, selected)
+            || IsAutomationAncestor(selected, target)) == true)
+        {
+            return true;
+        }
+
+        var focusedElement = TryRead(() => target.Automation.FocusedElement());
+        selectionStateWasReadable |= focusedElement is not null;
+        return focusedElement is not null
+            && (IsSameAutomationElement(focusedElement, target)
+                || IsAutomationAncestor(target, focusedElement)
+                || OccupiesSameGridRow(target, focusedElement)
+                || (allowContainerFocusFallback
+                    && selectionContainer is not null
+                    && IsSameAutomationElement(focusedElement, selectionContainer)
+                    && TryRead(() => target.BoundingRectangle) is { Width: > 0, Height: > 0 }));
+    }
+
+    private static bool OccupiesSameGridRow(
+        AutomationElement row,
+        AutomationElement focusedElement)
+    {
+        var rowBounds = TryRead(() => row.BoundingRectangle);
+        var focusedBounds = TryRead(() => focusedElement.BoundingRectangle);
+        if (rowBounds.Width <= 0
+            || rowBounds.Height <= 0
+            || focusedBounds.Width <= 0
+            || focusedBounds.Height <= 0
+            || focusedBounds.Height > rowBounds.Height * 2)
+        {
+            return false;
+        }
+
+        var focusedCenterY = focusedBounds.Top + focusedBounds.Height / 2;
+        return focusedCenterY >= rowBounds.Top && focusedCenterY <= rowBounds.Bottom;
+    }
+
+    private static bool IsAutomationAncestor(
+        AutomationElement expectedAncestor,
+        AutomationElement element)
+    {
+        var expectedIdentity = GetAutomationElementIdentity(expectedAncestor);
+        for (var current = element; current is not null; current = TryRead(() => current.Parent))
+        {
+            if (string.Equals(
+                    GetAutomationElementIdentity(current),
+                    expectedIdentity,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSameAutomationElement(AutomationElement left, AutomationElement right) =>
+        string.Equals(
+            GetAutomationElementIdentity(left),
+            GetAutomationElementIdentity(right),
+            StringComparison.Ordinal);
 
     private static void MoveMouseImmediatelyTo(AutomationElement element)
     {

@@ -458,6 +458,117 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
+    [Arguments(1, "ITEM-20")]
+    [Arguments(5, "ITEM-60")]
+    [Arguments(9, "ITEM-100")]
+    [Arguments(11, "ITEM-120")]
+    public async Task GridCatalog_RecordsSelectionForEveryLaterRowWithStableIdentity(
+        int rowIndex,
+        string expectedKey)
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: rowIndex,
+            selectedSourceField: "Key");
+
+        var capture = fixture.CaptureRowGesture(openRow: false);
+        var preview = CreateGenerator().GeneratePreview(capture.StepResult.Step!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(capture.IsConfigured).IsTrue();
+            await Assert.That(capture.StepResult.Success).IsTrue();
+            await Assert.That(capture.StepResult.Step!.ActionKind)
+                .IsEqualTo(RecordedActionKind.SelectGridRow);
+            await Assert.That(capture.StepResult.Step.GridRowConditions).IsEquivalentTo(
+            [
+                new RecordedGridRowCondition("Key", expectedKey)
+            ]);
+            await Assert.That(capture.StepResult.Step.RowIndex).IsNull();
+            await Assert.That(preview).Contains(
+                $"Page.SelectGridRow(static page => page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"{expectedKey}\"));");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_DoubleClickCoalescesSelectionIntoOneOpenStep()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: 2,
+            selectedSourceField: "Key");
+        using var session = fixture.CreateSession();
+        session.Start();
+
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell, clickCount: 1);
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell, clickCount: 2);
+
+        var step = session.StepJournal.Single();
+        using (Assert.Multiple())
+        {
+            await Assert.That(step.Preview).Contains("Page.OpenGridRow(");
+            await Assert.That(step.Preview).Contains("GridRowSelector.ByCell(\"Key\", \"ITEM-30\")");
+            await Assert.That(step.Preview).DoesNotContain("Page.SelectGridRow(");
+            await Assert.That(session.ExportPreview()).Contains("Page.OpenGridRow(");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_RowSelectionRequiresExplicitIdentity()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: false,
+            selectedRowIndex: 1,
+            selectedSourceField: "Key");
+
+        var capture = fixture.CaptureRowGesture(openRow: false);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(capture.IsConfigured).IsTrue();
+            await Assert.That(capture.StepResult.Success).IsFalse();
+            await Assert.That(capture.StepResult.Message).Contains("Configure IdentifyRowsBy");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_RowSelectionRejectsDuplicateStableIdentity()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: 0,
+            selectedSourceField: "Key",
+            duplicateRowIdentity: true);
+
+        var capture = fixture.CaptureRowGesture(openRow: false);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(capture.IsConfigured).IsTrue();
+            await Assert.That(capture.StepResult.Success).IsFalse();
+            await Assert.That(capture.StepResult.Message).Contains("matched 2 rows");
+            await Assert.That(capture.StepResult.Message).Contains("IdentifyRowsBy");
+        }
+    }
+
+    [Test]
+    public async Task GridCatalog_EmbeddedButtonKeepsItsMoreSpecificAction()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: 1,
+            selectedSourceField: "Key");
+
+        var capture = fixture.CaptureEmbeddedButtonGesture();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(capture.IsConfigured).IsFalse();
+            await Assert.That(capture.StepResult.Step).IsNull();
+        }
+    }
+
+    [Test]
     public async Task NativeGrid_UsesOnlyExplicitModelKeyAsAutomaticIdentity()
     {
         var grid = new NativeGridMetadataHost
@@ -1287,20 +1398,21 @@ public sealed class RecorderStableGridSelectorTests
     {
         private readonly RecorderStepFactory _factory;
         private readonly TextBlock _selectedCell;
+        private readonly Border _rowPresenter;
+        private readonly StackPanel _root;
+        private readonly AppAutomationRecorderOptions _options;
 
         public CatalogGridCaptureFixture(
             bool includeRowIdentity,
             int selectedRowIndex = 0,
-            string selectedSourceField = "RequiredQuantity")
+            string selectedSourceField = "RequiredQuantity",
+            bool duplicateRowIdentity = false)
         {
-            var rows = new[]
-            {
-                new CatalogItemRow("ITEM-10", 10.5m),
-                new CatalogItemRow("ITEM-20", 20.5m),
-                new CatalogItemRow("ITEM-30", 30.5m),
-                new CatalogItemRow("ITEM-40", 40.5m),
-                new CatalogItemRow("ITEM-50", 10.5m)
-            };
+            var rows = Enumerable.Range(1, 12)
+                .Select(index => new CatalogItemRow(
+                    duplicateRowIdentity && index == 2 ? "ITEM-10" : $"ITEM-{index * 10}",
+                    index == 5 ? 10.5m : index * 10m + 0.5m))
+                .ToArray();
             var row = rows[selectedRowIndex];
             object selectedValue = selectedSourceField switch
             {
@@ -1315,12 +1427,12 @@ public sealed class RecorderStableGridSelectorTests
                 row,
                 new GridColumnContext(selectedSourceField),
                 selectedValue);
-            var root = new StackPanel();
+            _root = new StackPanel();
             var archiveRow = new CatalogItemRow("ITEM-10", 999m);
             var archiveGrid = new GridHost { ItemsSource = new[] { archiveRow } };
             var archiveRuntimeGrid = new Border();
             var sourceGrid = new GridHost { ItemsSource = rows };
-            var rowPresenter = new Border { DataContext = cellContext };
+            _rowPresenter = new Border { DataContext = cellContext };
             _selectedCell = new TextBlock
             {
                 Text = selectedValue.ToString(),
@@ -1332,12 +1444,12 @@ public sealed class RecorderStableGridSelectorTests
             AutomationProperties.SetAutomationId(archiveRuntimeGrid, "ArchiveGrid");
             AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
             AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
-            rowPresenter.Child = _selectedCell;
-            sourceGrid.Children.Add(rowPresenter);
-            root.Children.Add(archiveGrid);
-            root.Children.Add(archiveRuntimeGrid);
-            root.Children.Add(sourceGrid);
-            root.Children.Add(runtimeGrid);
+            _rowPresenter.Child = _selectedCell;
+            sourceGrid.Children.Add(_rowPresenter);
+            _root.Children.Add(archiveGrid);
+            _root.Children.Add(archiveRuntimeGrid);
+            _root.Children.Add(sourceGrid);
+            _root.Children.Add(runtimeGrid);
 
             var definition = CreateDefinition("ItemsGrid", "ItemsGridVisual", "ItemsGrid");
             if (includeRowIdentity)
@@ -1351,19 +1463,42 @@ public sealed class RecorderStableGridSelectorTests
                     "ArchiveGrid")
                 .IdentifyRowsBy("Key");
 
-            var options = new AppAutomationRecorderOptions
+            _options = new AppAutomationRecorderOptions
             {
                 GridAutomation = new GridAutomationCatalog()
                     .Add(archiveDefinition)
                     .Add(definition),
                 Validation = new RecorderValidationOptions { ValidateRuntimeTargets = false }
             };
-            _factory = new RecorderStepFactory(options, () => root);
+            _factory = new RecorderStepFactory(_options, () => _root);
         }
+
+        public Control SelectedCell => _selectedCell;
 
         public StepCreationResult CaptureCheckpoint(string variableName = "requiredAmount")
         {
             return _factory.TryCreateCheckpointStep(_selectedCell, variableName);
+        }
+
+        public GridRowGestureCaptureResult CaptureRowGesture(bool openRow)
+        {
+            return _factory.TryCreateCatalogGridRowGestureStep(_selectedCell, openRow);
+        }
+
+        public GridRowGestureCaptureResult CaptureEmbeddedButtonGesture()
+        {
+            var button = new Button { Content = "Apply" };
+            _rowPresenter.Child = button;
+            return _factory.TryCreateCatalogGridRowGestureStep(button, openRow: false);
+        }
+
+        public RecorderSession CreateSession()
+        {
+            return new RecorderSession(
+                RecorderTestWindow.CreateStub(),
+                _options,
+                validationRootProvider: () => _root,
+                attachWindowHandlers: false);
         }
 
         private static GridAutomationDefinition CreateDefinition(

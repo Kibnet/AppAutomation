@@ -24,6 +24,8 @@ public sealed partial class FlaUiControlResolver
         IGridUserActionControl,
         IAddressableGridControl,
         IIndexedAddressableGridControl,
+        IGridRowSelectionControl,
+        IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl
     {
         private readonly AutomationElement _searchRoot;
@@ -301,6 +303,33 @@ public sealed partial class FlaUiControlResolver
                     $"Grid row '{GridRuntimeResolver.DescribeRowSelector(row)}' could not be opened in grid '{AutomationId}'.",
                     exception);
             }
+        }
+
+        public void SelectRow(GridRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var columnNames = ColumnNames;
+            var resolved = ResolveUniqueRow(row, columnNames, timeoutMs);
+            SelectAndConfirmGridRow(
+                resolved,
+                Inner,
+                RemainingMilliseconds(stopwatch, timeoutMs),
+                $"Grid '{AutomationId}' row '{GridRuntimeResolver.DescribeRowSelector(row)}'");
+        }
+
+        public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var resolved = ResolveUniqueRow(row, timeoutMs, out var scannedRows);
+            SelectAndConfirmGridRow(
+                resolved,
+                Inner,
+                RemainingMilliseconds(stopwatch, timeoutMs),
+                $"Grid '{AutomationId}' indexed row ({DescribeIndexedResolution(row, 1, scannedRows)})");
         }
 
         private int[] FindMatchingRows(

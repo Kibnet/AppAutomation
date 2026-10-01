@@ -72,7 +72,8 @@ public enum RecordedActionKind
     AssertValue = 64,
     SetGridCellChecked = 65,
     SetMultiItemSpinnerValue = 66,
-    CaptureCopiedValue = 67
+    CaptureCopiedValue = 67,
+    SelectGridRow = 68
 }
 
 public enum RecorderAssertionMode
@@ -596,6 +597,10 @@ internal sealed record GridComboSelectionCaptureResult(
     StepCreationResult StepResult);
 
 internal sealed record GridCellEditCaptureResult(
+    bool IsConfigured,
+    StepCreationResult StepResult);
+
+internal sealed record GridRowGestureCaptureResult(
     bool IsConfigured,
     StepCreationResult StepResult);
 

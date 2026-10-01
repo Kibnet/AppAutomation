@@ -419,6 +419,7 @@
                               SelectionMode="Single"
                               HeadersVisibility="All"
                               LoadingRow="OnDemoDataGridLoadingRow"
+                              DoubleTapped="OnDemoDataGridDoubleTapped"
                               ItemsSource="{Binding DataGridRows}"
                               SelectedItem="{Binding SelectedDataGridRow, Mode=TwoWay}"
                               IsReadOnly="True">
@@ -577,7 +578,7 @@
                     </DataGrid>
                 </Grid>
 
-                <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12">
+                <Grid Grid.Row="3" ColumnDefinitions="*,*,Auto,*" ColumnSpacing="12">
                     <Label x:Name="GridResultLabel"
                            Grid.Column="0"
                            automation:AutomationProperties.AutomationId="GridResultLabel"
@@ -592,6 +593,17 @@
                            HorizontalAlignment="Left"
                            VerticalAlignment="Center"
                            Content="{Binding GridSelectionLabel}" />
+                    <Button x:Name="DataGridSelectionActionButton"
+                            Grid.Column="2"
+                            automation:AutomationProperties.AutomationId="DataGridSelectionActionButton"
+                            IsEnabled="{Binding HasSelectedDataGridRow}"
+                            Content="Use selection" />
+                    <Label x:Name="GridOpenMarkerLabel"
+                           Grid.Column="3"
+                           automation:AutomationProperties.AutomationId="GridOpenMarkerLabel"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Content="{Binding GridOpenMarker}" />
                 </Grid>
 
                 <TextBlock Grid.Row="4"

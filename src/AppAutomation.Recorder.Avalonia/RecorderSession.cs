@@ -1095,6 +1095,11 @@ internal sealed class RecorderSession :
         TryRecordGridAction(source);
     }
 
+    internal void CaptureCatalogGridRowGestureForTesting(Control? source, int clickCount = 1)
+    {
+        TryRecordCatalogGridRowGesture(source, clickCount);
+    }
+
     internal void SetLastHoveredControlForTesting(Control? source)
     {
         _lastHoveredControl = source;
@@ -1498,7 +1503,11 @@ internal sealed class RecorderSession :
 
         if (FindAncestorOrSelf<Button>(source) is null)
         {
-            TryRecordGridAction(source ?? control);
+            var gestureSource = source ?? control;
+            if (!TryRecordCatalogGridRowGesture(gestureSource, e.ClickCount))
+            {
+                TryRecordGridAction(gestureSource);
+            }
         }
     }
 
@@ -3970,6 +3979,61 @@ internal sealed class RecorderSession :
 
         AddStep(result, source, "GridAction");
         return true;
+    }
+
+    private bool TryRecordCatalogGridRowGesture(Control? source, int clickCount)
+    {
+        var capture = _stepFactory.TryCreateCatalogGridRowGestureStep(
+            source,
+            openRow: clickCount >= 2);
+        if (!capture.IsConfigured)
+        {
+            return false;
+        }
+
+        if (clickCount >= 2 && capture.StepResult.Step is { } openStep)
+        {
+            RemoveImmediatelyPrecedingGridSelection(openStep);
+        }
+
+        AddStep(capture.StepResult, source, clickCount >= 2 ? "GridRowOpen" : "GridRowSelect");
+        return true;
+    }
+
+    private void RemoveImmediatelyPrecedingGridSelection(RecordedStep openStep)
+    {
+        if (_steps.Count == 0)
+        {
+            return;
+        }
+
+        var previous = _steps[^1];
+        if (previous.ActionKind != RecordedActionKind.SelectGridRow
+            || !string.Equals(
+                previous.Control.ProposedPropertyName,
+                openStep.Control.ProposedPropertyName,
+                StringComparison.Ordinal)
+            || !GridRowConditionsEqual(previous.GridRowConditions, openStep.GridRowConditions))
+        {
+            return;
+        }
+
+        _steps.RemoveAt(_steps.Count - 1);
+        _lastFingerprint = null;
+    }
+
+    private static bool GridRowConditionsEqual(
+        IReadOnlyList<RecordedGridRowCondition>? left,
+        IReadOnlyList<RecordedGridRowCondition>? right)
+    {
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        return left.Zip(right).All(pair =>
+            string.Equals(pair.First.ColumnName, pair.Second.ColumnName, StringComparison.Ordinal)
+            && string.Equals(pair.First.Value, pair.Second.Value, StringComparison.Ordinal));
     }
 
     private bool TryRecordCatalogGridCellEdit(

@@ -1565,6 +1565,96 @@ internal sealed partial class RecorderStepFactory
         };
     }
 
+    public GridRowGestureCaptureResult TryCreateCatalogGridRowGestureStep(
+        Control? source,
+        bool openRow)
+    {
+        if (source is null
+            || !TryResolveGridHint(source, out var hint, out var gridSource)
+            || _options.FindGridDefinition(hint) is not { } definition)
+        {
+            return new GridRowGestureCaptureResult(
+                false,
+                StepCreationResult.Unsupported(NoGridActionHintMessage));
+        }
+
+        if (HasMoreSpecificGridInteraction(source, gridSource))
+        {
+            return new GridRowGestureCaptureResult(
+                false,
+                StepCreationResult.Unsupported(NoGridActionHintMessage));
+        }
+
+        if (definition.RowIdentityColumns.Count == 0)
+        {
+            return new GridRowGestureCaptureResult(
+                true,
+                StepCreationResult.Unsupported(
+                    $"Grid '{definition.PagePropertyName}' cannot record row selection without a declared stable identity. "
+                    + "Configure IdentifyRowsBy(...); visual row indexes are not persisted."));
+        }
+
+        if (!TryReadItemsSource(gridSource, out var items)
+            || !TryResolveGridRow(source, gridSource, items, out var rowIndex, out _))
+        {
+            return new GridRowGestureCaptureResult(
+                true,
+                StepCreationResult.Unsupported(
+                    $"Grid '{definition.PagePropertyName}' could not resolve the clicked visual element to a source row."));
+        }
+
+        var descriptor = new RecordedControlDescriptor(
+            definition.PagePropertyName,
+            UiControlType.Grid,
+            definition.RuntimeLocatorValue,
+            definition.RuntimeLocatorKind,
+            definition.RuntimeFallbackToName,
+            gridSource.GetType().FullName ?? gridSource.GetType().Name,
+            Warning: null);
+        var action = openRow
+            ? RecordedActionKind.OpenGridRow
+            : RecordedActionKind.SelectGridRow;
+        var step = new RecordedStep(action, descriptor, RowIndex: rowIndex);
+        var result = CreateCatalogGridStep(
+            source,
+            step,
+            warning: null,
+            hint,
+            definition,
+            rowIndex,
+            columnIndex: null,
+            excludeTargetColumnFromIdentity: false);
+        return new GridRowGestureCaptureResult(true, result);
+    }
+
+    private static bool HasMoreSpecificGridInteraction(Control source, Control gridSource)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (ReferenceEquals(current, gridSource))
+            {
+                return false;
+            }
+
+            if (current is Button
+                or ToggleButton
+                or TextBox
+                or ComboBox
+                or ListBox
+                or NumericUpDown
+                or DatePicker
+                or TimePicker
+                or Calendar
+                or Slider
+                or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public StepCreationResult TryCreateListBoxStep(ListBox listBox)
     {
         ArgumentNullException.ThrowIfNull(listBox);
