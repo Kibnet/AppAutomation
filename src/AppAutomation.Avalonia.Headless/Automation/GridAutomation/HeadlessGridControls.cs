@@ -637,19 +637,20 @@ public sealed partial class HeadlessControlResolver
                     availableItems = list.Items
                         .Select(static item => item.Text ?? string.Empty)
                         .ToArray();
-                    var matches = availableItems.Count(item =>
-                        string.Equals(item, request.Value, StringComparison.Ordinal));
-                    if (matches > 1)
+                    var matchingItems = availableItems
+                        .Where(item => GridSelectionText.Equals(item, request.Value))
+                        .ToArray();
+                    if (matchingItems.Length > 1)
                     {
                         throw CreateSearchPickerPartException(
                             cell,
                             request,
                             "results",
-                            $"contains {matches} items with exact caption '{request.Value}'");
+                            $"contains {matchingItems.Length} items with exact caption '{request.Value}'");
                     }
-                    if (matches == 1)
+                    if (matchingItems.Length == 1)
                     {
-                        list.SelectItemExact(request.Value);
+                        list.SelectItemExact(matchingItems[0]);
                         return (true, true, availableItems);
                     }
                 }

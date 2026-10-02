@@ -876,26 +876,34 @@ public sealed class UiControlAdapterTests
         var cancelButton = new FakeButtonControl("CancelDeleteButton");
         var dismissButton = new FakeButtonControl("DismissDeleteButton");
         var addButton = new FakeButtonControl("AddDeleteButton");
+        var parts = new DialogControlParts(
+            " DeleteDialogMessage ",
+            " ConfirmDeleteButton ",
+            " CancelDeleteButton ",
+            " DismissDeleteButton ")
+        {
+            ButtonLocators = [" AddDeleteButton "]
+        };
+        var duplicateError = Assert.Throws<ArgumentException>(() =>
+            new FakeResolver().WithDialog(
+                "DuplicateDialog",
+                new DialogControlParts("DeleteDialogMessage", "ConfirmDeleteButton")
+                {
+                    ButtonLocators = [" ConfirmDeleteButton "]
+                }));
         var resolver = new FakeResolver(
             ("DeleteDialogMessage", message),
             ("ConfirmDeleteButton", confirmButton),
             ("CancelDeleteButton", cancelButton),
             ("DismissDeleteButton", dismissButton),
             ("AddDeleteButton", addButton))
-            .WithDialog(
-                "DeleteDialog",
-                DialogControlParts.ByAutomationIds(
-                    "DeleteDialogMessage",
-                    "ConfirmDeleteButton",
-                    cancelButtonAutomationId: "CancelDeleteButton",
-                    dismissButtonAutomationId: "DismissDeleteButton",
-                    additionalButtonAutomationIds: ["AddDeleteButton"]));
+            .WithDialog("DeleteDialog", parts);
         var page = new WorkflowPage(resolver);
 
         page.DeleteDialog.Complete();
         page.DeleteDialog.Complete(DialogActionKind.Cancel);
         page.DeleteDialog.Complete(DialogActionKind.Dismiss);
-        ((IAddressableDialogControl)page.DeleteDialog).InvokeButton("AddDeleteButton");
+        ((IAddressableDialogControl)page.DeleteDialog).InvokeButton(" AddDeleteButton ");
 
         using (Assert.Multiple())
         {
@@ -904,6 +912,7 @@ public sealed class UiControlAdapterTests
             await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
             await Assert.That(dismissButton.InvokeCount).IsEqualTo(1);
             await Assert.That(addButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(duplicateError.Message).Contains("registered more than once");
         }
     }
 

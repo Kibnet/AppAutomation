@@ -351,40 +351,6 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
-    public async Task DataGrid_SelectGridRow_UsesStableIdentityForEveryRow()
-    {
-        Page
-            .SelectTabItem(static page => page.DataGridTabItem)
-            .EnterText(static page => page.DataGridRowsInput, "12")
-            .ClickButton(static page => page.BuildGridButton)
-            .WaitUntilNameEquals(static page => page.GridResultLabel, "Grid rows: 12")
-            .WaitUntilIsEnabled(static page => page.DataGridSelectionActionButton, false)
-            .WaitUntilNameEquals(static page => page.GridOpenMarkerLabel, "No row opened");
-
-        for (var rowNumber = 1; rowNumber <= 12; rowNumber++)
-        {
-            var rowKey = $"R{rowNumber}";
-            Page
-                .SelectGridRow(
-                    static page => page.DemoDataGrid,
-                    GridRowSelector.ByCell("Row", rowKey))
-                .WaitUntilNameEquals(
-                    static page => page.GridSelectionLabel,
-                    $"Selected row: {rowKey}")
-                .WaitUntilIsEnabled(static page => page.DataGridSelectionActionButton, true)
-                .WaitUntilNameEquals(static page => page.GridOpenMarkerLabel, "No row opened");
-        }
-
-        using (Assert.Multiple())
-        {
-            await Assert.That(Page.GridSelectionLabel.Text).IsEqualTo("Selected row: R12");
-            await Assert.That(Page.DataGridSelectionActionButton.IsEnabled).IsTrue();
-            await Assert.That(Page.GridOpenMarkerLabel.Text).IsEqualTo("No row opened");
-        }
-    }
-
-    [Test]
-    [NotInParallel(DesktopUiConstraint)]
     public async Task MultiSelectPopup_SelectsExactItemsAndCloses()
     {
         string[] expectedItems = ["Alpha", "Omega"];

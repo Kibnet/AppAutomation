@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AppAutomation.Abstractions;
 
 namespace AppAutomation.FlaUI.Automation.GridAutomation;
 
@@ -28,7 +29,7 @@ internal static class VirtualizedExactItemSelector
         ArgumentNullException.ThrowIfNull(trySelect);
         ArgumentNullException.ThrowIfNull(click);
 
-        var normalizedTarget = Normalize(expectedText);
+        var normalizedTarget = GridSelectionText.Normalize(expectedText);
         var stopwatch = Stopwatch.StartNew();
         string? previousSignature = null;
         string? scrolledContainerIdentity = null;
@@ -125,11 +126,11 @@ internal static class VirtualizedExactItemSelector
                 .ToArray();
             var matches = candidateValues
                 .Where(candidate => string.Equals(
-                    Normalize(candidate.CandidateText),
+                    GridSelectionText.Normalize(candidate.CandidateText),
                     normalizedTarget,
                     StringComparison.OrdinalIgnoreCase))
                 .Where(candidate => string.Equals(
-                    Normalize(candidate.ContainerText),
+                    GridSelectionText.Normalize(candidate.ContainerText),
                     normalizedTarget,
                     StringComparison.OrdinalIgnoreCase))
                 .DistinctBy(static candidate => candidate.ContainerIdentity)
@@ -142,7 +143,7 @@ internal static class VirtualizedExactItemSelector
             lastCandidateTexts = string.Join(
                 ", ",
                 candidateValues
-                    .Select(static candidate => Normalize(candidate.CandidateText))
+                    .Select(static candidate => GridSelectionText.Normalize(candidate.CandidateText))
                     .Where(static text => text.Length > 0)
                     .Distinct(StringComparer.Ordinal)
                     .Take(10));
@@ -152,20 +153,18 @@ internal static class VirtualizedExactItemSelector
                 containers.Select(container => string.Join(
                     '\u001f',
                     container.ContainerIdentity,
-                    Normalize(container.ContainerText))));
+                    GridSelectionText.Normalize(container.ContainerText))));
             return new SelectionSnapshot<TContainer>(signature, matches);
         }
 
         bool IsExactMatch(TContainer container)
         {
             return string.Equals(
-                Normalize(readContainerText(container)),
+                GridSelectionText.Normalize(readContainerText(container)),
                 normalizedTarget,
                 StringComparison.OrdinalIgnoreCase);
         }
     }
-
-    private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
 
     private sealed record SelectionSnapshot<TContainer>(string Signature, TContainer[] Matches);
 }

@@ -1815,7 +1815,7 @@ internal sealed class AuthoringCodeGenerator
         return step.ValueAccessorKind switch
         {
             RecorderValueAccessorKind.Text when step.Control.ControlType == UiControlType.Button =>
-                $"((global::AppAutomation.Abstractions.IReadableTextControl){control}).Text",
+                $"global::AppAutomation.Abstractions.UiControlText.Read({control})",
             RecorderValueAccessorKind.Text => $"{control}.Text",
             RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.SearchPicker =>
                 $"{control}.SelectedItemText",

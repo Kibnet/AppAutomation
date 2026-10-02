@@ -2966,6 +2966,11 @@ public static partial class UiPageExtensions
                 && string.Equals(actualValue.DisplayText, originalValue.DisplayText, StringComparison.Ordinal);
         }
 
+        if (request.EditorKind is GridCellEditorKind.ComboBox or GridCellEditorKind.SearchPicker)
+        {
+            return GridSelectionText.Equals(actualValue.DisplayText, request.Value);
+        }
+
         if (request.EditorKind != GridCellEditorKind.Number)
         {
             return string.Equals(actualValue.DisplayText, request.Value, StringComparison.Ordinal);
@@ -3086,7 +3091,7 @@ public static partial class UiPageExtensions
             ITreeControl tree => ReadTreeVisibleText(tree),
             ITabControl tab => JoinVisibleText(tab.Items.Select(ReadTabItemVisibleText)),
             IGridControl grid => ReadGridVisibleText(grid),
-            IReadableTextControl readable => readable.Text,
+            IReadableTextControl => UiControlText.Read(control),
             _ => null
         };
 

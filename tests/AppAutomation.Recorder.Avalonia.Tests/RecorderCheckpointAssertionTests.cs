@@ -819,7 +819,7 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(scenarioSource).Contains("await Assert.That(");
             await Assert.That(scenarioSource).Contains("Page.GeneratedIdentifier.Text).IsNotEmpty();");
             await Assert.That(scenarioSource).Contains(
-                "((global::AppAutomation.Abstractions.IReadableTextControl)Page.SavedValueButton).Text).IsEqualTo(\"Saved value\");");
+                "UiControlText.Read(Page.SavedValueButton)).IsEqualTo(\"Saved value\");");
             await Assert.That(scenarioSource).Contains("Page.OptionalDate.SelectedDate).IsNotNull();");
             await Assert.That(scenarioSource).Contains("Page.StatusFilter.SelectedItems).IsNotEmpty();");
             await Assert.That(scenarioSource).Contains(".Contains(");
@@ -1403,8 +1403,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(invalidAfterMove.CanPersist).IsFalse();
             await Assert.That(invalidAfterMove.StatusMessage).Contains("missing or later checkpoint");
             await Assert.That(movedBack).IsTrue();
-            await Assert.That(session.StepCount).IsEqualTo(2);
-            await Assert.That(session.PersistableStepCount).IsEqualTo(2);
+            await Assert.That(session.StepCount).IsEqualTo(2).Because(session.LatestStatus);
+            await Assert.That(session.PersistableStepCount).IsEqualTo(2).Because(session.LatestStatus);
             await Assert.That(session.ExportPreview()).Contains(
                 "await Assert.That(Page.RemainingQuantity.Value).IsEqualTo(quantityBefore - Page.Adjustment.Value);");
             await Assert.That(session.StepJournal[^1].StatusMessage)
@@ -1590,7 +1590,7 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(expectedEnabled.Items.Count).IsEqualTo(2);
             await Assert.That(session.ExportPreview())
                 .IsEqualTo(
-                    "await Assert.That(((global::AppAutomation.Abstractions.IReadableTextControl)Page.SaveButton).Text).IsEqualTo(\"Saved value\");"
+                    "await Assert.That(global::AppAutomation.Abstractions.UiControlText.Read(Page.SaveButton)).IsEqualTo(\"Saved value\");"
                     + Environment.NewLine
                     + "await Assert.That(Page.SaveButton.IsEnabled).IsEqualTo(false);");
         }
@@ -1629,6 +1629,12 @@ public sealed class RecorderCheckpointAssertionTests
             out var resolvedSource,
             out var snapshot,
             out var error);
+        using var session = CreateSession(root, options);
+        session.Start();
+        session.CaptureAssertionForTesting(
+            nativeValue,
+            [nativeValue, configuredPresenter],
+            RecorderAssertionMode.Auto);
 
         using (Assert.Multiple())
         {
@@ -1638,6 +1644,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(error).Contains("multiple logical targets");
             await Assert.That(error).Contains("NativeValue");
             await Assert.That(error).Contains("ConfiguredValue");
+            await Assert.That(session.StepCount).IsEqualTo(0);
+            await Assert.That(session.LatestStatus).Contains("multiple logical targets");
         }
     }
 
@@ -1686,7 +1694,7 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task CheckMode_MapsEditorAndDisplayPresentersToOneStableGridValue()
+    public async Task DirectCheckpointComparison_UsesSpatialReadOnlyGridCellInsteadOfStaleHover()
     {
         var product = new ProductValue("Search result");
         var row = new ProductGridRow("10", product);
@@ -1747,26 +1755,28 @@ public sealed class RecorderCheckpointAssertionTests
         details.CaptureCheckpoint(editorSnapshot!, "productBeforeSave");
 
         var checkpoint = details.Checkpoints.FirstOrDefault();
-        RecorderCheckTargetSelection? displaySelection = null;
-        session.CheckTargetSelected += (_, eventArgs) => displaySelection = eventArgs.Selection;
-        session.BeginCheckTargetSelection();
-        session.SelectCheckTargetAtForTesting(eventSource, root, new Point(120, 40));
+        session.SetLastHoveredControlForTesting(eventSource);
+        session.SetLastSpatialCaptureTargetForTesting(eventSource, root, new Point(120, 40));
         if (checkpoint is not null)
         {
-            details.CaptureCheckpointAssertion(displaySelection!, checkpoint.CheckpointId);
+            session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
         }
 
         var preview = session.ExportPreview();
+        session.Stop();
+        session.Start();
+        session.SetLastHoveredControlForTesting(eventSource);
+        if (checkpoint is not null)
+        {
+            session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
+        }
+
         using (Assert.Multiple())
         {
             await Assert.That(GridCellMetadataExtractor.ReadMaterializedCellControls(sourceGrid))
                 .Contains(cell);
             await Assert.That(editorSnapshot!.ValueDescriptionError).IsNullOrEmpty();
-            await Assert.That(displaySelection!.ValueDescriptionError).IsNullOrEmpty();
             await Assert.That(editorSnapshot.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
-            await Assert.That(displaySelection!.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
-            await Assert.That(ReferenceEquals(displaySelection.Target, eventSource)).IsFalse();
-            await Assert.That(displaySelection.ValueDescription!.SuggestedCheckpointName).DoesNotContain("MainSurface");
             await Assert.That(session.StepCount).IsEqualTo(2);
             await Assert.That(session.PersistableStepCount).IsEqualTo(2);
             await Assert.That(preview).Contains("GridRowSelector.ByCell(\"PositionNumber\", \"10\")");

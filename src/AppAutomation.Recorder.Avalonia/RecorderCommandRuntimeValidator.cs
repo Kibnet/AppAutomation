@@ -6,12 +6,16 @@ internal sealed class RecorderCommandRuntimeValidator
 {
     private readonly AppAutomationRecorderOptions _recorderOptions;
     private readonly RecorderValidationOptions _options;
+    private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
 
     public RecorderCommandRuntimeValidator(AppAutomationRecorderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         _recorderOptions = options;
         _options = options.Validation;
+        _dialogHints = options.DialogHints
+            .Select(static hint => hint with { Parts = hint.Parts.NormalizeAndValidate() })
+            .ToArray();
     }
 
     public RecordedStep Validate(RecordedStep step)
@@ -649,7 +653,7 @@ internal sealed class RecorderCommandRuntimeValidator
             yield break;
         }
 
-        var matchingHints = _recorderOptions.DialogHints
+        var matchingHints = _dialogHints
             .Where(hint =>
                 hint.LocatorKind == step.Control.LocatorKind
                 && string.Equals(
@@ -671,7 +675,7 @@ internal sealed class RecorderCommandRuntimeValidator
 
         var normalizedLocator = step.StringValue.Trim();
         var matches = matchingHints[0].Parts.EnumerateRegisteredButtonLocators()
-            .Count(locator => string.Equals(locator.Trim(), normalizedLocator, StringComparison.Ordinal));
+            .Count(locator => string.Equals(locator, normalizedLocator, StringComparison.Ordinal));
         if (matches != 1)
         {
             yield return Invalid(

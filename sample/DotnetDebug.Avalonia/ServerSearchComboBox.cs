@@ -1,6 +1,7 @@
 using System.Collections;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
@@ -75,6 +76,9 @@ public sealed class ServerSearchComboBox : PopupEditor
 
     public event EventHandler<object?>? CurrentSelectedChanged;
 
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new ServerSearchComboBoxAutomationPeer(this);
+
     protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
     {
         _canOpenFromTextChanges = false;
@@ -116,6 +120,7 @@ public sealed class ServerSearchComboBox : PopupEditor
             IsPopupOpen = false;
         }
 
+        UpdateAutomationName();
         ApplyAutomationPartIds();
         RefreshResults();
 
@@ -169,6 +174,11 @@ public sealed class ServerSearchComboBox : PopupEditor
         if (change.Property == CurrentSelectedProperty && !_synchronizing)
         {
             SynchronizeSelectedValue(CurrentSelected);
+        }
+
+        if (change.Property == SearchTextProperty || change.Property == CurrentSelectedProperty)
+        {
+            UpdateAutomationName();
         }
 
         if (change.Property == AutomationProperties.AutomationIdProperty)
@@ -284,6 +294,7 @@ public sealed class ServerSearchComboBox : PopupEditor
             }
 
             SearchText = selected?.ToString() ?? string.Empty;
+            UpdateAutomationName();
             if (_input is not null)
             {
                 _input.Text = SearchText;
@@ -301,6 +312,13 @@ public sealed class ServerSearchComboBox : PopupEditor
         }
 
         CurrentSelectedChanged?.Invoke(this, selected);
+    }
+
+    private void UpdateAutomationName()
+    {
+        AutomationProperties.SetName(
+            this,
+            CurrentSelected?.ToString() ?? SearchText ?? string.Empty);
     }
 
     private void RefreshResults()
@@ -335,5 +353,12 @@ public sealed class ServerSearchComboBox : PopupEditor
         }
 
         AutomationProperties.SetAutomationId(_results, $"{automationId}_Results");
+    }
+
+    private sealed class ServerSearchComboBoxAutomationPeer(ServerSearchComboBox owner) :
+        ControlAutomationPeer(owner)
+    {
+        protected override string? GetNameCore() =>
+            owner.CurrentSelected?.ToString() ?? owner.SearchText ?? string.Empty;
     }
 }

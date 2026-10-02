@@ -775,7 +775,16 @@ public sealed class RecorderStableGridSelectorTests
             catalogEditorKind: editorKind,
             addDuplicateEditorPart: true);
 
-        fixture.SelectStatus("Ready", keyboard: false);
+        fixture.Session.BeginPointerGestureForTesting();
+        try
+        {
+            fixture.Session.CaptureCatalogGridRowGestureForTesting(fixture.Editor);
+            fixture.SelectStatus("Ready", keyboard: false);
+        }
+        finally
+        {
+            fixture.Session.EndPointerGestureForTesting();
+        }
 
         var entry = fixture.Session.StepJournal.Single();
         using (Assert.Multiple())
@@ -785,6 +794,21 @@ public sealed class RecorderStableGridSelectorTests
                 $"Page.{generatedMethod}(static page => page.ItemsGrid, "
                 + "GridRowSelector.ByCell(\"Key\", \"ITEM-42\"), \"Status\"");
             await Assert.That(entry.Preview).DoesNotContain("SelectListBoxItem");
+        }
+
+        using var independentFixture = new GridComboSelectionFixture(
+            useCatalog: true,
+            catalogEditorKind: editorKind,
+            addDuplicateEditorPart: true);
+        independentFixture.Session.CaptureCatalogGridRowGestureForTesting(independentFixture.Editor);
+        independentFixture.SelectStatus("Ready", keyboard: false);
+
+        var independentEntries = independentFixture.Session.StepJournal;
+        using (Assert.Multiple())
+        {
+            await Assert.That(independentEntries).Count().IsEqualTo(2);
+            await Assert.That(independentEntries[0].Preview).Contains("Page.SelectGridRow(");
+            await Assert.That(independentEntries[1].Preview).Contains($"Page.{generatedMethod}(");
         }
     }
 
@@ -1316,6 +1340,8 @@ public sealed class RecorderStableGridSelectorTests
         public RecorderSession Session { get; }
 
         public AppAutomationRecorderOptions Options { get; }
+
+        public Control Editor => _editor;
 
         public bool IsPopupAttached => ReferenceEquals(_editor.Child, _results);
 

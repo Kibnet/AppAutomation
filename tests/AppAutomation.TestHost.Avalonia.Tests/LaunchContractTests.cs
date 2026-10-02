@@ -557,6 +557,33 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_SearchPickerIgnoresOuterDisplayWhitespace()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(() => CreateDelayedSearchGridWindow(
+            resultsOpenFromText: true,
+            searchResults: ["Item 42 ", "Item 84"]));
+        var page = new DelayedSearchGridPage(
+            new HeadlessControlResolver(context.Window).WithGridAutomation(CreateDelayedSearchGridCatalog()));
+
+        page.SearchAndSelectGridCell(
+            static candidate => candidate.CatalogGrid,
+            GridRowSelector.ByCell("StableKey", "10"),
+            "SelectedItem",
+            "item",
+            "Item 42",
+            timeoutMs: 2000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.Row.SelectedItem).IsEqualTo("Item 42 ");
+            await Assert.That(string.Join("|", context.Events))
+                .IsEqualTo("search:item|select:Item 42 |commit");
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessCatalogGrid_SequentialSearchPickerAndNumberUsesActiveEditorWhenCellStaysVirtualized()
     {
         using var headless = StartHeadlessRuntime();
@@ -1168,7 +1195,8 @@ Console.WriteLine("Fake desktop");
     private static DelayedSearchGridContext CreateDelayedSearchGridWindow(
         bool resultsOpenFromText,
         int numberCellMaterializationDelayMs = 0,
-        bool keepNumberCellVirtualizedAfterSearchCommit = false)
+        bool keepNumberCellVirtualizedAfterSearchCommit = false,
+        IReadOnlyList<string>? searchResults = null)
     {
         var row = new DelayedSearchGridRow("10", "Original item", 200m);
         var popupLayer = new StackPanel();
@@ -1177,7 +1205,8 @@ Console.WriteLine("Fake desktop");
             popupLayer,
             resultsOpenFromText,
             numberCellMaterializationDelayMs,
-            keepNumberCellVirtualizedAfterSearchCommit);
+            keepNumberCellVirtualizedAfterSearchCommit,
+            searchResults ?? ["Item 42", "Item 84"]);
         AutomationProperties.SetAutomationId(grid, "CatalogGrid");
         var root = new StackPanel();
         root.Children.Add(grid);
@@ -1348,6 +1377,7 @@ Console.WriteLine("Fake desktop");
         private readonly bool _resultsOpenFromText;
         private readonly int _numberCellMaterializationDelayMs;
         private readonly bool _keepNumberCellVirtualizedAfterSearchCommit;
+        private readonly IReadOnlyList<string> _searchResults;
         private string? _pendingSelection;
         private decimal? _pendingRequiredVolume;
         private bool _numberCellPending;
@@ -1358,13 +1388,15 @@ Console.WriteLine("Fake desktop");
             StackPanel popupLayer,
             bool resultsOpenFromText,
             int numberCellMaterializationDelayMs,
-            bool keepNumberCellVirtualizedAfterSearchCommit)
+            bool keepNumberCellVirtualizedAfterSearchCommit,
+            IReadOnlyList<string> searchResults)
         {
             _row = row;
             _popupLayer = popupLayer;
             _resultsOpenFromText = resultsOpenFromText;
             _numberCellMaterializationDelayMs = numberCellMaterializationDelayMs;
             _keepNumberCellVirtualizedAfterSearchCommit = keepNumberCellVirtualizedAfterSearchCommit;
+            _searchResults = searchResults;
             ItemsSource = new[] { row };
             Columns =
             [
@@ -1501,7 +1533,7 @@ Console.WriteLine("Fake desktop");
                 return;
             }
 
-            var results = new ListBox { ItemsSource = new[] { "Item 42", "Item 84" } };
+            var results = new ListBox { ItemsSource = _searchResults };
             AutomationProperties.SetAutomationId(results, "ItemPicker_Results");
             results.SelectionChanged += (_, _) =>
             {

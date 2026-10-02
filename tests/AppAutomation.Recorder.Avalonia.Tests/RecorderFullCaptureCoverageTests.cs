@@ -25,10 +25,10 @@ public sealed class RecorderFullCaptureCoverageTests
         };
         validationOptions.DialogHints.Add(new RecorderDialogHint(
             "DeleteDialog",
-            DialogControlParts.ByAutomationIds(
+            DialogControlParts.ByAutomationIdsWithAdditionalButtons(
                 "DeleteDialogMessage",
-                "DeleteDialogConfirmButton",
-                additionalButtonAutomationIds: ["DeleteDialogAddButton"])));
+                ["DeleteDialogAddButton"],
+                confirmButtonAutomationId: "DeleteDialogConfirmButton")));
         var validator = new RecorderCommandRuntimeValidator(validationOptions);
 
         await Assert.That(missingActions.Length).IsEqualTo(0);

@@ -673,6 +673,8 @@ public static partial class UiPageExtensions
                 bool.TryParse(request.Value, out var expectedChecked)
                 && TryConvertGridBoolean(actual.RawValue, actual.DisplayText, out var actualChecked)
                 && actualChecked == expectedChecked,
+            GridCellEditorKind.ComboBox or GridCellEditorKind.SearchPicker =>
+                GridSelectionText.Equals(actual.DisplayText, request.Value),
             _ => string.Equals(actual.DisplayText, request.Value, StringComparison.Ordinal)
         };
     }

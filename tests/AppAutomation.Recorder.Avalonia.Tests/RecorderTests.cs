@@ -4361,12 +4361,12 @@ public sealed class RecorderTests
         var options = new AppAutomationRecorderOptions();
         options.DialogHints.Add(new RecorderDialogHint(
             "DeleteDialog",
-            DialogControlParts.ByAutomationIds(
+            DialogControlParts.ByAutomationIdsWithAdditionalButtons(
                 "DeleteDialogMessage",
-                "DeleteDialogConfirmButton",
+                ["DeleteDialogAddButton"],
+                confirmButtonAutomationId: "DeleteDialogConfirmButton",
                 cancelButtonAutomationId: "DeleteDialogCancelButton",
-                dismissButtonAutomationId: "DeleteDialogDismissButton",
-                additionalButtonAutomationIds: ["DeleteDialogAddButton"])));
+                dismissButtonAutomationId: "DeleteDialogDismissButton")));
         options.NotificationHints.Add(new RecorderNotificationHint(
             "ExportToast",
             NotificationControlParts.ByAutomationIds(

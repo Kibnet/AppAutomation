@@ -23,6 +23,7 @@ internal sealed partial class RecorderStepFactory
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
+    private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
     private readonly Dictionary<Control, (RecorderGridHint Hint, GridAutomationDefinition Definition)> _nativeGridDefinitions =
         new(ReferenceEqualityComparer.Instance);
 
@@ -43,6 +44,9 @@ internal sealed partial class RecorderStepFactory
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _assertionExtractors = CreateAssertionExtractors(options);
+        _dialogHints = options.DialogHints
+            .Select(static hint => hint with { Parts = hint.Parts.NormalizeAndValidate() })
+            .ToArray();
     }
 
     public StepCreationResult TryCreateButtonStep(Control? source)
@@ -1200,11 +1204,13 @@ internal sealed partial class RecorderStepFactory
             && FindMultiSelectActions(source).Any();
     }
 
-    public StepCreationResult TryCreateDialogActionStep(Control? source)
+    public (bool IsConfigured, StepCreationResult Result) TryCreateDialogActionStep(Control? source)
     {
         if (source is null)
         {
-            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
+            return (
+                false,
+                StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button."));
         }
 
         if (!TryResolveDialogHint(
@@ -1212,9 +1218,10 @@ internal sealed partial class RecorderStepFactory
                 out var hint,
                 out var actionKind,
                 out var buttonLocator,
-                out var error))
+                out var error,
+                out var isConfigured))
         {
-            return StepCreationResult.Unsupported(error);
+            return (isConfigured, StepCreationResult.Unsupported(error));
         }
 
         var descriptor = CreateCompositeDescriptor(
@@ -1225,17 +1232,11 @@ internal sealed partial class RecorderStepFactory
             source,
             warning: null);
 
-        return CreateStep(
-            source,
-            new RecordedStep(actionKind, descriptor, StringValue: buttonLocator));
-    }
-
-    public bool IsDialogAction(Control? source)
-    {
-        return source is not null
-            && _options.DialogHints.Any(candidate =>
-                candidate.Parts.EnumerateRegisteredButtonLocators()
-                    .Any(locator => MatchesLocator(source, candidate.Parts.LocatorKind, locator)));
+        return (
+            true,
+            CreateStep(
+                source,
+                new RecordedStep(actionKind, descriptor, StringValue: buttonLocator)));
     }
 
     public StepCreationResult TryCreateNotificationActionStep(Control? source)
@@ -2264,6 +2265,37 @@ internal sealed partial class RecorderStepFactory
         }
 
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
+    }
+
+    internal StepCreationResult TryCreateAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderAssertionMode mode)
+    {
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        {
+            return StepCreationResult.Unsupported(
+                $"Semantic value snapshots do not support the {mode} assertion mode.");
+        }
+
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported(
+                "The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (!HasLiteral(candidate))
+        {
+            return StepCreationResult.Unsupported(
+                $"{candidate.Control.ControlType} does not expose a committed value for a literal assertion.");
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: RecorderComparisonKind.Equal,
+            hasExpectedLiteral: true);
+        return CreateStepFromSnapshot(snapshot, step, "Added current semantic value assertion.");
     }
 
     private StepCreationResult? TryCreateProjectedSemanticAssertionStep(
@@ -5354,10 +5386,11 @@ internal sealed partial class RecorderStepFactory
         out RecorderDialogHint hint,
         out RecordedActionKind actionKind,
         out string? buttonLocator,
-        out string error)
+        out string error,
+        out bool isConfigured)
     {
         var matches = new List<(RecorderDialogHint Hint, RecordedActionKind ActionKind, string? ButtonLocator)>();
-        foreach (var candidate in _options.DialogHints)
+        foreach (var candidate in _dialogHints)
         {
             var parts = candidate.Parts;
             if (!string.IsNullOrWhiteSpace(parts.ConfirmButtonLocator)
@@ -5378,21 +5411,16 @@ internal sealed partial class RecorderStepFactory
                 matches.Add((candidate, RecordedActionKind.DismissDialog, null));
             }
 
-            if (parts.ButtonLocators is null)
+            foreach (var locator in parts.ButtonLocators)
             {
-                continue;
-            }
-
-            foreach (var locator in parts.ButtonLocators.Where(static locator => !string.IsNullOrWhiteSpace(locator)))
-            {
-                var normalizedLocator = locator.Trim();
-                if (MatchesLocator(source, parts.LocatorKind, normalizedLocator))
+                if (MatchesLocator(source, parts.LocatorKind, locator))
                 {
-                    matches.Add((candidate, RecordedActionKind.InvokeDialogButton, normalizedLocator));
+                    matches.Add((candidate, RecordedActionKind.InvokeDialogButton, locator));
                 }
             }
         }
 
+        isConfigured = matches.Count > 0;
         if (matches.Count == 1)
         {
             (hint, actionKind, buttonLocator) = matches[0];

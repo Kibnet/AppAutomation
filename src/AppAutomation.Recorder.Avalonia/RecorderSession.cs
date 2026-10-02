@@ -71,6 +71,7 @@ internal sealed class RecorderSession :
     private Control? _pendingColorPickerSource;
     private Control? _pendingContextMenuOwner;
     private Control? _lastHoveredControl;
+    private SpatialCaptureTarget? _lastSpatialCaptureTarget;
     private RecorderTargetSelectionMode _targetSelectionMode;
     private Control? _pendingTargetSelectionControl;
     private IReadOnlyList<Control> _pendingTargetSelectionCandidates = Array.Empty<Control>();
@@ -85,6 +86,9 @@ internal sealed class RecorderSession :
     private Guid? _pendingCopiedValuePasteId;
     private Control? _recentPointerControl;
     private DateTimeOffset _recentPointerAt;
+    private int _pointerGestureSequence;
+    private int? _activePointerGestureSequence;
+    private PendingGridRowSelectionGesture? _pendingGridRowSelectionGesture;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
     private PendingCatalogGridEdit? _pendingCatalogGridEdit;
@@ -388,9 +392,11 @@ internal sealed class RecorderSession :
         _state = RecorderSessionState.Recording;
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
+        ResetPointerGesture();
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
+        _lastSpatialCaptureTarget = null;
         SetStatus("Recording.", RecorderValidationStatus.Valid);
     }
 
@@ -407,9 +413,11 @@ internal sealed class RecorderSession :
         FlushPendingState();
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
+        ResetPointerGesture();
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
+        _lastSpatialCaptureTarget = null;
         _state = RecorderSessionState.Off;
         SetStatus("Recording stopped.", RecorderValidationStatus.Valid);
     }
@@ -435,6 +443,7 @@ internal sealed class RecorderSession :
         FlushPendingState();
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
+        ResetPointerGesture();
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
@@ -1066,7 +1075,15 @@ internal sealed class RecorderSession :
 
     internal void CaptureAssertionForTesting(Control source, RecorderAssertionMode mode)
     {
-        AddStep(_stepFactory.TryCreateAssertionStep(source, mode), source, $"Assertion:{mode}");
+        CaptureAssertion(ResolveCheckTargetSelection(source, [source]), mode);
+    }
+
+    internal void CaptureAssertionForTesting(
+        Control source,
+        IReadOnlyList<Control> visualCandidates,
+        RecorderAssertionMode mode)
+    {
+        CaptureAssertion(ResolveCheckTargetSelection(source, visualCandidates), mode);
     }
 
     internal void AttachInputHandlersForTesting()
@@ -1100,9 +1117,28 @@ internal sealed class RecorderSession :
         TryRecordCatalogGridRowGesture(source, clickCount);
     }
 
+    internal void BeginPointerGestureForTesting()
+    {
+        BeginPointerGesture();
+    }
+
+    internal void EndPointerGestureForTesting()
+    {
+        ResetPointerGesture();
+    }
+
     internal void SetLastHoveredControlForTesting(Control? source)
     {
         _lastHoveredControl = source;
+    }
+
+    internal void SetLastSpatialCaptureTargetForTesting(
+        Control? eventTarget,
+        Control positionRoot,
+        Point position)
+    {
+        ArgumentNullException.ThrowIfNull(positionRoot);
+        _lastSpatialCaptureTarget = new SpatialCaptureTarget(eventTarget, positionRoot, position);
     }
 
     internal void HandleRecorderCommandForTesting(RecorderCommandKind command)
@@ -1202,7 +1238,13 @@ internal sealed class RecorderSession :
             OnPointerReleased,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        _inputRoot.AddHandler(
+            InputElement.PointerReleasedEvent,
+            OnPointerGestureCompleted,
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
         _inputRoot.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
+        _inputRoot.AddHandler(InputElement.PointerExitedEvent, OnPointerExited, RoutingStrategies.Tunnel);
         _inputRoot.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
         _inputRoot.AddHandler(
             InputElement.KeyDownEvent,
@@ -1221,11 +1263,14 @@ internal sealed class RecorderSession :
 
         _inputRoot.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
         _inputRoot.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+        _inputRoot.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerGestureCompleted);
         _inputRoot.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
+        _inputRoot.RemoveHandler(InputElement.PointerExitedEvent, OnPointerExited);
         _inputRoot.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
         _inputRoot.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
         _inputRoot.RemoveHandler(Button.ClickEvent, OnButtonClick);
         _inputRoot = null;
+        _lastSpatialCaptureTarget = null;
     }
 
     private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -1463,7 +1508,9 @@ internal sealed class RecorderSession :
             return;
         }
 
+        BeginPointerGesture();
         var source = e.Source as Control;
+        RememberSpatialCaptureTarget(source, e);
         if (_targetSelectionMode != RecorderTargetSelectionMode.None)
         {
             var positionRoot = _inputRoot ?? _window;
@@ -1540,9 +1587,38 @@ internal sealed class RecorderSession :
         }
     }
 
+    private void OnPointerGestureCompleted(object? sender, PointerReleasedEventArgs e)
+    {
+        ResetPointerGesture();
+    }
+
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
-        _lastHoveredControl = ResolveInteractionOwner(e.Source as Control);
+        var source = e.Source as Control;
+        _lastHoveredControl = ResolveInteractionOwner(source);
+        RememberSpatialCaptureTarget(source, e);
+    }
+
+    private void OnPointerExited(object? sender, PointerEventArgs e)
+    {
+        _lastSpatialCaptureTarget = null;
+        _lastHoveredControl = null;
+    }
+
+    private void RememberSpatialCaptureTarget(Control? eventTarget, PointerEventArgs e)
+    {
+        var positionRoot = _inputRoot ?? _validationRootProvider() ?? _window;
+        var position = e.GetPosition(positionRoot);
+        if (position.X < 0
+            || position.Y < 0
+            || position.X > positionRoot.Bounds.Width
+            || position.Y > positionRoot.Bounds.Height)
+        {
+            _lastSpatialCaptureTarget = null;
+            return;
+        }
+
+        _lastSpatialCaptureTarget = new SpatialCaptureTarget(eventTarget, positionRoot, position);
     }
 
     private void OnTextInput(object? sender, TextInputEventArgs e)
@@ -2307,10 +2383,10 @@ internal sealed class RecorderSession :
             return true;
         }
 
-        var dialogResult = _stepFactory.TryCreateDialogActionStep(source);
-        if (_stepFactory.IsDialogAction(source))
+        var dialogCapture = _stepFactory.TryCreateDialogActionStep(source);
+        if (dialogCapture.IsConfigured)
         {
-            AddStep(dialogResult, source, "DialogAction");
+            AddStep(dialogCapture.Result, source, "DialogAction");
             return true;
         }
 
@@ -2844,19 +2920,52 @@ internal sealed class RecorderSession :
 
     private void CaptureAssertion(RecorderAssertionMode mode)
     {
-        var control = _lastHoveredControl ?? GetFocusedWindowControl();
-        FlushPendingTextIfSwitchingTo(control);
-        FlushPendingSliderIfSwitchingTo(control);
-        FlushPendingSpinnerIfSwitchingTo(control);
-        AddStep(_stepFactory.TryCreateAssertionStep(control, mode), control, $"Assertion:{mode}");
+        CaptureAssertion(PrepareSemanticCaptureSelection(), mode);
+    }
+
+    private void CaptureAssertion(
+        RecorderCheckTargetSelection? selection,
+        RecorderAssertionMode mode)
+    {
+        if (selection is null)
+        {
+            AddStep(
+                StepCreationResult.Unsupported("No control is available for assertion capture."),
+                captureAction: $"Assertion:{mode}");
+            return;
+        }
+
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
+        var result = mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Text
+            ? _stepFactory.TryCreateAssertionStep(selection.ValueSnapshot, mode)
+            : mode == RecorderAssertionMode.Enabled
+                ? _stepFactory.TryCreateEnabledAssertionStep(
+                    selection.Target,
+                    selection.ValueSnapshot,
+                    selection.IsEnabled)
+                : _stepFactory.TryCreateAssertionStep(selection.Target, mode);
+        AddStep(result, selection.Target, $"Assertion:{mode}");
     }
 
     private bool TryDescribeCurrentValue(
         out RecorderSemanticValueDescription? description,
         out string? error)
     {
-        var control = _lastHoveredControl ?? GetFocusedWindowControl();
-        return _stepFactory.TryDescribeSemanticValue(control, out description, out error);
+        var selection = PrepareSemanticCaptureSelection();
+        if (selection is not null && !selection.CanCaptureAssertions)
+        {
+            description = null;
+            error = selection.ValueDescriptionError;
+            return false;
+        }
+
+        description = selection?.ValueDescription;
+        error = selection?.ValueDescriptionError;
+        return description is not null && string.IsNullOrWhiteSpace(error);
     }
 
     public void BeginCheckTargetSelection()
@@ -2977,7 +3086,16 @@ internal sealed class RecorderSession :
 
     public void CaptureCheckpoint(string? variableName = null)
     {
-        CaptureCheckpoint(PrepareSemanticCaptureTarget(), variableName);
+        var selection = PrepareSemanticCaptureSelection();
+        if (selection is not null && !CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateCheckpointStep(selection?.ValueSnapshot, variableName),
+            selection?.Target,
+            "Checkpoint:Remember");
     }
 
     void IRecorderCheckpointSessionDetails.CaptureCheckpoint(
@@ -2996,17 +3114,21 @@ internal sealed class RecorderSession :
             "Checkpoint:Remember");
     }
 
-    private void CaptureCheckpoint(Control? control, string? variableName)
-    {
-        AddStep(
-            _stepFactory.TryCreateCheckpointStep(control, variableName),
-            control,
-            "Checkpoint:Remember");
-    }
-
     public void CaptureCheckpointAssertion(Guid checkpointId)
     {
-        CaptureCheckpointAssertion(PrepareSemanticCaptureTarget(), checkpointId);
+        var selection = PrepareSemanticCaptureSelection();
+        if (selection is null)
+        {
+            SetStatus("No control is available for checkpoint comparison.", RecorderValidationStatus.Invalid);
+            return;
+        }
+
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
+        CaptureCheckpointAssertion(selection.ValueSnapshot, selection.Target, checkpointId);
     }
 
     void IRecorderCheckpointSessionDetails.CaptureCheckpointAssertion(
@@ -3025,22 +3147,6 @@ internal sealed class RecorderSession :
             selection.Target,
             checkpointId,
             comparisonKind);
-    }
-
-    private void CaptureCheckpointAssertion(Control? control, Guid checkpointId)
-    {
-        var checkpoint = CreateCheckpointOptions()
-            .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId);
-        if (checkpoint is null)
-        {
-            SetStatus("Selected checkpoint is missing or ignored.", RecorderValidationStatus.Invalid);
-            return;
-        }
-
-        AddStep(
-            _stepFactory.TryCreateCheckpointAssertionStep(control, checkpoint),
-            control,
-            "Checkpoint:Compare");
     }
 
     private void CaptureCheckpointAssertion(
@@ -3119,7 +3225,19 @@ internal sealed class RecorderSession :
         string expectedText,
         RecorderComparisonKind comparisonKind)
     {
-        CaptureLiteralAssertion(PrepareSemanticCaptureTarget(), expectedText, comparisonKind);
+        var selection = PrepareSemanticCaptureSelection();
+        if (selection is not null && !CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateLiteralAssertionStep(
+                selection?.ValueSnapshot,
+                expectedText,
+                comparisonKind),
+            selection?.Target,
+            "Assertion:Literal");
     }
 
     void IRecorderCheckpointSessionDetails.CaptureLiteralAssertion(
@@ -3141,17 +3259,6 @@ internal sealed class RecorderSession :
                 comparisonKind,
                 dateExpression),
             selection.Target,
-            "Assertion:Literal");
-    }
-
-    private void CaptureLiteralAssertion(
-        Control? control,
-        string expectedText,
-        RecorderComparisonKind comparisonKind)
-    {
-        AddStep(
-            _stepFactory.TryCreateLiteralAssertionStep(control, expectedText, comparisonKind),
-            control,
             "Assertion:Literal");
     }
 
@@ -3761,49 +3868,29 @@ internal sealed class RecorderSession :
         Point position)
     {
         var rootIsAttached = TopLevel.GetTopLevel(positionRoot) is not null;
+        var configuredGridCells = EnumerateConfiguredGridCellCandidates(positionRoot, position)
+            .ToArray();
+        var nonHitTestCandidates = configuredGridCells
+            .ToHashSet<Control>(ReferenceEqualityComparer.Instance);
         var visualCandidates = positionRoot
             .GetVisualsAt(position)
             .OfType<Control>()
-            .Concat(EnumerateGeometricCandidates(positionRoot, position));
+            .Concat(configuredGridCells);
         return ResolveCheckTargetCandidatesCore(
             eventTarget,
             positionRoot
                 .GetInputElementsAt(position, enabledElementsOnly: false)
                 .OfType<Control>(),
             visualCandidates,
-            requireAttachedVisual: rootIsAttached);
+            requireAttachedVisual: rootIsAttached,
+            nonHitTestCandidates);
     }
 
-    private IEnumerable<Control> EnumerateGeometricCandidates(
+    private IEnumerable<Control> EnumerateConfiguredGridCellCandidates(
         Control positionRoot,
         Point position)
     {
         var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        foreach (var candidate in EnumerateCandidateControlTrees(positionRoot))
-        {
-            if (!ContainsPosition(positionRoot, position, candidate))
-            {
-                continue;
-            }
-
-            if (visited.Add(candidate))
-            {
-                yield return candidate;
-            }
-
-            foreach (var cell in _stepFactory.ReadMaterializedGridCellControls(candidate))
-            {
-                if (ContainsPosition(positionRoot, position, cell) && visited.Add(cell))
-                {
-                    yield return cell;
-                }
-            }
-        }
-
-        // A disabled editor inside a read-only cell can be absent from Avalonia's hit-test
-        // result. Docking controls may then report their own container as the pointer
-        // source. Resolve registered grids independently so the materialized cell remains
-        // the semantic target without making invisible playback bridges selectable.
         foreach (var grid in _stepFactory.ReadConfiguredGridRoots())
         {
             if (!ContainsPosition(positionRoot, position, grid))
@@ -3811,65 +3898,11 @@ internal sealed class RecorderSession :
                 continue;
             }
 
-            if (visited.Add(grid))
-            {
-                yield return grid;
-            }
-
             foreach (var cell in _stepFactory.ReadMaterializedGridCellControls(grid))
             {
                 if (ContainsPosition(positionRoot, position, cell) && visited.Add(cell))
                 {
                     yield return cell;
-                }
-            }
-        }
-    }
-
-    private static IEnumerable<Control> EnumerateCandidateControlTrees(Control positionRoot)
-    {
-        var pendingRoots = new Queue<Control>();
-        var expandedRoots = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var yielded = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        pendingRoots.Enqueue(positionRoot);
-        if (TopLevel.GetTopLevel(positionRoot) is Control topLevel
-            && !ReferenceEquals(topLevel, positionRoot))
-        {
-            pendingRoots.Enqueue(topLevel);
-        }
-
-        while (pendingRoots.Count > 0)
-        {
-            var root = pendingRoots.Dequeue();
-            if (!expandedRoots.Add(root))
-            {
-                continue;
-            }
-
-            var visualControls = root
-                .GetVisualDescendants()
-                .OfType<Control>()
-                .Prepend(root)
-                .ToArray();
-            var visualSet = visualControls.ToHashSet<Control>(ReferenceEqualityComparer.Instance);
-            foreach (var visual in visualControls)
-            {
-                if (yielded.Add(visual))
-                {
-                    yield return visual;
-                }
-            }
-
-            foreach (var logical in root.GetLogicalDescendants().OfType<Control>())
-            {
-                if (yielded.Add(logical))
-                {
-                    yield return logical;
-                }
-
-                if (!visualSet.Contains(logical))
-                {
-                    pendingRoots.Enqueue(logical);
                 }
             }
         }
@@ -3899,8 +3932,7 @@ internal sealed class RecorderSession :
             candidateVisualRoot = visualParent;
         }
 
-        if (ReferenceEquals(candidateVisualRoot, candidate)
-            || !positionRoot.GetLogicalDescendants().OfType<Control>().Any(control =>
+        if (!positionRoot.GetLogicalDescendants().OfType<Control>().Any(control =>
                 ReferenceEquals(control, candidateVisualRoot)))
         {
             return false;
@@ -3909,6 +3941,11 @@ internal sealed class RecorderSession :
         var visualRootPosition = new Point(
             position.X - candidateVisualRoot.Bounds.X,
             position.Y - candidateVisualRoot.Bounds.Y);
+        if (ReferenceEquals(candidateVisualRoot, candidate))
+        {
+            return localBounds.Contains(visualRootPosition);
+        }
+
         return candidateVisualRoot.TranslatePoint(visualRootPosition, candidate) is { } nestedPosition
             && localBounds.Contains(nestedPosition);
     }
@@ -3918,18 +3955,26 @@ internal sealed class RecorderSession :
         IEnumerable<Control> inputCandidates,
         IEnumerable<Control> visualCandidates)
     {
+        var input = inputCandidates.ToArray();
+        var visual = visualCandidates.ToArray();
+        var nonHitTestCandidates = input
+            .Concat(visual)
+            .Where(_stepFactory.IsCatalogGridCell)
+            .ToHashSet<Control>(ReferenceEqualityComparer.Instance);
         return ResolveCheckTargetCandidatesCore(
             eventTarget,
-            inputCandidates,
-            visualCandidates,
-            requireAttachedVisual: false);
+            input,
+            visual,
+            requireAttachedVisual: false,
+            nonHitTestCandidates);
     }
 
     private List<Control> ResolveCheckTargetCandidatesCore(
         Control? eventTarget,
         IEnumerable<Control> inputCandidates,
         IEnumerable<Control> visualCandidates,
-        bool requireAttachedVisual)
+        bool requireAttachedVisual,
+        IReadOnlySet<Control> nonHitTestCandidates)
     {
         var visitedSpatial = new HashSet<Control>(ReferenceEqualityComparer.Instance);
         var spatialCandidates = visualCandidates
@@ -3938,7 +3983,10 @@ internal sealed class RecorderSession :
             .Where(static candidate => candidate is not null)
             .Select(static candidate => candidate!)
             .Where(candidate => visitedSpatial.Add(candidate))
-            .Where(candidate => IsCaptureVisualCandidate(candidate, requireAttachedVisual))
+            .Where(candidate => IsCaptureVisualCandidate(
+                candidate,
+                requireAttachedVisual,
+                nonHitTestCandidates.Contains(candidate)))
             .Where(candidate => !IsPlaybackOnlyGridSurface(candidate))
             .ToArray();
         var leafCandidates = spatialCandidates
@@ -3995,9 +4043,13 @@ internal sealed class RecorderSession :
         return false;
     }
 
-    private static bool IsCaptureVisualCandidate(Control candidate, bool requireAttachedVisual)
+    private static bool IsCaptureVisualCandidate(
+        Control candidate,
+        bool requireAttachedVisual,
+        bool allowNonHitTestCandidate)
     {
-        if (!candidate.IsVisible)
+        if (!candidate.IsVisible
+            || (!candidate.IsHitTestVisible && !allowNonHitTestCandidate))
         {
             return false;
         }
@@ -4074,13 +4126,56 @@ internal sealed class RecorderSession :
         }
     }
 
-    private Control? PrepareSemanticCaptureTarget()
+    private RecorderCheckTargetSelection? PrepareSemanticCaptureSelection()
     {
-        var control = _lastHoveredControl ?? GetFocusedWindowControl();
+        Control? control;
+        IReadOnlyList<Control>? candidates = null;
+        if (TryResolveLastSpatialCaptureTarget(out var spatialTarget, out var spatialCandidates))
+        {
+            control = spatialTarget;
+            candidates = spatialCandidates;
+        }
+        else
+        {
+            control = _lastHoveredControl ?? GetFocusedWindowControl();
+        }
+
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
-        return control;
+        return control is null ? null : ResolveCheckTargetSelection(control, candidates);
+    }
+
+    private bool TryResolveLastSpatialCaptureTarget(
+        out Control? target,
+        out IReadOnlyList<Control>? candidates)
+    {
+        target = null;
+        candidates = null;
+        var spatial = _lastSpatialCaptureTarget;
+        if (spatial is null
+            || (_inputRoot is not null && !ReferenceEquals(_inputRoot, spatial.PositionRoot))
+            || !spatial.PositionRoot.IsVisible
+            || spatial.Position.X < 0
+            || spatial.Position.Y < 0
+            || spatial.Position.X > spatial.PositionRoot.Bounds.Width
+            || spatial.Position.Y > spatial.PositionRoot.Bounds.Height)
+        {
+            return false;
+        }
+
+        var resolvedCandidates = ResolveCheckTargetCandidates(
+            spatial.EventTarget,
+            spatial.PositionRoot,
+            spatial.Position);
+        if (resolvedCandidates.Count == 0)
+        {
+            return false;
+        }
+
+        candidates = resolvedCandidates;
+        target = resolvedCandidates[0];
+        return true;
     }
 
     private bool AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
@@ -4121,6 +4216,8 @@ internal sealed class RecorderSession :
         {
             return false;
         }
+
+        RemovePointerLinkedGridSelection(recordedStep);
 
         _steps.Add(recordedStep);
         var graphValidation = ApplyScenarioGraphValidation();
@@ -4171,8 +4268,38 @@ internal sealed class RecorderSession :
             RemoveImmediatelyPrecedingGridSelection(openStep);
         }
 
+        var stepCount = _steps.Count;
         AddStep(capture.StepResult, source, clickCount >= 2 ? "GridRowOpen" : "GridRowSelect");
+        if (clickCount < 2
+            && _activePointerGestureSequence is { } pointerGestureSequence
+            && _steps.Count > stepCount
+            && _steps[^1] is { ActionKind: RecordedActionKind.SelectGridRow } selectionStep)
+        {
+            _pendingGridRowSelectionGesture = new PendingGridRowSelectionGesture(
+                pointerGestureSequence,
+                selectionStep.StepId);
+        }
+
         return true;
+    }
+
+    private void RemovePointerLinkedGridSelection(RecordedStep recordedStep)
+    {
+        if (string.IsNullOrWhiteSpace(recordedStep.GridTargetColumnName)
+            || _activePointerGestureSequence is not { } activeSequence
+            || _pendingGridRowSelectionGesture is not { } pending
+            || pending.PointerGestureSequence != activeSequence)
+        {
+            return;
+        }
+
+        _pendingGridRowSelectionGesture = null;
+        if (_steps.Count == 0 || _steps[^1].StepId != pending.SelectionStepId)
+        {
+            return;
+        }
+
+        RemoveImmediatelyPrecedingGridSelection(recordedStep);
     }
 
     private void RemoveImmediatelyPrecedingGridSelection(RecordedStep openStep)
@@ -4209,6 +4336,21 @@ internal sealed class RecorderSession :
         return left.Zip(right).All(pair =>
             string.Equals(pair.First.ColumnName, pair.Second.ColumnName, StringComparison.Ordinal)
             && string.Equals(pair.First.Value, pair.Second.Value, StringComparison.Ordinal));
+    }
+
+    private void BeginPointerGesture()
+    {
+        _pointerGestureSequence = _pointerGestureSequence == int.MaxValue
+            ? 1
+            : _pointerGestureSequence + 1;
+        _activePointerGestureSequence = _pointerGestureSequence;
+        _pendingGridRowSelectionGesture = null;
+    }
+
+    private void ResetPointerGesture()
+    {
+        _activePointerGestureSequence = null;
+        _pendingGridRowSelectionGesture = null;
     }
 
     private bool TryRecordCatalogGridCellEdit(
@@ -5150,6 +5292,10 @@ internal sealed class RecorderSession :
         StepCreationResult StepResult,
         string DiagnosticContext);
 
+    private sealed record PendingGridRowSelectionGesture(
+        int PointerGestureSequence,
+        Guid SelectionStepId);
+
     private static bool IsPickerTemplateButton(Control? control)
     {
         var button = FindAncestorOrSelf<Button>(control);
@@ -6037,6 +6183,11 @@ internal sealed class RecorderSession :
         IReadOnlyDictionary<Guid, RecorderCheckpointOption> CheckpointsById,
         IReadOnlyDictionary<Guid, RecorderGeneratedValueOption> GeneratedValuesById,
         IReadOnlyDictionary<Guid, RecorderCopiedValueOption> CopiedValuesById);
+
+    private sealed record SpatialCaptureTarget(
+        Control? EventTarget,
+        Control PositionRoot,
+        Point Position);
 
     private enum RecorderTargetSelectionMode
     {
