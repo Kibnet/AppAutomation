@@ -1,3 +1,4 @@
+using AppAutomation.FlaUI.Input;
 using System.Diagnostics;
 using System.Globalization;
 using AppAutomation.Abstractions;
@@ -448,9 +449,9 @@ internal static class FlaUiCalendarSelection
     {
         try
         {
-            element.Click();
+            DesktopPointer.ClickFallback(element, "calendar action lacks Invoke");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DesktopPointer.IsTerminalFailure(ex))
         {
             throw new InvalidOperationException($"Unable to click {description}.", ex);
         }
@@ -533,7 +534,7 @@ internal static class FlaUiCalendarSelection
         {
             return read();
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             return default;
         }

@@ -28,12 +28,19 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var mainWindow = new MainWindow();
-            desktop.MainWindow = mainWindow;
+            if (string.Equals(Environment.GetEnvironmentVariable("APPAUTOMATION_POINTER_FIXTURE"), "1", StringComparison.Ordinal))
+            {
+                desktop.MainWindow = new PointerFixtureWindow();
+            }
+            else
+            {
+                var mainWindow = new MainWindow();
+                desktop.MainWindow = mainWindow;
 
 #if DEBUG
-            AttachRecorderIfRequested(mainWindow);
+                AttachRecorderIfRequested(mainWindow);
 #endif
+            }
         }
 
         base.OnFrameworkInitializationCompleted();

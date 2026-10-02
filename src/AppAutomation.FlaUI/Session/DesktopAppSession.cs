@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AppAutomation.Session.Contracts;
+using AppAutomation.FlaUI.Input;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
@@ -14,6 +15,7 @@ public sealed class DesktopAppSession : IDisposable
     private readonly Application _application;
     private readonly UIA3Automation _automation;
     private readonly Action? _disposeCallback;
+    private readonly IDisposable _pointerSession;
     private bool _disposed;
 
     private DesktopAppSession(
@@ -28,6 +30,7 @@ public sealed class DesktopAppSession : IDisposable
         _disposeCallback = disposeCallback;
         MainWindow = mainWindow;
         ConditionFactory = conditionFactory;
+        _pointerSession = DesktopPointer.RegisterSession(mainWindow);
     }
 
     public Window MainWindow { get; }
@@ -110,22 +113,30 @@ public sealed class DesktopAppSession : IDisposable
         }
 
         _disposed = true;
+        var cleanupExceptions = new List<Exception>();
         try
         {
-            _automation.Dispose();
-            TryTerminateApplication(_application);
-            _application.Dispose();
+            // Pointer cleanup needs the application and automation tree to remain alive.
+            TryCleanup(_pointerSession.Dispose, cleanupExceptions);
+            TryCleanup(_automation.Dispose, cleanupExceptions);
+            TryCleanup(() => TryTerminateApplication(_application), cleanupExceptions);
+            TryCleanup(_application.Dispose, cleanupExceptions);
         }
         finally
         {
             try
             {
-                _disposeCallback?.Invoke();
+                TryCleanup(_disposeCallback, cleanupExceptions);
             }
             finally
             {
                 GC.SuppressFinalize(this);
             }
+        }
+
+        if (cleanupExceptions.Count > 0)
+        {
+            throw new AggregateException("Desktop session cleanup failed.", cleanupExceptions);
         }
     }
 

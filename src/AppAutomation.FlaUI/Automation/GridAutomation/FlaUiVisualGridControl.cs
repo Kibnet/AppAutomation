@@ -1,3 +1,4 @@
+using AppAutomation.FlaUI.Input;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -1278,8 +1279,6 @@ public sealed partial class FlaUiControlResolver
         {
             try
             {
-                PrepareForPhysicalGridInput(cell);
-                TryScrollIntoView(cell);
                 var row = EnumerateSelfAndParents(cell)
                     .FirstOrDefault(candidate =>
                         TryRead(() => candidate.ControlType) == ControlType.DataItem
@@ -1294,9 +1293,7 @@ public sealed partial class FlaUiControlResolver
                     });
                 }
 
-                TryFocus(cell);
-                MoveMouseToBoundsCenter(cell);
-                Mouse.LeftClick();
+                DesktopPointer.ClickPrepared(() => cell, PrepareForPhysicalGridInput, GetBoundsCenter);
                 if (row is not null)
                 {
                     var selectionWait = Stopwatch.StartNew();
@@ -1313,11 +1310,11 @@ public sealed partial class FlaUiControlResolver
                     return true;
                 }
 
-                Mouse.LeftClick();
+                DesktopPointer.ClickPrepared(() => cell, PrepareForPhysicalGridInput, GetBoundsCenter);
                 exception = null;
                 return true;
             }
-            catch (Exception activationException)
+            catch (Exception activationException) when (!DesktopPointer.IsTerminalFailure(activationException))
             {
                 exception = activationException;
                 return false;
@@ -1626,8 +1623,7 @@ public sealed partial class FlaUiControlResolver
                         _searchRoot.SetForeground();
                         return true;
                     });
-                    MoveMouseImmediatelyTo(candidate);
-                    Mouse.LeftClick();
+                    DesktopPointer.ClickFallback(candidate, "grid popup candidate fallback");
                 });
         }
 
@@ -1691,12 +1687,9 @@ public sealed partial class FlaUiControlResolver
             AutomationElement input,
             GridCellEditRequest request)
         {
-            PrepareForPhysicalGridInput(input);
-            TryScrollIntoView(input);
             _ = TryRead(() =>
             {
-                input.Focus();
-                input.Click();
+                DesktopPointer.ClickPrepared(() => input, PrepareForPhysicalGridInput);
                 return true;
             });
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
@@ -1759,7 +1752,10 @@ public sealed partial class FlaUiControlResolver
                     .FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Calendar);
             if (calendar is null)
             {
-                ResolveEditorPart(cell, request.EditorParts?.OpenButton)?.Click();
+                if (ResolveEditorPart(cell, request.EditorParts?.OpenButton) is { } openButton)
+                {
+                    new FlaUiButtonControl(openButton.AsButton()).Invoke();
+                }
                 calendar = request.EditorParts?.Results is { } results
                     ? WaitForEditorPart(cell, results, TimeSpan.FromMilliseconds(request.TimeoutMs))
                     : null;
@@ -1785,7 +1781,7 @@ public sealed partial class FlaUiControlResolver
             if (input is not null && TryRead(() => input.ControlType) == ControlType.Edit)
             {
                 new FlaUiTextBoxControl(input.AsTextBox()).Enter(time.ToString("c", CultureInfo.InvariantCulture));
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
                 return;
             }
 
@@ -1833,16 +1829,15 @@ public sealed partial class FlaUiControlResolver
                 TryFocus(cell);
                 Keyboard.TypeSimultaneously(VirtualKeyShort.ALT, VirtualKeyShort.DOWN);
                 Keyboard.Type(request.Value);
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
                 return;
             }
 
-            MoveMouseImmediatelyTo(editor);
-            Mouse.LeftClick();
+            DesktopPointer.ClickFallback(editor, "grid editor activation fallback");
             if (TryRead(() => editor.IsAvailable))
             {
                 Keyboard.Type(request.Value);
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
                 return;
             }
 
@@ -1896,7 +1891,7 @@ public sealed partial class FlaUiControlResolver
 
                 if (matches.Length == 1)
                 {
-                    matches[0].Click();
+                    DesktopPointer.ClickFallback(matches[0], "grid editor candidate fallback");
                     return;
                 }
 
@@ -1939,7 +1934,7 @@ public sealed partial class FlaUiControlResolver
             var confirm = ResolveEditorPart(cell, request.EditorParts?.ConfirmButton);
             if (confirm is not null)
             {
-                confirm.Click();
+                new FlaUiButtonControl(confirm.AsButton()).Invoke();
                 return;
             }
 
@@ -1949,10 +1944,7 @@ public sealed partial class FlaUiControlResolver
                     ?? throw new InvalidOperationException(
                         $"Grid editor commit target '{commitTargetLocator.LocatorKind}:{commitTargetLocator.LocatorValue}' "
                         + $"was not found within scope '{commitTargetLocator.Scope}' of the active row in grid '{AutomationId}'.");
-                PrepareForPhysicalGridInput(commitTarget);
-                TryScrollIntoView(commitTarget);
-                MoveMouseImmediatelyTo(commitTarget);
-                Mouse.LeftClick();
+                DesktopPointer.ClickPrepared(() => commitTarget, PrepareForPhysicalGridInput);
                 return;
             }
 
@@ -1961,7 +1953,7 @@ public sealed partial class FlaUiControlResolver
                 or GridCellEditorKind.Color)
             {
                 TryFocus(ResolveEditorPart(cell, request.EditorParts?.Input) ?? cell);
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
             }
         }
 
@@ -1970,12 +1962,12 @@ public sealed partial class FlaUiControlResolver
             var cancel = ResolveEditorPart(cell, request.EditorParts?.CancelButton);
             if (cancel is not null)
             {
-                cancel.Click();
+                new FlaUiButtonControl(cancel.AsButton()).Invoke();
                 return;
             }
 
             TryFocus(cell);
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Type(VirtualKeyShort.ESCAPE);
         }
 
         private void EditCheckBoxCell(
@@ -2005,8 +1997,7 @@ public sealed partial class FlaUiControlResolver
             {
                 TryScrollIntoView(editor);
                 TryFocus(editor);
-                MoveMouseImmediatelyTo(editor);
-                Mouse.LeftClick();
+                DesktopPointer.ClickFallback(editor, "grid editor activation fallback");
             }
         }
 
@@ -3177,17 +3168,14 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            PrepareForPhysicalGridInput(thumb);
             return TryRead(() =>
             {
                 var bounds = TryRead(() => thumb.BoundingRectangle);
                 var start = new System.Drawing.Point(
                     bounds.Left + bounds.Width / 2,
                     bounds.Top + bounds.Height / 2);
-                Mouse.Position = start;
-                Mouse.Down(MouseButton.Left);
-                Mouse.Position = new System.Drawing.Point(start.X, targetCenterY);
-                Mouse.Up(MouseButton.Left);
+                DesktopPointer.Drag(thumb, start, new System.Drawing.Point(start.X, targetCenterY),
+                    prepare: () => PrepareForPhysicalGridInput(thumb));
                 return true;
             });
         }
@@ -3210,13 +3198,12 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            PrepareForPhysicalGridInput(scroll.ScrollBar);
             return TryRead(() =>
             {
-                Mouse.Position = new System.Drawing.Point(
+                DesktopPointer.ClickAt(scroll.ScrollBar, new System.Drawing.Point(
                     scrollBounds.Left + scrollBounds.Width / 2,
-                    availableStart + (availableEnd - availableStart) / 2);
-                Mouse.LeftClick();
+                    availableStart + (availableEnd - availableStart) / 2),
+                    prepare: () => PrepareForPhysicalGridInput(scroll.ScrollBar));
                 return true;
             });
         }
@@ -3327,20 +3314,18 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            return TryRead(() =>
+            var typedButton = button.AsButton();
+            if (typedButton.Patterns.Invoke.IsSupported)
             {
-                var typedButton = button.AsButton();
-                if (typedButton.Patterns.Invoke.IsSupported)
-                {
-                    typedButton.Invoke();
-                }
-                else
-                {
-                    typedButton.Click();
-                }
+                // An Invoke failure may follow delivery. Do not replay it as wheel/keyboard input.
+                typedButton.Invoke();
+            }
+            else
+            {
+                DesktopPointer.ClickFallback(typedButton, "grid scroll button lacks Invoke");
+            }
 
-                return true;
-            });
+            return true;
         }
 
         private bool TryScrollGridWithWheel(AutomationElement root, double lines)
@@ -3350,14 +3335,13 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            PrepareForPhysicalGridInput(root);
             return TryRead(() =>
             {
                 var bounds = TryRead(() => root.BoundingRectangle);
-                Mouse.Position = new System.Drawing.Point(
+                DesktopPointer.Scroll(root, new System.Drawing.Point(
                     bounds.Left + bounds.Width / 2,
-                    bounds.Top + bounds.Height * 3 / 4);
-                Mouse.Scroll(lines);
+                    bounds.Top + bounds.Height * 3 / 4), lines,
+                    prepare: () => PrepareForPhysicalGridInput(root));
                 return true;
             });
         }
@@ -3402,7 +3386,6 @@ public sealed partial class FlaUiControlResolver
                 return false;
             }
 
-            PrepareForPhysicalGridInput(target.Element);
             return TryRead(() =>
             {
                 if (target.Element.Patterns.SelectionItem.IsSupported)
@@ -3410,12 +3393,10 @@ public sealed partial class FlaUiControlResolver
                     target.Element.Patterns.SelectionItem.Pattern.Select();
                 }
 
-                TryFocus(target.Element);
-                MoveMouseImmediatelyTo(target.Element);
-                Mouse.LeftClick();
+                DesktopPointer.ClickPrepared(() => target.Element, PrepareForPhysicalGridInput);
                 if (forward)
                 {
-                    Keyboard.Press(VirtualKeyShort.NEXT);
+                    Keyboard.Type(VirtualKeyShort.NEXT);
                 }
                 else
                 {
@@ -3840,14 +3821,15 @@ public sealed partial class FlaUiControlResolver
     {
         try
         {
-            TryScrollIntoView(element);
-            TryFocus(element);
-            MoveMouseImmediatelyTo(element);
-            Mouse.LeftDoubleClick();
+            DesktopPointer.ClickPrepared(() => element, target =>
+            {
+                TryScrollIntoView(target);
+                TryFocus(target);
+            }, options: new PointerClickOptions { ClickCount = 2 });
             exception = null;
             return true;
         }
-        catch (Exception mouseException)
+        catch (Exception mouseException) when (!DesktopPointer.IsTerminalFailure(mouseException))
         {
             try
             {
@@ -3857,7 +3839,7 @@ public sealed partial class FlaUiControlResolver
                     return true;
                 }
             }
-            catch (Exception nativeException)
+            catch (Exception nativeException) when (!DesktopPointer.IsTerminalFailure(nativeException))
             {
                 exception = new AggregateException(
                     "The standard and native double-click paths both failed.",
@@ -3871,21 +3853,7 @@ public sealed partial class FlaUiControlResolver
         }
     }
 
-    private static void MoveMouseImmediatelyTo(AutomationElement element)
-    {
-        if (element.TryGetClickablePoint(out var point))
-        {
-            Mouse.Position = point;
-            return;
-        }
-
-        var bounds = element.BoundingRectangle;
-        Mouse.Position = new System.Drawing.Point(
-            bounds.Left + bounds.Width / 2,
-            bounds.Top + bounds.Height / 2);
-    }
-
-    private static void MoveMouseToBoundsCenter(AutomationElement element)
+    private static System.Drawing.Point GetBoundsCenter(AutomationElement element)
     {
         var bounds = element.BoundingRectangle;
         if (bounds.Width <= 0 || bounds.Height <= 0)
@@ -3894,7 +3862,7 @@ public sealed partial class FlaUiControlResolver
                 "The automation element does not expose visible bounds for mouse input.");
         }
 
-        Mouse.Position = new System.Drawing.Point(
+        return new System.Drawing.Point(
             bounds.Left + bounds.Width / 2,
             bounds.Top + bounds.Height / 2);
     }
@@ -3908,7 +3876,7 @@ public sealed partial class FlaUiControlResolver
                 element.Patterns.ScrollItem.Pattern.ScrollIntoView();
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Some visual bridge elements expose no scroll pattern; double-click can still work.
         }
@@ -3920,7 +3888,7 @@ public sealed partial class FlaUiControlResolver
         {
             element.Focus();
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Focus is best-effort before the mouse gesture.
         }

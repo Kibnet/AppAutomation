@@ -1,0 +1,18 @@
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:00.9415567+00:00","ProcessId":398276,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.1.0"}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.2655126+00:00","ProcessId":398276,"Kind":"click","Stage":"saved","X":4474,"Y":1190,"Detail":null}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3304036+00:00","ProcessId":398276,"Kind":"click","Stage":"target","X":1340,"Y":872,"Detail":"pid=407156; hwnd=279253610; locator=CurrentTaskStatusButton"}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3362387+00:00","ProcessId":398276,"Kind":"click","Stage":"move-requested","X":1340,"Y":872,"Detail":null}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3376487+00:00","ProcessId":398276,"Kind":"click","Stage":"moved","X":1340,"Y":872,"Detail":null}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3544486+00:00","ProcessId":398276,"Kind":"click","Stage":"down","X":1340,"Y":872,"Detail":"Left"}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3604464+00:00","ProcessId":398276,"Kind":"click","Stage":"up","X":1340,"Y":872,"Detail":"Left"}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3630931+00:00","ProcessId":398276,"Kind":"click","Stage":"restore-requested","X":4474,"Y":1190,"Detail":null}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3639664+00:00","ProcessId":398276,"Kind":"click","Stage":"restored","X":4474,"Y":1190,"Detail":"None"}
+{"OperationId":"3054cb4c-7367-4b7f-a57c-55b5a5b7edf6","Timestamp":"2026-10-02T15:35:01.3689745+00:00","ProcessId":398276,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:04.4030687+00:00","ProcessId":398276,"Kind":"hover","Stage":"queued","X":null,"Y":null,"Detail":"1.8.1.0"}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:04.4044788+00:00","ProcessId":398276,"Kind":"hover","Stage":"saved","X":4474,"Y":1190,"Detail":null}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:05.8014828+00:00","ProcessId":398276,"Kind":"hover","Stage":"target","X":1697,"Y":1016,"Detail":"pid=407156; hwnd=184943880; locator=TaskStatusOptionInProgress"}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:05.8043081+00:00","ProcessId":398276,"Kind":"hover","Stage":"move-requested","X":1697,"Y":1016,"Detail":null}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:05.805523+00:00","ProcessId":398276,"Kind":"hover","Stage":"moved","X":1697,"Y":1016,"Detail":null}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:09.1695186+00:00","ProcessId":398276,"Kind":"hover","Stage":"restore-requested","X":4474,"Y":1190,"Detail":null}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:09.1709176+00:00","ProcessId":398276,"Kind":"hover","Stage":"restored","X":4474,"Y":1190,"Detail":"None"}
+{"OperationId":"19616b73-6464-4d1c-9256-624f6428a76f","Timestamp":"2026-10-02T15:35:09.1717172+00:00","ProcessId":398276,"Kind":"hover","Stage":"released","X":null,"Y":null,"Detail":null}

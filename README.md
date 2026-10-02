@@ -42,6 +42,8 @@ Supported baseline:
 
 Full matrix: [docs/appautomation/compatibility.md](docs/appautomation/compatibility.md)
 
+Physical mouse gestures and cursor restoration: [pointer input](docs/appautomation/pointer-input.md).
+
 ## Codex skill for AppAutomation
 
 The [AppAutomation skill](skills/appautomation/SKILL.md) guides an agent from an Avalonia project with no UI tests to a working `Authoring`/`Headless`/`FlaUI` setup, shared user scenarios, diagnostics, and visual review using real PNGs from Headless tests. It is an **agent workflow**; the NuGet packages, template, and CLI below are still required in the consumer project. Invoke it as `$appautomation`, for example: “`$appautomation Add a Headless UI test for the login flow and show me the resulting screen.`”

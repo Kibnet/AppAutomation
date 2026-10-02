@@ -55,7 +55,7 @@ public sealed class FlaUiControlResolverTests
             await Assert.That(page.MultiSelection.Items).IsEquivalentTo(ExpectedMultiSelectItems);
         }
 
-        popup.CancelButton.Click();
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(popup.CancelButton);
     }
 
     [Test]

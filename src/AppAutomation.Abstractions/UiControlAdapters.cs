@@ -584,7 +584,8 @@ public static partial class UiControlResolverExtensions
     private sealed class AdapterAwareUiControlResolver :
         IUiControlResolver,
         IMultiItemControlRuntimeResolver,
-        IUiClipboardRuntime
+        IUiClipboardRuntime,
+        IUiPointerRuntime
     {
         private readonly IUiControlResolver _innerResolver;
         private readonly IReadOnlyList<IUiControlAdapter> _adapters;
@@ -652,6 +653,37 @@ public static partial class UiControlResolverExtensions
             }
 
             return clipboardRuntime.SetTextAsync(text, cancellationToken);
+        }
+
+        public Task PointerClickAsync(
+            UiControlDefinition target,
+            PointerClickOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            GetPointerRuntime().PointerClickAsync(target, options, cancellationToken);
+
+        public Task HoverAsync(
+            UiControlDefinition target,
+            Func<CancellationToken, Task> verifyWhileHovered,
+            PointerHoverOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            GetPointerRuntime().HoverAsync(target, verifyWhileHovered, options, cancellationToken);
+
+        public Task DragAndDropAsync(
+            UiControlDefinition source,
+            UiControlDefinition target,
+            PointerDragOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            GetPointerRuntime().DragAndDropAsync(source, target, options, cancellationToken);
+
+        private IUiPointerRuntime GetPointerRuntime()
+        {
+            if (!Capabilities.SupportsPointerInput || _innerResolver is not IUiPointerRuntime pointerRuntime)
+            {
+                throw new NotSupportedException(
+                    $"Runtime adapter '{Capabilities.AdapterId}' does not support physical pointer input.");
+            }
+
+            return pointerRuntime;
         }
     }
 }

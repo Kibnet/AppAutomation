@@ -25,4 +25,9 @@ public sealed record UiRuntimeCapabilities(
     /// Gets a value indicating whether the adapter can write and paste plain text through its clipboard.
     /// </summary>
     public bool SupportsClipboardText { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the adapter supports physical pointer gestures with cursor restoration.
+    /// </summary>
+    public bool SupportsPointerInput { get; init; }
 }

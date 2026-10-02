@@ -545,7 +545,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     {
         var element = FindElement(session, automationId);
         element.Focus();
-        element.Click();
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(element);
     }
 
     private static void ReplaceText(DesktopAppSession session, string automationId, string value)

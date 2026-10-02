@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add optional physical pointer click, hover verification, and drag-and-drop APIs with desktop coordination, bounded cleanup, cursor restoration, and pointer diagnostics.
 - Add provider-neutral clipboard text copy through `IUiClipboardRuntime` and real paste through `IClipboardPasteTarget`, with Recorder-generated replay and shared Avalonia Headless/FlaUI support.
+
+### Fixed
+
+- Restore the cursor after FlaUI physical fallbacks, prefer supported semantic actions, and stop failed gestures without automatically replaying input.
 
 ## [1.8.0] - 2026-09-27
 

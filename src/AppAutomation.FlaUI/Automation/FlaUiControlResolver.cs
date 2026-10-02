@@ -4,6 +4,7 @@ using System.Text;
 using AppAutomation.Abstractions;
 using AppAutomation.FlaUI.Automation.GridAutomation;
 using AppAutomation.FlaUI.Extensions;
+using AppAutomation.FlaUI.Input;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Conditions;
 using FlaUI.Core.Definitions;
@@ -17,7 +18,7 @@ using NumberStyles = System.Globalization.NumberStyles;
 
 namespace AppAutomation.FlaUI.Automation;
 
-public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime
+public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, IUiPointerRuntime
 {
     private const uint WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageKeyUp = 0x0101;
@@ -46,8 +47,66 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         SupportsRawNativeHandles: true,
         SupportsScreenshots: true)
     {
-        SupportsClipboardText = true
+        SupportsClipboardText = true,
+        SupportsPointerInput = true
     };
+
+    public Task PointerClickAsync(UiControlDefinition target, PointerClickOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return DesktopPointer.ClickAsync(() => FindPointerElement(target), options, cancellationToken);
+    }
+
+    public Task HoverAsync(UiControlDefinition target, Func<CancellationToken, Task> verifyWhileHovered,
+        PointerHoverOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return DesktopPointer.HoverAsync(() => FindPointerElement(target), verifyWhileHovered, options, cancellationToken);
+    }
+
+    public Task DragAndDropAsync(UiControlDefinition source, UiControlDefinition target,
+        PointerDragOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        return DesktopPointer.DragAndDropAsync(() => FindPointerElement(source), () => FindPointerElement(target), options, cancellationToken);
+    }
+
+    private AutomationElement FindPointerElement(UiControlDefinition definition)
+    {
+        var roots = definition.Scope is null
+            ? GetProcessSearchRoots()
+            : FindScopeRoots(definition.Scope);
+        var lookupKind = definition.LocatorKind;
+        var matches = FindPointerMatches(roots, definition.LocatorValue, lookupKind);
+        // Fallback is a second lookup stage, never a union with primary matches. In particular,
+        // an unrelated Name must not make a unique AutomationId ambiguous across process roots.
+        if (matches.Length == 0 && definition.FallbackToName && lookupKind != UiLocatorKind.Name)
+        {
+            lookupKind = UiLocatorKind.Name;
+            matches = FindPointerMatches(roots, definition.LocatorValue, lookupKind);
+        }
+
+        return matches.Length switch
+        {
+            1 => matches[0],
+            0 => throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                $"Pointer target [{definition.LocatorKind}:{definition.LocatorValue}] was not found."),
+            _ => throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
+                $"Pointer target [{lookupKind}:{definition.LocatorValue}] is ambiguous ({matches.Length} controls).")
+        };
+    }
+
+    private AutomationElement[] FindPointerMatches(
+        IEnumerable<AutomationElement> roots, string locatorValue, UiLocatorKind locatorKind)
+    {
+        var condition = CreateCondition(locatorValue, locatorKind);
+        return DistinctElements(roots
+            .SelectMany(root => TryRead(() => root.FindAllDescendants(condition)) ?? [])
+            .Where(IsAttachedAndAvailable))
+            .ToArray();
+    }
 
     public Task SetTextAsync(string text, CancellationToken cancellationToken = default)
     {
@@ -144,7 +203,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 InlineTextPreview: BuildLogicalTreeSnapshot()),
             screenshotArtifact,
             processInfoArtifact,
-            windowHandleArtifact
+            windowHandleArtifact,
+            new UiFailureArtifact(
+                Kind: "pointer-trace",
+                LogicalName: "pointer-trace",
+                RelativePath: "artifacts/ui-failures/flaui/pointer-trace.jsonl",
+                ContentType: "application/x-ndjson",
+                IsRequiredByContract: false,
+                InlineTextPreview: DesktopPointer.GetTraceSnapshot())
         ];
 
         return ValueTask.FromResult(artifacts);
@@ -542,7 +608,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return candidate.IsAvailable
                 && candidate.Parent is not null;
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             return false;
         }
@@ -554,7 +620,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             return accessor();
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             return default;
         }
@@ -588,6 +654,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     {
         try
         {
+            using var dpi = WindowsPointerBackend.PhysicalDpiScope.Enter();
             using var screenshot = _window.Capture();
             return new UiFailureArtifact(
                 Kind: "screenshot",
@@ -597,7 +664,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 IsRequiredByContract: true,
                 InlineTextPreview: $"{screenshot.Width}x{screenshot.Height}");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DesktopPointer.IsTerminalFailure(ex))
         {
             return new UiFailureArtifact(
                 Kind: "screenshot-unavailable",
@@ -651,7 +718,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 IsRequiredByContract: true,
                 InlineTextPreview: $"Pid={processId}; Name={process.ProcessName}; StartedAtUtc={startedAt ?? "<unknown>"}");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!DesktopPointer.IsTerminalFailure(ex))
         {
             return new UiFailureArtifact(
                 Kind: "process-info",
@@ -692,7 +759,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 return accessor();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 return default;
             }
@@ -820,7 +887,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return;
             }
 
-            Inner.Click();
+            DesktopPointer.ClickFallback(Inner, "button lacks supported semantic action");
         }
 
         private static bool IsOpenToggleButton(AutomationElement element)
@@ -982,7 +1049,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     }
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Some providers do not expose direct list items.
             }
@@ -1028,7 +1095,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return candidate.Patterns.SelectionItem.IsSupported
                         && candidate.Patterns.SelectionItem.Pattern.IsSelected.Value;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     return false;
                 }
@@ -1053,7 +1120,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     expectedText,
                     StringComparison.OrdinalIgnoreCase);
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 return false;
             }
@@ -1067,7 +1134,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 _ = Inner.FindAllDescendants();
                 return false;
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 return true;
             }
@@ -1090,7 +1157,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return true;
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
             }
 
@@ -1099,28 +1166,15 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         private static bool TryClick(AutomationElement candidate)
         {
-            try
+            if (candidate.Patterns.Invoke.IsSupported)
             {
-                candidate.Click();
+                // Do not replay an Invoke whose delivery failed ambiguously.
+                candidate.Patterns.Invoke.Pattern.Invoke();
                 return true;
             }
-            catch
-            {
-            }
 
-            try
-            {
-                if (candidate.Patterns.Invoke.IsSupported)
-                {
-                    candidate.Patterns.Invoke.Pattern.Invoke();
-                    return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
+            DesktopPointer.ClickFallback(candidate, "list candidate lacks Invoke");
+            return true;
         }
     }
 
@@ -1278,7 +1332,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return item.Patterns.SelectionItem.IsSupported
                     && item.Patterns.SelectionItem.Pattern.IsSelected.Value;
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 return false;
             }
@@ -1293,7 +1347,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 pattern.AddToSelection();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 pattern.Select();
             }
@@ -1949,7 +2003,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return;
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Fall back to direct item interaction below.
             }
@@ -1963,7 +2017,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 Inner.Expand();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Some providers do not expose expand directly.
             }
@@ -2030,7 +2084,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     }
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Some providers do not expose direct combo box items.
             }
@@ -2089,7 +2143,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return candidate.Patterns.SelectionItem.IsSupported
                         && candidate.Patterns.SelectionItem.Pattern.IsSelected.Value;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     return false;
                 }
@@ -2140,28 +2194,15 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         private static bool TryClick(AutomationElement candidate)
         {
-            try
+            if (candidate.Patterns.Invoke.IsSupported)
             {
-                candidate.Click();
+                // Do not replay an Invoke whose delivery failed ambiguously.
+                candidate.Patterns.Invoke.Pattern.Invoke();
                 return true;
             }
-            catch
-            {
-            }
 
-            try
-            {
-                if (candidate.Patterns.Invoke.IsSupported)
-                {
-                    candidate.Patterns.Invoke.Pattern.Invoke();
-                    return true;
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
+            DesktopPointer.ClickFallback(candidate, "combo candidate lacks Invoke");
+            return true;
         }
     }
 
@@ -2325,7 +2366,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     Inner.SelectedDate = null;
                     return true;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     return false;
                 }
@@ -2339,7 +2380,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return true;
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Fall back to text input below.
             }
@@ -2364,7 +2405,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 {
                     textInput.Text = candidate;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     continue;
                 }
@@ -2467,7 +2508,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                         return false;
                     }
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     continue;
                 }
@@ -2489,7 +2530,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     .FirstOrDefault(static candidate => candidate.ControlType == ControlType.Edit)
                     ?.AsTextBox();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 return null;
             }
@@ -2595,7 +2636,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 .Select(GetAutomationElementIdentity)
                 .ToHashSet(StringComparer.Ordinal);
             owner.Focus();
-            owner.RightClick();
+            DesktopPointer.ClickFallback(owner, "context menu requires right click", new PointerClickOptions { Button = PointerButton.Right });
 
             var popupItems = UiWait.Until(
                 () => FindVisibleMenuItems(owner)
@@ -2625,7 +2666,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 .ToArray();
             if (rootItems.Length == 0 || popupRoots.Length != 1)
             {
-                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                Keyboard.Type(VirtualKeyShort.ESCAPE);
                 throw new InvalidOperationException(
                     $"Context-menu owner '{TryRead(() => owner.AutomationId)}' opened an ambiguous popup.");
             }
@@ -2638,9 +2679,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     budget,
                     rootIsPopup: true);
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
-                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                Keyboard.Type(VirtualKeyShort.ESCAPE);
                 throw;
             }
         }
@@ -2742,7 +2783,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     currentItems = () => childItems;
                 }
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 CloseOpenedItems(openedItems);
                 throw;
@@ -2764,7 +2805,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     continue;
                 }
 
-                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                Keyboard.Type(VirtualKeyShort.ESCAPE);
             }
         }
 
@@ -2820,7 +2861,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
             else
             {
-                item.Click();
+                DesktopPointer.ClickFallback(item, "menu item lacks Invoke");
             }
         }
 
@@ -2852,7 +2893,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             else if (pattern is null)
             {
                 item.Focus();
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
             }
 
             return UiWait.Until(
@@ -2973,14 +3014,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             var waitForPopupClose = HasMenuItemAncestor(target);
             if (waitForPopupClose)
             {
-                target.Click();
+                DesktopPointer.ClickFallback(target, "popup menu requires pointer activation");
             }
             else
             {
                 FocusContainingWindow(target);
                 TryFocus(target);
-                Keyboard.Press(VirtualKeyShort.RETURN);
-                Keyboard.Press(VirtualKeyShort.ESCAPE);
+                Keyboard.Type(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.ESCAPE);
             }
 
             if (waitForPopupClose)
@@ -3088,15 +3129,15 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             if (input is not null && TryRead(() => input.IsEnabled))
             {
                 input.EnterText(text);
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
                 return true;
             }
 
             Inner.Focus();
-            Inner.Click();
+            DesktopPointer.ClickFallback(Inner, "spinner editor requires pointer activation");
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
             Keyboard.Type(text);
-            Keyboard.Press(VirtualKeyShort.RETURN);
+            Keyboard.Type(VirtualKeyShort.RETURN);
             return true;
         }
     }
@@ -3112,7 +3153,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectTabItem(string itemText)
         {
-            Inner.SelectTabItem(itemText);
+            var item = Inner.TabItems.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, itemText, StringComparison.Ordinal))
+                ?? throw new InvalidOperationException($"Tab item '{itemText}' was not found.");
+            new FlaUiTabItemControl(item).SelectTab();
         }
     }
 
@@ -3128,18 +3172,30 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectTab()
         {
-            try
+            if (IsSelected)
             {
-                Inner.Click();
-            }
-            catch
-            {
-                Inner.Select();
+                return;
             }
 
-            if (TryRead(() => Inner.IsSelected) != true)
+            if (Inner.Patterns.SelectionItem.IsSupported)
             {
-                Inner.Select();
+                try
+                {
+                    Inner.Patterns.SelectionItem.Pattern.Select();
+                }
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
+                {
+                    // Selection is idempotent; read its result before the provider fallback.
+                }
+            }
+
+            if (!IsSelected)
+            {
+                DesktopPointer.ClickFallback(Inner, "tab SelectionItem did not select");
+                if (!IsSelected)
+                {
+                    throw new InvalidOperationException($"Tab '{Inner.AutomationId}' did not become selected.");
+                }
             }
         }
     }
@@ -3190,7 +3246,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     return Inner.Patterns.SelectionItem.IsSupported
                         && Inner.Patterns.SelectionItem.Pattern.IsSelected.Value;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     return false;
                 }
@@ -3209,7 +3265,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 {
                     Inner.IsSelected = false;
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     // Tree nodes without selection support cannot be force-unselected.
                 }
@@ -3227,7 +3283,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 Inner.Expand();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 // Ignore expansion failures for leaf nodes.
             }
@@ -3742,7 +3798,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 }
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Ignore pattern access errors and continue with fallbacks.
         }
@@ -3795,7 +3851,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 }
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Ignore pattern access errors and continue with text descendants.
         }
@@ -3833,7 +3889,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return true;
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
         }
 
@@ -3847,7 +3903,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             treeItem.Select();
             return true;
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
         }
 
@@ -3882,7 +3938,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 new IntPtr(SpaceKeyUpData));
             return true;
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
         }
 
@@ -3968,19 +4024,19 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private static bool TryActivateTreeSelectionCandidate(AutomationElement candidate)
     {
-        return TryClickTreeSelectionCandidate(candidate)
+        return TrySelectTreeSelectionCandidate(candidate)
             || TryInvokeTreeSelectionCandidate(candidate)
-            || TrySelectTreeSelectionCandidate(candidate);
+            || TryClickTreeSelectionCandidate(candidate);
     }
 
     private static bool TryClickTreeSelectionCandidate(AutomationElement candidate)
     {
         try
         {
-            candidate.Click();
+            DesktopPointer.ClickFallback(candidate, "tree selection requires pointer activation");
             return true;
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
         }
 
@@ -3989,16 +4045,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private static bool TryInvokeTreeSelectionCandidate(AutomationElement candidate)
     {
-        try
+        if (candidate.Patterns.Invoke.IsSupported)
         {
-            if (candidate.Patterns.Invoke.IsSupported)
-            {
-                candidate.Patterns.Invoke.Pattern.Invoke();
-                return true;
-            }
-        }
-        catch
-        {
+            // An ambiguous Invoke failure must not trigger a second, physical activation.
+            candidate.Patterns.Invoke.Pattern.Invoke();
+            return true;
         }
 
         return false;
@@ -4011,10 +4062,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             if (candidate.Patterns.SelectionItem.IsSupported)
             {
                 candidate.Patterns.SelectionItem.Pattern.Select();
-                return true;
+                return candidate.Patterns.SelectionItem.Pattern.IsSelected.Value;
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
         }
 
