@@ -4049,6 +4049,7 @@ public sealed partial class FlaUiControlResolver
                 currentTarget,
                 selectable,
                 selectionContainer,
+                allowContainerFocusFallback: false,
                 out _))
         {
             try
@@ -4091,6 +4092,7 @@ public sealed partial class FlaUiControlResolver
                     currentTarget,
                     selectable,
                     selectionContainer,
+                    allowContainerFocusFallback: true,
                     out var currentStateWasReadable))
             {
                 return;
@@ -4210,6 +4212,7 @@ public sealed partial class FlaUiControlResolver
         AutomationElement target,
         AutomationElement? selectable,
         AutomationElement? selectionContainer,
+        bool allowContainerFocusFallback,
         out bool selectionStateWasReadable)
     {
         bool? selectionItemIsSelected = null;
@@ -4238,10 +4241,76 @@ public sealed partial class FlaUiControlResolver
 
         var targetIsSelected = selectedElements?.Any(selected =>
             RepresentsSameSelectedGridRow(selected, target)) == true;
+        var focusedElement = TryRead(() => target.Automation.FocusedElement());
+        var focusRepresentsTarget = focusedElement is not null
+            && RepresentsFocusedGridRow(focusedElement, target, selectionContainer);
+        var containerFocusConfirmsClick = allowContainerFocusFallback
+            && focusedElement is not null
+            && selectionContainer is not null
+            && IsSameAutomationElement(focusedElement, selectionContainer)
+            && IsMouseWithinGridRow(target, selectionContainer);
 
-        selectionStateWasReadable = selectionItemIsSelected.HasValue || selectedElements is not null;
+        selectionStateWasReadable = selectionItemIsSelected.HasValue
+            || selectedElements is not null
+            || focusedElement is not null;
         return selectionItemIsSelected == true
-            || (selectedElements is not null && targetIsSelected);
+            || (selectedElements is not null && targetIsSelected)
+            || focusRepresentsTarget
+            || containerFocusConfirmsClick;
+    }
+
+    private static bool IsMouseWithinGridRow(
+        AutomationElement target,
+        AutomationElement selectionContainer)
+    {
+        var targetBounds = TryRead(() => target.BoundingRectangle);
+        var containerBounds = TryRead(() => selectionContainer.BoundingRectangle);
+        if (targetBounds.Width <= 0
+            || targetBounds.Height <= 0
+            || containerBounds.Width <= 0
+            || containerBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        var visibleTargetBounds = System.Drawing.Rectangle.Intersect(targetBounds, containerBounds);
+        return visibleTargetBounds.Width > 0
+            && visibleTargetBounds.Height > 0
+            && visibleTargetBounds.Contains(Mouse.Position);
+    }
+
+    private static bool RepresentsFocusedGridRow(
+        AutomationElement focusedElement,
+        AutomationElement target,
+        AutomationElement? selectionContainer)
+    {
+        if (selectionContainer is not null
+            && IsSameAutomationElement(focusedElement, selectionContainer))
+        {
+            return false;
+        }
+
+        if (IsSameAutomationElement(focusedElement, target)
+            || IsAutomationAncestor(target, focusedElement))
+        {
+            return true;
+        }
+
+        var focusedBounds = TryRead(() => focusedElement.BoundingRectangle);
+        var targetBounds = TryRead(() => target.BoundingRectangle);
+        if (focusedBounds.Width <= 0
+            || focusedBounds.Height <= 0
+            || targetBounds.Width <= 0
+            || targetBounds.Height <= 0
+            || focusedBounds.Height > targetBounds.Height * 2)
+        {
+            return false;
+        }
+
+        var overlap = System.Drawing.Rectangle.Intersect(focusedBounds, targetBounds);
+        return overlap.Width > 0
+            && overlap.Height > 0
+            && overlap.Height * 2 >= Math.Min(focusedBounds.Height, targetBounds.Height);
     }
 
     private static bool RepresentsSameSelectedGridRow(

@@ -97,7 +97,7 @@ public sealed class RecorderColorPickerCaptureTests
         recorder.CaptureAssertion();
 
         await Assert.That(recorder.OnlyStep.Preview)
-            .Contains("Page.WaitUntilColorEquals(static page => page.AccentColor, \"#FF336699\");");
+            .Contains("await Assert.That(Page.AccentColor.Color).IsEqualTo(\"#FF336699\");");
     }
 
     [Test]

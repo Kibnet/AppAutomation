@@ -115,7 +115,8 @@ public sealed class RecorderTimePickerCaptureTests
         using (Assert.Multiple())
         {
             await Assert.That(recorder.OnlyStep.CanPersist).IsTrue();
-            await Assert.That(recorder.OnlyStep.Preview).Contains("Page.WaitUntilTimeEquals(static page => page.DeliveryTimeEditor");
+            await Assert.That(recorder.OnlyStep.Preview).Contains(
+                "await Assert.That(Page.DeliveryTimeEditor.SelectedTime).IsEqualTo(new global::System.TimeSpan(432000000000L));");
         }
     }
 }

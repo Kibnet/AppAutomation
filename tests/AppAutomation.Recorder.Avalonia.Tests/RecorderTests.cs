@@ -2931,7 +2931,7 @@ public sealed class RecorderTests
         {
             await Assert.That(session.StepJournal.Count).IsEqualTo(1);
             await Assert.That(session.StepJournal[0].Preview).Contains(
-                "Page.WaitUntilValueEquals(static page => page.QuantitySpinner, 12);");
+                "await Assert.That(Page.QuantitySpinner.Value).IsEqualTo(12);");
             await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
         }
     }
