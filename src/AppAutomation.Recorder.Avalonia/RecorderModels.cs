@@ -445,15 +445,10 @@ internal sealed record RecorderNumericExpectedExpression(
     RecorderNumericOperand Left,
     RecorderNumericOperand Right);
 
-internal sealed record RecorderDateOperandConfiguration(
+internal sealed record RecorderDateInput(
     DateTime? ExactDate,
     RecorderDateReferenceKind ReferenceKind,
     int DayOffset);
-
-internal sealed record RecorderStepDateConfiguration(
-    Guid StepId,
-    RecorderDateOperandConfiguration Primary,
-    RecorderDateOperandConfiguration? Secondary);
 
 internal sealed record RecordedStep(
     RecordedActionKind ActionKind,
@@ -501,7 +496,8 @@ internal sealed record RecordedStep(
     string? RepeatedItemKey = null,
     Guid? CopiedValueId = null,
     string? CopiedValueVariableName = null,
-    Guid? InputCopiedValueId = null)
+    Guid? InputCopiedValueId = null,
+    bool PreserveVariableName = false)
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 

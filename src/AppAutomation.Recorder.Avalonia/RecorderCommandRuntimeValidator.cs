@@ -66,6 +66,32 @@ internal sealed class RecorderCommandRuntimeValidator
         };
     }
 
+    public RecordedStep ValidatePayload(RecordedStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+
+        var findings = ValidateAction(step, RecorderRuntimeValidationTarget.Headless)
+            .Where(static finding => finding.BlocksTarget)
+            .ToArray();
+        if (findings.Length == 0)
+        {
+            return step;
+        }
+
+        var message = string.Join(
+            " ",
+            findings
+                .Select(static finding => finding.Message)
+                .Distinct(StringComparer.Ordinal));
+        return step with
+        {
+            ValidationStatus = RecorderValidationStatus.Invalid,
+            ValidationMessage = CombineMessage(step.ValidationMessage, message),
+            CanPersist = false,
+            RuntimeValidationFindings = findings
+        };
+    }
+
     private IReadOnlyList<RecorderRuntimeValidationTarget> GetSelectedTargets()
     {
         var targets = new List<RecorderRuntimeValidationTarget>();
@@ -1005,7 +1031,7 @@ internal sealed class RecorderCommandRuntimeValidator
         return locatorKind is UiLocatorKind.AutomationId or UiLocatorKind.Name;
     }
 
-    private static string BuildRuntimeValidationMessage(IReadOnlyList<RecorderRuntimeValidationFinding> findings)
+    internal static string BuildRuntimeValidationMessage(IReadOnlyList<RecorderRuntimeValidationFinding> findings)
     {
         var surfaced = findings
             .Where(static finding => finding.ShouldSurface)

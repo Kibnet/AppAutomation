@@ -49,40 +49,83 @@ internal static class RecorderNaming
         }
     }
 
-    public static string CreateCheckpointVariableName(string? proposedName, ISet<string> reservedNames)
+    public static string CreateCheckpointVariableName(
+        string? proposedName,
+        ISet<string> reservedNames,
+        bool preserveExact = false)
     {
         return CreateVariableName(
             proposedName,
             reservedNames,
             fallback: "CheckpointValue",
-            keywordPrefix: "checkpoint");
+            keywordPrefix: "checkpoint",
+            preserveExact);
     }
 
-    public static string CreateGeneratedValueVariableName(string? proposedName, ISet<string> reservedNames)
+    public static string CreateGeneratedValueVariableName(
+        string? proposedName,
+        ISet<string> reservedNames,
+        bool preserveExact = false)
     {
         return CreateVariableName(
             proposedName,
             reservedNames,
             fallback: "GeneratedValue",
-            keywordPrefix: "generated");
+            keywordPrefix: "generated",
+            preserveExact);
     }
 
-    public static string CreateCopiedValueVariableName(string? proposedName, ISet<string> reservedNames)
+    public static string CreateCopiedValueVariableName(
+        string? proposedName,
+        ISet<string> reservedNames,
+        bool preserveExact = false)
     {
         return CreateVariableName(
             proposedName,
             reservedNames,
             fallback: "CopiedValue",
-            keywordPrefix: "copied");
+            keywordPrefix: "copied",
+            preserveExact);
+    }
+
+    public static bool TryValidateExactVariableName(string? proposedName, out string error)
+    {
+        var identifier = proposedName?.Trim() ?? string.Empty;
+        if (identifier.Length == 0)
+        {
+            error = "Variable name is required.";
+            return false;
+        }
+
+        if (!IsValidIdentifier(identifier))
+        {
+            error = $"'{identifier}' is not a valid C# variable name.";
+            return false;
+        }
+
+        if (IsKeyword(identifier))
+        {
+            error = $"'{identifier}' is a reserved C# keyword.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     private static string CreateVariableName(
         string? proposedName,
         ISet<string> reservedNames,
         string fallback,
-        string keywordPrefix)
+        string keywordPrefix,
+        bool preserveExact)
     {
         ArgumentNullException.ThrowIfNull(reservedNames);
+
+        if (preserveExact && TryValidateExactVariableName(proposedName, out _))
+        {
+            return EnsureUniqueName(proposedName!.Trim(), reservedNames);
+        }
 
         var identifier = SanitizeIdentifier(proposedName, fallback);
         identifier = char.ToLowerInvariant(identifier[0]) + identifier[1..];

@@ -660,7 +660,8 @@ internal sealed class AuthoringCodeGenerator
             var reservedNames = variables.Values.ToHashSet(StringComparer.Ordinal);
             variables[checkpointId] = RecorderNaming.CreateCheckpointVariableName(
                 step.CheckpointVariableName,
-                reservedNames);
+                reservedNames,
+                step.PreserveVariableName);
             checkpointVariables = variables;
         }
 
