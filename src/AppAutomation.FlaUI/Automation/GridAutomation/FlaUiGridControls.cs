@@ -1,3 +1,4 @@
+using AppAutomation.FlaUI.Input;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -50,7 +51,7 @@ public sealed partial class FlaUiControlResolver
                 var row = Inner.GetRowByIndex(index);
                 return row is null ? null : new FlaUiGridRowControl(row);
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
                 var rows = Inner.Rows;
                 return index >= 0 && index < rows.Length
@@ -190,12 +191,12 @@ public sealed partial class FlaUiControlResolver
                 var cancel = ResolveNativeEditorPart(cell, request.EditorParts?.CancelButton);
                 if (cancel is not null)
                 {
-                    cancel.Click();
+                    new FlaUiButtonControl(cancel.AsButton()).Invoke();
                 }
                 else
                 {
                     TryFocus(cell);
-                    Keyboard.Press(VirtualKeyShort.ESCAPE);
+                    Keyboard.Type(VirtualKeyShort.ESCAPE);
                 }
 
                 return;
@@ -204,11 +205,11 @@ public sealed partial class FlaUiControlResolver
             var confirm = ResolveNativeEditorPart(cell, request.EditorParts?.ConfirmButton);
             if (confirm is not null)
             {
-                confirm.Click();
+                new FlaUiButtonControl(confirm.AsButton()).Invoke();
             }
             else
             {
-                Keyboard.Press(VirtualKeyShort.RETURN);
+                Keyboard.Type(VirtualKeyShort.RETURN);
             }
         }
 
@@ -807,7 +808,10 @@ public sealed partial class FlaUiControlResolver
                 ?? candidates.FirstOrDefault(candidate => TryRead(() => candidate.ControlType) == ControlType.Calendar);
             if (calendar is null)
             {
-                ResolveNativeEditorPart(cell, request.EditorParts?.OpenButton)?.Click();
+                if (ResolveNativeEditorPart(cell, request.EditorParts?.OpenButton) is { } openButton)
+                {
+                    new FlaUiButtonControl(openButton.AsButton()).Invoke();
+                }
                 calendar = request.EditorParts?.Results is { } locator
                     ? WaitForNativeEditorPart(cell, locator, TimeSpan.FromMilliseconds(timeoutMs))
                     : null;

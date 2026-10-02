@@ -1,3 +1,4 @@
+using AppAutomation.FlaUI.Input;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
@@ -27,7 +28,7 @@ public static class UiPageExtensions
             throw new TimeoutException($"Element [{element.AutomationId}] is not clickable.");
         }
 
-        element.Click();
+        DesktopPointer.Click(element);
         return page;
     }
 
@@ -300,7 +301,7 @@ public static class UiPageExtensions
             {
                 tab.SelectTabItem(itemText);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!DesktopPointer.IsTerminalFailure(ex))
             {
                 throw new InvalidOperationException($"Tab item '{itemText}' was not found.", ex);
             }
@@ -789,9 +790,9 @@ public static class UiPageExtensions
             {
                 treeItem.Select();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
-                target.Click();
+                DesktopPointer.ClickFallback(target, "legacy tree selection fallback");
             }
 
             if (!target.Patterns.SelectionItem.IsSupported)
@@ -809,9 +810,9 @@ public static class UiPageExtensions
             {
                 asTreeItem.Select();
             }
-            catch
+            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
-                asTreeItem.Click();
+                DesktopPointer.ClickFallback(asTreeItem, "legacy tree item fallback");
             }
 
             if (!asTreeItem.Patterns.SelectionItem.IsSupported)
@@ -828,7 +829,7 @@ public static class UiPageExtensions
             return WaitUntilElementSelected(target, timeoutMs);
         }
 
-        target.Click();
+        DesktopPointer.ClickFallback(target, "legacy tree selection fallback");
         return true;
     }
 
@@ -902,14 +903,14 @@ public static class UiPageExtensions
             tabItem.Select();
             return true;
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             try
             {
                 tab.SelectTabItem(tabItem.Name ?? string.Empty);
                 return true;
             }
-            catch
+            catch (Exception tabLookupError) when (!DesktopPointer.IsTerminalFailure(tabLookupError))
             {
                 // Some providers expose header buttons/cells inside tab item.
                 try
@@ -928,10 +929,10 @@ public static class UiPageExtensions
                         return false;
                     }
 
-                    fallbackButton.Click();
+                    DesktopPointer.ClickFallback(fallbackButton, "legacy calendar button fallback");
                     return true;
                 }
-                catch
+                catch (Exception tabClickError) when (!DesktopPointer.IsTerminalFailure(tabClickError))
                 {
                     return false;
                 }
@@ -946,7 +947,7 @@ public static class UiPageExtensions
             spinner.Value = value;
             return spinner.WaitUntilValueEquals(value, timeoutMs);
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Fallback through nested text editor.
         }
@@ -1011,7 +1012,7 @@ public static class UiPageExtensions
         {
             textBox.EnterText(expected);
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             if (!TrySetText(textBox, expected))
             {
@@ -1048,7 +1049,7 @@ public static class UiPageExtensions
                 return true;
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // Fallback through text editor in provider.
         }
@@ -1100,7 +1101,7 @@ public static class UiPageExtensions
             calendar.SelectDate(date);
             return calendar.WaitUntilCalendarDateEquals(date, timeoutMs);
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             return false;
         }
@@ -1176,7 +1177,7 @@ public static class UiPageExtensions
                 }
             }
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // ignore and continue with descendants fallback
         }
@@ -1350,7 +1351,7 @@ public static class UiPageExtensions
                         return true;
                     }
                 }
-                catch
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
                 {
                     // ignore and continue with direct click fallback
                 }
@@ -1405,22 +1406,14 @@ public static class UiPageExtensions
 
     private static bool TryClickComboItem(AutomationElement candidate)
     {
-        try
-        {
-            candidate.Click();
-            return true;
-        }
-        catch
-        {
-        }
-
         if (candidate.Patterns.Invoke.IsSupported)
         {
             candidate.Patterns.Invoke.Pattern.Invoke();
             return true;
         }
 
-        return false;
+        DesktopPointer.ClickFallback(candidate, "legacy tree candidate fallback");
+        return true;
     }
 
     private static void ExpandCombo(ComboBox combo)
@@ -1429,7 +1422,7 @@ public static class UiPageExtensions
         {
             combo.Expand();
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // ignore if combo does not expose expand pattern directly
         }
@@ -1486,7 +1479,7 @@ public static class UiPageExtensions
         {
             item.Expand();
         }
-        catch
+        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
         {
             // ignore expansion errors for leaf nodes
         }

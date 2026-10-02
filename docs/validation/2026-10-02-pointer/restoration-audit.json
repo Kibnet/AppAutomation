@@ -1,0 +1,74 @@
+[
+  {
+    "operationId": "093a6f22-9daf-44e1-96b9-a14ae69b8262",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "29d32cbd-4d73-478c-82fe-68d14c287b88",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "62be01bc-d0b1-4f0c-a2e7-25665b04c292",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "97e013ab-a736-475c-a1ea-dc15cb0f27ff",
+    "kind": "hover",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "9bfd46f0-7285-4d0c-978f-5fce8bb3ebeb",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "a04ed6f1-6a3d-4219-a585-a370095efd6a",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "c4a24777-3e18-4a16-87f4-8ea4ba77a8c7",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "dcdfcd49-46d0-4586-8e58-c26d43e674d3",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  },
+  {
+    "operationId": "fb1b322b-9d45-4d80-9ab4-2bd8188b66c6",
+    "kind": "click",
+    "savedCount": 1,
+    "restoredCount": 1,
+    "returnedExactly": true,
+    "failed": 0
+  }
+]

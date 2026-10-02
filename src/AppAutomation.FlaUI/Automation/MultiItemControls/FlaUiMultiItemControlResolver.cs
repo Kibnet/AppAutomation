@@ -163,7 +163,7 @@ public sealed partial class FlaUiControlResolver : IMultiItemControlRuntimeResol
                 }
                 else
                 {
-                    Keyboard.Press(VirtualKeyShort.RETURN);
+                    Keyboard.Type(VirtualKeyShort.RETURN);
                 }
             });
     }

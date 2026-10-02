@@ -1,0 +1,77 @@
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:34.8932009+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:35.0020085+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:35.003075+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.256076+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":75,"Y":984,"Detail":"pid=8436; hwnd=127669876; locator=ArmGridRowCommitTarget"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2586742+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":75,"Y":984,"Detail":null}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2600727+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":75,"Y":984,"Detail":null}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2732309+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":75,"Y":984,"Detail":"Left"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2761891+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":75,"Y":984,"Detail":"Left"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2793633+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.2807527+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"0ca021ce-4b14-4451-8e93-05a259240c81","Timestamp":"2026-10-02T18:34:36.281998+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:38.9996577+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:39.0014358+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:39.0017862+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6433743+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":75,"Y":912,"Detail":"pid=8436; hwnd=127669876; locator=ArmGridRowCommitTarget"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6445501+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":75,"Y":912,"Detail":null}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6459581+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":75,"Y":912,"Detail":null}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6561448+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":75,"Y":912,"Detail":"Left"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6599997+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":75,"Y":912,"Detail":"Left"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6619277+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6641634+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"c26b60b1-72ee-4fae-9dd8-68fbc47405b4","Timestamp":"2026-10-02T18:34:40.6654596+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:43.5013075+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:43.5025882+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:43.502888+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:44.9827025+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":75,"Y":984,"Detail":"pid=8436; hwnd=127669876; locator=ArmGridRowCommitTarget"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:44.9834642+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":75,"Y":984,"Detail":null}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:44.9843675+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":75,"Y":984,"Detail":null}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:44.9961971+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":75,"Y":984,"Detail":"Left"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:45.0001258+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":75,"Y":984,"Detail":"Left"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:45.0014074+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:45.0042405+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"d724d23f-6658-491c-8ad9-930a90f84d33","Timestamp":"2026-10-02T18:34:45.0057265+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:46.9543116+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:46.9553713+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:46.9556924+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0490356+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":600,"Y":939,"Detail":"pid=8436; hwnd=127669876; locator="}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0495026+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":600,"Y":939,"Detail":null}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0503906+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":600,"Y":939,"Detail":null}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0557311+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0588974+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.059741+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0605942+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"cc0405b9-94c3-4f30-8801-4429370a3ceb","Timestamp":"2026-10-02T18:34:47.0614885+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.0439325+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.0450264+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.0453229+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1291069+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":600,"Y":939,"Detail":"pid=8436; hwnd=127669876; locator="}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1296223+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":600,"Y":939,"Detail":null}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1305305+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":600,"Y":939,"Detail":null}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1410833+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1438476+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1446137+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1459975+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"a3810b09-4848-4f30-929f-2da364191473","Timestamp":"2026-10-02T18:34:48.1486099+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.2408403+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.6566914+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.6571644+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7638051+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":600,"Y":939,"Detail":"pid=8436; hwnd=127669876; locator=ArmGridRequiredEditor_Input"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7644639+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":600,"Y":939,"Detail":null}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7655209+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":600,"Y":939,"Detail":null}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.770567+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7731795+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":600,"Y":939,"Detail":"Left"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7740652+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7747365+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"cdbc24bc-ee2a-4069-ba12-e5aa132a17f1","Timestamp":"2026-10-02T18:34:48.7757225+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:48.8843025+00:00","ProcessId":389256,"Kind":"click","Stage":"queued","X":null,"Y":null,"Detail":"1.8.0.0"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.271256+00:00","ProcessId":389256,"Kind":"click","Stage":"saved","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.272212+00:00","ProcessId":389256,"Kind":"click","Stage":"physical-fallback","X":null,"Y":null,"Detail":"grid physical fallback"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4754271+00:00","ProcessId":389256,"Kind":"click","Stage":"target","X":75,"Y":912,"Detail":"pid=8436; hwnd=127669876; locator=ArmGridRowCommitTarget"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4760555+00:00","ProcessId":389256,"Kind":"click","Stage":"move-requested","X":75,"Y":912,"Detail":null}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4769856+00:00","ProcessId":389256,"Kind":"click","Stage":"moved","X":75,"Y":912,"Detail":null}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4911284+00:00","ProcessId":389256,"Kind":"click","Stage":"down","X":75,"Y":912,"Detail":"Left"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4953767+00:00","ProcessId":389256,"Kind":"click","Stage":"up","X":75,"Y":912,"Detail":"Left"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4972289+00:00","ProcessId":389256,"Kind":"click","Stage":"restore-requested","X":4802,"Y":1471,"Detail":null}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.4980527+00:00","ProcessId":389256,"Kind":"click","Stage":"restored","X":4802,"Y":1471,"Detail":"None"}
+{"OperationId":"7618c76a-f7af-463b-8677-28b701ba189e","Timestamp":"2026-10-02T18:34:49.5120756+00:00","ProcessId":389256,"Kind":"click","Stage":"released","X":null,"Y":null,"Detail":null}

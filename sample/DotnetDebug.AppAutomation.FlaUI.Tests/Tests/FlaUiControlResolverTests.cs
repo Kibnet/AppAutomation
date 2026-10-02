@@ -55,7 +55,7 @@ public sealed class FlaUiControlResolverTests
             await Assert.That(page.MultiSelection.Items).IsEquivalentTo(ExpectedMultiSelectItems);
         }
 
-        popup.CancelButton.Click();
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(popup.CancelButton);
     }
 
     [Test]
@@ -273,6 +273,7 @@ public sealed class FlaUiControlResolverTests
             }
         }
 
+        var pointerBeforeSelection = global::FlaUI.Core.Input.Mouse.Position;
         page
             .SelectGridRow(static candidate => candidate.ArmComplexDataGridControl, secondRow)
             .ClickButton(static candidate => candidate.SaveArmGridProductButton)
@@ -281,6 +282,8 @@ public sealed class FlaUiControlResolverTests
             .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton)
             .SelectGridRow(static candidate => candidate.ArmComplexDataGridControl, secondRow)
             .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton, expected: false);
+
+        await Assert.That(global::FlaUI.Core.Input.Mouse.Position).IsEqualTo(pointerBeforeSelection);
 
         page.EditGridCellNumber(
             static candidate => candidate.ArmComplexDataGridControl,
