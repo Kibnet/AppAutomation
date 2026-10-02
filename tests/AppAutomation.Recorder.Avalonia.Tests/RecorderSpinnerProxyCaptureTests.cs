@@ -62,7 +62,7 @@ public sealed class RecorderSpinnerProxyCaptureTests
             await Assert.That(saveResult.Success).IsTrue();
             await Assert.That(saveResult.PersistedStepCount).IsEqualTo(1);
             await Assert.That(recorder.ReadGeneratedScenario(saveResult)).Contains(
-                "Page.WaitUntilValueEquals(static page => page.QuantitySpinner, 12);");
+                "await Assert.That(Page.QuantitySpinner.Value).IsEqualTo(12);");
         }
     }
 }

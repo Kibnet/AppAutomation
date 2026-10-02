@@ -72,7 +72,9 @@ public enum RecordedActionKind
     AssertValue = 64,
     SetGridCellChecked = 65,
     SetMultiItemSpinnerValue = 66,
-    CaptureCopiedValue = 67
+    CaptureCopiedValue = 67,
+    SelectGridRow = 68,
+    InvokeDialogButton = 69
 }
 
 public enum RecorderAssertionMode
@@ -248,6 +250,10 @@ internal static class RecorderAssertionCapabilities
                 controlType,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text),
+            UiControlType.Button => Value(
+                controlType,
+                RecorderValueKind.Text,
+                RecorderValueAccessorKind.Text),
             UiControlType.ListBox => Value(
                 controlType,
                 RecorderValueKind.Text,
@@ -318,7 +324,6 @@ internal static class RecorderAssertionCapabilities
                 RecorderValueKind.Color,
                 RecorderValueAccessorKind.Color),
             UiControlType.AutomationElement
-                or UiControlType.Button
                 or UiControlType.Tab
                 or UiControlType.Tree
                 or UiControlType.DataGridViewRow
@@ -596,6 +601,10 @@ internal sealed record GridComboSelectionCaptureResult(
     StepCreationResult StepResult);
 
 internal sealed record GridCellEditCaptureResult(
+    bool IsConfigured,
+    StepCreationResult StepResult);
+
+internal sealed record GridRowGestureCaptureResult(
     bool IsConfigured,
     StepCreationResult StepResult);
 

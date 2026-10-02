@@ -2,6 +2,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using AppAutomation.Recorder.Avalonia.UI;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -518,6 +519,7 @@ public sealed class RecorderCheckpointAssertionTests
         {
             [UiControlType.TextBox] = (RecorderValueKind.Text, RecorderValueAccessorKind.Text),
             [UiControlType.Label] = (RecorderValueKind.Text, RecorderValueAccessorKind.Text),
+            [UiControlType.Button] = (RecorderValueKind.Text, RecorderValueAccessorKind.Text),
             [UiControlType.ListBox] = (RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText),
             [UiControlType.CheckBox] = (RecorderValueKind.Boolean, RecorderValueAccessorKind.IsChecked),
             [UiControlType.ComboBox] = (RecorderValueKind.Text, RecorderValueAccessorKind.SelectedItemText),
@@ -709,6 +711,11 @@ public sealed class RecorderCheckpointAssertionTests
                     RecorderValueAccessorKind.Text,
                     stringValue: string.Empty),
                 LiteralAssertion(
+                    Descriptor("SavedValueButton", UiControlType.Button),
+                    RecorderValueKind.Text,
+                    RecorderValueAccessorKind.Text,
+                    stringValue: "Saved value"),
+                LiteralAssertion(
                     Descriptor("AmountValue", UiControlType.Spinner),
                     RecorderValueKind.Number,
                     RecorderValueAccessorKind.NumericValue,
@@ -811,6 +818,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(scenarioSource).DoesNotContain("global::System.Threading.Tasks.Task");
             await Assert.That(scenarioSource).Contains("await Assert.That(");
             await Assert.That(scenarioSource).Contains("Page.GeneratedIdentifier.Text).IsNotEmpty();");
+            await Assert.That(scenarioSource).Contains(
+                "UiControlText.Read(Page.SavedValueButton)).IsEqualTo(\"Saved value\");");
             await Assert.That(scenarioSource).Contains("Page.OptionalDate.SelectedDate).IsNotNull();");
             await Assert.That(scenarioSource).Contains("Page.StatusFilter.SelectedItems).IsNotEmpty();");
             await Assert.That(scenarioSource).Contains(".Contains(");
@@ -1394,8 +1403,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(invalidAfterMove.CanPersist).IsFalse();
             await Assert.That(invalidAfterMove.StatusMessage).Contains("missing or later checkpoint");
             await Assert.That(movedBack).IsTrue();
-            await Assert.That(session.StepCount).IsEqualTo(2);
-            await Assert.That(session.PersistableStepCount).IsEqualTo(2);
+            await Assert.That(session.StepCount).IsEqualTo(2).Because(session.LatestStatus);
+            await Assert.That(session.PersistableStepCount).IsEqualTo(2).Because(session.LatestStatus);
             await Assert.That(session.ExportPreview()).Contains(
                 "await Assert.That(Page.RemainingQuantity.Value).IsEqualTo(quantityBefore - Page.Adjustment.Value);");
             await Assert.That(session.StepJournal[^1].StatusMessage)
@@ -1521,7 +1530,7 @@ public sealed class RecorderCheckpointAssertionTests
         var container = new DockPanel();
         var saveButton = new Button
         {
-            Content = "Save",
+            Content = new TextBlock { Text = "Saved value" },
             IsEnabled = false
         };
         AutomationProperties.SetAutomationId(container, "DetailsPanel");
@@ -1542,16 +1551,24 @@ public sealed class RecorderCheckpointAssertionTests
         using (Assert.Multiple())
         {
             await Assert.That(ReferenceEquals(selection!.Target, saveButton)).IsTrue();
-            await Assert.That(selection.ValueDescription).IsNull();
+            await Assert.That(selection.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
+            await Assert.That(selection.ValueDescription?.CurrentValueText).IsEqualTo("Saved value");
             await Assert.That(selection.IsEnabled).IsFalse();
         }
 
         var overlay = new RecorderOverlay();
         overlay.Attach(session, new AppAutomationRecorderOptions());
         var checkMenu = overlay.CreateCheckMenuForTesting(selection);
+        var rememberItem = checkMenu.Items
+            .OfType<MenuItem>()
+            .Single(item => string.Equals(item.Header?.ToString(), "Remember value…", StringComparison.Ordinal));
         var enableItem = checkMenu.Items
             .OfType<MenuItem>()
             .Single(item => string.Equals(item.Header?.ToString(), "Enable…", StringComparison.Ordinal));
+        ((IRecorderCheckpointSessionDetails)session).CaptureLiteralAssertion(
+            selection,
+            "Saved value",
+            RecorderComparisonKind.Equal);
         var enabledEditor = overlay.CreateEnabledAssertionEditorForTesting(selection);
         var expectedEnabled = enabledEditor.GetLogicalDescendants()
             .OfType<ComboBox>()
@@ -1564,6 +1581,7 @@ public sealed class RecorderCheckpointAssertionTests
 
         using (Assert.Multiple())
         {
+            await Assert.That(rememberItem.IsEnabled).IsTrue();
             await Assert.That(enableItem).IsNotNull();
             await Assert.That(checkMenu.Items.OfType<MenuItem>().Any(item =>
                     string.Equals(item.Header?.ToString(), "Assert enabled", StringComparison.Ordinal)
@@ -1571,7 +1589,10 @@ public sealed class RecorderCheckpointAssertionTests
                 .IsFalse();
             await Assert.That(expectedEnabled.Items.Count).IsEqualTo(2);
             await Assert.That(session.ExportPreview())
-                .IsEqualTo("await Assert.That(Page.SaveButton.IsEnabled).IsEqualTo(false);");
+                .IsEqualTo(
+                    "await Assert.That(global::AppAutomation.Abstractions.UiControlText.Read(Page.SaveButton)).IsEqualTo(\"Saved value\");"
+                    + Environment.NewLine
+                    + "await Assert.That(Page.SaveButton.IsEnabled).IsEqualTo(false);");
         }
 
     }
@@ -1608,6 +1629,12 @@ public sealed class RecorderCheckpointAssertionTests
             out var resolvedSource,
             out var snapshot,
             out var error);
+        using var session = CreateSession(root, options);
+        session.Start();
+        session.CaptureAssertionForTesting(
+            nativeValue,
+            [nativeValue, configuredPresenter],
+            RecorderAssertionMode.Auto);
 
         using (Assert.Multiple())
         {
@@ -1617,6 +1644,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(error).Contains("multiple logical targets");
             await Assert.That(error).Contains("NativeValue");
             await Assert.That(error).Contains("ConfiguredValue");
+            await Assert.That(session.StepCount).IsEqualTo(0);
+            await Assert.That(session.LatestStatus).Contains("multiple logical targets");
         }
     }
 
@@ -1665,24 +1694,54 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task CheckMode_MapsEditorAndDisplayPresentersToOneStableGridValue()
+    public async Task DirectCheckpointComparison_UsesSpatialReadOnlyGridCellInsteadOfStaleHover()
     {
-        var root = new StackPanel();
-        var logicalGrid = new Border();
-        var editor = new TextBox { Text = "Search result" };
-        var display = new Button { Content = "Search result" };
-        var eventSource = new DockPanel();
-        AutomationProperties.SetAutomationId(logicalGrid, "ItemsGrid");
+        var product = new ProductValue("Search result");
+        var row = new ProductGridRow("10", product);
+        var column = new ProductGridColumn("MarketProduct");
+        var cellContext = new ProductGridCellContext(row, column, product);
+        var root = new LogicalOverlayGrid { Width = 240, Height = 80 };
+        var sourceGrid = new ProductGridHost { ItemsSource = [row], Width = 240, Height = 80 };
+        var rowPresenter = new ProductGridRowPresenter { DataContext = row, Width = 240, Height = 80 };
+        var cell = new Border { DataContext = cellContext, Width = 240, Height = 80 };
+        var editor = new TextBox { Text = product.Name, DataContext = cellContext };
+        var eventSource = new DockPanel { Width = 240, Height = 80 };
+        AutomationProperties.SetAutomationId(sourceGrid, "ItemsGrid");
         AutomationProperties.SetAutomationId(editor, "ProductEditor");
-        AutomationProperties.SetAutomationId(display, "ProductDisplay");
         AutomationProperties.SetAutomationId(eventSource, "MainSurface");
-        root.Children.Add(logicalGrid);
-        root.Children.Add(editor);
+        cell.Child = editor;
+        rowPresenter.MaterializedCells = [cell];
+        rowPresenter.Children.Add(cell);
+        sourceGrid.Children.Add(rowPresenter);
+        root.AddLogicalLayer(sourceGrid);
         root.Children.Add(eventSource);
+        sourceGrid.Measure(new Size(240, 80));
+        sourceGrid.Arrange(new Rect(0, 0, 240, 80));
+        root.Measure(new Size(240, 80));
+        root.Arrange(new Rect(0, 0, 240, 80));
 
-        var options = CreateSessionOptions();
-        options.SemanticValueResolvers.Add(new ProductPresenterValueResolver());
-        using var session = CreateSession(root, options);
+        var options = new AppAutomationRecorderOptions
+        {
+            Validation = new RecorderValidationOptions
+            {
+                ValidateSelectors = true,
+                ValidateRuntimeTargets = false,
+                CaptureInvalidSteps = true
+            },
+            GridAutomation = new GridAutomationCatalog().Add(
+                GridAutomationDefinition
+                    .ByAutomationIds("ItemsGrid", "ItemsGrid", "ItemsGrid")
+                    .WithColumns(
+                        GridColumnDefinition.Map("PositionNumber")
+                            .FromField("PositionNumber"),
+                        GridColumnDefinition.Map("Product")
+                            .FromField("MarketProduct")
+                            .DisplayValueFrom("MarketProduct.Name")
+                            .AsValue(GridCellValueKind.Reference)
+                            .EditWith(GridCellEditorKind.SearchPicker))
+                    .IdentifyRowsBy("PositionNumber"))
+        };
+        using var session = CreateSession(sourceGrid, options);
         session.Start();
         var details = (IRecorderCheckpointSessionDetails)session;
         RecorderCheckTargetSelection? editorSelection = null;
@@ -1690,33 +1749,39 @@ public sealed class RecorderCheckpointAssertionTests
 
         session.BeginCheckTargetSelection();
         session.SelectCheckTargetForTesting(editor);
-        root.Children.Remove(editor);
-        root.Children.Add(display);
-        details.CaptureCheckpoint(editorSelection!, "productBeforeSave");
+        var editorSnapshot = editorSelection;
+        editor.IsEnabled = false;
+        editor.IsHitTestVisible = false;
+        details.CaptureCheckpoint(editorSnapshot!, "productBeforeSave");
 
         var checkpoint = details.Checkpoints.FirstOrDefault();
-        RecorderCheckTargetSelection? displaySelection = null;
-        session.CheckTargetSelected += (_, eventArgs) => displaySelection = eventArgs.Selection;
-        session.BeginCheckTargetSelection();
-        session.SelectCheckTargetForTesting(eventSource, [display, eventSource]);
+        session.SetLastHoveredControlForTesting(eventSource);
+        session.SetLastSpatialCaptureTargetForTesting(eventSource, root, new Point(120, 40));
         if (checkpoint is not null)
         {
-            details.CaptureCheckpointAssertion(displaySelection!, checkpoint.CheckpointId);
+            session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
         }
 
         var preview = session.ExportPreview();
+        session.Stop();
+        session.Start();
+        session.SetLastHoveredControlForTesting(eventSource);
+        if (checkpoint is not null)
+        {
+            session.CaptureCheckpointAssertion(checkpoint.CheckpointId);
+        }
+
         using (Assert.Multiple())
         {
-            await Assert.That(editorSelection!.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.GridCellText);
-            await Assert.That(displaySelection!.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.GridCellText);
-            await Assert.That(ReferenceEquals(displaySelection.Target, display)).IsTrue();
-            await Assert.That(displaySelection.ValueDescription!.SuggestedCheckpointName).DoesNotContain("MainSurface");
+            await Assert.That(GridCellMetadataExtractor.ReadMaterializedCellControls(sourceGrid))
+                .Contains(cell);
+            await Assert.That(editorSnapshot!.ValueDescriptionError).IsNullOrEmpty();
+            await Assert.That(editorSnapshot.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
             await Assert.That(session.StepCount).IsEqualTo(2);
             await Assert.That(session.PersistableStepCount).IsEqualTo(2);
-            await Assert.That(preview).Contains("GridRowSelector.ByCell(\"Key\", \"ITEM-42\")");
+            await Assert.That(preview).Contains("GridRowSelector.ByCell(\"PositionNumber\", \"10\")");
             await Assert.That(preview).Contains("\"Product\"");
             await Assert.That(preview).DoesNotContain("ProductEditor");
-            await Assert.That(preview).DoesNotContain("ProductDisplay");
             await Assert.That(preview).DoesNotContain("MainSurface");
         }
     }
@@ -1833,29 +1898,36 @@ public sealed class RecorderCheckpointAssertionTests
         };
     }
 
-    private sealed class ProductPresenterValueResolver : IRecorderSemanticValueResolver
+    private sealed class ProductGridHost : StackPanel
     {
-        public RecorderSemanticValueResolution Resolve(Control source)
-        {
-            var automationId = AutomationProperties.GetAutomationId(source);
-            if (automationId is not ("ProductEditor" or "ProductDisplay"))
-            {
-                return RecorderSemanticValueResolution.NotHandled;
-            }
+        public IReadOnlyList<ProductGridRow> ItemsSource { get; init; } = [];
+    }
 
-            return RecorderSemanticValueResolution.Resolved(new RecorderSemanticValueTarget(
-                "ItemsGrid",
-                UiControlType.Grid,
-                RecorderValueKind.GridCellText,
-                RecorderValueAccessorKind.GridCellText)
-            {
-                StringValue = "Search result",
-                GridContext = new RecorderSemanticGridValueTarget(
-                    [new RecorderSemanticGridRowCondition("Key", "ITEM-42")],
-                    "Product")
-            });
+    private sealed class ProductGridRowPresenter : StackPanel
+    {
+        public IReadOnlyList<Control> MaterializedCells { get; set; } = [];
+
+        public IReadOnlyList<Control> GetCells() => MaterializedCells;
+    }
+
+    private sealed class LogicalOverlayGrid : Grid
+    {
+        public void AddLogicalLayer(Control control)
+        {
+            LogicalChildren.Add(control);
         }
     }
+
+    private sealed record ProductGridRow(string PositionNumber, ProductValue MarketProduct);
+
+    private sealed record ProductValue(string Name);
+
+    private sealed record ProductGridColumn(string FieldName);
+
+    private sealed record ProductGridCellContext(
+        ProductGridRow Row,
+        ProductGridColumn Column,
+        ProductValue Value);
 
     private sealed class TestSemanticValueResolver(Func<Control, RecorderSemanticValueResolution> resolve)
         : IRecorderSemanticValueResolver

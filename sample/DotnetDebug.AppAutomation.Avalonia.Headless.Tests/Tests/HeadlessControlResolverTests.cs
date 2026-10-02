@@ -20,7 +20,11 @@ public sealed class HeadlessControlResolverTests
         var command = new EnableableCommand();
         var button = HeadlessRuntime.Dispatch(() =>
         {
-            var control = new global::Avalonia.Controls.Button { Command = command };
+            var control = new global::Avalonia.Controls.Button
+            {
+                Command = command,
+                Content = new global::Avalonia.Controls.TextBlock { Text = "Saved_value" }
+            };
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "ActionButton");
             session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
             {
@@ -32,6 +36,7 @@ public sealed class HeadlessControlResolverTests
         var resolver = new HeadlessControlResolver(session.MainWindow);
         var resolvedButton = resolver.Resolve<IButtonControl>(new UiControlDefinition(
             "ActionButton", UiControlType.Button, "ActionButton"));
+        await Assert.That(((IReadableTextControl)resolvedButton).Text).IsEqualTo("Saved_value");
 
         foreach (var canExecute in new[] { false, true, false })
         {

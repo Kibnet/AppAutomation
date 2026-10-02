@@ -750,6 +750,18 @@ public interface IDialogControl : IUiControl
 }
 
 /// <summary>
+/// Represents a dialog whose configured buttons can be invoked by their stable locator.
+/// </summary>
+public interface IAddressableDialogControl : IDialogControl
+{
+    /// <summary>
+    /// Invokes exactly one button registered for this dialog under the supplied locator.
+    /// </summary>
+    /// <param name="buttonLocator">The stable locator registered in <see cref="DialogControlParts"/>.</param>
+    void InvokeButton(string buttonLocator);
+}
+
+/// <summary>
 /// Represents a toast, notification, or status message that can be asserted by text.
 /// </summary>
 public interface INotificationControl : IUiControl

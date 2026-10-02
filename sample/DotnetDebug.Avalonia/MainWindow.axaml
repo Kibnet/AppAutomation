@@ -419,6 +419,7 @@
                               SelectionMode="Single"
                               HeadersVisibility="All"
                               LoadingRow="OnDemoDataGridLoadingRow"
+                              DoubleTapped="OnDemoDataGridDoubleTapped"
                               ItemsSource="{Binding DataGridRows}"
                               SelectedItem="{Binding SelectedDataGridRow, Mode=TwoWay}"
                               IsReadOnly="True">
@@ -437,10 +438,16 @@
                                                 Binding="{Binding Parity}" />
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TextBlock x:Name="ArmGridLastNumericInputText"
-                               Grid.Row="4"
-                               automation:AutomationProperties.AutomationId="ArmGridLastNumericInputText"
-                               Text="" />
+                    <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="ArmGridLastNumericInputText"
+                                   automation:AutomationProperties.AutomationId="ArmGridLastNumericInputText"
+                                   Text="" />
+                        <Button x:Name="SaveArmGridProductButton"
+                                automation:AutomationProperties.AutomationId="SaveArmGridProductButton"
+                                Content="Save selected product"
+                                IsEnabled="{Binding SelectedArmGridRow.IsProductEditable}"
+                                Click="OnSaveArmGridProductClick" />
+                    </StackPanel>
 
                     <TextBlock Grid.Row="2"
                                FontSize="14"
@@ -453,6 +460,7 @@
                               AutoGenerateColumns="False"
                               IsReadOnly="False"
                               SelectionMode="Single"
+                              SelectedItem="{Binding SelectedArmGridRow, Mode=TwoWay}"
                               LoadingRow="OnArmComplexDataGridLoadingRow"
                               CellEditEnding="OnArmComplexGridCellEditEnding"
                               automation:AutomationProperties.AutomationId="ArmComplexDataGridControl">
@@ -527,20 +535,13 @@
                                                     Width="150">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Border automation:AutomationProperties.Name="">
-                                            <TextBlock Text="{Binding Product}"
-                                                       automation:AutomationProperties.AutomationId="ArmGridProductDisplayText" />
-                                        </Border>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                                <DataGridTemplateColumn.CellEditingTemplate>
-                                    <DataTemplate>
                                         <local:ServerSearchComboBox DataGridControlMode="True"
                                                                     CurrentSelected="{Binding Product, Mode=TwoWay}"
                                                                     ItemList="{Binding $parent[DataGrid].DataContext.ArmServerItems}"
+                                                                    IsEnabled="{Binding IsProductEditable}"
                                                                     automation:AutomationProperties.AutomationId="ArmGridProductEditor" />
                                     </DataTemplate>
-                                </DataGridTemplateColumn.CellEditingTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Date"
                                                     SortMemberPath="ScheduledDate"
@@ -577,7 +578,7 @@
                     </DataGrid>
                 </Grid>
 
-                <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="12">
+                <Grid Grid.Row="3" ColumnDefinitions="*,*,Auto,*" ColumnSpacing="12">
                     <Label x:Name="GridResultLabel"
                            Grid.Column="0"
                            automation:AutomationProperties.AutomationId="GridResultLabel"
@@ -592,6 +593,17 @@
                            HorizontalAlignment="Left"
                            VerticalAlignment="Center"
                            Content="{Binding GridSelectionLabel}" />
+                    <Button x:Name="DataGridSelectionActionButton"
+                            Grid.Column="2"
+                            automation:AutomationProperties.AutomationId="DataGridSelectionActionButton"
+                            IsEnabled="{Binding HasSelectedDataGridRow}"
+                            Content="Use selection" />
+                    <Label x:Name="GridOpenMarkerLabel"
+                           Grid.Column="3"
+                           automation:AutomationProperties.AutomationId="GridOpenMarkerLabel"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Content="{Binding GridOpenMarker}" />
                 </Grid>
 
                 <TextBlock Grid.Row="4"

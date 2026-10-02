@@ -381,7 +381,10 @@ internal class Button : AutomationElement
 
     private global::Avalonia.Controls.Button Native => (global::Avalonia.Controls.Button)Control;
 
-    public string Text => Ui(() => Native.Content?.ToString() ?? string.Empty);
+    public string Text => Ui(() =>
+        AppAutomation.Abstractions.MenuPathValue.TryGetVisibleText(
+            Native.Content,
+            AutomationProperties.GetName(Native)) ?? string.Empty);
 
     public void Invoke()
     {

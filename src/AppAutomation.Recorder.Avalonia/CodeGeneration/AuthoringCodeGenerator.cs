@@ -1516,6 +1516,10 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.OpenGridRow => HasNamedGridRow(step)
                 ? $"Page.OpenGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});"
                 : $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
+            RecordedActionKind.SelectGridRow when HasNamedGridRow(step) =>
+                $"Page.SelectGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});",
+            RecordedActionKind.SelectGridRow =>
+                throw new InvalidOperationException("SelectGridRow requires a stable named row selector."),
             RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
             RecordedActionKind.CopyGridCell => HasNamedGridRow(step)
@@ -1549,6 +1553,7 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.DismissDialog => $"Page.DismissDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
+            RecordedActionKind.InvokeDialogButton => $"Page.InvokeDialogButton(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.DismissNotification => $"Page.DismissNotification(static page => page.{propertyName});",
             RecordedActionKind.OpenOrActivateShellPane => $"Page.OpenOrActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ActivateShellPane => $"Page.ActivateShellPane(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
@@ -1809,6 +1814,8 @@ internal sealed class AuthoringCodeGenerator
         var control = $"Page.{propertyName}";
         return step.ValueAccessorKind switch
         {
+            RecorderValueAccessorKind.Text when step.Control.ControlType == UiControlType.Button =>
+                $"global::AppAutomation.Abstractions.UiControlText.Read({control})",
             RecorderValueAccessorKind.Text => $"{control}.Text",
             RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.SearchPicker =>
                 $"{control}.SelectedItemText",

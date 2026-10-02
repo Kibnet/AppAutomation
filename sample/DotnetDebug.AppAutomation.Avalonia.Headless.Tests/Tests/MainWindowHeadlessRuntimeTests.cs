@@ -1,11 +1,18 @@
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.Recorder.Avalonia;
 using AppAutomation.TUnit;
+using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;
 using DotnetDebug.AppAutomation.TestHost;
 using DotnetDebug.AppAutomation.Configuration;
+using DotnetDebug.Avalonia;
+using TUnit.Assertions;
 using TUnit.Core;
 
 namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTests;
@@ -36,6 +43,87 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
         }
 
         await TUnit.Assertions.Assert.That("actual-state").IsEqualTo("expected-state");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task RecorderCheck_RemembersReadOnlyServerSearchGridCell()
+    {
+        var row = GridRowSelector.ByCell("Key", "ARM-01");
+        Page.SelectTabItem(static page => page.DataGridTabItem);
+        Page.SelectGridRow(static page => page.ArmComplexDataGridControl, row);
+        Page.ClickButton(static page => page.SaveArmGridProductButton);
+
+        var result = HeadlessRuntime.Dispatch(() =>
+        {
+            var window = Session.Inner.MainWindow;
+            var productEditor = window.GetVisualDescendants()
+                .OfType<ServerSearchComboBox>()
+                .Single(control =>
+                    string.Equals(
+                        AutomationProperties.GetAutomationId(control),
+                        "ArmGridProductEditor",
+                        StringComparison.Ordinal)
+                    && control.DataContext is ArmDesktopGridRowViewModel { Key: "ARM-01" });
+            var center = productEditor.TranslatePoint(
+                new Point(productEditor.Bounds.Width / 2d, productEditor.Bounds.Height / 2d),
+                window);
+            if (center is null)
+            {
+                throw new InvalidOperationException("The read-only Product cell is not positioned in the sample window.");
+            }
+
+            var options = new AppAutomationRecorderOptions
+            {
+                ScenarioName = "ReadOnlyProductCheck",
+                ShowOverlay = false,
+                GridAutomation = SampleGridAutomation.CreateRecorderCatalog(),
+                Validation = new RecorderValidationOptions
+                {
+                    ValidateSelectors = true,
+                    ValidateRuntimeTargets = false,
+                    CaptureInvalidSteps = true
+                }
+            };
+            using var recorder = new RecorderSession(window, options);
+            var details = (IRecorderCheckpointSessionDetails)recorder;
+            RecorderCheckTargetSelection? selection = null;
+            details.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+            recorder.Start();
+            details.BeginCheckTargetSelection();
+
+            recorder.SelectCheckTargetAtForTesting(window, window, center.Value);
+            if (selection is null)
+            {
+                throw new InvalidOperationException("Check mode did not select the read-only Product cell.");
+            }
+
+            details.CaptureCheckpoint(selection, "savedProduct");
+            return new
+            {
+                productEditor.IsEffectivelyEnabled,
+                selection.CanCaptureAssertions,
+                selection.ValueDescriptionError,
+                selection.ValueDescription?.CurrentValueText,
+                recorder.StepCount,
+                recorder.PersistableStepCount,
+                Preview = recorder.ExportPreview()
+            };
+        });
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(result.CanCaptureAssertions).IsTrue();
+            await Assert.That(result.ValueDescriptionError).IsNullOrEmpty();
+            await Assert.That(result.CurrentValueText).IsEqualTo("Product 42");
+            await Assert.That(result.StepCount).IsEqualTo(1);
+            await Assert.That(result.PersistableStepCount).IsEqualTo(1);
+            await Assert.That(result.Preview).Contains("var savedProduct =");
+            await Assert.That(result.Preview).Contains("GridRowSelector.ByCell(\"Key\", \"ARM-01\")");
+            await Assert.That(result.Preview).Contains("\"Product\"");
+            await Assert.That(result.Preview).DoesNotContain("ArmGridProductEditor");
+        }
     }
 
     protected override HeadlessRuntimeSession LaunchSession()

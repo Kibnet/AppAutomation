@@ -273,6 +273,15 @@ public sealed class FlaUiControlResolverTests
             }
         }
 
+        page
+            .SelectGridRow(static candidate => candidate.ArmComplexDataGridControl, secondRow)
+            .ClickButton(static candidate => candidate.SaveArmGridProductButton)
+            .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton, expected: false)
+            .SelectGridRow(static candidate => candidate.ArmComplexDataGridControl, firstRow)
+            .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton)
+            .SelectGridRow(static candidate => candidate.ArmComplexDataGridControl, secondRow)
+            .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton, expected: false);
+
         page.EditGridCellNumber(
             static candidate => candidate.ArmComplexDataGridControl,
             firstRow,
@@ -285,6 +294,17 @@ public sealed class FlaUiControlResolverTests
                 "RequiredAmount"))
             .IsEqualTo(1000);
 
+    }
+
+    [Test]
+    public async Task AutomationTextClassification_PreservesQualifiedBusinessValues()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Acme.Editor")).IsTrue();
+            await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Product.ComboBox")).IsTrue();
+            await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Avalonia.Controls.TextBox")).IsFalse();
+        }
     }
 
     [Test]

@@ -23,6 +23,7 @@ internal sealed partial class RecorderStepFactory
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
+    private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
     private readonly Dictionary<Control, (RecorderGridHint Hint, GridAutomationDefinition Definition)> _nativeGridDefinitions =
         new(ReferenceEqualityComparer.Instance);
 
@@ -43,6 +44,9 @@ internal sealed partial class RecorderStepFactory
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _assertionExtractors = CreateAssertionExtractors(options);
+        _dialogHints = options.DialogHints
+            .Select(static hint => hint with { Parts = hint.Parts.NormalizeAndValidate() })
+            .ToArray();
     }
 
     public StepCreationResult TryCreateButtonStep(Control? source)
@@ -555,6 +559,53 @@ internal sealed partial class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(source);
         return TryResolveGridHint(source, out var hint, out _)
             && FindGridDefinition(hint) is not null;
+    }
+
+    internal IReadOnlyList<Control> ReadMaterializedGridCellControls(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var isConfiguredGridRoot = _options.GridAutomation.Any(definition =>
+            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
+            && string.Equals(
+                definition.CaptureLocatorValue,
+                locatorValue,
+                StringComparison.Ordinal));
+        if (!isConfiguredGridRoot)
+        {
+            return Array.Empty<Control>();
+        }
+
+        return GridCellMetadataExtractor.ReadMaterializedCellControls(source);
+    }
+
+    internal IReadOnlyList<Control> ReadConfiguredGridRoots()
+    {
+        var roots = new List<Control>();
+        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        foreach (var definition in _options.GridAutomation)
+        {
+            if (TryFindControl(
+                    definition.CaptureLocatorValue,
+                    definition.CaptureLocatorKind,
+                    out var grid)
+                && visited.Add(grid))
+            {
+                roots.Add(grid);
+            }
+        }
+
+        return roots;
+    }
+
+    internal bool IsConfiguredGridRoot(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return _options.GridAutomation.Any(definition =>
+            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
+            && string.Equals(
+                definition.CaptureLocatorValue,
+                locatorValue,
+                StringComparison.Ordinal));
     }
 
     public bool ShouldSuppressCatalogGridTextEntry(TextBox textBox)
@@ -1153,31 +1204,39 @@ internal sealed partial class RecorderStepFactory
             && FindMultiSelectActions(source).Any();
     }
 
-    public StepCreationResult TryCreateDialogActionStep(Control? source)
+    public (bool IsConfigured, StepCreationResult Result) TryCreateDialogActionStep(Control? source)
     {
         if (source is null)
         {
-            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
+            return (
+                false,
+                StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button."));
         }
 
-        if (!TryResolveDialogHint(source, out var hint, out var actionKind))
+        if (!TryResolveDialogHint(
+                source,
+                out var hint,
+                out var actionKind,
+                out var buttonLocator,
+                out var error,
+                out var isConfigured))
         {
-            return StepCreationResult.Unsupported("Recorder does not have a dialog hint for this button.");
+            return (isConfigured, StepCreationResult.Unsupported(error));
         }
 
-        var warning = $"Recorded dialog action '{actionKind}' from configured parts.";
         var descriptor = CreateCompositeDescriptor(
             hint.LocatorValue,
             UiControlType.Dialog,
             hint.LocatorKind,
             hint.FallbackToName,
             source,
-            warning);
+            warning: null);
 
-        return CreateStep(
-            source,
-            new RecordedStep(actionKind, descriptor, Warning: warning),
-            warning);
+        return (
+            true,
+            CreateStep(
+                source,
+                new RecordedStep(actionKind, descriptor, StringValue: buttonLocator)));
     }
 
     public StepCreationResult TryCreateNotificationActionStep(Control? source)
@@ -1563,6 +1622,96 @@ internal sealed partial class RecorderStepFactory
                     warning),
             _ => StepCreationResult.Unsupported($"Unsupported grid action hint '{hint.ActionKind}'.")
         };
+    }
+
+    public GridRowGestureCaptureResult TryCreateCatalogGridRowGestureStep(
+        Control? source,
+        bool openRow)
+    {
+        if (source is null
+            || !TryResolveGridHint(source, out var hint, out var gridSource)
+            || _options.FindGridDefinition(hint) is not { } definition)
+        {
+            return new GridRowGestureCaptureResult(
+                false,
+                StepCreationResult.Unsupported(NoGridActionHintMessage));
+        }
+
+        if (HasMoreSpecificGridInteraction(source, gridSource))
+        {
+            return new GridRowGestureCaptureResult(
+                false,
+                StepCreationResult.Unsupported(NoGridActionHintMessage));
+        }
+
+        if (definition.RowIdentityColumns.Count == 0)
+        {
+            return new GridRowGestureCaptureResult(
+                true,
+                StepCreationResult.Unsupported(
+                    $"Grid '{definition.PagePropertyName}' cannot record row selection without a declared stable identity. "
+                    + "Configure IdentifyRowsBy(...); visual row indexes are not persisted."));
+        }
+
+        if (!TryReadItemsSource(gridSource, out var items)
+            || !TryResolveGridRow(source, gridSource, items, out var rowIndex, out _))
+        {
+            return new GridRowGestureCaptureResult(
+                true,
+                StepCreationResult.Unsupported(
+                    $"Grid '{definition.PagePropertyName}' could not resolve the clicked visual element to a source row."));
+        }
+
+        var descriptor = new RecordedControlDescriptor(
+            definition.PagePropertyName,
+            UiControlType.Grid,
+            definition.RuntimeLocatorValue,
+            definition.RuntimeLocatorKind,
+            definition.RuntimeFallbackToName,
+            gridSource.GetType().FullName ?? gridSource.GetType().Name,
+            Warning: null);
+        var action = openRow
+            ? RecordedActionKind.OpenGridRow
+            : RecordedActionKind.SelectGridRow;
+        var step = new RecordedStep(action, descriptor, RowIndex: rowIndex);
+        var result = CreateCatalogGridStep(
+            source,
+            step,
+            warning: null,
+            hint,
+            definition,
+            rowIndex,
+            columnIndex: null,
+            excludeTargetColumnFromIdentity: false);
+        return new GridRowGestureCaptureResult(true, result);
+    }
+
+    private static bool HasMoreSpecificGridInteraction(Control source, Control gridSource)
+    {
+        foreach (var current in EnumerateRelatedControls(source))
+        {
+            if (ReferenceEquals(current, gridSource))
+            {
+                return false;
+            }
+
+            if (current is Button
+                or ToggleButton
+                or TextBox
+                or ComboBox
+                or ListBox
+                or NumericUpDown
+                or DatePicker
+                or TimePicker
+                or Calendar
+                or Slider
+                or MenuItem)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public StepCreationResult TryCreateListBoxStep(ListBox listBox)
@@ -2116,6 +2265,37 @@ internal sealed partial class RecorderStepFactory
         }
 
         return StepCreationResult.Unsupported("Recorder could not derive a supported assertion for this control.");
+    }
+
+    internal StepCreationResult TryCreateAssertionStep(
+        RecorderSemanticValueSnapshot? snapshot,
+        RecorderAssertionMode mode)
+    {
+        if (mode is not (RecorderAssertionMode.Auto or RecorderAssertionMode.Text))
+        {
+            return StepCreationResult.Unsupported(
+                $"Semantic value snapshots do not support the {mode} assertion mode.");
+        }
+
+        if (snapshot is null)
+        {
+            return StepCreationResult.Unsupported(
+                "The selected control does not expose a semantic value snapshot.");
+        }
+
+        var candidate = CreateCandidate(snapshot);
+        if (!HasLiteral(candidate))
+        {
+            return StepCreationResult.Unsupported(
+                $"{candidate.Control.ControlType} does not expose a committed value for a literal assertion.");
+        }
+
+        var step = CreateSemanticValueStep(
+            RecordedActionKind.AssertValue,
+            candidate,
+            comparisonKind: RecorderComparisonKind.Equal,
+            hasExpectedLiteral: true);
+        return CreateStepFromSnapshot(snapshot, step, "Added current semantic value assertion.");
     }
 
     private StepCreationResult? TryCreateProjectedSemanticAssertionStep(
@@ -3768,7 +3948,7 @@ internal sealed partial class RecorderStepFactory
         var accessorKind = capabilities.AccessorKinds.Single();
         var resolvedCandidate = accessorKind switch
         {
-            RecorderValueAccessorKind.Text when source is TextBox or TextBlock or Label =>
+            RecorderValueAccessorKind.Text when source is TextBox or TextBlock or Label or Button =>
                 new SemanticValueCandidate(
                     locator.Control,
                     valueKind,
@@ -4791,7 +4971,9 @@ internal sealed partial class RecorderStepFactory
             TextBox textBox => textBox.Text,
             TextBlock textBlock => textBlock.Text,
             Label label => label.Content?.ToString(),
-            Button button => button.Content?.ToString(),
+            Button button => MenuPathValue.TryGetVisibleText(
+                button.Content,
+                AutomationProperties.GetName(button)),
             ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
             ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
             _ => AutomationProperties.GetName(control)
@@ -5202,37 +5384,56 @@ internal sealed partial class RecorderStepFactory
     private bool TryResolveDialogHint(
         Control source,
         out RecorderDialogHint hint,
-        out RecordedActionKind actionKind)
+        out RecordedActionKind actionKind,
+        out string? buttonLocator,
+        out string error,
+        out bool isConfigured)
     {
-        foreach (var candidate in _options.DialogHints)
+        var matches = new List<(RecorderDialogHint Hint, RecordedActionKind ActionKind, string? ButtonLocator)>();
+        foreach (var candidate in _dialogHints)
         {
             var parts = candidate.Parts;
-            if (MatchesLocator(source, parts.LocatorKind, parts.ConfirmButtonLocator))
+            if (!string.IsNullOrWhiteSpace(parts.ConfirmButtonLocator)
+                && MatchesLocator(source, parts.LocatorKind, parts.ConfirmButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.ConfirmDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.ConfirmDialog, null));
             }
 
             if (!string.IsNullOrWhiteSpace(parts.CancelButtonLocator)
                 && MatchesLocator(source, parts.LocatorKind, parts.CancelButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.CancelDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.CancelDialog, null));
             }
 
             if (!string.IsNullOrWhiteSpace(parts.DismissButtonLocator)
                 && MatchesLocator(source, parts.LocatorKind, parts.DismissButtonLocator))
             {
-                hint = candidate;
-                actionKind = RecordedActionKind.DismissDialog;
-                return true;
+                matches.Add((candidate, RecordedActionKind.DismissDialog, null));
             }
+
+            foreach (var locator in parts.ButtonLocators)
+            {
+                if (MatchesLocator(source, parts.LocatorKind, locator))
+                {
+                    matches.Add((candidate, RecordedActionKind.InvokeDialogButton, locator));
+                }
+            }
+        }
+
+        isConfigured = matches.Count > 0;
+        if (matches.Count == 1)
+        {
+            (hint, actionKind, buttonLocator) = matches[0];
+            error = string.Empty;
+            return true;
         }
 
         hint = null!;
         actionKind = default;
+        buttonLocator = null;
+        error = matches.Count == 0
+            ? "Recorder does not have a dialog hint for this button."
+            : "The selected dialog button matches more than one configured action. Register each dialog button locator exactly once.";
         return false;
     }
 
