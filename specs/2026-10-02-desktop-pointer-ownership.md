@@ -597,6 +597,8 @@ Stop decision: локальная merge-интеграция framework PASS; con
 
 После локальной реализации пользователь отдельно поручил **«Оформи PRы»**. Это разрешает commit, push рабочих веток и создание связанных PR для framework и consumer. Это не подтверждение product fix из §14 и не разрешение на merge, релиз или публикацию NuGet-пакетов. Переносимая выборка evidence: [validation report](../docs/validation/2026-10-02-pointer/README.md).
 
+Следующее явное поручение **«Влей https://github.com/Kibnet/AppAutomation/pull/39 и опубликуй»** разрешает merge framework PR и выпуск AppAutomation. Выбрана SemVer **1.9.0**: с 1.8.0 добавлены совместимые pointer/clipboard/grid/repeated-control API. Release metadata (`eng/Versions.props`, changelog) входит в подготовку релиза. Unlimotion PR #313, product fix §14 и установка пакетов в исходные consumer checkout этим поручением не разрешены. Предварительный PR CI на `a4891ab` полностью прошёл: 793 tests, 792 PASS/0 FAIL/1 skip, failure screenshot, pack, consumer smoke ([run 37048748655](https://github.com/Kibnet/AppAutomation/actions/runs/37048748655)); после version metadata требуется зелёный CI на окончательном head и проверка опубликованных assets/NuGet.
+
 ## 20. Журнал действий агента
 
 | Фаза/событие | Решение и основание | Evidence / остаток | Следующее действие | Решение человека | Артефакты |
