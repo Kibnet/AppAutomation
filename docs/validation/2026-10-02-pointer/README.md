@@ -37,3 +37,14 @@ Framework FlaUI включает 40 controller/fault tests, 12 native pointer te
 Оставшиеся consumer failures: `CurrentTaskRepeaterSection` отсутствует также на baseline; показанная Headless-форма выявила сброс выбора remote при HTTP→SSH. Product fix Unlimotion не включён. Его полный repository unit suite и CI не заявляются пройденными.
 
 Полные локальные логи сохранены в `artifacts/pointer/validation/` framework и `artifacts/pointer/` consumer. В Git включена небольшая выборка визуального evidence. Эти результаты отделены от PR CI checks и не подтверждают публикацию пакетов в NuGet.
+
+## Проверка совмещения с актуальным master перед PR
+
+Во время подготовки PR `origin/master` продвинулся до `c848963`. Конфликты с новым выбором строк таблицы разрешены с сохранением обоих изменений. Его физический fallback также переведён на общий pointer lifecycle: свежий row selector после ожидания, оставшийся общий timeout, отсутствие повторного click после ошибки `SelectionItem.Select`, сравнение доставленной точки с bounds в physical DPI после возврата мыши.
+
+- Финальный `dotnet build AppAutomation.sln -c Release --no-restore`: **0 errors / 114 warnings**.
+- Abstractions: **175/175 PASS**.
+- Первый `FlaUiControlResolverTests` после совмещения: **13 PASS / 1 FAIL**; новый grid test выявил несовпадение logical/physical DPI при проверке доставленной точки.
+- После исправления и повторной сборки `ComplexDataGrid_ThreeRowsResolveAllConfiguredColumns`: **1/1 PASS, 59.7s**, включая новую проверку сохранения позиции курсора при выборе строк. [Финальная trace](grid-pointer-trace.jsonl): **7/7** точных saved/restored `(4802,1471)`, 0 failed operations.
+
+Это целевой recheck изменённой поверхности. Полные 779 PASS выше относятся к implementation snapshot до совмещения; они не объявляются полным повторным прогоном merged snapshot. Consumer `.2` packages и видео также предшествуют совмещению; после выпуска окончательной версии потребуется consumer revalidation. Логи: `pr-merge-build-reviewed.log`, `pr-merge-abstractions-tests.log`, `pr-merge-grid-tests.log`, `pr-merge-grid-final-tests.log` и TRX в `artifacts/pointer/validation/`.

@@ -9,8 +9,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
     private string _gridResultLabel = string.Empty;
     private string _gridSelectionLabel = "No row selected";
+    private string _gridOpenMarker = "No row opened";
     private string _dataGridErrorText = string.Empty;
     private DataGridRowViewModel? _selectedDataGridRow;
+    private ArmDesktopGridRowViewModel? _selectedArmGridRow;
 
     public MainWindowViewModel()
     {
@@ -66,6 +68,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public IReadOnlyList<string> ArmGridStateOptions { get; } = ["Open", "Pending", "Closed"];
 
+    public ArmDesktopGridRowViewModel? SelectedArmGridRow
+    {
+        get => _selectedArmGridRow;
+        set => SetProperty(ref _selectedArmGridRow, value);
+    }
+
     public ObservableCollection<MultiSelectItemViewModel> MultiSelectItems { get; }
 
     public ObservableCollection<MultiSelectItemViewModel> SelectedMultiSelectItems { get; } = [];
@@ -82,6 +90,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetProperty(ref _gridSelectionLabel, value);
     }
 
+    public string GridOpenMarker
+    {
+        get => _gridOpenMarker;
+        set => SetProperty(ref _gridOpenMarker, value);
+    }
+
+    public bool HasSelectedDataGridRow => SelectedDataGridRow is not null;
+
     public string DataGridErrorText
     {
         get => _dataGridErrorText;
@@ -96,6 +112,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             if (SetProperty(ref _selectedDataGridRow, value))
             {
                 GridSelectionLabel = value is null ? "No row selected" : $"Selected row: {value.Row}";
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasSelectedDataGridRow)));
             }
         }
     }
@@ -118,6 +135,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         DataGridErrorText = string.Empty;
         GridResultLabel = $"Grid rows: {DataGridRows.Count}";
         SelectedDataGridRow = null;
+        GridOpenMarker = "No row opened";
     }
 
     public void ClearGrid()
@@ -127,6 +145,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         GridResultLabel = string.Empty;
         SelectedDataGridRow = null;
         GridSelectionLabel = "No row selected";
+        GridOpenMarker = "No row opened";
     }
 
     public void SelectRowByIndex(int selectedIndex)

@@ -68,6 +68,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnDemoDataGridDoubleTapped(object? sender, global::Avalonia.Input.TappedEventArgs e)
+    {
+        if (_viewModel.SelectedDataGridRow is { } row)
+        {
+            _viewModel.GridOpenMarker = $"Opened row: {row.Row}";
+        }
+    }
+
     private static void OnArmComplexDataGridLoadingRow(object? sender, DataGridRowEventArgs e)
     {
         if (e.Row.DataContext is ArmDesktopGridRowViewModel row)
@@ -92,6 +100,14 @@ public partial class MainWindow : Window
         if (popupEditor?.IsPopupOpen == true)
         {
             e.Cancel = true;
+        }
+    }
+
+    private void OnSaveArmGridProductClick(object? sender, RoutedEventArgs e)
+    {
+        if (_viewModel.SelectedArmGridRow is { } row)
+        {
+            row.IsProductEditable = false;
         }
     }
 

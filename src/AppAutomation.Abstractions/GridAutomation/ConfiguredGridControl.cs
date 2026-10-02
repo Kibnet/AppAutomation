@@ -2,6 +2,7 @@ namespace AppAutomation.Abstractions;
 
 internal class ConfiguredGridControl :
     IAddressableGridControl,
+    IGridRowSelectionControl,
     IGridColumnMetadataControl,
     IGridLogicalColumnMetadataControl,
     IGridAutomationCatalogControl
@@ -317,6 +318,48 @@ internal class ConfiguredGridControl :
         }
 
         _actionGrid.OpenRow(ResolveUniqueRowIndex(row));
+    }
+
+    public void SelectRow(GridRowSelector row, int timeoutMs)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        if (!IsDeclaredIdentitySelector(row))
+        {
+            throw new InvalidOperationException(
+                $"Grid '{AutomationId}' row selection requires exactly the stable identity columns declared by IdentifyRowsBy(...). "
+                + $"Expected: [{string.Join(", ", Definition.RowIdentityColumns)}]; "
+                + $"actual: [{string.Join(", ", row.Conditions.Select(static condition => condition.ColumnName))}].");
+        }
+
+        if (ShouldUseIndexedGrid(row)
+            && Inner is IIndexedGridRowSelectionControl indexedSelection)
+        {
+            indexedSelection.SelectRow(MapRow(row), timeoutMs);
+            return;
+        }
+
+        if (ShouldUseAddressableGrid()
+            && Inner is IGridRowSelectionControl addressableSelection)
+        {
+            addressableSelection.SelectRow(MapAddressableRow(row), timeoutMs);
+            return;
+        }
+
+        if (Inner is IIndexedGridRowSelectionControl indexedFallback)
+        {
+            indexedFallback.SelectRow(MapRow(row), timeoutMs);
+            return;
+        }
+
+        if (Inner is IGridRowSelectionControl addressableFallback)
+        {
+            addressableFallback.SelectRow(MapAddressableRow(row), timeoutMs);
+            return;
+        }
+
+        throw new NotSupportedException(
+            $"Grid '{AutomationId}' does not expose provider-neutral row selection.");
     }
 
     private bool ShouldUseAddressableGrid()

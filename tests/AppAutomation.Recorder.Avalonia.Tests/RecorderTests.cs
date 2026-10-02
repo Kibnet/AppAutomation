@@ -449,6 +449,7 @@ public sealed class RecorderTests
             new RecordedStep(RecordedActionKind.ConfirmDialog, dialogDescriptor),
             new RecordedStep(RecordedActionKind.CancelDialog, dialogDescriptor),
             new RecordedStep(RecordedActionKind.DismissDialog, dialogDescriptor),
+            new RecordedStep(RecordedActionKind.InvokeDialogButton, dialogDescriptor, StringValue: "DeleteDialogAddButton"),
             new RecordedStep(RecordedActionKind.DismissNotification, notificationDescriptor),
             new RecordedStep(RecordedActionKind.OpenOrActivateShellPane, shellDescriptor, StringValue: "Customers"),
             new RecordedStep(RecordedActionKind.ActivateShellPane, shellDescriptor, StringValue: "Orders")
@@ -480,6 +481,7 @@ public sealed class RecorderTests
             await Assert.That(scenarioSource.Contains("Page.ConfirmDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.CancelDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.DismissDialog(static page => page.DeleteDialog);", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(scenarioSource.Contains("Page.InvokeDialogButton(static page => page.DeleteDialog, \"DeleteDialogAddButton\");", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.DismissNotification(static page => page.ExportToast);", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.OpenOrActivateShellPane(static page => page.Shell, \"Customers\");", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(scenarioSource.Contains("Page.ActivateShellPane(static page => page.Shell, \"Orders\");", StringComparison.Ordinal)).IsEqualTo(true);
@@ -2156,11 +2158,17 @@ public sealed class RecorderTests
     {
         var options = CreateCompositeRecorderOptions();
         var root = new StackPanel();
+        var dialogRoot = new StackPanel();
         var confirmButton = new Button { Content = "Yes" };
+        var addButton = new Button { Content = "Add" };
         var dismissNotificationButton = new Button { Content = "Close" };
+        AutomationProperties.SetAutomationId(dialogRoot, "DeleteDialog");
         AutomationProperties.SetAutomationId(confirmButton, "DeleteDialogConfirmButton");
+        AutomationProperties.SetAutomationId(addButton, "DeleteDialogAddButton");
         AutomationProperties.SetAutomationId(dismissNotificationButton, "ExportToastDismissButton");
-        root.Children.Add(confirmButton);
+        dialogRoot.Children.Add(confirmButton);
+        dialogRoot.Children.Add(addButton);
+        root.Children.Add(dialogRoot);
         root.Children.Add(dismissNotificationButton);
 
         var session = new RecorderSession(CreateWindowStub(), options, () => root, attachWindowHandlers: false);
@@ -2168,13 +2176,19 @@ public sealed class RecorderTests
 
         session.Start();
         session.CaptureButtonClickForTesting(confirmButton);
+        session.CaptureButtonClickForTesting(addButton);
         session.CaptureButtonClickForTesting(dismissNotificationButton);
 
         using (Assert.Multiple())
         {
-            await Assert.That(details.StepJournal.Count).IsEqualTo(2);
+            await Assert.That(details.StepJournal.Count).IsEqualTo(3);
             await Assert.That(details.StepJournal[0].Preview).Contains("Page.ConfirmDialog(static page => page.DeleteDialog);");
-            await Assert.That(details.StepJournal[1].Preview).Contains("Page.DismissNotification(static page => page.ExportToast);");
+            await Assert.That(details.StepJournal[1].Preview).Contains(
+                "Page.InvokeDialogButton(static page => page.DeleteDialog, \"DeleteDialogAddButton\");");
+            await Assert.That(details.StepJournal[1].Preview.Contains("CancelDialog", StringComparison.Ordinal)).IsEqualTo(false);
+            await Assert.That(details.StepJournal[1].ValidationStatus).IsEqualTo(RecorderValidationStatus.Valid);
+            await Assert.That(details.StepJournal[1].CanPersist).IsEqualTo(true);
+            await Assert.That(details.StepJournal[2].Preview).Contains("Page.DismissNotification(static page => page.ExportToast);");
         }
     }
 
@@ -2917,7 +2931,7 @@ public sealed class RecorderTests
         {
             await Assert.That(session.StepJournal.Count).IsEqualTo(1);
             await Assert.That(session.StepJournal[0].Preview).Contains(
-                "Page.WaitUntilValueEquals(static page => page.QuantitySpinner, 12);");
+                "await Assert.That(Page.QuantitySpinner.Value).IsEqualTo(12);");
             await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
         }
     }
@@ -3351,7 +3365,23 @@ public sealed class RecorderTests
         var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
         var options = CreateOptions(directory.Path, scenarioName: "Recovery Flow");
         var firstStep = CreateRecordedButtonStep(Guid.NewGuid(), "FirstButton");
-        var secondStep = CreateRecordedButtonStep(Guid.NewGuid(), "SecondButton");
+        var secondStep = new RecordedStep(
+            RecordedActionKind.SelectGridRow,
+            new RecordedControlDescriptor(
+                "OrdersGrid",
+                UiControlType.Grid,
+                "OrdersGrid",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: "Avalonia.Controls.DataGrid",
+                Warning: null),
+            StepId: Guid.NewGuid())
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("OrderId", "ORD-42")
+            ]
+        };
 
         var firstResult = await generator.AutosaveAsync(CreateWindowStub(), options, [firstStep], outputDirectoryOverride: null);
         var secondResult = await generator.AutosaveAsync(CreateWindowStub(), options, [firstStep, secondStep], outputDirectoryOverride: null);
@@ -3375,9 +3405,10 @@ public sealed class RecorderTests
             await Assert.That(scenarioSource).Contains("AppAutomation recorder autosave recovery file.");
             await Assert.That(scenarioSource).Contains("public void Autosave_RecoveryFlow_");
             await Assert.That(scenarioSource).Contains("Page.ClickButton(static page => page.FirstButton);");
-            await Assert.That(scenarioSource).Contains("Page.ClickButton(static page => page.SecondButton);");
+            await Assert.That(scenarioSource).Contains(
+                "Page.SelectGridRow(static page => page.OrdersGrid, GridRowSelector.ByCell(\"OrderId\", \"ORD-42\"));");
             await Assert.That(pageSource).Contains("[UiControl(\"FirstButton\", UiControlType.Button, \"FirstButton\", FallbackToName = false)]");
-            await Assert.That(pageSource).Contains("[UiControl(\"SecondButton\", UiControlType.Button, \"SecondButton\", FallbackToName = false)]");
+            await Assert.That(pageSource).Contains("[UiControl(\"OrdersGrid\", UiControlType.Grid, \"OrdersGrid\", FallbackToName = false)]");
         }
     }
 
@@ -4330,9 +4361,10 @@ public sealed class RecorderTests
         var options = new AppAutomationRecorderOptions();
         options.DialogHints.Add(new RecorderDialogHint(
             "DeleteDialog",
-            DialogControlParts.ByAutomationIds(
+            DialogControlParts.ByAutomationIdsWithAdditionalButtons(
                 "DeleteDialogMessage",
-                "DeleteDialogConfirmButton",
+                ["DeleteDialogAddButton"],
+                confirmButtonAutomationId: "DeleteDialogConfirmButton",
                 cancelButtonAutomationId: "DeleteDialogCancelButton",
                 dismissButtonAutomationId: "DeleteDialogDismissButton")));
         options.NotificationHints.Add(new RecorderNotificationHint(

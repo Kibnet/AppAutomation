@@ -101,6 +101,7 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.ApplyFilterSelection
                 or RecordedActionKind.CancelFilterSelection => true,
             RecordedActionKind.OpenGridRow
+                or RecordedActionKind.SelectGridRow
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd
                 or RecordedActionKind.CopyGridCell
@@ -118,6 +119,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog
+                or RecordedActionKind.InvokeDialogButton
                 or RecordedActionKind.DismissNotification
                 or RecordedActionKind.OpenOrActivateShellPane
                 or RecordedActionKind.ActivateShellPane => true,

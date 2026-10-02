@@ -259,25 +259,30 @@ public sealed record NumericRangeFilterParts(
 /// Configuration for composing a modal dialog from individual UI controls.
 /// </summary>
 /// <param name="MessageLocator">The locator for the dialog message label.</param>
-/// <param name="ConfirmButtonLocator">The locator for the confirm button.</param>
+/// <param name="ConfirmButtonLocator">Optional locator for the confirm button.</param>
 /// <param name="CancelButtonLocator">Optional locator for the cancel button.</param>
 /// <param name="DismissButtonLocator">Optional locator for the dismiss/close button.</param>
 /// <param name="LocatorKind">The locator strategy for all components. Defaults to <see cref="UiLocatorKind.AutomationId"/>.</param>
 /// <param name="FallbackToName">Whether components should fall back to name-based lookup. Defaults to <see langword="true"/>.</param>
 public sealed record DialogControlParts(
     string MessageLocator,
-    string ConfirmButtonLocator,
+    string? ConfirmButtonLocator = null,
     string? CancelButtonLocator = null,
     string? DismissButtonLocator = null,
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = true)
 {
     /// <summary>
+    /// Gets the locators for buttons without canonical confirm/cancel/dismiss semantics.
+    /// </summary>
+    public IReadOnlyList<string> ButtonLocators { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Creates a <see cref="DialogControlParts"/> configuration using automation IDs.
     /// </summary>
     public static DialogControlParts ByAutomationIds(
         string messageAutomationId,
-        string confirmButtonAutomationId,
+        string? confirmButtonAutomationId = null,
         string? cancelButtonAutomationId = null,
         string? dismissButtonAutomationId = null)
     {
@@ -285,8 +290,104 @@ public sealed record DialogControlParts(
             messageAutomationId,
             confirmButtonAutomationId,
             cancelButtonAutomationId,
-            dismissButtonAutomationId);
+            dismissButtonAutomationId).NormalizeAndValidate();
     }
+
+    /// <summary>
+    /// Creates a <see cref="DialogControlParts"/> configuration with canonical and additional buttons using automation IDs.
+    /// </summary>
+    public static DialogControlParts ByAutomationIdsWithAdditionalButtons(
+        string messageAutomationId,
+        IReadOnlyList<string> additionalButtonAutomationIds,
+        string? confirmButtonAutomationId = null,
+        string? cancelButtonAutomationId = null,
+        string? dismissButtonAutomationId = null)
+    {
+        ArgumentNullException.ThrowIfNull(additionalButtonAutomationIds);
+        return new DialogControlParts(
+            messageAutomationId,
+            confirmButtonAutomationId,
+            cancelButtonAutomationId,
+            dismissButtonAutomationId)
+        {
+            ButtonLocators = additionalButtonAutomationIds
+        }.NormalizeAndValidate();
+    }
+
+    /// <summary>
+    /// Creates a dialog configuration whose buttons are addressed only by stable automation IDs.
+    /// </summary>
+    public static DialogControlParts ByButtonAutomationIds(
+        string messageAutomationId,
+        params string[] buttonAutomationIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageAutomationId);
+        ArgumentNullException.ThrowIfNull(buttonAutomationIds);
+        return new DialogControlParts(messageAutomationId)
+        {
+            ButtonLocators = buttonAutomationIds
+        }.NormalizeAndValidate();
+    }
+
+    internal DialogControlParts NormalizeAndValidate()
+    {
+        var normalizedButtons = (ButtonLocators ?? Array.Empty<string>())
+            .Where(static locator => !string.IsNullOrWhiteSpace(locator))
+            .Select(static locator => locator.Trim())
+            .ToArray();
+        var normalized = this with
+        {
+            MessageLocator = NormalizeRequiredLocator(MessageLocator, nameof(MessageLocator)),
+            ConfirmButtonLocator = NormalizeOptionalLocator(ConfirmButtonLocator),
+            CancelButtonLocator = NormalizeOptionalLocator(CancelButtonLocator),
+            DismissButtonLocator = NormalizeOptionalLocator(DismissButtonLocator),
+            ButtonLocators = Array.AsReadOnly(normalizedButtons)
+        };
+
+        var duplicate = normalized.EnumerateRegisteredButtonLocators()
+            .GroupBy(static locator => locator, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
+        {
+            throw new ArgumentException(
+                $"Dialog button locator '{duplicate.Key}' is registered more than once.",
+                nameof(ButtonLocators));
+        }
+
+        return normalized;
+    }
+
+    internal IEnumerable<string> EnumerateRegisteredButtonLocators()
+    {
+        if (!string.IsNullOrWhiteSpace(ConfirmButtonLocator))
+        {
+            yield return ConfirmButtonLocator;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CancelButtonLocator))
+        {
+            yield return CancelButtonLocator;
+        }
+
+        if (!string.IsNullOrWhiteSpace(DismissButtonLocator))
+        {
+            yield return DismissButtonLocator;
+        }
+
+        foreach (var locator in ButtonLocators ?? Array.Empty<string>())
+        {
+            yield return locator;
+        }
+    }
+
+    private static string NormalizeRequiredLocator(string locator, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(locator, parameterName);
+        return locator.Trim();
+    }
+
+    private static string? NormalizeOptionalLocator(string? locator) =>
+        string.IsNullOrWhiteSpace(locator) ? null : locator.Trim();
 }
 
 /// <summary>
@@ -1533,7 +1634,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         }
 
         _propertyName = propertyName.Trim();
-        _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+        _parts = (parts ?? throw new ArgumentNullException(nameof(parts))).NormalizeAndValidate();
     }
 
     /// <inheritdoc />
@@ -1556,7 +1657,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         return new DialogControl(definition.PropertyName, _parts, innerResolver);
     }
 
-    private sealed class DialogControl : IDialogControl, IReadableTextControl
+    private sealed class DialogControl : IAddressableDialogControl, IReadableTextControl
     {
         private readonly DialogControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -1590,6 +1691,23 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             button.Invoke();
         }
 
+        public void InvokeButton(string buttonLocator)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(buttonLocator);
+            var normalizedLocator = buttonLocator.Trim();
+            var matches = _parts.EnumerateRegisteredButtonLocators()
+                .Count(locator => string.Equals(locator, normalizedLocator, StringComparison.Ordinal));
+            if (matches != 1)
+            {
+                throw new NotSupportedException(
+                    matches == 0
+                        ? $"Dialog '{AutomationId}' does not register button locator '{normalizedLocator}'."
+                        : $"Dialog '{AutomationId}' registers button locator '{normalizedLocator}' more than once.");
+            }
+
+            ResolveButton("Button", normalizedLocator, actionKind: null).Invoke();
+        }
+
         private string? TryReadMessageText()
         {
             try
@@ -1607,7 +1725,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
             return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
         }
 
-        private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind actionKind)
+        private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind? actionKind)
         {
             if (string.IsNullOrWhiteSpace(locatorValue))
             {

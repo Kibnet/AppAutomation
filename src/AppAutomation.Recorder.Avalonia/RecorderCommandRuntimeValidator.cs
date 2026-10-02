@@ -6,12 +6,16 @@ internal sealed class RecorderCommandRuntimeValidator
 {
     private readonly AppAutomationRecorderOptions _recorderOptions;
     private readonly RecorderValidationOptions _options;
+    private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
 
     public RecorderCommandRuntimeValidator(AppAutomationRecorderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         _recorderOptions = options;
         _options = options.Validation;
+        _dialogHints = options.DialogHints
+            .Select(static hint => hint with { Parts = hint.Parts.NormalizeAndValidate() })
+            .ToArray();
     }
 
     public RecordedStep Validate(RecordedStep step)
@@ -189,6 +193,9 @@ internal sealed class RecorderCommandRuntimeValidator
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.OpenGridRow => ValidateGridUserAction(step, target)
                 .Concat(RequireGridCoordinates(step, target, requireTargetColumn: false)),
+            RecordedActionKind.SelectGridRow => ValidateGridUserAction(step, target)
+                .Concat(RequireNamedGridRow(step, target))
+                .Concat(RequireNoGridTargetColumn(step, target)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
                 .Concat(RequireString(step, target, allowEmpty: false, "grid column name")),
             RecordedActionKind.ScrollGridToEnd => ValidateGridUserAction(step, target),
@@ -226,6 +233,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.ConfirmDialog
                 or RecordedActionKind.CancelDialog
                 or RecordedActionKind.DismissDialog => ValidateControlType(step, target, UiControlType.Dialog),
+            RecordedActionKind.InvokeDialogButton => ValidateDialogButtonAction(step, target),
             RecordedActionKind.DismissNotification => ValidateControlType(step, target, UiControlType.Notification),
             RecordedActionKind.OpenOrActivateShellPane
                 or RecordedActionKind.ActivateShellPane => ValidateControlType(step, target, UiControlType.ShellNavigation)
@@ -282,7 +290,7 @@ internal sealed class RecorderCommandRuntimeValidator
     {
         return (controlType, valueKind, accessorKind) switch
         {
-            (UiControlType.TextBox or UiControlType.Label or UiControlType.Search,
+            (UiControlType.TextBox or UiControlType.Label or UiControlType.Button or UiControlType.Search,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text) => true,
             (UiControlType.SearchPicker or UiControlType.ComboBox or UiControlType.ListBox,
@@ -626,6 +634,59 @@ internal sealed class RecorderCommandRuntimeValidator
         return ValidateControlType(step, target, [expected]);
     }
 
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateDialogButtonAction(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        foreach (var finding in ValidateControlType(step, target, UiControlType.Dialog))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in RequireString(step, target, allowEmpty: false, "dialog button locator"))
+        {
+            yield return finding;
+        }
+
+        if (string.IsNullOrWhiteSpace(step.StringValue))
+        {
+            yield break;
+        }
+
+        var matchingHints = _dialogHints
+            .Where(hint =>
+                hint.LocatorKind == step.Control.LocatorKind
+                && string.Equals(
+                    hint.LocatorValue.Trim(),
+                    step.Control.LocatorValue.Trim(),
+                    StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matchingHints.Length != 1)
+        {
+            yield return Invalid(
+                target,
+                "dialog-hint-ambiguous",
+                matchingHints.Length == 0
+                    ? $"Dialog '{step.Control.LocatorValue}' does not have a matching recorder hint."
+                    : $"Dialog '{step.Control.LocatorValue}' has more than one matching recorder hint.");
+            yield break;
+        }
+
+        var normalizedLocator = step.StringValue.Trim();
+        var matches = matchingHints[0].Parts.EnumerateRegisteredButtonLocators()
+            .Count(locator => string.Equals(locator, normalizedLocator, StringComparison.Ordinal));
+        if (matches != 1)
+        {
+            yield return Invalid(
+                target,
+                "dialog-button-locator-invalid",
+                matches == 0
+                    ? $"Dialog '{step.Control.LocatorValue}' does not register button locator '{normalizedLocator}'."
+                    : $"Dialog '{step.Control.LocatorValue}' registers button locator '{normalizedLocator}' more than once.");
+        }
+    }
+
     private static IEnumerable<RecorderRuntimeValidationFinding> ValidateControlType(
         RecordedStep step,
         RecorderRuntimeValidationTarget target,
@@ -722,6 +783,21 @@ internal sealed class RecorderCommandRuntimeValidator
         RecorderRuntimeValidationTarget target)
     {
         return RequireGridCoordinates(step, target, requireTargetColumn: true);
+    }
+
+    private static IEnumerable<RecorderRuntimeValidationFinding> RequireNoGridTargetColumn(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
+        return string.IsNullOrWhiteSpace(step.GridTargetColumnName)
+            ? []
+            :
+            [
+                Invalid(
+                    target,
+                    "payload-unexpected-grid-target-column",
+                    "Grid row selection must not contain a target column.")
+            ];
     }
 
     private IEnumerable<RecorderRuntimeValidationFinding> RequireGridCoordinates(

@@ -3739,39 +3739,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private static string? ReadVisualGridCellText(AutomationElement element)
     {
-        var value = TryRead(() => element.Patterns.Value.PatternOrDefault?.Value.Value);
-        if (IsUsefulAutomationText(value))
-        {
-            return value;
-        }
-
-        var name = TryRead(() => element.Name);
-        if (IsUsefulAutomationText(name))
-        {
-            return name;
-        }
-
-        foreach (var candidate in FindAutomationDescendants(element))
-        {
-            if (TryRead(() => candidate.ControlType) == ControlType.Button)
-            {
-                continue;
-            }
-
-            value = TryRead(() => candidate.Patterns.Value.PatternOrDefault?.Value.Value);
-            if (IsUsefulAutomationText(value))
-            {
-                return value;
-            }
-
-            name = TryRead(() => candidate.Name);
-            if (IsUsefulAutomationText(name))
-            {
-                return name;
-            }
-        }
-
-        return null;
+        return ReadGridCellText(element);
     }
 
     private static string? ReadAutomationElementText(AutomationElement element)
@@ -3829,54 +3797,88 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private static string? ReadAutomationElementVisibleText(AutomationElement element)
     {
+        return ReadAutomationElementVisibleText(element, preferValue: false, skipButtonDescendants: false);
+    }
+
+    private static string? ReadGridCellText(AutomationElement element)
+    {
+        return ReadAutomationElementVisibleText(element, preferValue: true, skipButtonDescendants: true);
+    }
+
+    private static string? ReadAutomationElementVisibleText(
+        AutomationElement element,
+        bool preferValue,
+        bool skipButtonDescendants)
+    {
         if (element is null)
         {
             return null;
         }
 
         var name = TryRead(() => element.Name);
-        if (IsUsefulAutomationText(name))
+        var value = TryRead(() => element.Patterns.Value.PatternOrDefault?.Value.Value);
+        if (!preferValue && IsUsefulAutomationText(name))
         {
             return name;
         }
 
-        try
+        if (IsUsefulAutomationText(value))
         {
-            if (element.Patterns.Value.IsSupported)
+            return value;
+        }
+
+        var descendants = FindAutomationDescendants(element);
+        var textChildName = descendants
+            .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Text)
+            .Select(static candidate => TryRead(() => candidate.Name))
+            .FirstOrDefault(IsUsefulAutomationText);
+        if (textChildName is not null)
+        {
+            return textChildName;
+        }
+
+        foreach (var candidate in descendants)
+        {
+            if (skipButtonDescendants
+                && TryRead(() => candidate.ControlType) == ControlType.Button)
             {
-                var value = element.Patterns.Value.Pattern.Value;
+                continue;
+            }
+
+            if (preferValue)
+            {
+                value = TryRead(() => candidate.Patterns.Value.PatternOrDefault?.Value.Value);
                 if (IsUsefulAutomationText(value))
                 {
                     return value;
                 }
             }
-        }
-        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
-        {
-            // Ignore pattern access errors and continue with text descendants.
-        }
 
-        var textChild = FindAutomationDescendants(element)
-            .FirstOrDefault(candidate => candidate.ControlType == ControlType.Text);
-        if (textChild is not null)
-        {
-            var textChildName = TryRead(() => textChild.Name);
-            if (IsUsefulAutomationText(textChildName))
+            var candidateName = TryRead(() => candidate.Name);
+            if (IsUsefulAutomationText(candidateName))
             {
-                return textChildName;
+                return candidateName;
             }
         }
 
-        return FindAutomationDescendants(element)
-            .Select(static candidate => TryRead(() => candidate.Name))
-            .FirstOrDefault(IsUsefulAutomationText);
+        return preferValue && IsUsefulAutomationText(name) ? name : null;
     }
 
-    private static bool IsUsefulAutomationText(string? value)
+    internal static bool IsUsefulAutomationText(string? value)
     {
         return !string.IsNullOrWhiteSpace(value)
-            && !value.StartsWith("Avalonia.Controls.", StringComparison.Ordinal)
-            && !string.Equals(value, "TextBlock", StringComparison.Ordinal);
+            && !LooksLikeFrameworkControlTypeName(value)
+            && !string.Equals(value, "TextBlock", StringComparison.Ordinal)
+            && !string.Equals(value, "ContentPresenter", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeFrameworkControlTypeName(string value)
+    {
+        return value.StartsWith("Avalonia.Controls.", StringComparison.Ordinal)
+            || value.StartsWith("System.Windows.Controls.", StringComparison.Ordinal)
+            || value.StartsWith("Microsoft.UI.Xaml.Controls.", StringComparison.Ordinal)
+            || value.StartsWith("Windows.UI.Xaml.Controls.", StringComparison.Ordinal)
+            || value.StartsWith("FlaUI.Core.AutomationElements.", StringComparison.Ordinal);
     }
 
     private static bool TrySelectTreeItem(TreeItem treeItem)

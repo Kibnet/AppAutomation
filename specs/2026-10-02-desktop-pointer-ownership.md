@@ -574,6 +574,23 @@ Consumer evidence, подтверждённое независимо от ещё
 
 Итоговый независимый проход по final diff/evidence завершён: незакрытых **BLOCKER/HIGH/MEDIUM/LOW в pointer diff нет**, **consumer AC11 PASS**. Reviewer проверил последние два targeted TRX, финальную сборку, соответствие textbox выбранному удаляемому объекту и отсутствие physical replay. Первое замечание про cleanup ComboBox закрыто явным ограниченным ожиданием готовности и закрытия; дополнительный повторный выбор Settings space удалён. Reviewer отдельно подтвердил оба full-suite counters и идентичный baseline Repeater locator failure. Общий gate осознанно оставлен NEEDS-FIX по двум описанным consumer issues, без подмены результатов зелёным статусом.
 
+### Дополнительный post-EXEC проход при подготовке PR
+
+Scope/Evidence: implementation commit `ffecaef`, обновившийся `origin/master` `c848963`, разрешённые конфликты `FlaUiControlResolver`/`FlaUiVisualGridControl`, автоматически совмещённые adapters/native grid, полный Release build и целевые Abstractions/native tests. Новые master изменения не отменены; UIA grid selection переведён на тот же pointer lifecycle. Consumer production scope не расширен.
+
+Contract/Adversarial/Role passes: проверены повторное разрешение virtualized row после очереди, отсутствие replay после частично выполненного semantic Select, общий timeout, physical DPI и возврат до проверки состояния строки. Tester проверил native assertion и trace; developer — передачу API/capabilities; UX — отсутствие парковки и повторных кликов; delivery — раздельные исходные и merge результаты, unpublished consumer dependency, draft gate и переносимое video evidence. Отдельный reviewer `/root/review_pointer_exec` работал только чтением по поведению, но его effective sandbox `danger-full-access`: это writable reviewer fallback, не технически read-only independent review.
+
+| Severity | Area | Finding | Required action | Status |
+| --- | --- | --- | --- | --- |
+| HIGH | grid replay | Новый master catch мог кликнуть после Select, завершившегося ошибкой после изменения состояния | Semantic Select вынесен за physical fallback catch | fixed |
+| HIGH | fresh target | Closure удерживала row до очереди ownership | Фабрика повторно разрешает исходный selector и container | fixed |
+| MEDIUM | timeout | Default pointer timeout мог превысить остаток SelectRow | Передаётся remaining timeout, фабрика проверяет общий deadline | fixed |
+| MEDIUM | DPI | Click point physical, bounds при подтверждении logical | PhysicalDpiScope при сравнении | fixed |
+
+Fix/re-review: reviewer повторно проверил все четыре исправления; новых code findings нет. Первая merged suite `FlaUiControlResolverTests` дала 13 PASS/1 grid FAIL до DPI fix. После fix final Release build 0 errors/114 warnings, Abstractions 175/175 PASS, native `ComplexDataGrid_ThreeRowsResolveAllConfiguredColumns` 1/1 PASS (59.7s); trace 7/7 точных возвратов. Проверка добавлена в существующий сценарий выбора строк. Подробные команды/границы: [merge validation](../docs/validation/2026-10-02-pointer/README.md#проверка-совмещения-с-актуальным-master-перед-pr).
+
+Stop decision: локальная merge-интеграция framework PASS; consumer остаётся draft/NEEDS-FIX по опубликованной зависимости и двум известным suite failures. Полный framework suite и consumer packages после merge не пересобирались/не перепроверялись целиком; full 779 PASS, consumer `.2` и видео сохраняют прежнюю provenance. Hosted CI — отдельная проверка после открытия PR. Нет оснований расширять product scope или публиковать пакеты.
+
 ## Approval
 
 Реализация разрешается только после **«Спеку подтверждаю»** по central `quest-mode.md`. Включены framework и описанная локальная интеграция Unlimotion в изолированном worktree. Публикация, push/PR/release и установка за пределами этой проверки не разрешаются автоматически.

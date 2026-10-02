@@ -25,6 +25,8 @@ public sealed partial class FlaUiControlResolver
         IGridUserActionControl,
         IAddressableGridControl,
         IIndexedAddressableGridControl,
+        IGridRowSelectionControl,
+        IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl
     {
         private readonly AutomationElement _searchRoot;
@@ -302,6 +304,83 @@ public sealed partial class FlaUiControlResolver
                     $"Grid row '{GridRuntimeResolver.DescribeRowSelector(row)}' could not be opened in grid '{AutomationId}'.",
                     exception);
             }
+        }
+
+        public void SelectRow(GridRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var columnNames = ColumnNames;
+            var resolved = ResolveUniqueRow(row, columnNames, timeoutMs);
+            SelectAndConfirmGridRow(
+                resolved,
+                Inner,
+                RemainingMilliseconds(stopwatch, timeoutMs),
+                $"Grid '{AutomationId}' row '{GridRuntimeResolver.DescribeRowSelector(row)}'",
+                () => TryResolveVisibleRow(row, columnNames),
+                () => Inner);
+        }
+
+        public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(row);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            var resolved = ResolveUniqueRow(row, timeoutMs, out var scannedRows);
+            SelectAndConfirmGridRow(
+                resolved,
+                Inner,
+                RemainingMilliseconds(stopwatch, timeoutMs),
+                $"Grid '{AutomationId}' indexed row ({DescribeIndexedResolution(row, 1, scannedRows)})",
+                () => TryResolveVisibleRow(row),
+                () => Inner);
+        }
+
+        private AutomationElement? TryResolveVisibleRow(
+            GridRowSelector selector,
+            IReadOnlyList<string> columnNames)
+        {
+            var columns = selector.Conditions
+                .Select(condition => (Index: ResolveColumnIndex(condition.ColumnName, columnNames), condition.Value))
+                .ToArray();
+            var candidates = TryRead(() => Inner.GetRowsByValue(columns[0].Index, columns[0].Value, 0))
+                ?? Array.Empty<GridRow>();
+            var matches = candidates
+                .Where(candidate =>
+                {
+                    var cells = TryRead(() => candidate.Cells) ?? Array.Empty<GridCell>();
+                    return columns.All(condition =>
+                        condition.Index < cells.Length
+                        && string.Equals(
+                            new FlaUiGridCellControl(cells[condition.Index]).Value,
+                            condition.Value,
+                            StringComparison.Ordinal));
+                })
+                .Take(2)
+                .ToArray();
+            return matches.Length == 1 ? matches[0] : null;
+        }
+
+        private AutomationElement? TryResolveVisibleRow(GridIndexedRowSelector selector)
+        {
+            var visibleSeed = selector.Conditions.FirstOrDefault(static condition =>
+                condition.Column.RowIdentityAutomationProperty is null
+                && condition.Column.RuntimeColumnIndex is not null);
+            var candidates = visibleSeed is null
+                ? TryRead(() => Inner.Rows) ?? Array.Empty<GridRow>()
+                : TryRead(() => Inner.GetRowsByValue(
+                    visibleSeed.Column.RuntimeColumnIndex!.Value,
+                    visibleSeed.ExpectedText,
+                    0)) ?? Array.Empty<GridRow>();
+            var matches = candidates
+                .Where(candidate => IndexedRowMatches(
+                    candidate,
+                    TryRead(() => candidate.Cells) ?? Array.Empty<GridCell>(),
+                    selector))
+                .Take(2)
+                .ToArray();
+            return matches.Length == 1 ? matches[0] : null;
         }
 
         private int[] FindMatchingRows(

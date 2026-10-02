@@ -333,6 +333,33 @@ internal static class HeadlessGridRuntimeAccess
             || SetPropertyIfCompatible(grid, "FocusedItem", row);
     }
 
+    public static bool IsRowSelected(Control grid, object row)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+        ArgumentNullException.ThrowIfNull(row);
+        if (grid is DataGrid dataGrid)
+        {
+            return ReferenceEquals(dataGrid.SelectedItem, row) || Equals(dataGrid.SelectedItem, row);
+        }
+
+        return IsPropertyValue(grid, "SelectedItem", row)
+            || IsPropertyValue(grid, "FocusedItem", row);
+    }
+
+    private static bool IsPropertyValue(object source, string propertyName, object expected)
+    {
+        var property = source.GetType().GetProperty(
+            propertyName,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        if (property is null || !property.CanRead || property.GetIndexParameters().Length != 0)
+        {
+            return false;
+        }
+
+        var actual = property.GetValue(source);
+        return ReferenceEquals(actual, expected) || Equals(actual, expected);
+    }
+
     private static bool IsCellContextMatch(object? context, object row, GridRuntimeColumn column)
     {
         if (context is null

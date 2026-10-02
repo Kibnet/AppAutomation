@@ -954,7 +954,7 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
-    public async Task ConfirmDialog_ValidatesMessageAndInvokesConfirm()
+    public async Task DialogActions_InvokeCanonicalAndRegisteredButtons()
     {
         var dialog = new FakeDialogControl("DeleteDialog", "Delete selected record?");
         var page = new WorkflowPage(new FakeResolver(("DeleteDialog", dialog)));
@@ -962,12 +962,17 @@ public sealed class UiPageExtensionsTests
         var returnedPage = page.ConfirmDialog(
             static candidate => candidate.DeleteDialog,
             "delete selected");
+        page.InvokeDialogButton(
+            static candidate => candidate.DeleteDialog,
+            "AddDeleteButton",
+            "delete selected");
 
         using (Assert.Multiple())
         {
             await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
             await Assert.That(dialog.CompletedActions.Count).IsEqualTo(1);
             await Assert.That(dialog.CompletedActions[0]).IsEqualTo(DialogActionKind.Confirm);
+            await Assert.That(dialog.InvokedButtonLocators).IsEquivalentTo(["AddDeleteButton"]);
         }
     }
 
@@ -1565,7 +1570,7 @@ public sealed class UiPageExtensionsTests
         }
     }
 
-    private sealed class FakeDialogControl : FakeControlBase, IDialogControl
+    private sealed class FakeDialogControl : FakeControlBase, IAddressableDialogControl
     {
         public FakeDialogControl(string automationId, string messageText)
             : base(automationId, automationId)
@@ -1579,6 +1584,8 @@ public sealed class UiPageExtensionsTests
 
         public List<DialogActionKind> CompletedActions { get; } = [];
 
+        public List<string> InvokedButtonLocators { get; } = [];
+
         public void Complete(DialogActionKind actionKind = DialogActionKind.Confirm)
         {
             if (Failure is not null)
@@ -1587,6 +1594,16 @@ public sealed class UiPageExtensionsTests
             }
 
             CompletedActions.Add(actionKind);
+        }
+
+        public void InvokeButton(string buttonLocator)
+        {
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
+            InvokedButtonLocators.Add(buttonLocator);
         }
     }
 
