@@ -122,16 +122,16 @@ internal interface IRecorderCopiedValueSessionDetails
         CancellationToken cancellationToken = default);
 }
 
-internal interface IRecorderRelativeDateSessionDetails
+internal interface IRecorderStepEditingSessionDetails
 {
-    bool TryGetDateConfiguration(
+    bool TryCreateStepEditDraft(
         Guid stepId,
-        out RecorderStepDateConfiguration? configuration);
+        out RecorderStepEditDraft? draft,
+        out string? error);
 
-    bool SetStepDateExpressions(
-        Guid stepId,
-        RecorderDateExpression? primary,
-        RecorderDateExpression? secondary);
+    RecorderStepEditPreviewResult PreviewStepEdit(RecorderStepEditDraft draft);
+
+    RecorderStepEditResult ApplyStepEdit(RecorderStepEditDraft draft);
 }
 
 internal sealed record RecorderCheckTargetSelection(
@@ -205,4 +205,5 @@ public sealed record RecorderStepJournalEntry(
     bool IsIgnored,
     RecorderStepReviewState ReviewState,
     string? FailureCode,
-    DateTimeOffset? LastValidationAt);
+    DateTimeOffset? LastValidationAt,
+    bool CanEdit = false);

@@ -52,8 +52,10 @@ internal sealed partial class RecorderOverlay : UserControl
     private IRecorderCheckpointSessionDetails? _checkpointDetails;
     private IRecorderGeneratedValueSessionDetails? _generatedValueDetails;
     private IRecorderCopiedValueSessionDetails? _copiedValueDetails;
-    private IRecorderRelativeDateSessionDetails? _relativeDateDetails;
+    private IRecorderStepEditingSessionDetails? _stepEditingDetails;
     private RecorderCalculatedAssertionDraft? _calculatedAssertionDraft;
+    private RecorderStepEditDraft? _activeStepEditDraft;
+    private RecorderStepRetargetRole? _pendingStepRetargetRole;
     private int _renderedJournalEntryCount;
     private bool _isRefreshingScenarioSelection;
 
@@ -67,7 +69,10 @@ internal sealed partial class RecorderOverlay : UserControl
 
     internal Action<ScrollViewer>? ScrollToEndForTesting { get; set; }
 
-    internal Control? LastDateExpressionEditorForTesting { get; private set; }
+
+    internal Control? LastStepEditorForTesting { get; private set; }
+
+    internal RecorderStepRetargetRole? PendingStepRetargetRoleForTesting => _pendingStepRetargetRole;
 
     internal void RefreshForTesting()
     {
@@ -84,7 +89,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _checkpointDetails = session as IRecorderCheckpointSessionDetails;
         _generatedValueDetails = session as IRecorderGeneratedValueSessionDetails;
         _copiedValueDetails = session as IRecorderCopiedValueSessionDetails;
-        _relativeDateDetails = session as IRecorderRelativeDateSessionDetails;
+        _stepEditingDetails = session as IRecorderStepEditingSessionDetails;
         _options = options ?? throw new ArgumentNullException(nameof(options));
         ApplyThemeResources(ResolveOverlayTheme(options.OverlayTheme));
 
@@ -269,12 +274,12 @@ internal sealed partial class RecorderOverlay : UserControl
 
         if (_checkpointDetails?.IsCheckTargetSelectionActive == true)
         {
-            _checkpointDetails.CancelCheckTargetSelection();
+            CancelStepRetargetSelection();
             e.Handled = true;
         }
         else if (_checkpointDetails?.IsNumericOperandTargetSelectionActive == true)
         {
-            _checkpointDetails.CancelNumericOperandTargetSelection();
+            CancelStepRetargetSelection();
             e.Handled = true;
         }
         else if (_generatedValueDetails?.IsGeneratedValueTargetSelectionActive == true)
@@ -564,6 +569,12 @@ internal sealed partial class RecorderOverlay : UserControl
     {
         RunOnUiThread(() =>
         {
+            if (_activeStepEditDraft is not null && _pendingStepRetargetRole is { } retargetRole)
+            {
+                ApplyStepRetargetSelection(e.Selection, retargetRole);
+                return;
+            }
+
             _calculatedAssertionDraft = null;
             ShowCheckMenu(e.Selection);
         });
@@ -575,6 +586,14 @@ internal sealed partial class RecorderOverlay : UserControl
     {
         RunOnUiThread(() =>
         {
+            if (_activeStepEditDraft is not null
+                && _pendingStepRetargetRole is RecorderStepRetargetRole.CalculatedLeftOperand
+                    or RecorderStepRetargetRole.CalculatedRightOperand)
+            {
+                ApplyCalculatedOperandRetarget(e.Selection);
+                return;
+            }
+
             if (_calculatedAssertionDraft is not { } draft)
             {
                 return;
@@ -650,7 +669,7 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             var checkpointItem = new MenuItem
             {
-                Header = $"{checkpoint.VariableName} ({checkpoint.ControlName})",
+                Header = FormatCheckpointMenuHeader(checkpoint),
                 Tag = checkpoint.CheckpointId
             };
             if (checkpoint.ValueKind == RecorderValueKind.StringSet)
@@ -759,6 +778,12 @@ internal sealed partial class RecorderOverlay : UserControl
 
         return menu;
     }
+
+    internal static string FormatCheckpointMenuHeaderForTesting(RecorderCheckpointOption checkpoint) =>
+        FormatCheckpointMenuHeader(checkpoint);
+
+    private static string FormatCheckpointMenuHeader(RecorderCheckpointOption checkpoint) =>
+        $"{checkpoint.VariableName} ({checkpoint.ControlName})";
 
     private MenuItem CreatePresenceAssertionMenu(
         RecorderCheckTargetSelection selection,
@@ -881,9 +906,9 @@ internal sealed partial class RecorderOverlay : UserControl
             draft.Operation = (RecorderArithmeticOperation)Math.Clamp(operation.SelectedIndex, 0, 3);
             var leftValid = TryCreateNumericOperand(draft.Left, out _, out var leftError);
             var rightValid = TryCreateNumericOperand(draft.Right, out var rightOperand, out var rightError);
-            var dividesByLiteralZero = draft.Operation == RecorderArithmeticOperation.Divide
-                && rightOperand?.Kind == RecorderNumericOperandKind.Literal
-                && rightOperand.LiteralValue == 0;
+            var dividesByLiteralZero = RecorderValueCodec.DividesByLiteralZero(
+                draft.Operation,
+                rightOperand);
             var error = draft.Error
                 ?? (!leftValid ? leftError : null)
                 ?? (!rightValid ? rightError : null)
@@ -905,6 +930,13 @@ internal sealed partial class RecorderOverlay : UserControl
             if (!leftValid || !rightValid)
             {
                 validation.Text = leftError ?? rightError;
+                validation.IsVisible = true;
+                return;
+            }
+
+            if (RecorderValueCodec.DividesByLiteralZero(draft.Operation, right))
+            {
+                validation.Text = "Cannot divide by a literal zero.";
                 validation.IsVisible = true;
                 return;
             }
@@ -1058,46 +1090,16 @@ internal sealed partial class RecorderOverlay : UserControl
         out RecorderNumericOperand? operand,
         out string? error)
     {
-        operand = null;
-        error = null;
-        switch (draft.Kind)
-        {
-            case RecorderNumericOperandKind.Literal:
-                if (!double.TryParse(
-                        draft.LiteralText,
-                        NumberStyles.Float,
-                        CultureInfo.InvariantCulture,
-                        out var value)
-                    || !double.IsFinite(value))
-                {
-                    error = "Enter a finite number using invariant decimal format.";
-                    return false;
-                }
-
-                operand = RecorderNumericOperand.FromLiteral(value);
-                return true;
-            case RecorderNumericOperandKind.Checkpoint:
-                if (draft.CheckpointId is not { } checkpointId)
-                {
-                    error = "Select a numeric checkpoint.";
-                    return false;
-                }
-
-                operand = RecorderNumericOperand.FromCheckpoint(checkpointId);
-                return true;
-            case RecorderNumericOperandKind.Control:
-                if (draft.ControlOperand is null)
-                {
-                    error = "Select a numeric UI element.";
-                    return false;
-                }
-
-                operand = draft.ControlOperand;
-                return true;
-            default:
-                error = "Select an operand source.";
-                return false;
-        }
+        return RecorderValueCodec.TryCreateNumericOperand(
+            new RecorderNumericOperandInput(
+                draft.Kind,
+                draft.LiteralText,
+                draft.CheckpointId,
+                draft.ControlOperand),
+            allowPendingControlSelection: false,
+            fallbackOperand: null,
+            out operand,
+            out error);
     }
 
     private void ShowEnabledAssertionEditor(RecorderCheckTargetSelection selection)
@@ -1293,10 +1295,9 @@ internal sealed partial class RecorderOverlay : UserControl
         var dateEditor = description.ValueKind == RecorderValueKind.Date
             ? new RelativeDateOperandEditor(
                 "Date mode",
-                new RecorderDateOperandConfiguration(
+                RecorderValueCodec.CreateDateInput(
                     selection.ValueSnapshot?.Prototype.DateValue,
-                    RecorderDateReferenceKind.Exact,
-                    DayOffset: 0),
+                    expression: null),
                 GetBrush("RecorderMuted"),
                 showRecordedValue: false,
                 controlNamePrefix: "RecorderLiteralDate")
@@ -1541,7 +1542,15 @@ internal sealed partial class RecorderOverlay : UserControl
 
         RefreshScenarioSelection();
 
-        RenderStepJournal();
+        if (_activeStepEditDraft is null)
+        {
+            RenderStepJournal();
+        }
+        else if (LastStepEditorForTesting is { } editor)
+        {
+            editor.IsEnabled = !isBusy;
+        }
+
         UpdateValidationBadge(_session.LatestValidationStatus);
     }
 
@@ -1743,16 +1752,6 @@ internal sealed partial class RecorderOverlay : UserControl
         };
 
         var canReorder = _stepReorderDetails is not null && !(_sessionDetails?.IsBusy ?? false);
-        if (_relativeDateDetails?.TryGetDateConfiguration(entry.StepId, out var dateConfiguration) == true)
-        {
-            actions.Children.Add(CreateActionButton(
-                DescribeDateConfiguration(dateConfiguration!),
-                entry.StepId,
-                OnEditDateExpressionClick,
-                isEnabled: !(_sessionDetails?.IsBusy ?? false) && !entry.IsIgnored,
-                toolTip: "Choose an exact or relative date"));
-        }
-
         actions.Children.Add(CreateActionButton(
             "↑",
             entry.StepId,
@@ -1765,6 +1764,16 @@ internal sealed partial class RecorderOverlay : UserControl
             OnMoveStepLaterClick,
             isEnabled: canReorder && _stepReorderDetails!.CanMoveStep(entry.StepId, RecorderStepMoveDirection.Later),
             toolTip: "Move later"));
+        if (entry.CanEdit)
+        {
+            actions.Children.Add(CreateActionButton(
+                "Edit",
+                entry.StepId,
+                OnEditStepClick,
+                isEnabled: !(_sessionDetails?.IsBusy ?? false) && !entry.IsIgnored,
+                toolTip: "Edit recorded step"));
+        }
+
         actions.Children.Add(CreateActionButton("Remove", entry.StepId, OnRemoveStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
         actions.Children.Add(CreateActionButton(entry.IsIgnored ? "Restore" : "Ignore", entry.StepId, OnIgnoreStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
         actions.Children.Add(CreateActionButton("Retry", entry.StepId, OnRetryStepClick, isEnabled: !(_sessionDetails?.IsBusy ?? false)));
@@ -1773,159 +1782,193 @@ internal sealed partial class RecorderOverlay : UserControl
         container.Children.Add(header);
         container.Children.Add(preview);
         container.Children.Add(actions);
+        if (_activeStepEditDraft?.StepId == entry.StepId)
+        {
+            var editor = new RecorderStepEditor(
+                _activeStepEditDraft,
+                GetBrush("RecorderText"),
+                GetBrush("RecorderMuted"),
+                GetBrush("RecorderDanger"),
+                _stepEditingDetails!.PreviewStepEdit,
+                ApplyStepEdit,
+                CancelStepEdit,
+                BeginStepRetarget);
+            LastStepEditorForTesting = editor;
+            container.Children.Add(editor);
+        }
+
         border.Child = container;
         return border;
     }
 
-    private static string DescribeDateConfiguration(RecorderStepDateConfiguration configuration)
+    private void OnEditStepClick(object? sender, RoutedEventArgs e)
     {
-        var prefix = configuration.Secondary is null ? "Date" : "Dates";
-        var primary = DescribeDateOperand(configuration.Primary);
-        return configuration.Secondary is null
-            ? $"{prefix}: {primary}"
-            : $"{prefix}: {primary} / {DescribeDateOperand(configuration.Secondary)}";
-    }
-
-    private static string DescribeDateOperand(RecorderDateOperandConfiguration operand)
-    {
-        if (operand.ReferenceKind == RecorderDateReferenceKind.Exact)
-        {
-            return "Exact";
-        }
-
-        return operand.DayOffset switch
-        {
-            0 => "Today",
-            > 0 => $"Today +{operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d",
-            _ => $"Today {operand.DayOffset.ToString(CultureInfo.InvariantCulture)}d"
-        };
-    }
-
-    private void OnEditDateExpressionClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Button { Tag: Guid stepId } button
-            || _relativeDateDetails?.TryGetDateConfiguration(stepId, out var configuration) != true)
+        if (sender is not Button { Tag: Guid stepId } || _stepEditingDetails is null)
         {
             return;
         }
 
-        ShowDateExpressionEditor(button, configuration!);
+        CancelStepRetargetSelection();
+        if (!_stepEditingDetails.TryCreateStepEditDraft(stepId, out var draft, out var error)
+            || draft is null)
+        {
+            ShowSettingsError(error ?? "The recorded step cannot be edited.");
+            return;
+        }
+
+        _activeStepEditDraft = draft;
+        RenderStepJournal();
     }
 
-    private void ShowDateExpressionEditor(
-        Button anchor,
-        RecorderStepDateConfiguration configuration)
+    private void ApplyStepEdit(RecorderStepEditDraft draft)
     {
-        if (_relativeDateDetails is null)
+        if (_stepEditingDetails is null)
         {
             return;
         }
 
-        var primary = new RelativeDateOperandEditor(
-            configuration.Secondary is null ? "Date" : "From",
-            configuration.Primary,
-            GetBrush("RecorderMuted"),
-            controlNamePrefix: "RecorderJournalDate");
-        var secondary = configuration.Secondary is null
-            ? null
-            : new RelativeDateOperandEditor(
-                "To",
-                configuration.Secondary,
-                GetBrush("RecorderMuted"),
-                controlNamePrefix: "RecorderJournalDateSecondary");
-        var validation = new TextBlock
+        var result = _stepEditingDetails.ApplyStepEdit(draft);
+        if (!result.Success)
         {
-            Name = "RecorderJournalDateValidation",
-            Foreground = GetBrush("RecorderDanger"),
-            TextWrapping = TextWrapping.Wrap,
-            IsVisible = false
-        };
-        var apply = new Button { Content = "Apply", Padding = new Thickness(10, 4) };
-        var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
-        var content = new StackPanel
-        {
-            Width = configuration.Secondary is null ? 300 : 340,
-            Spacing = 8,
-            Children =
+            _activeStepEditDraft = result.Draft ?? draft;
+            if (LastStepEditorForTesting is RecorderStepEditor editor)
             {
-                new TextBlock
-                {
-                    Text = "Date value",
-                    FontWeight = FontWeight.SemiBold
-                },
-                primary.Content
-            }
-        };
-        if (secondary is not null)
-        {
-            content.Children.Add(secondary.Content);
-        }
-
-        content.Children.Add(validation);
-        content.Children.Add(new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Children = { apply, cancel }
-        });
-        LastDateExpressionEditorForTesting = content;
-
-        var flyout = new Flyout { Content = content };
-        void RefreshValidation()
-        {
-            var primaryValid = primary.TryGetExpression(out _, out var primaryError);
-            var secondaryValid = true;
-            string? secondaryError = null;
-            if (secondary is not null)
-            {
-                secondaryValid = secondary.TryGetExpression(out _, out secondaryError);
+                editor.ShowValidation(result.Message);
             }
 
-            var error = primaryValid ? secondaryError : primaryError;
-            apply.IsEnabled = primaryValid && secondaryValid;
-            validation.Text = error;
-            validation.IsVisible = !string.IsNullOrWhiteSpace(error);
+            return;
         }
 
-        primary.Changed += (_, _) => RefreshValidation();
-        if (secondary is not null)
+        _activeStepEditDraft = null;
+        CancelStepRetargetSelection();
+        LastStepEditorForTesting = null;
+        RenderStepJournal();
+    }
+
+    private void CancelStepEdit()
+    {
+        CancelStepRetargetSelection();
+        _activeStepEditDraft = null;
+        LastStepEditorForTesting = null;
+        RenderStepJournal();
+    }
+
+    private void CancelStepRetargetSelection()
+    {
+        _checkpointDetails?.CancelCheckTargetSelection();
+        _checkpointDetails?.CancelNumericOperandTargetSelection();
+        _pendingStepRetargetRole = null;
+    }
+
+    private void BeginStepRetarget(RecorderStepRetargetRole role)
+    {
+        if (_activeStepEditDraft is null || _checkpointDetails is null)
         {
-            secondary.Changed += (_, _) => RefreshValidation();
+            return;
         }
 
-        apply.Click += (_, _) =>
+        if (LastStepEditorForTesting is RecorderStepEditor editor)
         {
-            if (!primary.TryGetExpression(out var primaryExpression, out var primaryError))
+            if (!editor.TryBuildDraftForRetarget(role, out var currentDraft, out var error)
+                || currentDraft is null)
             {
-                validation.Text = primaryError;
-                validation.IsVisible = true;
+                editor.ShowValidation(error);
                 return;
             }
 
-            RecorderDateExpression? secondaryExpression = null;
-            if (secondary is not null
-                && !secondary.TryGetExpression(out secondaryExpression, out var secondaryError))
+            _activeStepEditDraft = currentDraft;
+        }
+
+        _pendingStepRetargetRole = role;
+        if (role is RecorderStepRetargetRole.CalculatedLeftOperand
+            or RecorderStepRetargetRole.CalculatedRightOperand)
+        {
+            _checkpointDetails.BeginNumericOperandTargetSelection();
+        }
+        else
+        {
+            _checkpointDetails.BeginCheckTargetSelection();
+        }
+    }
+
+    private void ApplyCalculatedOperandRetarget(RecorderNumericOperandTargetSelection selection)
+    {
+        if (_activeStepEditDraft is not { } draft
+            || _pendingStepRetargetRole is not { } role)
+        {
+            return;
+        }
+
+        _pendingStepRetargetRole = null;
+        if (selection.Operand is not { } operand)
+        {
+            if (LastStepEditorForTesting is RecorderStepEditor missingOperandEditor)
             {
-                validation.Text = secondaryError;
-                validation.IsVisible = true;
-                return;
+                missingOperandEditor.ShowValidation(
+                    selection.Error ?? "The selected control does not expose a numeric value.");
             }
 
-            if (!_relativeDateDetails.SetStepDateExpressions(
-                    configuration.StepId,
-                    primaryExpression,
-                    secondaryExpression))
-            {
-                validation.Text = "The date expression could not be applied.";
-                validation.IsVisible = true;
-                return;
-            }
+            return;
+        }
 
-            flyout.Hide();
+        var expression = draft.NumericExpectedExpression
+            ?? new RecorderNumericExpectedExpression(
+                RecorderArithmeticOperation.Add,
+                RecorderNumericOperand.FromLiteral(0),
+                RecorderNumericOperand.FromLiteral(0));
+        expression = role == RecorderStepRetargetRole.CalculatedLeftOperand
+            ? expression with { Left = operand }
+            : expression with { Right = operand };
+        _activeStepEditDraft = draft with
+        {
+            ExpectedSource = RecorderExpectedValueSourceKind.Calculated,
+            NumericExpectedExpression = expression
         };
-        cancel.Click += (_, _) => flyout.Hide();
-        RefreshValidation();
-        flyout.ShowAt(anchor);
+        RenderStepJournal();
+    }
+
+    private void ApplyStepRetargetSelection(
+        RecorderCheckTargetSelection selection,
+        RecorderStepRetargetRole role)
+    {
+        _pendingStepRetargetRole = null;
+        if (_activeStepEditDraft is not { } draft)
+        {
+            return;
+        }
+
+        if (selection.ValueSnapshot is not { } snapshot)
+        {
+            if (LastStepEditorForTesting is RecorderStepEditor missingValueEditor)
+            {
+                missingValueEditor.ShowValidation(
+                    selection.ValueDescriptionError ?? "The selected control does not expose a readable value.");
+            }
+
+            return;
+        }
+
+        if (role == RecorderStepRetargetRole.AssertionTarget
+            && draft.ValueKind != snapshot.Description.ValueKind)
+        {
+            if (LastStepEditorForTesting is RecorderStepEditor incompatibleEditor)
+            {
+                incompatibleEditor.ShowValidation(
+                    $"The selected value kind '{snapshot.Description.ValueKind}' is not compatible with '{draft.ValueKind}'.");
+            }
+
+            return;
+        }
+
+        _activeStepEditDraft = draft with
+        {
+            ControlName = snapshot.Prototype.Control.ProposedPropertyName,
+            ValueKind = snapshot.Prototype.ValueKind,
+            ValueAccessorKind = snapshot.Prototype.ValueAccessorKind,
+            CurrentPreview = snapshot.Description.CurrentValueText,
+            RetargetPrototype = snapshot.Prototype
+        };
+        RenderStepJournal();
     }
 
     private void ScrollStepJournalToEnd()
@@ -2131,7 +2174,7 @@ internal sealed partial class RecorderOverlay : UserControl
 
         public RelativeDateOperandEditor(
             string label,
-            RecorderDateOperandConfiguration configuration,
+            RecorderDateInput configuration,
             IBrush mutedBrush,
             bool showRecordedValue = true,
             string? controlNamePrefix = null)
@@ -2208,36 +2251,11 @@ internal sealed partial class RecorderOverlay : UserControl
                 return true;
             }
 
-            if (!_exactDate.HasValue)
-            {
-                error = "A relative expression cannot be used for an empty boundary.";
-                return false;
-            }
-
-            if (!int.TryParse(
-                    _dayOffset.Text,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out var dayOffset))
-            {
-                error = "Enter a whole number of days.";
-                return false;
-            }
-
-            try
-            {
-                _ = DateTime.Today.AddDays(dayOffset);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                error = "The relative date is outside the supported range.";
-                return false;
-            }
-
-            expression = new RecorderDateExpression(
-                RecorderDateReferenceKind.RelativeToToday,
-                dayOffset);
-            return true;
+            return RecorderValueCodec.TryCreateRelativeExpression(
+                _exactDate,
+                _dayOffset.Text,
+                out expression,
+                out error);
         }
 
         private void RefreshOffsetState()

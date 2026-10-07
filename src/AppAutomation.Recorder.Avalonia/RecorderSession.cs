@@ -23,7 +23,7 @@ internal sealed class RecorderSession :
     IRecorderCheckpointSessionDetails,
     IRecorderGeneratedValueSessionDetails,
     IRecorderCopiedValueSessionDetails,
-    IRecorderRelativeDateSessionDetails,
+    IRecorderStepEditingSessionDetails,
     IRecorderScenarioPathDetails,
     IRecorderScenarioSelectionDetails
 {
@@ -774,130 +774,431 @@ internal sealed class RecorderSession :
         return graphValidation.Success;
     }
 
-    public bool TryGetDateConfiguration(
+    public bool TryCreateStepEditDraft(
         Guid stepId,
-        out RecorderStepDateConfiguration? configuration)
+        out RecorderStepEditDraft? draft,
+        out string? error)
     {
-        var step = _steps.FirstOrDefault(candidate => candidate.StepId == stepId);
-        if (step is null || !SupportsRelativeDate(step))
-        {
-            configuration = null;
-            return false;
-        }
-
-        configuration = new RecorderStepDateConfiguration(
-            step.StepId,
-            CreateDateOperandConfiguration(step.DateValue, step.DateExpression),
-            step.ActionKind == RecordedActionKind.SetDateRangeFilter
-                ? CreateDateOperandConfiguration(step.SecondDateValue, step.SecondDateExpression)
-                : null);
-        return true;
-    }
-
-    public bool SetStepDateExpressions(
-        Guid stepId,
-        RecorderDateExpression? primary,
-        RecorderDateExpression? secondary)
-    {
-        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var index = _steps.FindIndex(candidate => candidate.StepId == stepId);
         if (index < 0)
         {
+            draft = null;
+            error = "The recorded step no longer exists.";
             return false;
         }
 
         var step = _steps[index];
-        if (!SupportsRelativeDate(step) || step.IsIgnored || IsBusy)
+        if (step.IsIgnored)
         {
+            draft = null;
+            error = "Restore the recorded step before editing it.";
             return false;
         }
 
-        var normalizedPrimary = NormalizeDateExpression(primary);
-        var normalizedSecondary = NormalizeDateExpression(secondary);
-        if (!IsValidDateExpression(step.DateValue, normalizedPrimary)
-            || (step.ActionKind == RecordedActionKind.SetDateRangeFilter
-                ? !IsValidDateExpression(step.SecondDateValue, normalizedSecondary)
-                : normalizedSecondary is not null))
+        var context = GetCurrentJournalContext();
+        var precedingSteps = _steps
+            .Take(index)
+            .Where(static candidate => !candidate.IsIgnored && candidate.CanPersist)
+            .ToArray();
+        var precedingCheckpointIds = precedingSteps
+            .Where(static candidate => candidate.CheckpointId.HasValue)
+            .Select(static candidate => candidate.CheckpointId!.Value)
+            .ToHashSet();
+        var precedingGeneratedValueIds = precedingSteps
+            .Where(static candidate => candidate.GeneratedValueId.HasValue)
+            .Select(static candidate => candidate.GeneratedValueId!.Value)
+            .ToHashSet();
+        var generatedPreview = _codeGenerator.GeneratePreviewForStep(step, context.PreviewSteps);
+        if (!RecorderStepEditService.TryCreateDraft(
+                step,
+                _scenarioGraphRevision,
+                DescribeRecordedValue(step),
+                generatedPreview,
+                ResolveEditableVariableName(step, context),
+                context.Checkpoints
+                    .Where(option => precedingCheckpointIds.Contains(option.CheckpointId))
+                    .ToArray(),
+                context.GeneratedValues
+                    .Where(option => precedingGeneratedValueIds.Contains(option.GeneratedValueId))
+                    .ToArray(),
+                out draft))
         {
+            error = "This recorded step does not contain editable data.";
             return false;
         }
 
-        if (Equals(step.DateExpression, normalizedPrimary)
-            && Equals(step.SecondDateExpression, normalizedSecondary))
-        {
-            return true;
-        }
-
-        _steps[index] = step with
-        {
-            DateExpression = normalizedPrimary,
-            SecondDateExpression = normalizedSecondary
-        };
-        InvalidateScenarioGraphValidation();
-        UpdateLatestPreviewFromSteps();
-        SetStatus("Recorded date expression updated.", step.ValidationStatus);
-        RequestAutosaveIfRecording();
+        error = string.Empty;
         return true;
     }
 
-    private static bool SupportsRelativeDate(RecordedStep step)
+    private static string? ResolveEditableVariableName(
+        RecordedStep step,
+        RecorderJournalContext context)
     {
-        return step.ActionKind is RecordedActionKind.SetDate
-            or RecordedActionKind.SetDateRangeFilter
-            or RecordedActionKind.EditGridCellDate
-            || step.ActionKind == RecordedActionKind.AssertValue
-                && step.ValueKind == RecorderValueKind.Date
-                && step.HasExpectedLiteral;
-    }
-
-    private static RecorderDateOperandConfiguration CreateDateOperandConfiguration(
-        DateTime? exactDate,
-        RecorderDateExpression? expression)
-    {
-        return new RecorderDateOperandConfiguration(
-            exactDate,
-            expression?.ReferenceKind ?? RecorderDateReferenceKind.Exact,
-            expression?.DayOffset ?? CalculateSuggestedDayOffset(exactDate));
-    }
-
-    private static int CalculateSuggestedDayOffset(DateTime? exactDate)
-    {
-        return exactDate.HasValue
-            ? (exactDate.Value.Date - DateTime.Today).Days
-            : 0;
-    }
-
-    private static RecorderDateExpression? NormalizeDateExpression(RecorderDateExpression? expression)
-    {
-        return expression?.ReferenceKind == RecorderDateReferenceKind.Exact
-            ? null
-            : expression;
-    }
-
-    private static bool IsValidDateExpression(
-        DateTime? exactDate,
-        RecorderDateExpression? expression)
-    {
-        if (expression is null)
+        if (step.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && step.CheckpointId is { } checkpointId)
         {
+            return context.CheckpointsById.TryGetValue(checkpointId, out var checkpoint)
+                ? checkpoint.VariableName
+                : step.CheckpointVariableName;
+        }
+
+        if (step.ActionKind == RecordedActionKind.CaptureCopiedValue
+            && step.CopiedValueId is { } copiedValueId)
+        {
+            return context.CopiedValuesById.TryGetValue(copiedValueId, out var copiedValue)
+                ? copiedValue.VariableName
+                : step.CopiedValueVariableName;
+        }
+
+        if (step.DefinesGeneratedValue
+            && step.GeneratedValueId is { } generatedValueId)
+        {
+            return context.GeneratedValuesById.TryGetValue(generatedValueId, out var generatedValue)
+                ? generatedValue.VariableName
+                : step.GeneratedValueVariableName;
+        }
+
+        return null;
+    }
+
+    private static string DescribeRecordedValue(RecordedStep step)
+    {
+        if (!string.IsNullOrWhiteSpace(step.NumericInputText))
+        {
+            return step.NumericInputText!;
+        }
+
+        if (step.StringValues is not null)
+        {
+            return string.Join(", ", step.StringValues);
+        }
+
+        if (step.StringValue is not null)
+        {
+            return step.StringValue;
+        }
+
+        if (step.ItemValue is not null)
+        {
+            return step.ItemValue;
+        }
+
+        if (step.BoolValue.HasValue)
+        {
+            return step.BoolValue.Value ? "true" : "false";
+        }
+
+        if (step.DoubleValue.HasValue)
+        {
+            return step.DoubleValue.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (step.DateValue.HasValue)
+        {
+            return step.DateValue.Value.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return step.TimeValue?.ToString("c", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    public RecorderStepEditResult ApplyStepEdit(RecorderStepEditDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        if (IsBusy)
+        {
+            return RecorderStepEditResult.Rejected(
+                string.IsNullOrWhiteSpace(BusyDescription)
+                    ? "Wait for the current recorder operation to finish."
+                    : $"Wait for '{BusyDescription}' to finish.",
+                draft);
+        }
+
+        if (!TryPrepareStepEdit(
+                draft,
+                out var index,
+                out var candidate,
+                out _,
+                out var error))
+        {
+            return RecorderStepEditResult.Rejected(error, draft);
+        }
+
+        _steps[index] = candidate;
+        var appliedGraphValidation = ApplyScenarioGraphValidation();
+        UpdateLatestPreviewFromSteps(notify: false);
+        LogRecordedStepDiagnostics("EditStep", null, _steps[index]);
+        SetStatusAfterGraphValidation(
+            appliedGraphValidation,
+            "Recorded step updated.",
+            _steps[index].ValidationStatus);
+        RequestAutosaveIfRecording();
+        return RecorderStepEditResult.Applied("Recorded step updated.");
+    }
+
+    public RecorderStepEditPreviewResult PreviewStepEdit(RecorderStepEditDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        if (!TryPrepareStepEdit(
+                draft,
+                out _,
+                out var candidate,
+                out var graphSteps,
+                out var error))
+        {
+            return new RecorderStepEditPreviewResult(false, draft.GeneratedPreview, error);
+        }
+
+        return new RecorderStepEditPreviewResult(
+            true,
+            _codeGenerator.GeneratePreviewForStep(candidate, graphSteps),
+            string.Empty);
+    }
+
+    private bool TryPrepareStepEdit(
+        RecorderStepEditDraft draft,
+        out int index,
+        out RecordedStep candidate,
+        out RecordedStep[] graphSteps,
+        out string error)
+    {
+        index = _steps.FindIndex(step => step.StepId == draft.StepId);
+        if (index < 0)
+        {
+            candidate = null!;
+            graphSteps = [];
+            error = "The recorded step no longer exists.";
+            return false;
+        }
+
+        var source = RestoreValidationBeforeGraphError(_steps[index]);
+        if (source.IsIgnored)
+        {
+            candidate = null!;
+            graphSteps = [];
+            error = "Restore the recorded step before editing it.";
+            return false;
+        }
+
+        if (draft.Revision != _scenarioGraphRevision)
+        {
+            candidate = null!;
+            graphSteps = [];
+            error = "The scenario changed after the editor was opened. Reopen the step and apply the edit again.";
+            return false;
+        }
+
+        if (!RecorderStepEditService.TryCreateCandidate(source, draft, out var preparedCandidate, out error)
+            || preparedCandidate is null)
+        {
+            candidate = null!;
+            graphSteps = [];
+            return false;
+        }
+
+        if (!TryValidateEditedVariableName(preparedCandidate, out error))
+        {
+            candidate = null!;
+            graphSteps = [];
+            return false;
+        }
+
+        candidate = preparedCandidate with
+        {
+            PreserveVariableName = DefinesEditableVariable(preparedCandidate)
+        };
+        var payloadValidation = _runtimeValidator.ValidatePayload(candidate with
+        {
+            ValidationStatus = RecorderValidationStatus.Valid,
+            ValidationMessage = null,
+            CanPersist = true,
+            RuntimeValidationFindings = Array.Empty<RecorderRuntimeValidationFinding>()
+        });
+        if (payloadValidation.ValidationStatus == RecorderValidationStatus.Invalid
+            || !payloadValidation.CanPersist)
+        {
+            graphSteps = [];
+            error = payloadValidation.ValidationMessage
+                ?? "The edited step is not valid and cannot be saved.";
+            return false;
+        }
+
+        candidate = RestoreRepairedPayloadValidation(source, candidate, payloadValidation);
+        if (candidate.ValidationStatus == RecorderValidationStatus.Invalid || !candidate.CanPersist)
+        {
+            graphSteps = [];
+            error = candidate.ValidationMessage
+                ?? "The edited step still has a validation error and cannot be saved.";
+            return false;
+        }
+
+        var candidateSteps = _steps.Select(RestoreValidationBeforeGraphError).ToArray();
+        candidateSteps[index] = candidate;
+        graphSteps = candidateSteps
+            .Where(static step => !step.IsIgnored && step.CanPersist)
+            .ToArray();
+        var graphValidation = RecorderScenarioGraphValidator.Validate(graphSteps);
+        if (!graphValidation.Success)
+        {
+            error = graphValidation.StepErrors.TryGetValue(candidate.StepId, out var stepError)
+                ? stepError
+                : graphValidation.Error ?? "The edited scenario dependency graph is invalid.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private RecordedStep RestoreRepairedPayloadValidation(
+        RecordedStep source,
+        RecordedStep candidate,
+        RecordedStep payloadValidation)
+    {
+        if (source.ValidationStatus != RecorderValidationStatus.Invalid || source.CanPersist)
+        {
+            return candidate;
+        }
+
+        var previousPayloadValidation = _runtimeValidator.ValidatePayload(source with
+        {
+            ValidationStatus = RecorderValidationStatus.Valid,
+            ValidationMessage = null,
+            CanPersist = true,
+            RuntimeValidationFindings = Array.Empty<RecorderRuntimeValidationFinding>()
+        });
+        var payloadFindings = previousPayloadValidation.RuntimeValidationFindings;
+        var sourceFindings = source.RuntimeValidationFindings ?? [];
+        // Older autosaves can retain the payload diagnostic but lose its structured findings.
+        var legacyPayloadOnly = sourceFindings.Count == 0
+            && previousPayloadValidation.ValidationStatus == RecorderValidationStatus.Invalid
+            && string.Equals(
+                source.ValidationMessage,
+                previousPayloadValidation.ValidationMessage,
+                StringComparison.Ordinal);
+        if (previousPayloadValidation.ValidationStatus != RecorderValidationStatus.Invalid
+            || (!legacyPayloadOnly && !sourceFindings.Any(finding => payloadFindings.Any(payload =>
+                IsSameRuntimeValidationIssue(finding, payload)))))
+        {
+            return candidate;
+        }
+
+        var remainingFindings = sourceFindings
+            .Where(finding => !payloadFindings.Any(payload =>
+                IsSameRuntimeValidationIssue(finding, payload)))
+            .ToArray();
+        var hasBlockingFinding = remainingFindings.Any(static finding => finding.BlocksTarget);
+        var hasWarning = remainingFindings.Any(static finding => finding.ShouldSurface)
+            || !string.IsNullOrWhiteSpace(candidate.Warning);
+        var validationStatus = hasBlockingFinding
+            ? RecorderValidationStatus.Invalid
+            : hasWarning
+                ? RecorderValidationStatus.Warning
+                : RecorderValidationStatus.Valid;
+        var runtimeMessage = RecorderCommandRuntimeValidator.BuildRuntimeValidationMessage(remainingFindings);
+        var validationMessage = string.Join(
+            " ",
+            new[] { candidate.Warning, runtimeMessage }
+                .Where(static message => !string.IsNullOrWhiteSpace(message))
+                .Distinct(StringComparer.Ordinal));
+        return payloadValidation with
+        {
+            ValidationStatus = validationStatus,
+            ValidationMessage = string.IsNullOrWhiteSpace(validationMessage) ? null : validationMessage,
+            CanPersist = !hasBlockingFinding,
+            ReviewState = hasBlockingFinding
+                ? RecorderStepReviewState.NeedsReview
+                : RecorderStepReviewState.Active,
+            FailureCode = hasBlockingFinding
+                ? "validation-invalid"
+                : hasWarning
+                    ? "validation-warning"
+                    : null,
+            LastValidationAt = DateTimeOffset.UtcNow,
+            RuntimeValidationFindings = remainingFindings
+        };
+    }
+
+    private static bool IsSameRuntimeValidationIssue(
+        RecorderRuntimeValidationFinding candidate,
+        RecorderRuntimeValidationFinding expected)
+    {
+        static string? WithoutTargetPrefix(RecorderRuntimeValidationFinding finding)
+        {
+            var prefix = finding.Target switch
+            {
+                RecorderRuntimeValidationTarget.Headless => "headless-",
+                RecorderRuntimeValidationTarget.FlaUI => "flaui-",
+                _ => string.Empty
+            };
+            return prefix.Length > 0
+                && finding.Code.StartsWith(prefix, StringComparison.Ordinal)
+                    ? finding.Code[prefix.Length..]
+                    : null;
+        }
+
+        var candidateCode = WithoutTargetPrefix(candidate);
+        var expectedCode = WithoutTargetPrefix(expected);
+        return candidate.Severity == expected.Severity
+            && candidate.BlocksTarget == expected.BlocksTarget
+            && candidateCode is not null
+            && expectedCode is not null
+            && string.Equals(
+                candidateCode,
+                expectedCode,
+                StringComparison.Ordinal);
+    }
+
+    private bool TryValidateEditedVariableName(RecordedStep candidate, out string error)
+    {
+        var variableName = candidate.ActionKind == RecordedActionKind.CaptureCheckpoint
+            ? candidate.CheckpointVariableName
+            : candidate.ActionKind == RecordedActionKind.CaptureCopiedValue
+                ? candidate.CopiedValueVariableName
+                : candidate.DefinesGeneratedValue
+                    ? candidate.GeneratedValueVariableName
+                    : null;
+        if (variableName is null)
+        {
+            error = string.Empty;
             return true;
         }
 
-        if (!exactDate.HasValue
-            || expression.ReferenceKind != RecorderDateReferenceKind.RelativeToToday)
+        if (!RecorderNaming.TryValidateExactVariableName(variableName, out error))
         {
             return false;
         }
 
-        try
+        var context = GetCurrentJournalContext();
+        var reservedNames = context.Checkpoints
+            .Where(option => option.CheckpointId != candidate.CheckpointId)
+            .Select(static option => option.VariableName)
+            .Concat(context.GeneratedValues
+                .Where(option => option.GeneratedValueId != candidate.GeneratedValueId)
+                .Select(static option => option.VariableName))
+            .Concat(context.CopiedValues
+                .Where(option => option.CopiedValueId != candidate.CopiedValueId)
+                .Select(static option => option.VariableName))
+            .ToHashSet(StringComparer.Ordinal);
+        if (context.GraphValidation.GeneratedValueSeriesVariable is { } generatedSeries)
         {
-            _ = DateTime.Today.AddDays(expression.DayOffset);
-            return true;
+            reservedNames.Add(generatedSeries);
         }
-        catch (ArgumentOutOfRangeException)
+
+        if (reservedNames.Contains(variableName.Trim()))
         {
+            error = $"Variable name '{variableName.Trim()}' is already used by another recorded value.";
             return false;
         }
+
+        error = string.Empty;
+        return true;
     }
+
+    private static bool DefinesEditableVariable(RecordedStep step) =>
+        step.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.CaptureCopiedValue
+        || step.DefinesGeneratedValue;
 
     internal Task<RecorderSaveResult> ExportWithDirectoryPickerAsync(
         Func<CancellationToken, Task<string?>> selectOutputDirectory,
@@ -5671,7 +5972,8 @@ internal sealed class RecorderSession :
             step.IsIgnored,
             step.ReviewState,
             step.FailureCode,
-            step.LastValidationAt);
+            step.LastValidationAt,
+            !step.IsIgnored && RecorderStepEditService.CanEdit(step));
     }
 
     private static RecorderStepReviewState ResolveReviewState(RecordedStep step)
@@ -5933,7 +6235,7 @@ internal sealed class RecorderSession :
         return string.Join(" | ", parts);
     }
 
-    private void UpdateLatestPreviewFromSteps()
+    private void UpdateLatestPreviewFromSteps(bool notify = true)
     {
         var context = GetCurrentJournalContext();
         var latestStep = context.PreviewSteps.Length == 0
@@ -5944,7 +6246,10 @@ internal sealed class RecorderSession :
             : _codeGenerator.GeneratePreviewForStep(
                 latestStep,
                 context.PreviewSteps);
-        NotifySessionChanged();
+        if (notify)
+        {
+            NotifySessionChanged();
+        }
     }
 
     private IReadOnlyList<RecorderCheckpointOption> CreateCheckpointOptions() =>

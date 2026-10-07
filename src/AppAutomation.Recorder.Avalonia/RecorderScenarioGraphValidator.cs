@@ -184,7 +184,8 @@ internal static class RecorderScenarioGraphValidator
             copiedValueId,
             RecorderNaming.CreateCopiedValueVariableName(
                 step.CopiedValueVariableName,
-                reservedNames));
+                reservedNames,
+                step.PreserveVariableName));
         return RecorderGraphStepValidationResult.Valid;
     }
 
@@ -250,7 +251,8 @@ internal static class RecorderScenarioGraphValidator
                 generatedValueId,
                 RecorderNaming.CreateGeneratedValueVariableName(
                     step.GeneratedValueVariableName,
-                    reservedNames));
+                    reservedNames,
+                    step.PreserveVariableName));
             return RecorderGraphStepValidationResult.Valid;
         }
 
@@ -287,7 +289,8 @@ internal static class RecorderScenarioGraphValidator
 
         var variableName = RecorderNaming.CreateCheckpointVariableName(
             step.CheckpointVariableName,
-            reservedNames);
+            reservedNames,
+            step.PreserveVariableName);
         variables.Add(checkpointId, variableName);
         valueKinds.Add(checkpointId, valueKind);
         return RecorderGraphStepValidationResult.Valid;
@@ -575,7 +578,7 @@ internal static class RecorderScenarioGraphValidator
             : RecorderGraphStepValidationResult.Valid;
     }
 
-    private static bool SupportsComparison(RecorderValueKind valueKind, RecorderComparisonKind comparisonKind)
+    internal static bool SupportsComparison(RecorderValueKind valueKind, RecorderComparisonKind comparisonKind)
     {
         return comparisonKind switch
         {
