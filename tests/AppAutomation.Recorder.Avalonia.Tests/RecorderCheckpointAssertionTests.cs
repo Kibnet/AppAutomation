@@ -5,6 +5,7 @@ using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
@@ -1528,9 +1529,10 @@ public sealed class RecorderCheckpointAssertionTests
     {
         var root = new StackPanel();
         var container = new DockPanel();
+        var buttonText = new TextBlock { Text = "Saved value" };
         var saveButton = new Button
         {
-            Content = new TextBlock { Text = "Saved value" },
+            Content = buttonText,
             IsEnabled = false
         };
         AutomationProperties.SetAutomationId(container, "DetailsPanel");
@@ -1546,7 +1548,7 @@ public sealed class RecorderCheckpointAssertionTests
         session.SelectCheckTargetForTesting(
             container,
             inputCandidates: [container],
-            visualCandidates: [container, saveButton]);
+            visualCandidates: [container, saveButton, buttonText]);
 
         using (Assert.Multiple())
         {
@@ -1595,6 +1597,59 @@ public sealed class RecorderCheckpointAssertionTests
                     + "await Assert.That(Page.SaveButton.IsEnabled).IsEqualTo(false);");
         }
 
+    }
+
+    [Test]
+    public async Task CheckMode_UsesReadOnlyTextBlockInsideTabControlForAssertionAndCheckpoint()
+    {
+        await AssertReadOnlyTextInsideTabControl(
+            new TextBlock { Text = "Загружено 60 из 120" });
+    }
+
+    [Test]
+    public async Task CheckMode_UsesReadOnlyLabelInsideTabControlForAssertionAndCheckpoint()
+    {
+        await AssertReadOnlyTextInsideTabControl(
+            new Label { Content = "Загружено 60 из 120" });
+    }
+
+    private static async Task AssertReadOnlyTextInsideTabControl(Control counter)
+    {
+        const string expectedText = "Загружено 60 из 120";
+        var tabs = new TabControl
+        {
+            Template = new FuncControlTemplate<TabControl>(
+                (_, _) => new StackPanel { Children = { counter } })
+        };
+        AutomationProperties.SetAutomationId(tabs, "MainPaneTabs");
+        AutomationProperties.SetAutomationId(counter, "OrdersLoadCounterText");
+        var root = new StackPanel { Children = { tabs } };
+        tabs.ApplyTemplate();
+        using var session = CreateSession(root);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(
+            tabs,
+            inputCandidates: [tabs],
+            visualCandidates: [tabs, counter]);
+
+        var details = (IRecorderCheckpointSessionDetails)session;
+        details.CaptureLiteralAssertion(selection!, expectedText, RecorderComparisonKind.Equal);
+        details.CaptureCheckpoint(selection!, "ordersLoadCount");
+        var preview = session.ExportPreview();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(selection!.Target, counter)).IsTrue();
+            await Assert.That(selection.ValueDescriptionError).IsEmpty();
+            await Assert.That(selection.ValueDescription?.CurrentValueText).IsEqualTo(expectedText);
+            await Assert.That(session.PersistableStepCount).IsEqualTo(2);
+            await Assert.That(preview).Contains("Page.OrdersLoadCounterText.Text");
+            await Assert.That(preview).DoesNotContain("Page.MainPaneTabs.IsEnabled");
+        }
     }
 
     [Test]

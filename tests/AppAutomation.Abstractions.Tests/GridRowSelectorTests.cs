@@ -671,6 +671,98 @@ public sealed class GridRowSelectorTests
         }
     }
 
+    [Test]
+    public async Task GridDateReader_UsesConfiguredCultureForDottedDisplay()
+    {
+        var fixture = new GridFixture(Row("ITEM-1", "Ready", "07.10.2026 19:48"));
+        var page = fixture.CreatePage();
+        var row = GridRowSelector.ByCell("OrderId", "ITEM-1");
+        var cell = (MutableCell)fixture.Rows[0].Cells[2];
+        var previousCulture = CultureInfo.CurrentCulture;
+        var previousUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru-RU");
+            cell.SemanticSnapshot = new GridCellValueSnapshot(cell.Value)
+                { CultureName = "ru-RU" };
+            await Assert.That(GridValueReader.ReadCellDate(page.Orders, row, "Amount"))
+                .IsEqualTo(new DateTime(2026, 10, 7));
+
+            cell.Value = "03/09/2026";
+            cell.SemanticSnapshot = null;
+            var ambiguous = await Assert.That(() => GridValueReader.ReadCellDate(page.Orders, row, "Amount"))
+                .Throws<InvalidOperationException>();
+            await Assert.That(ambiguous!.Message).Contains("culture-ambiguous");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
+    }
+
+    [Test]
+    public async Task CatalogGrid_ReadCellDateHonorsConfiguredFormatBeforeCulture()
+    {
+        var grid = new ActionEditableGrid(
+            "OrdersGrid",
+            [Row("ITEM-1", "Ready", "03/09/2026")]);
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Auto("Status"),
+                    GridColumnDefinition.Map("ReadyDate")
+                        .FromField("Amount")
+                        .AsValue(GridCellValueKind.Date)
+                        .FormatWith("MM'/'dd'/'yyyy", "ru-RU"))
+                .IdentifyRowsBy("Code"));
+        var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
+        var row = GridRowSelector.ByCell("Code", "ITEM-1");
+
+        var value = GridValueReader.ReadCellDate(page.Orders, row, "ReadyDate");
+        ((MutableCell)grid.GetRowByIndex(0)!.Cells[2]).Value = "09.03.2026";
+        var invalidFormat = await Assert.That(() => GridValueReader.ReadCellDate(
+                page.Orders,
+                row,
+                "ReadyDate"))
+            .Throws<InvalidOperationException>();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value).IsEqualTo(new DateTime(2026, 3, 9));
+            await Assert.That(invalidFormat!.Message).Contains("configured format 'MM'/'dd'/'yyyy'");
+            await Assert.That(invalidFormat.Message).Contains("culture 'ru-RU'");
+        }
+    }
+
+    [Test]
+    public async Task CatalogGrid_PreservesDeclaredColumnOrderWhenRuntimeShowsOnlyOtherColumns()
+    {
+        var grid = new ActionEditableGrid("OrdersGrid", [Row("ITEM-1", "Ready", "10")])
+        {
+            ColumnNames = ["OrderId", "Amount"]
+        };
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Map("State").FromField("Status").AtRuntime("Status caption"),
+                    GridColumnDefinition.Auto("Amount"))
+                .IdentifyRowsBy("Code"));
+        var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
+
+        _ = GridValueReader.ReadCellText(page.Orders, GridRowSelector.ByCell("Code", "ITEM-1"), "State");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(grid.LastIndexedColumn!.ColumnIndex).IsEqualTo(2);
+            await Assert.That(string.Join("|", grid.LastIndexedColumn.DeclaredRuntimeColumnNames))
+                .IsEqualTo("OrderId|Status caption|Amount");
+        }
+    }
+
     private static MutableRow Row(string orderId, string status, string amount)
     {
         return new MutableRow(orderId, status, amount);
@@ -777,8 +869,27 @@ public sealed class GridRowSelectorTests
 
     private sealed class ActionEditableGrid(string automationId, IReadOnlyList<MutableRow> rows)
         : ReadOnlyGrid(automationId, rows), IGridUserActionControl, IEditableGridControl,
-            IIndexedAddressableGridControl, IIndexedGridRowSelectionControl
+            IIndexedAddressableGridControl, IIndexedGridRowSelectionControl, IGridColumnMetadataControl
     {
+        public IReadOnlyList<string> ColumnNames { get; init; } = Array.Empty<string>();
+
+        public GridRuntimeColumn? LastIndexedColumn { get; private set; }
+
+        public bool TryGetColumnIndex(string columnName, out int columnIndex)
+        {
+            for (var index = 0; index < ColumnNames.Count; index++)
+            {
+                if (string.Equals(ColumnNames[index], columnName, StringComparison.Ordinal))
+                {
+                    columnIndex = index;
+                    return true;
+                }
+            }
+
+            columnIndex = -1;
+            return false;
+        }
+
         public Action<GridCellEditRequest>? AfterEdit { get; set; }
 
         public GridCellEditRequest? LastRequest { get; private set; }
@@ -846,6 +957,7 @@ public sealed class GridRowSelectorTests
             int timeoutMs)
         {
             IndexedOperationCount++;
+            LastIndexedColumn = column;
             var rowIndex = ResolveUniqueIndex(row);
             var value = GetRowByIndex(rowIndex)?.Cells[column.ColumnIndex].Value;
             return new GridCellValueSnapshot(value, value, column.ValueKind);

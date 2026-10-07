@@ -353,8 +353,18 @@ internal sealed partial class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(textBox);
         ArgumentNullException.ThrowIfNull(copiedValue);
 
-        if (TryResolveSearchControlHint(textBox, out _)
-            || MatchesSearchPickerTextPart(textBox)
+        if (TryResolveSearchControlHint(textBox, out _))
+        {
+            var searchStep = TryCreateTextEntryStep(textBox);
+            return searchStep.Step?.ActionKind == RecordedActionKind.EnterSearch
+                ? searchStep with
+                {
+                    Step = searchStep.Step with { InputCopiedValueId = copiedValue.CopiedValueId }
+                }
+                : searchStep;
+        }
+
+        if (MatchesSearchPickerTextPart(textBox)
             || MatchesGridSearchPickerTextPart(textBox)
             || ShouldSuppressCompositeTextEntry(textBox))
         {

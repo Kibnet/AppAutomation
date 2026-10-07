@@ -18,7 +18,7 @@ using NumberStyles = System.Globalization.NumberStyles;
 
 namespace AppAutomation.FlaUI.Automation;
 
-public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, IUiPointerRuntime
+public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, IUiPointerRuntime, INotificationRuntimeResolver
 {
     private const uint WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageKeyUp = 0x0101;
@@ -112,6 +112,75 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     {
         ArgumentNullException.ThrowIfNull(text);
         return WindowsClipboard.SetTextAsync(text, cancellationToken);
+    }
+
+    IReadOnlyList<NotificationRuntimeSnapshot>? INotificationRuntimeResolver.ReadNotifications(
+        UiControlDefinition rootDefinition, NotificationControlParts parts)
+    {
+        try
+        {
+            var searchRoots = rootDefinition.Scope is null
+                ? GetProcessSearchRoots()
+                : FindScopeRoots(rootDefinition.Scope);
+            var roots = FindVisibleNotificationMatches(searchRoots, rootDefinition.LocatorValue,
+                rootDefinition.LocatorKind, rootDefinition.FallbackToName, includeRoot: true);
+            return roots.Select(root =>
+            {
+                var text = FindNotificationPart(root, rootDefinition, parts, parts.TextLocator);
+                return new NotificationRuntimeSnapshot(
+                    new FlaUiLabelControl(text.AsLabel()).Text,
+                    root.IsEnabled && text.IsEnabled,
+                    () => new FlaUiButtonControl(FindNotificationPart(
+                        root, rootDefinition, parts, parts.DismissButtonLocator!).AsButton()).Invoke());
+            }).ToArray();
+        }
+        catch (ElementNotAvailableException exception)
+        {
+            throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                $"Notification '{rootDefinition.PropertyName}' changed while reading its visible instances.", exception);
+        }
+    }
+
+    private AutomationElement FindNotificationPart(
+        AutomationElement root, UiControlDefinition definition, NotificationControlParts parts, string locator)
+    {
+        var matches = FindVisibleNotificationMatches([root], locator,
+            parts.LocatorKind, parts.FallbackToName, includeRoot: false);
+        return matches.Length == 1 ? matches[0] : throw new UiControlResolutionException(
+            matches.Length == 0 ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous,
+            $"Notification '{definition.PropertyName}' part [{parts.LocatorKind}:{locator}] "
+            + $"matched {matches.Length} visible controls inside its notification root; expected exactly one.");
+    }
+
+    private AutomationElement[] FindVisibleNotificationMatches(
+        IEnumerable<AutomationElement> searchRoots,
+        string locator,
+        UiLocatorKind locatorKind,
+        bool fallbackToName,
+        bool includeRoot)
+    {
+        var roots = searchRoots.ToArray();
+        var primary = FindVisibleNotificationMatches(roots, locator, locatorKind, includeRoot);
+        return primary.Length > 0 || !fallbackToName || locatorKind == UiLocatorKind.Name
+            ? primary
+            : FindVisibleNotificationMatches(roots, locator, UiLocatorKind.Name, includeRoot);
+    }
+
+    private AutomationElement[] FindVisibleNotificationMatches(
+        AutomationElement[] roots,
+        string locator,
+        UiLocatorKind locatorKind,
+        bool includeRoot)
+    {
+        var scope = new UiControlScope(locator, locatorKind, FallbackToName: false);
+        var condition = CreateCondition(locator, locatorKind);
+        return DistinctElements(roots.SelectMany(root =>
+                (includeRoot && MatchesLocator(root, scope)
+                    ? new[] { root }
+                    : Array.Empty<AutomationElement>())
+                .Concat(TryRead(() => root.FindAllDescendants(condition)) ?? [])))
+            .Where(candidate => IsAttachedAndAvailable(candidate) && !candidate.IsOffscreen)
+            .ToArray();
     }
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
@@ -354,6 +423,18 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             .Where(candidate => MatchesLocator(candidate, scope))
             .Where(candidate => TryRead(() => candidate.IsAvailable)))
             .ToArray();
+    }
+
+    private static AutomationElement ResolveComboItemProjection(AutomationElement candidate)
+    {
+        for (var current = candidate; current is not null; current = TryRead(() => current.Parent))
+        {
+            if (TryRead(() => current.ControlType) is ControlType.ListItem or ControlType.DataItem)
+            {
+                return current;
+            }
+        }
+        return candidate;
     }
 
     private static IEnumerable<AutomationElement> DistinctElements(IEnumerable<AutomationElement> candidates)
@@ -914,10 +995,13 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public string Text => TryRead(() => Inner.Text) ?? ReadAutomationElementVisibleText(Inner) ?? string.Empty;
     }
 
-    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, IExactSelectableListBoxControl, IReadableTextControl
+    private sealed class FlaUiListBoxControl : FlaUiControlBase<ListBox>, IExactSelectableListBoxControl, ITimedSelectableListBoxControl, IReadableTextControl
     {
-        public FlaUiListBoxControl(ListBox inner) : base(inner)
+        private readonly Func<AutomationElement?>? _resolveCurrentList;
+
+        public FlaUiListBoxControl(ListBox inner, Func<AutomationElement?>? resolveCurrentList = null) : base(inner)
         {
+            _resolveCurrentList = resolveCurrentList;
         }
 
         public IReadOnlyList<IListBoxItem> Items =>
@@ -953,6 +1037,12 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             SelectItem(itemText, TimeSpan.FromSeconds(1), exact: false);
         }
 
+        public void SelectItem(string itemText, int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            SelectItem(itemText, TimeSpan.FromMilliseconds(timeoutMs), exact: false);
+        }
+
         public void SelectItemExact(string itemText)
         {
             SelectItem(itemText, TimeSpan.FromSeconds(1), exact: true);
@@ -969,19 +1059,27 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
             var normalizedTarget = NormalizeLookupText(itemText);
             var stopwatch = Stopwatch.StartNew();
-            AutomationElement? candidate;
-            do
+            AutomationElement? ResolveCandidate()
             {
-                candidate = ReadSelectableItems().FirstOrDefault(element =>
+                var matches = ReadSelectableItems().Where(element =>
                 {
                     var text = ReadAutomationElementText(element);
                     return exact
                         ? string.Equals(text, itemText, StringComparison.Ordinal)
-                        : string.Equals(
-                            NormalizeLookupText(text),
-                            normalizedTarget,
+                        : string.Equals(NormalizeLookupText(text), normalizedTarget,
                             StringComparison.OrdinalIgnoreCase);
-                });
+                }).Take(2).ToArray();
+                if (matches.Length > 1)
+                {
+                    throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous ({matches.Length} matches).");
+                }
+                return matches.SingleOrDefault();
+            }
+
+            AutomationElement? candidate;
+            do
+            {
+                candidate = ResolveCandidate();
                 if (candidate is not null)
                 {
                     break;
@@ -1003,12 +1101,22 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     : SelectionMatches(normalizedTarget);
             }
 
-            if (TrySelect(candidate) && (SelectionMatchesTarget() || SelectionStateUnavailable()))
+            // Select may commit the value and close its popup before UIA returns. Never replay
+            // a delivered semantic action against that old projection; the picker/grid caller
+            // confirms the committed value outside the results list.
+            if (TrySelect(candidate))
             {
                 return;
             }
 
-            if (TryClick(candidate) && (SelectionMatchesTarget() || SelectionStateUnavailable()))
+            var remaining = timeout - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException($"ListBox item '{itemText}' lookup exhausted the selection timeout.");
+            }
+            TryClick(() => ResolveCandidate()
+                ?? throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection."), remaining);
+            if (SelectionStateUnavailable() || SelectionMatchesTarget())
             {
                 return;
             }
@@ -1038,10 +1146,12 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         private List<AutomationElement> ReadSelectableItems()
         {
             var items = new List<AutomationElement>();
+            var currentList = _resolveCurrentList is null ? Inner : _resolveCurrentList();
+            if (currentList is null) return items;
 
             try
             {
-                foreach (var item in Inner.Items)
+                foreach (var item in currentList.AsListBox().Items)
                 {
                     if (item is not null && !items.Contains(item))
                     {
@@ -1054,10 +1164,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 // Some providers do not expose direct list items.
             }
 
-            foreach (var candidate in FindAutomationDescendants(Inner))
+            foreach (var candidate in FindAutomationDescendants(currentList))
             {
-                if (candidate is null || candidate == Inner || items.Contains(candidate) || !IsListItemCandidate(candidate)
-                    || HasListItemAncestor(candidate))
+                if (candidate is null || candidate == currentList || items.Contains(candidate) || !IsListItemCandidate(candidate)
+                    || HasListItemAncestor(candidate, currentList))
                 {
                     continue;
                 }
@@ -1072,9 +1182,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return items;
         }
 
-        private bool HasListItemAncestor(AutomationElement candidate)
+        private static bool HasListItemAncestor(AutomationElement candidate, AutomationElement list)
         {
-            for (var parent = TryRead(() => candidate.Parent); parent is not null && !parent.Equals(Inner);
+            for (var parent = TryRead(() => candidate.Parent); parent is not null && !parent.Equals(list);
                  parent = TryRead(() => parent.Parent))
             {
                 if (parent.ControlType is ControlType.ListItem or ControlType.DataItem)
@@ -1128,11 +1238,12 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         private bool SelectionStateUnavailable()
         {
+            var currentList = _resolveCurrentList is null ? Inner : _resolveCurrentList();
+            if (currentList is null) return true;
             try
             {
-                _ = Inner.IsAvailable;
-                _ = Inner.FindAllDescendants();
-                return false;
+                if (!currentList.IsAvailable || currentList.IsOffscreen || currentList.Parent is null) return true;
+                return currentList.FindAllDescendants().Length == 0;
             }
             catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
             {
@@ -1149,32 +1260,29 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         private static bool TrySelect(AutomationElement candidate)
         {
-            try
+            if (candidate.Patterns.SelectionItem.IsSupported)
             {
-                if (candidate.Patterns.SelectionItem.IsSupported)
-                {
-                    candidate.Patterns.SelectionItem.Pattern.Select();
-                    return true;
-                }
-            }
-            catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
-            {
+                // A failing call may already have applied selection. Do not turn ambiguous
+                // delivery into a second user action, just as with Invoke below.
+                candidate.Patterns.SelectionItem.Pattern.Select();
+                return true;
             }
 
             return false;
         }
 
-        private static bool TryClick(AutomationElement candidate)
+        private static void TryClick(Func<AutomationElement> resolveCandidate, TimeSpan timeout)
         {
+            var candidate = resolveCandidate();
             if (candidate.Patterns.Invoke.IsSupported)
             {
                 // Do not replay an Invoke whose delivery failed ambiguously.
                 candidate.Patterns.Invoke.Pattern.Invoke();
-                return true;
+                return;
             }
 
-            DesktopPointer.ClickFallback(candidate, "list candidate lacks Invoke");
-            return true;
+            DesktopPointer.ClickFallback(resolveCandidate, "list candidate lacks Invoke",
+                new PointerClickOptions { Timeout = timeout });
         }
     }
 
@@ -1370,22 +1478,13 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
             if (scroll is not null)
             {
-                var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
                 TraverseItems(items, () => ScrollForward(scroll));
-                if (startingPosition > 0)
-                {
-                    TraverseItems(items, () => ScrollBackward(scroll));
-                }
+                TraverseItems(items, () => ScrollBackward(scroll));
             }
             else if (scrollBarRange is not null)
             {
-                var startingPosition = scrollBarRange.Value.ValueOrDefault;
-                var minimum = scrollBarRange.Minimum.ValueOrDefault;
                 TraverseItems(items, () => ScrollForward(scrollBarRange));
-                if (startingPosition > minimum)
-                {
-                    TraverseItems(items, () => ScrollBackward(scrollBarRange));
-                }
+                TraverseItems(items, () => ScrollBackward(scrollBarRange));
             }
 
             return items.Values.ToArray();
@@ -1415,12 +1514,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             foreach (var item in ReadCurrentItems())
             {
-                if (items.ContainsKey(item.Text))
-                {
-                    continue;
-                }
-
-                items.Add(item.Text, new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true));
+                items[item.Text] = new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true);
             }
         }
 
@@ -2045,16 +2139,23 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     .Select(static text => text!.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                var index = items.FindIndex(candidate =>
-                    string.Equals(
-                        NormalizeLookupText(ReadAutomationElementText(candidate)),
+                var matches = items.Select((candidate, index) => (candidate, index))
+                    .Where(item => string.Equals(
+                        NormalizeLookupText(ReadAutomationElementText(item.candidate)),
                         normalizedTarget,
-                        StringComparison.OrdinalIgnoreCase));
+                        StringComparison.OrdinalIgnoreCase))
+                    .Take(2).ToArray();
+                if (matches.Length > 1)
+                {
+                    throw new InvalidOperationException($"Combo-box item '{itemText}' is ambiguous ({matches.Length} matches).");
+                }
+                var index = matches.Length == 1 ? matches[0].index : -1;
                 if (index >= 0)
                 {
                     Select(index);
                     if (SelectionMatches(normalizedTarget))
                     {
+                        Inner.Collapse();
                         return;
                     }
                 }
@@ -2089,6 +2190,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 // Some providers do not expose direct combo box items.
             }
 
+            if (items.Count > 0)
+            {
+                return DistinctElements(items).ToList();
+            }
+
             foreach (var candidate in FindAutomationDescendants(Inner))
             {
                 if (candidate is null || items.Contains(candidate) || !IsComboItemCandidate(candidate))
@@ -2103,7 +2209,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 }
             }
 
-            return items;
+            return DistinctElements(items.Select(ResolveComboItemProjection)).ToList();
         }
 
         private IComboBoxItem ToComboBoxItem(AutomationElement item)

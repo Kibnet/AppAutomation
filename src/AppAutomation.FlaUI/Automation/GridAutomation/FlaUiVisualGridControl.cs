@@ -20,6 +20,22 @@ namespace AppAutomation.FlaUI.Automation;
 
 public sealed partial class FlaUiControlResolver
 {
+    internal static bool IsEmptyNativeDateCellProjection(
+        string? name,
+        string? value,
+        ControlType controlType,
+        bool hasTextPattern,
+        int descendantCount)
+    {
+        // Some grid providers publish a row ordinal as the Name of an otherwise empty date cell.
+        return controlType == ControlType.Group
+            && name is { Length: > 0 }
+            && int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+            && string.IsNullOrWhiteSpace(value)
+            && !hasTextPattern
+            && descendantCount == 0;
+    }
+
     private sealed class FlaUiVisualGridControl :
         IGridUserActionControl,
         IEditableGridControl,
@@ -32,7 +48,6 @@ public sealed partial class FlaUiControlResolver
         private readonly Window _searchRoot;
         private readonly IGridControl? _fallback;
         private AutomationElement? _gridRoot;
-        private NativeGridColumnHeader[]? _nativeColumnHeaders;
         private NativeFlaUiRow[]? _prefetchedNativeRows;
         private int[] _nativeSignatureColumnIndexes = [];
         private GridRowAutomationProperty[] _nativeSignatureRowProperties = [];
@@ -124,13 +139,15 @@ public sealed partial class FlaUiControlResolver
             if (HasNativeDataRows())
             {
                 var stopwatch = Stopwatch.StartNew();
+                EnsureNativeColumnVisible(address.ColumnName, stopwatch, timeoutMs);
                 var row = ResolveUniqueNativeRow(address.Row, stopwatch, timeoutMs);
                 var columnIndex = ResolveNamedColumnIndex(address.ColumnName);
                 var displayText = ReadVisualGridCellText(row.Cells[columnIndex]);
                 return new GridCellValueSnapshot(
                     displayText,
                     displayText,
-                    GridCellValueKind.Text) { IsDisplayOnly = true };
+                    GridCellValueKind.Text)
+                { IsDisplayOnly = true };
             }
 
             return ReadCell(
@@ -146,6 +163,7 @@ public sealed partial class FlaUiControlResolver
             if (HasNativeDataRows())
             {
                 var stopwatch = Stopwatch.StartNew();
+                EnsureNativeColumnVisible(address.ColumnName, stopwatch, timeoutMs);
                 var row = ResolveUniqueNativeRow(address.Row, stopwatch, timeoutMs);
                 var columnIndex = ResolveNamedColumnIndex(address.ColumnName);
                 var cell = row.Cells[columnIndex];
@@ -178,6 +196,7 @@ public sealed partial class FlaUiControlResolver
             if (HasNativeDataRows())
             {
                 var stopwatch = Stopwatch.StartNew();
+                EnsureNativeColumnVisible(address.ColumnName, stopwatch, timeoutMs);
                 var columnIndex = ResolveNamedColumnIndex(address.ColumnName);
                 var selectorColumnIndexes = address.Row.Conditions
                     .Select(condition => ResolveNamedColumnIndex(condition.ColumnName))
@@ -254,7 +273,7 @@ public sealed partial class FlaUiControlResolver
                     FindGridRoot(),
                     RemainingGridMilliseconds(stopwatch, timeoutMs),
                     $"Grid '{AutomationId}' row '{GridRuntimeResolver.DescribeRowSelector(row)}'",
-                    () => TryResolveVisibleNativeRow(row)?.Element,
+                    () => TryResolveVisibleNativeRow(row, forSelection: true)?.Element,
                     () => FindGridRoot());
                 return;
             }
@@ -351,15 +370,20 @@ public sealed partial class FlaUiControlResolver
             IReadOnlyList<GridRowAutomationProperty> selectorRowProperties,
             Func<NativeGridRowSnapshot, bool> snapshotMatches,
             Func<NativeFlaUiRow, bool> liveRowMatches,
-            out NativeFlaUiRow? matchingRow)
+            out NativeFlaUiRow? matchingRow,
+            bool forSelection = false)
         {
             matchingRow = null;
-            var visibleRows = TakePrefetchedNativeRows();
+            var visibleRows = forSelection && selectorColumnIndexes.Count == 0
+                ? ReadNativeDataRows(includeCells: false)
+                : TakePrefetchedNativeRows();
             var snapshots = new List<NativeGridRowSnapshot>();
             AppendNativeRows(
                 snapshots,
                 visibleRows,
-                ReadGridScrollPosition(FindGridScrollState()),
+                forSelection
+                    ? new GridScrollPosition(null, null)
+                    : ReadGridScrollPosition(FindGridScrollState()),
                 selectorColumnIndexes,
                 selectorRowProperties);
             if (!NativeGridVisibleResolution.TryResolve(
@@ -390,7 +414,7 @@ public sealed partial class FlaUiControlResolver
             return true;
         }
 
-        private NativeFlaUiRow? TryResolveVisibleNativeRow(GridRowSelector selector)
+        private NativeFlaUiRow? TryResolveVisibleNativeRow(GridRowSelector selector, bool forSelection = false)
         {
             var selectorColumnIndexes = selector.Conditions
                 .Select(condition => ResolveNamedColumnIndex(condition.ColumnName))
@@ -401,12 +425,13 @@ public sealed partial class FlaUiControlResolver
                 Array.Empty<GridRowAutomationProperty>(),
                 candidate => NativeRowMatches(candidate, selector),
                 candidate => NativeRowMatches(candidate, selector),
-                out var matchingRow)
+                out var matchingRow,
+                forSelection)
                 ? matchingRow
                 : null;
         }
 
-        private NativeFlaUiRow? TryResolveVisibleNativeRow(GridIndexedRowSelector selector)
+        private NativeFlaUiRow? TryResolveVisibleNativeRow(GridIndexedRowSelector selector, bool forSelection = false)
         {
             var selectorColumnIndexes = selector.Conditions
                 .Where(static condition => condition.Column.RowIdentityAutomationProperty is null)
@@ -424,7 +449,8 @@ public sealed partial class FlaUiControlResolver
                 selectorRowProperties,
                 candidate => NativeRowMatches(candidate, selector),
                 candidate => NativeRowMatches(candidate, selector),
-                out var matchingRow)
+                out var matchingRow,
+                forSelection)
                 ? matchingRow
                 : null;
         }
@@ -561,6 +587,199 @@ public sealed partial class FlaUiControlResolver
 
             throw new InvalidOperationException(
                 $"Grid '{AutomationId}' stable row disappeared during bounded traversal.");
+        }
+
+        private NativeFlaUiRow ResolveIndexedNativeRowForColumn(
+            GridIndexedRowSelector selector,
+            GridRuntimeColumn targetColumn,
+            Stopwatch stopwatch,
+            int timeoutMs)
+        {
+            var visibleSelectorColumns = selector.Conditions
+                .Where(static condition => condition.Column.RowIdentityAutomationProperty is null)
+                .Select(static condition => condition.Column)
+                .ToArray();
+            if (visibleSelectorColumns.Length > 1 && selector.HasDeclaredUniqueIdentity)
+            {
+                return ResolveCompositeNativeRowForColumn(selector, targetColumn, stopwatch, timeoutMs);
+            }
+
+            if (visibleSelectorColumns.Length != 1)
+            {
+                EnsureNativeColumnVisible(targetColumn, stopwatch, timeoutMs);
+                return ResolveUniqueNativeRow(selector, stopwatch, timeoutMs);
+            }
+
+            EnsureNativeColumnVisible(visibleSelectorColumns[0], stopwatch, timeoutMs);
+            var identifiedRow = ResolveUniqueNativeRow(selector, stopwatch, timeoutMs);
+            var originalScroll = ReadGridScrollPosition(FindGridScrollState());
+            var originalAnchor = CaptureNativeRowAnchor(identifiedRow);
+            EnsureNativeColumnVisible(targetColumn, stopwatch, timeoutMs);
+            return RebindNativeRowAfterHorizontalScroll(originalAnchor, originalScroll);
+        }
+
+        private NativeFlaUiRow ResolveCompositeNativeRowForColumn(
+            GridIndexedRowSelector selector,
+            GridRuntimeColumn targetColumn,
+            Stopwatch stopwatch,
+            int timeoutMs)
+        {
+            var visibleRows = WaitForNativeDataRows(stopwatch, timeoutMs);
+            if (TryResolveCompositeVisibleRow(selector, targetColumn, visibleRows, stopwatch, timeoutMs)
+                is { } visibleMatch)
+            {
+                return visibleMatch;
+            }
+
+            var scroll = FindGridScrollState();
+            MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
+            do
+            {
+                visibleRows = TakePrefetchedNativeRows();
+                if (TryResolveCompositeVisibleRow(selector, targetColumn, visibleRows, stopwatch, timeoutMs)
+                    is { } match)
+                {
+                    return match;
+                }
+
+                visibleRows = ReadNativeDataRows();
+                var signature = CreateNativeRowSignature(visibleRows);
+                if (!MoveGridScrollForward(
+                        scroll, stopwatch, timeoutMs, signature, EstimateNativeScrollIncrement(visibleRows)))
+                {
+                    break;
+                }
+            }
+            while (true);
+
+            throw new InvalidOperationException(
+                $"Grid '{AutomationId}' did not expose a row matching its configured composite identity.");
+        }
+
+        private NativeFlaUiRow? TryResolveCompositeVisibleRow(
+            GridIndexedRowSelector selector,
+            GridRuntimeColumn targetColumn,
+            IReadOnlyList<NativeFlaUiRow> visibleRows,
+            Stopwatch stopwatch,
+            int timeoutMs)
+        {
+            var originalScroll = ReadGridScrollPosition(FindGridScrollState());
+            var candidates = visibleRows.Where(static row => row.IsVisible)
+                .Select(row => (Row: row, Anchor: CaptureNativeRowAnchor(row)))
+                .ToArray();
+            if (candidates.Length == 0)
+            {
+                return null;
+            }
+            foreach (var condition in selector.Conditions)
+            {
+                if (condition.Column.RowIdentityAutomationProperty is { } rowProperty)
+                {
+                    candidates = candidates.Where(candidate => string.Equals(
+                        FlaUiGridRowAutomationValueReader.Read(candidate.Row.Element, rowProperty),
+                        condition.ExpectedText, StringComparison.Ordinal)).ToArray();
+                    continue;
+                }
+
+                EnsureNativeColumnVisible(condition.Column, stopwatch, timeoutMs);
+                var currentRows = ReadNativeDataRows();
+                var currentScroll = ReadGridScrollPosition(FindGridScrollState());
+                var columnIndex = ResolveRuntimeColumnIndex(condition.Column);
+                candidates = candidates.Select(candidate => (
+                        Row: RebindNativeRowAfterHorizontalScroll(
+                            candidate.Anchor, originalScroll, currentRows, currentScroll),
+                        candidate.Anchor))
+                    .Where(candidate => string.Equals(candidate.Row.GetCellText(columnIndex),
+                        condition.ExpectedText, StringComparison.Ordinal))
+                    .ToArray();
+                if (candidates.Length == 0)
+                {
+                    return null;
+                }
+            }
+
+            if (candidates.Length == 0)
+            {
+                return null;
+            }
+            var logicalRows = new List<NativeGridRowSnapshot>();
+            NativeGridRowNormalizer.Append(logicalRows, candidates.Select(candidate =>
+                new NativeGridRowSnapshot([], candidate.Anchor.Index, candidate.Anchor.Bounds, originalScroll)
+                {
+                    StableValues = selector.Conditions.Select(static condition => (string?)condition.ExpectedText).ToArray(),
+                    RuntimeId = candidate.Anchor.RuntimeId is { Length: > 0 } runtimeId
+                        ? string.Join(',', runtimeId)
+                        : null
+                }).ToArray(), HasSameNativeRow);
+            if (logicalRows.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' composite stable selector matched {logicalRows.Count} visible rows; "
+                    + "expected exactly one.");
+            }
+
+            EnsureNativeColumnVisible(targetColumn, stopwatch, timeoutMs);
+            return RebindNativeRowAfterHorizontalScroll(candidates[0].Anchor, originalScroll);
+        }
+
+        private static (System.Drawing.Rectangle Bounds, int? Index, int[]? RuntimeId) CaptureNativeRowAnchor(
+            NativeFlaUiRow row) =>
+            (TryRead(() => row.Element.BoundingRectangle),
+                ReadNativeGridRowIndex(row),
+                TryRead(() => row.Element.FrameworkAutomationElement.RuntimeId.ValueOrDefault));
+
+        private NativeFlaUiRow RebindNativeRowAfterHorizontalScroll(
+            (System.Drawing.Rectangle Bounds, int? Index, int[]? RuntimeId) originalAnchor,
+            GridScrollPosition originalScroll,
+            IReadOnlyList<NativeFlaUiRow>? observedRows = null,
+            GridScrollPosition? observedScroll = null)
+        {
+            var visibleRows = observedRows ?? ReadNativeDataRows();
+            var currentScroll = observedScroll ?? ReadGridScrollPosition(FindGridScrollState());
+            if ((originalScroll.ScrollPercent is { } originalPercent
+                    && currentScroll.ScrollPercent is { } currentPercent
+                    && Math.Abs(originalPercent - currentPercent) > 0.001)
+                || (originalScroll.RangeValue is { } originalRange
+                    && currentScroll.RangeValue is { } currentRange
+                    && Math.Abs(originalRange - currentRange) > 0.001))
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' changed its vertical position while materializing the target column; "
+                    + "the previously identified row cannot be reused safely.");
+            }
+
+            var (originalBounds, originalIndex, originalRuntimeId) = originalAnchor;
+            if (originalRuntimeId is { Length: > 0 })
+            {
+                var sameRuntime = visibleRows.FirstOrDefault(candidate =>
+                    originalRuntimeId.SequenceEqual(
+                        TryRead(() => candidate.Element.FrameworkAutomationElement.RuntimeId.ValueOrDefault)
+                        ?? [])
+                    && (originalIndex is null
+                        || ReadNativeGridRowIndex(candidate) is not { } candidateIndex
+                        || originalIndex == candidateIndex));
+                if (sameRuntime is not null)
+                {
+                    return sameRuntime;
+                }
+            }
+
+            var sameRowArea = visibleRows.Where(candidate =>
+            {
+                var bounds = TryRead(() => candidate.Element.BoundingRectangle);
+                var candidateIndex = ReadNativeGridRowIndex(candidate);
+                return originalBounds.Height > 0
+                    && Math.Abs(bounds.Top - originalBounds.Top) <= 3
+                    && Math.Abs(bounds.Bottom - originalBounds.Bottom) <= 3
+                    && (originalIndex is null || candidateIndex is null || originalIndex == candidateIndex);
+            }).ToArray();
+            if (sameRowArea.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' could not rebind the identified row after horizontal column navigation.");
+            }
+
+            return sameRowArea[0];
         }
 
         private NativeGridScan ScanNativeRows(
@@ -813,7 +1032,7 @@ public sealed partial class FlaUiControlResolver
             });
         }
 
-        private static bool NativeRowMatches(NativeFlaUiRow row, GridIndexedRowSelector selector)
+        private bool NativeRowMatches(NativeFlaUiRow row, GridIndexedRowSelector selector)
         {
             return selector.Conditions.All(condition =>
             {
@@ -824,7 +1043,7 @@ public sealed partial class FlaUiControlResolver
             });
         }
 
-        private static bool NativeRowMatches(NativeGridRowSnapshot row, GridIndexedRowSelector selector)
+        private bool NativeRowMatches(NativeGridRowSnapshot row, GridIndexedRowSelector selector)
         {
             return selector.Conditions.All(condition =>
             {
@@ -840,8 +1059,12 @@ public sealed partial class FlaUiControlResolver
             });
         }
 
-        private static int ResolveRuntimeColumnIndex(GridRuntimeColumn column)
+        private int ResolveRuntimeColumnIndex(GridRuntimeColumn column)
         {
+            if (column.RuntimeColumnName is { } runtimeName)
+            {
+                return ResolveNamedColumnIndex(runtimeName);
+            }
             if (column.RuntimeColumnIndex is { } runtimeColumnIndex)
             {
                 return runtimeColumnIndex;
@@ -949,24 +1172,24 @@ public sealed partial class FlaUiControlResolver
 
         private int ResolveNamedColumnIndex(string columnName)
         {
-            var matches = ColumnNames.Count(candidate => string.Equals(
-                candidate,
-                columnName?.Trim(),
-                StringComparison.Ordinal));
-            if (matches > 1)
+            var names = ColumnNames;
+            var matches = names.Select((name, index) => (name, index))
+                .Where(candidate => string.Equals(candidate.name, columnName?.Trim(), StringComparison.Ordinal))
+                .Take(2).ToArray();
+            if (matches.Length > 1)
             {
                 throw new InvalidOperationException(
-                    $"Grid column '{columnName}' is ambiguous in visual grid '{AutomationId}' ({matches} matches).");
+                    $"Grid column '{columnName}' is ambiguous in visual grid '{AutomationId}' ({matches.Length} matches).");
             }
 
-            if (TryGetColumnIndex(columnName, out var columnIndex))
+            if (matches.Length == 1)
             {
-                return columnIndex;
+                return matches[0].index;
             }
 
             throw new InvalidOperationException(
                 $"Grid column '{columnName}' was not found in visual grid '{AutomationId}'. "
-                + $"Available columns: {string.Join(", ", ColumnNames)}.");
+                + $"Available columns: {string.Join(", ", names)}.");
         }
 
         public GridRowResolution ResolveRow(GridIndexedRowSelector row, int timeoutMs)
@@ -1004,9 +1227,20 @@ public sealed partial class FlaUiControlResolver
             var stopwatch = Stopwatch.StartNew();
             if (HasNativeDataRows())
             {
-                var nativeRow = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
+                var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
                 var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
-                var nativeDisplayText = ReadVisualGridCellText(nativeRow.Cells[nativeRuntimeColumnIndex]);
+                var nativeCell = nativeRow.Cells[nativeRuntimeColumnIndex];
+                var nativeDisplayText = ReadVisualGridCellText(nativeCell);
+                if (column.ValueKind == GridCellValueKind.Date
+                    && IsEmptyNativeDateCellProjection(
+                        nativeDisplayText,
+                        TryRead(() => nativeCell.Patterns.Value.PatternOrDefault?.Value.Value),
+                        TryRead(() => nativeCell.ControlType),
+                        TryRead(() => nativeCell.Patterns.Text.IsSupported),
+                        FindAutomationDescendants(nativeCell).Length))
+                {
+                    nativeDisplayText = null;
+                }
                 return GridCellValueNormalizer.Normalize(AutomationId,
                     new GridCellValueSnapshot(nativeDisplayText, nativeDisplayText, column.ValueKind)
                     {
@@ -1038,12 +1272,13 @@ public sealed partial class FlaUiControlResolver
             if (HasNativeDataRows())
             {
                 var stopwatch = Stopwatch.StartNew();
-                var nativeRow = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
-                var nativeCell = nativeRow.Cells[ResolveRuntimeColumnIndex(column)];
+                var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
+                var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
+                var nativeCell = nativeRow.Cells[nativeRuntimeColumnIndex];
                 if (TryRead(() => nativeCell.Patterns.Value.IsSupported))
                 {
                     var value = TryRead(() => nativeCell.Patterns.Value.Pattern.Value);
-                    if (value is not null)
+                    if (!string.IsNullOrWhiteSpace(value))
                     {
                         return value;
                     }
@@ -1080,15 +1315,14 @@ public sealed partial class FlaUiControlResolver
             var stopwatch = Stopwatch.StartNew();
             if (HasNativeDataRows())
             {
-                var nativeRow = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
+                var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
                 var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
                 var nativeRemaining = RemainingGridMilliseconds(stopwatch, timeoutMs);
+                var editScroll = ReadGridScrollPosition(FindGridScrollState());
+                var editAnchor = CaptureNativeRowAnchor(nativeRow);
                 EditResolvedCell(
                     nativeRow.Cells[nativeRuntimeColumnIndex],
-                    timeout => ResolveUniqueNativeRow(
-                        row,
-                        Stopwatch.StartNew(),
-                        timeout).Cells[nativeRuntimeColumnIndex],
+                    _ => RebindNativeRowAfterHorizontalScroll(editAnchor, editScroll).Cells[nativeRuntimeColumnIndex],
                     GridCellEditRequestValidation.CreateIndexedRequest(
                         0,
                         nativeRuntimeColumnIndex,
@@ -1164,10 +1398,16 @@ public sealed partial class FlaUiControlResolver
             var stopwatch = Stopwatch.StartNew();
             AutomationElement target;
             Func<AutomationElement?> refreshTarget;
+            Func<AutomationElement, bool>? isCurrentRowMatch = null;
             if (HasNativeDataRows())
             {
                 target = ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
-                refreshTarget = () => TryResolveVisibleNativeRow(row)?.Element;
+                refreshTarget = () => TryResolveVisibleNativeRow(row, forSelection: true)?.Element;
+                if (row.Conditions.All(static condition => condition.Column.RowIdentityAutomationProperty is not null))
+                {
+                    isCurrentRowMatch = candidate => NativeRowMatches(
+                        new NativeFlaUiRow(candidate, Array.Empty<AutomationElement>()), row);
+                }
             }
             else
             {
@@ -1190,7 +1430,8 @@ public sealed partial class FlaUiControlResolver
                 RemainingGridMilliseconds(stopwatch, timeoutMs),
                 $"Grid '{AutomationId}' stable row",
                 refreshTarget,
-                () => FindGridRoot());
+                () => FindGridRoot(),
+                isCurrentRowMatch);
         }
 
         public void EditCell(GridCellEditRequest request)
@@ -1301,13 +1542,6 @@ public sealed partial class FlaUiControlResolver
             {
                 throw new System.NotSupportedException(
                     $"Visual grid '{AutomationId}' does not support '{request.EditorKind}' cell editing in the FlaUI adapter.");
-            }
-
-            if (activeRequest.CommitMode == GridCellEditCommitMode.Commit
-                && activeRequest.EditorParts?.CommitTarget is not null)
-            {
-                ConfirmCellEdit(activeCell, activeRequest);
-                return;
             }
 
             var confirmationCell = TryResolveCurrentCell(
@@ -1475,7 +1709,9 @@ public sealed partial class FlaUiControlResolver
                     }
                 }
 
-                if (editorKind is GridCellEditorKind.Number or GridCellEditorKind.SearchPicker)
+                if (editorKind is GridCellEditorKind.Number
+                    or GridCellEditorKind.SearchPicker
+                    or GridCellEditorKind.ComboBox)
                 {
                     exception = null;
                     return true;
@@ -1572,7 +1808,7 @@ public sealed partial class FlaUiControlResolver
                         + $"name='{TryRead(() => candidate.Name)}',"
                         + $"bounds={TryRead(() => candidate.BoundingRectangle)}]"));
             var configuredInputObservations = request.EditorParts?.Input is
-                { LocatorKind: UiLocatorKind.AutomationId } input
+            { LocatorKind: UiLocatorKind.AutomationId } input
                 && FindGridRoot() is { } gridRoot
                     ? FindAutomationDescendants(gridRoot)
                         .Where(candidate => string.Equals(
@@ -1709,10 +1945,10 @@ public sealed partial class FlaUiControlResolver
             ExecuteFlaUiSearchPickerSelection(
                 searchInput,
                 wait => configuredResults is
-                    {
-                        Scope: GridRelativeLocatorScope.DetachedPopup,
-                        LocatorKind: UiLocatorKind.AutomationId
-                    }
+                {
+                    Scope: GridRelativeLocatorScope.DetachedPopup,
+                    LocatorKind: UiLocatorKind.AutomationId
+                }
                         ? WaitForProcessElementByAutomationId(configuredResults.LocatorValue, wait)
                         : configuredResults is null
                             ? resultsAutomationId is null
@@ -1858,18 +2094,34 @@ public sealed partial class FlaUiControlResolver
             AutomationElement input,
             GridCellEditRequest request)
         {
+            var stopwatch = Stopwatch.StartNew();
             _ = TryRead(() =>
             {
-                DesktopPointer.ClickPrepared(() => input, PrepareForPhysicalGridInput);
+                DesktopPointer.ClickPrepared(
+                    () => input,
+                    PrepareForPhysicalGridInput,
+                    options: new PointerClickOptions
+                    {
+                        Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs))
+                    });
                 return true;
             });
+            _ = UiWait.Until(
+                () => TryRead(() => input.Properties.HasKeyboardFocus.Value) == true,
+                static hasFocus => hasFocus,
+                new UiWaitOptions
+                {
+                    Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs)),
+                    PollInterval = TimeSpan.FromMilliseconds(25)
+                },
+                $"Grid editor input '{TryRead(() => input.AutomationId)}' did not receive keyboard focus before entering its value.");
+            _ = RemainingGridMilliseconds(stopwatch, request.TimeoutMs);
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
             var inputText = request.EditorKind == GridCellEditorKind.Number
                 ? request.NumericInput?.Text ?? request.Value
                 : request.Value;
             Keyboard.Type(inputText);
 
-            var stopwatch = Stopwatch.StartNew();
             string? lastActual = null;
             do
             {
@@ -1995,111 +2247,56 @@ public sealed partial class FlaUiControlResolver
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a ComboBox editor.");
             }
 
-            if (!HasVisibleBounds(editor))
-            {
-                TryDoubleClick(cell, out _);
-                TryFocus(cell);
-                Keyboard.TypeSimultaneously(VirtualKeyShort.ALT, VirtualKeyShort.DOWN);
-                Keyboard.Type(request.Value);
-                Keyboard.Type(VirtualKeyShort.RETURN);
-                return;
-            }
-
-            DesktopPointer.ClickFallback(editor, "grid editor activation fallback");
-            if (TryRead(() => editor.IsAvailable))
-            {
-                Keyboard.Type(request.Value);
-                Keyboard.Type(VirtualKeyShort.RETURN);
-                return;
-            }
-
-            var normalizedTarget = NormalizeLookupText(request.Value);
             var stopwatch = Stopwatch.StartNew();
-            var observedItems = new HashSet<string>(StringComparer.Ordinal)
+            if (request.EditorParts?.Results is null
+                && TryRead(() => editor.ControlType) == ControlType.ComboBox)
             {
-                DescribeGridComboElement("editor", editor)
-            };
-            foreach (var descendant in FindAutomationDescendants(editor).Take(10))
-            {
-                observedItems.Add(DescribeGridComboElement("editor child", descendant));
+                new FlaUiComboBoxControl(editor.AsComboBox()).SelectItem(
+                    request.Value, TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs)));
+                return;
             }
 
-            do
+            var results = ResolveEditorPart(cell, request.EditorParts?.Results);
+            if (results is null || !HasVisibleBounds(results))
             {
-                var directItems = TryRead(() => editor.AsComboBox().Items.Cast<AutomationElement>().ToArray())
-                    ?? Array.Empty<AutomationElement>();
-                var candidates = directItems.Length > 0
-                    ? directItems
-                    : EnumerateProcessElements(_searchRoot)
-                    .Where(HasVisibleBounds)
-                    .ToArray();
-                foreach (var candidate in candidates)
-                {
-                    var text = ReadAutomationElementText(candidate);
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        observedItems.Add(
-                            $"{TryRead(() => candidate.ControlType)} "
-                            + $"id='{TryRead(() => candidate.AutomationId)}' "
-                            + $"text='{text}' "
-                            + $"offscreen={TryRead(() => candidate.IsOffscreen)}");
-                    }
-                }
-
-                var matches = candidates
-                    .Where(candidate => string.Equals(
-                        NormalizeLookupText(ReadAutomationElementText(candidate)),
-                        normalizedTarget,
-                        StringComparison.OrdinalIgnoreCase))
-                    .Select(ResolveComboItemProjection)
-                    .Distinct()
-                    .Take(2)
-                    .ToArray();
-                if (matches.Length > 1)
+                var open = ResolveEditorPart(cell, request.EditorParts?.OpenButton);
+                if (open is null)
                 {
                     throw new InvalidOperationException(
-                        $"Combo-box item '{request.Value}' is ambiguous in the open grid editor.");
+                        $"Combo-box editor in grid '{AutomationId}' requires a visible configured Results surface "
+                        + $"or OpenButton. Input type: {TryRead(() => editor.ControlType)}; parts: {request.EditorParts}.");
                 }
-
-                if (matches.Length == 1)
-                {
-                    DesktopPointer.ClickFallback(matches[0], "grid editor candidate fallback");
-                    return;
-                }
-
-                Thread.Sleep(Math.Min(50, Math.Max(1, request.TimeoutMs - (int)stopwatch.ElapsedMilliseconds)));
+                new FlaUiButtonControl(open.AsButton()).Invoke();
             }
-            while (stopwatch.ElapsedMilliseconds < request.TimeoutMs);
-
-            var observed = observedItems.Count == 0
-                ? "<none>"
-                : string.Join(", ", observedItems.Take(20));
-            throw new InvalidOperationException(
-                $"Combo-box item '{request.Value}' was not found in the open grid editor within {request.TimeoutMs} ms. "
-                + $"Observed items: {observed}.");
-        }
-
-        private static AutomationElement ResolveComboItemProjection(AutomationElement candidate)
-        {
-            for (var current = candidate; current is not null; current = TryRead(() => current.Parent))
+            results = UiWait.Until(
+                () => ResolveEditorPart(cell, request.EditorParts?.Results),
+                candidate => candidate is not null && HasVisibleBounds(candidate),
+                new UiWaitOptions
+                {
+                    Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs)),
+                    PollInterval = TimeSpan.FromMilliseconds(25)
+                },
+                $"Configured combo-box Results in grid '{AutomationId}' did not appear.");
+            var remaining = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs));
+            if (TryRead(() => results!.ControlType) == ControlType.List)
             {
-                if (TryRead(() => current.ControlType) is ControlType.ListItem or ControlType.DataItem)
-                {
-                    return current;
-                }
+                new FlaUiListBoxControl(results!.AsListBox()).SelectItem(request.Value, remaining);
             }
-
-            return candidate;
+            else if (TryRead(() => results!.ControlType) == ControlType.ComboBox)
+            {
+                new FlaUiComboBoxControl(results!.AsComboBox()).SelectItem(request.Value, remaining);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Configured combo-box Results in grid '{AutomationId}' expose '{TryRead(() => results!.ControlType)}', not ListBox or ComboBox.");
+            }
         }
 
-        private static string DescribeGridComboElement(string role, AutomationElement element)
-        {
-            return $"{role}: {TryRead(() => element.ControlType)} "
-                + $"id='{TryRead(() => element.AutomationId)}' "
-                + $"name='{TryRead(() => element.Name)}' "
-                + $"bounds={TryRead(() => element.BoundingRectangle)} "
-                + $"offscreen={TryRead(() => element.IsOffscreen)}";
-        }
+        private static string DescribeGridComboElement(string role, AutomationElement element) =>
+            $"{role}: {TryRead(() => element.ControlType)} id='{TryRead(() => element.AutomationId)}' "
+            + $"name='{TryRead(() => element.Name)}' bounds={TryRead(() => element.BoundingRectangle)} "
+            + $"offscreen={TryRead(() => element.IsOffscreen)}";
 
         private void ConfirmCellEdit(AutomationElement cell, GridCellEditRequest request)
         {
@@ -2116,7 +2313,41 @@ public sealed partial class FlaUiControlResolver
                     ?? throw new InvalidOperationException(
                         $"Grid editor commit target '{commitTargetLocator.LocatorKind}:{commitTargetLocator.LocatorValue}' "
                         + $"was not found within scope '{commitTargetLocator.Scope}' of the active row in grid '{AutomationId}'.");
-                DesktopPointer.ClickPrepared(() => commitTarget, PrepareForPhysicalGridInput);
+                var activeInput = ResolveEditorPart(cell, request.EditorParts.Input);
+                if (activeInput is not null)
+                {
+                    TryFocus(commitTarget);
+                    var focusStopwatch = Stopwatch.StartNew();
+                    var maximumFocusWait = Math.Min(500, request.TimeoutMs);
+                    do
+                    {
+                        if (!TryRead(() => activeInput.IsAvailable)
+                            || !HasVisibleBounds(activeInput))
+                        {
+                            return;
+                        }
+
+                        var remainingFocusWait = maximumFocusWait - (int)focusStopwatch.ElapsedMilliseconds;
+                        if (remainingFocusWait > 0)
+                        {
+                            Thread.Sleep(Math.Min(25, remainingFocusWait));
+                        }
+                    }
+                    while (focusStopwatch.ElapsedMilliseconds < maximumFocusWait);
+                }
+
+                DesktopPointer.ClickPrepared(
+                    () => ResolveEditorPart(cell, commitTargetLocator) ?? commitTarget,
+                    PrepareForPhysicalGridInput);
+                return;
+            }
+
+            if (request.EditorKind == GridCellEditorKind.ComboBox
+                && request.EditorParts?.Results is not null)
+            {
+                // Exact selection may update only the active composite editor. Keep its current
+                // focus and let the grid commit the pending value before resolving the display cell.
+                Keyboard.Type(VirtualKeyShort.RETURN);
                 return;
             }
 
@@ -2464,24 +2695,22 @@ public sealed partial class FlaUiControlResolver
 
         private IReadOnlyList<string> ReadColumnNames()
         {
+            var headers = ReadNativeColumnHeaders();
+            if (headers.Length > 0)
+            {
+                return headers.Select(static candidate => candidate.Name!).ToArray();
+            }
             if (_fallback is IGridColumnMetadataControl metadata
                 && metadata.ColumnNames.Count > 0)
             {
                 return metadata.ColumnNames;
             }
 
-            return ReadNativeColumnHeaders()
-                .Select(static candidate => candidate.Name!)
-                .ToArray();
+            return Array.Empty<string>();
         }
 
         private NativeGridColumnHeader[] ReadNativeColumnHeaders()
         {
-            if (_nativeColumnHeaders is { Length: > 0 })
-            {
-                return _nativeColumnHeaders;
-            }
-
             var root = FindGridRoot();
             if (root is null)
             {
@@ -2489,7 +2718,8 @@ public sealed partial class FlaUiControlResolver
             }
 
             var headerCondition = root.Automation.ConditionFactory.ByControlType(ControlType.HeaderItem);
-            _nativeColumnHeaders = (TryRead(() => root.FindAllDescendants(headerCondition))
+            var rootBounds = TryRead(() => root.BoundingRectangle);
+            return (TryRead(() => root.FindAllDescendants(headerCondition))
                     ?? Array.Empty<AutomationElement>())
                 .Select(candidate => new NativeGridColumnHeader(
                     ReadVisualGridCellText(candidate),
@@ -2497,13 +2727,494 @@ public sealed partial class FlaUiControlResolver
                 .Where(static candidate =>
                     !string.IsNullOrWhiteSpace(candidate.Name)
                     && candidate.Bounds.Width > 0)
+                .Where(candidate => System.Drawing.Rectangle.Intersect(candidate.Bounds, rootBounds).Width > 0)
                 .OrderBy(static candidate => candidate.Bounds.Left)
                 .Select(static candidate => candidate with { Name = candidate.Name!.Trim() })
                 .ToArray();
-            return _nativeColumnHeaders;
         }
 
-        private NativeFlaUiRow[] ReadNativeDataRows()
+        private void EnsureNativeColumnVisible(GridRuntimeColumn column, Stopwatch stopwatch, int timeoutMs)
+        {
+            if (column.RuntimeColumnName is { } caption)
+            {
+                var declaredIndexes = column.DeclaredRuntimeColumnNames
+                    .Select((name, index) => (name, index))
+                    .Where(candidate => string.Equals(candidate.name, caption, StringComparison.Ordinal))
+                    .Take(2)
+                    .ToArray();
+                EnsureNativeColumnVisible(
+                    caption,
+                    stopwatch,
+                    timeoutMs,
+                    declaredIndexes.Length == 1 ? declaredIndexes[0].index : null,
+                    column.DeclaredRuntimeColumnNames);
+            }
+        }
+
+        private void EnsureNativeColumnVisible(
+            string caption,
+            Stopwatch stopwatch,
+            int timeoutMs,
+            int? configuredColumnIndex = null,
+            IReadOnlyList<string>? declaredRuntimeColumnNames = null)
+        {
+            bool IsVisible() => ReadNativeColumnHeaders().Any(header =>
+                string.Equals(header.Name, caption, StringComparison.Ordinal));
+            bool WaitForTargetHeader(int maximumWaitMilliseconds)
+            {
+                var deadline = Math.Min(timeoutMs, stopwatch.ElapsedMilliseconds + maximumWaitMilliseconds);
+                while (stopwatch.ElapsedMilliseconds < deadline)
+                {
+                    if (IsVisible())
+                    {
+                        return true;
+                    }
+
+                    Thread.Sleep((int)Math.Max(1, Math.Min(25, deadline - stopwatch.ElapsedMilliseconds)));
+                }
+
+                return IsVisible();
+            }
+            bool WaitForTargetOrMovement(string previousSignature, double? previousPosition, int maximumWaitMilliseconds)
+            {
+                var deadline = Math.Min(
+                    timeoutMs,
+                    stopwatch.ElapsedMilliseconds + maximumWaitMilliseconds);
+                do
+                {
+                    if (IsVisible())
+                    {
+                        return true;
+                    }
+
+                    var currentSignature = Signature();
+                    var currentPosition = Position();
+                    if (!string.Equals(previousSignature, currentSignature, StringComparison.Ordinal)
+                        || HasHorizontalPositionChanged(previousPosition, currentPosition))
+                    {
+                        return true;
+                    }
+
+                    var remaining = deadline - stopwatch.ElapsedMilliseconds;
+                    if (remaining <= 0)
+                    {
+                        return false;
+                    }
+
+                    Thread.Sleep((int)Math.Min(25, remaining));
+                }
+                while (stopwatch.ElapsedMilliseconds < deadline);
+
+                return false;
+            }
+            if (IsVisible())
+            {
+                return;
+            }
+
+            // Keep the row snapshot captured by HasNativeDataRows when the target column is already
+            // visible. Re-reading that row while a composite editor is rebuilding its template can
+            // replace a usable snapshot with a transient projection. A real horizontal move still
+            // invalidates the snapshot before resolving the row again.
+            _prefetchedNativeRows = null;
+
+            var root = FindGridRoot();
+            var namedHeader = root is null ? null
+                : (TryRead(() => root.FindAllDescendants(root.Automation.ConditionFactory.ByControlType(ControlType.HeaderItem))) ?? [])
+                    .FirstOrDefault(header => string.Equals(ReadVisualGridCellText(header)?.Trim(), caption, StringComparison.Ordinal));
+            var scroll = FindGridHorizontalScrollPattern();
+            AutomationElement? FindCurrentHorizontalScrollBar()
+            {
+                var currentRoot = FindGridRoot();
+                return currentRoot is null ? null : FindAutomationDescendants(currentRoot)
+                    .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.ScrollBar
+                        && TryRead(() => candidate.BoundingRectangle) is var bounds && bounds.Width > bounds.Height)
+                    .FirstOrDefault(HasVisibleBounds);
+            }
+            IRangeValuePattern? FindCurrentHorizontalRange()
+            {
+                var currentScrollBar = FindCurrentHorizontalScrollBar();
+                return currentScrollBar is null
+                    ? null
+                    : TryRead(() => currentScrollBar.Patterns.RangeValue.PatternOrDefault);
+            }
+
+            string Signature() => string.Join("|", ReadNativeColumnHeaders().Select(header => $"{header.Name}@{header.Bounds}"));
+            double? Position()
+            {
+                if (scroll?.HorizontallyScrollable.ValueOrDefault == true)
+                {
+                    var percent = TryRead(() => scroll.HorizontalScrollPercent.ValueOrDefault);
+                    if (percent >= 0)
+                    {
+                        return percent;
+                    }
+                }
+
+                var currentRange = FindCurrentHorizontalRange();
+                return currentRange is null ? null : TryRead(() => currentRange.Value.ValueOrDefault);
+            }
+            bool AtBoundary(bool forward)
+            {
+                if (scroll?.HorizontallyScrollable.ValueOrDefault == true)
+                {
+                    var percent = TryRead(() => scroll.HorizontalScrollPercent.ValueOrDefault);
+                    if (percent >= 0)
+                    {
+                        return forward ? percent >= 99.999 : percent <= 0.001;
+                    }
+                }
+
+                var currentRange = FindCurrentHorizontalRange();
+                if (currentRange is not null)
+                {
+                    var value = TryRead(() => currentRange.Value.ValueOrDefault);
+                    var boundary = forward
+                        ? TryRead(() => currentRange.Maximum.ValueOrDefault)
+                        : TryRead(() => currentRange.Minimum.ValueOrDefault);
+                    return forward ? value >= boundary - 0.001 : value <= boundary + 0.001;
+                }
+
+                return false;
+            }
+            bool MoveWithScrollPattern(bool forward) => TryRead(() =>
+            {
+                if (scroll?.HorizontallyScrollable.ValueOrDefault != true)
+                {
+                    return false;
+                }
+
+                scroll.Scroll(
+                    forward ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement,
+                    ScrollAmount.NoAmount);
+                return true;
+            });
+            bool MoveWithScrollBarButton(bool forward) => TryRead(() =>
+            {
+                var scrollBar = FindCurrentHorizontalScrollBar();
+                if (scrollBar is null)
+                {
+                    return false;
+                }
+
+                var buttons = FindAutomationDescendants(scrollBar)
+                    .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Button
+                        && HasVisibleBounds(candidate))
+                    .OrderBy(candidate => TryRead(() => candidate.BoundingRectangle).Left)
+                    .ToArray();
+                if (buttons.Length == 0)
+                {
+                    return false;
+                }
+
+                var button = forward ? buttons[^1] : buttons[0];
+                new FlaUiButtonControl(button.AsButton()).Invoke();
+                return true;
+            });
+            bool PageScrollBar(bool forward) => TryRead(() =>
+            {
+                var scrollBar = FindCurrentHorizontalScrollBar();
+                if (scrollBar is null)
+                {
+                    return false;
+                }
+
+                var thumb = FindAutomationDescendants(scrollBar)
+                    .FirstOrDefault(candidate =>
+                        TryRead(() => candidate.ControlType) == ControlType.Thumb
+                        && HasVisibleBounds(candidate));
+                if (thumb is null)
+                {
+                    return false;
+                }
+
+                var scrollBounds = TryRead(() => scrollBar.BoundingRectangle);
+                var thumbBounds = TryRead(() => thumb.BoundingRectangle);
+                var trackStart = scrollBounds.Left + scrollBounds.Height + 1;
+                var trackEnd = scrollBounds.Right - scrollBounds.Height - 1;
+                var pagePoint = forward
+                    ? Math.Min(trackEnd, thumbBounds.Right + Math.Max(2, thumbBounds.Width / 2))
+                    : Math.Max(trackStart, thumbBounds.Left - Math.Max(2, thumbBounds.Width / 2));
+                if (forward ? pagePoint <= thumbBounds.Right : pagePoint >= thumbBounds.Left)
+                {
+                    return false;
+                }
+
+                DesktopPointer.ClickPrepared(
+                    () => FindCurrentHorizontalScrollBar() ?? scrollBar,
+                    element => PrepareForPhysicalGridInput(element),
+                    element => new System.Drawing.Point(
+                        pagePoint,
+                        TryRead(() => element.BoundingRectangle).Top + scrollBounds.Height / 2),
+                    options: new PointerClickOptions
+                    {
+                        Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs))
+                    });
+                return true;
+            });
+            bool DragScrollBarToBoundary(bool forward)
+            {
+                try
+                {
+                    var scrollBar = FindCurrentHorizontalScrollBar();
+                    if (scrollBar is null)
+                    {
+                        return false;
+                    }
+
+                    var thumb = FindAutomationDescendants(scrollBar)
+                        .FirstOrDefault(candidate =>
+                            TryRead(() => candidate.ControlType) == ControlType.Thumb
+                            && HasVisibleBounds(candidate));
+                    if (thumb is null)
+                    {
+                        return false;
+                    }
+
+                    var scrollBounds = TryRead(() => scrollBar.BoundingRectangle);
+                    var thumbBounds = TryRead(() => thumb.BoundingRectangle);
+                    var start = new System.Drawing.Point(
+                        thumbBounds.Left + thumbBounds.Width / 2,
+                        thumbBounds.Top + thumbBounds.Height / 2);
+                    var endX = forward
+                        ? scrollBounds.Right - scrollBounds.Height - thumbBounds.Width / 2 - 1
+                        : scrollBounds.Left + scrollBounds.Height + thumbBounds.Width / 2 + 1;
+                    if (forward ? endX <= start.X : endX >= start.X)
+                    {
+                        return false;
+                    }
+
+                    DesktopPointer.Drag(
+                        thumb,
+                        start,
+                        new System.Drawing.Point(endX, start.Y),
+                        prepare: () => PrepareForPhysicalGridInput(thumb),
+                        timeout: TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)));
+                    return true;
+                }
+                catch (Exception exception) when (!DesktopPointer.IsTerminalFailure(exception))
+                {
+                    return false;
+                }
+            }
+            var configuredIndexesByName = declaredRuntimeColumnNames?
+                .Select((name, index) => (name, index))
+                .GroupBy(static candidate => candidate.name, StringComparer.Ordinal)
+                .Where(static group => group.Count() == 1)
+                .ToDictionary(
+                    static group => group.Key,
+                    static group => group.Single().index,
+                    StringComparer.Ordinal);
+            bool MoveToConfiguredPosition()
+            {
+                if (configuredColumnIndex is not { } targetIndex
+                    || declaredRuntimeColumnNames is not { Count: > 1 })
+                {
+                    return false;
+                }
+
+                return TryRead(() =>
+                {
+                    var scrollBar = FindCurrentHorizontalScrollBar();
+                    if (scrollBar is null)
+                    {
+                        return false;
+                    }
+
+                    var visibleHeaderCount = Math.Max(1, ReadNativeColumnHeaders().Length);
+                    var targetIsInStartViewport = targetIndex < visibleHeaderCount;
+                    var targetIsInEndViewport = targetIndex >= declaredRuntimeColumnNames.Count - visibleHeaderCount;
+                    var direction = ResolveConfiguredDirection();
+                    if (direction == false && targetIsInStartViewport)
+                    {
+                        return DragScrollBarToBoundary(forward: false);
+                    }
+
+                    if (direction == true && targetIsInEndViewport)
+                    {
+                        return DragScrollBarToBoundary(forward: true);
+                    }
+
+                    return false;
+                });
+            }
+
+            if (namedHeader is not null)
+            {
+                var previousSignature = Signature();
+                var previousPosition = Position();
+                TryScrollIntoView(namedHeader);
+                if (WaitForTargetOrMovement(previousSignature, previousPosition, 300)
+                    && IsVisible())
+                {
+                    return;
+                }
+            }
+
+            if (configuredColumnIndex is not null
+                && declaredRuntimeColumnNames is { Count: > 1 })
+            {
+                if (MoveToConfiguredPosition())
+                {
+                    if (WaitForTargetHeader(700))
+                    {
+                        return;
+                    }
+                }
+            }
+
+            bool? ResolveConfiguredDirection()
+            {
+                if (configuredColumnIndex is not { } targetIndex
+                    || configuredIndexesByName is not { Count: > 0 })
+                {
+                    return null;
+                }
+
+                var visibleIndexes = ReadNativeColumnHeaders()
+                    .Select(header => header.Name is not null
+                        && configuredIndexesByName.TryGetValue(header.Name, out var index)
+                            ? (int?)index
+                            : null)
+                    .Where(static index => index.HasValue)
+                    .Select(static index => index!.Value)
+                    .ToArray();
+                if (visibleIndexes.Length == 0)
+                {
+                    return null;
+                }
+
+                var orderedIndexes = visibleIndexes.Distinct().Order().ToArray();
+                var scrollableRangeStart = 0;
+                for (var index = 1; index < orderedIndexes.Length; index++)
+                {
+                    if (orderedIndexes[index] > orderedIndexes[index - 1] + 1)
+                    {
+                        scrollableRangeStart = index;
+                    }
+                }
+
+                var currentScrollableMinimum = orderedIndexes[scrollableRangeStart];
+                var currentScrollableMaximum = orderedIndexes[^1];
+                if (targetIndex < currentScrollableMinimum)
+                {
+                    return false;
+                }
+
+                if (targetIndex > currentScrollableMaximum)
+                {
+                    return true;
+                }
+
+                return null;
+            }
+
+            bool ResolveGeometryDirection()
+            {
+                if (namedHeader is not null && root is not null)
+                {
+                    var targetBounds = TryRead(() => namedHeader.BoundingRectangle);
+                    var rootBounds = TryRead(() => root.BoundingRectangle);
+                    if (targetBounds.Width > 0 && targetBounds.Right <= rootBounds.Left)
+                    {
+                        return false;
+                    }
+
+                    if (targetBounds.Width > 0 && targetBounds.Left >= rootBounds.Right)
+                    {
+                        return true;
+                    }
+                }
+
+                return !AtBoundary(forward: true);
+            }
+
+            var configuredDirection = ResolveConfiguredDirection();
+            var moveForward = configuredDirection ?? ResolveGeometryDirection();
+            var directionWasInferred = configuredDirection.HasValue;
+            var directionChanges = 0;
+            for (var step = 0; step < 64 && stopwatch.ElapsedMilliseconds < timeoutMs; step++)
+            {
+                if (IsVisible())
+                {
+                    return;
+                }
+
+                var currentConfiguredDirection = ResolveConfiguredDirection();
+                if (currentConfiguredDirection.HasValue
+                    && currentConfiguredDirection.Value != moveForward
+                    && directionChanges == 0)
+                {
+                    moveForward = currentConfiguredDirection.Value;
+                    directionWasInferred = true;
+                    directionChanges++;
+                }
+
+                if (AtBoundary(moveForward))
+                {
+                    if (directionWasInferred || directionChanges > 0)
+                    {
+                        break;
+                    }
+
+                    moveForward = !moveForward;
+                    directionChanges++;
+                    continue;
+                }
+
+                var before = Signature();
+                var beforePosition = Position();
+                _prefetchedNativeRows = null;
+                var moved = MoveWithScrollPattern(moveForward)
+                    && WaitForTargetOrMovement(before, beforePosition, 300);
+                if (!moved)
+                {
+                    before = Signature();
+                    beforePosition = Position();
+                    moved = PageScrollBar(moveForward)
+                        && WaitForTargetOrMovement(before, beforePosition, 300);
+                }
+                if (!moved)
+                {
+                    before = Signature();
+                    beforePosition = Position();
+                    moved = MoveWithScrollBarButton(moveForward)
+                        && WaitForTargetOrMovement(before, beforePosition, 300);
+                }
+
+                if (!moved)
+                {
+                    if (directionWasInferred || directionChanges > 0)
+                    {
+                        break;
+                    }
+
+                    moveForward = !moveForward;
+                    directionChanges++;
+                }
+            }
+
+            if (IsVisible())
+            {
+                return;
+            }
+            var finalRange = FindCurrentHorizontalRange();
+            throw new InvalidOperationException(
+                $"Grid '{AutomationId}' did not expose runtime column '{caption}' after horizontal materialization. "
+                + $"The column may be hidden or unavailable through UI Automation. Current headers: {string.Join(", ", ColumnNames)}. "
+                + $"Horizontal scroll: available={scroll?.HorizontallyScrollable.ValueOrDefault}, percent={scroll?.HorizontalScrollPercent.ValueOrDefault}; "
+                + $"range={finalRange?.Value.ValueOrDefault}/{finalRange?.Maximum.ValueOrDefault}; "
+                + $"scrollbars={string.Join("; ", root is null ? [] : FindAutomationDescendants(root).Where(item => TryRead(() => item.ControlType) == ControlType.ScrollBar).Select(item => DescribeGridComboElement("scrollbar", item)))}.");
+        }
+
+        private static bool HasHorizontalPositionChanged(double? previous, double? current)
+        {
+            return previous.HasValue
+                && current.HasValue
+                && Math.Abs(previous.Value - current.Value) >= 0.001;
+        }
+
+        private NativeFlaUiRow[] ReadNativeDataRows(bool includeCells = true)
         {
             var root = FindGridRoot();
             var headers = ReadNativeColumnHeaders();
@@ -2535,8 +3246,8 @@ public sealed partial class FlaUiControlResolver
                 .OrderBy(static candidate => candidate.Bounds.Top)
                 .Select(row => new NativeFlaUiRow(
                     row.Element,
-                    ResolveNativeRowCells(row.Element, headers)))
-                .Where(row => row.Cells.Count == headers.Length)
+                    includeCells ? ResolveNativeRowCells(row.Element, headers) : Array.Empty<AutomationElement>()))
+                .Where(row => !includeCells || row.Cells.Count == headers.Length)
                 .ToArray();
         }
 
@@ -3960,7 +4671,8 @@ public sealed partial class FlaUiControlResolver
 
         if (TryRead(() => results.ControlType) == ControlType.List)
         {
-            new FlaUiListBoxControl(results.AsListBox()).SelectItem(itemText, selectionTimeout);
+            new FlaUiListBoxControl(results.AsListBox(), () => resolveResults(TimeSpan.Zero))
+                .SelectItem(itemText, selectionTimeout);
             return;
         }
 
@@ -4010,22 +4722,34 @@ public sealed partial class FlaUiControlResolver
         }
     }
 
-    private static void SelectAndConfirmGridRow(
+    internal static void SelectAndConfirmGridRow(
         AutomationElement target,
         AutomationElement? selectionContainer,
         int timeoutMs,
         string description,
         Func<AutomationElement?> refreshTarget,
-        Func<AutomationElement?>? refreshSelectionContainer = null)
+        Func<AutomationElement?>? refreshSelectionContainer = null,
+        Func<AutomationElement, bool>? isCurrentRowMatch = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(refreshTarget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
         var stopwatch = Stopwatch.StartNew();
         var currentTarget = target;
-        TryScrollIntoView(currentTarget);
-        currentTarget = WaitForFreshGridRowTarget(refreshTarget, stopwatch, timeoutMs, description);
-        selectionContainer = refreshSelectionContainer?.Invoke() ?? selectionContainer;
+        var targetBounds = TryRead(() => currentTarget.BoundingRectangle);
+        var targetIsVisible = TryRead(() => currentTarget.IsAvailable)
+            && !TryRead(() => currentTarget.IsOffscreen)
+            && targetBounds.Width > 0
+            && targetBounds.Height > 0;
+        if (!targetIsVisible)
+        {
+            TryScrollIntoView(currentTarget);
+        }
+        if (!targetIsVisible || isCurrentRowMatch is null || !isCurrentRowMatch(currentTarget))
+        {
+            currentTarget = WaitForFreshGridRowTarget(refreshTarget, stopwatch, timeoutMs, description);
+            selectionContainer = refreshSelectionContainer?.Invoke() ?? selectionContainer;
+        }
         var selectable = FindSelectableGridRowElement(currentTarget);
         System.Drawing.Point? completedClickPoint = null;
 
@@ -4073,7 +4797,9 @@ public sealed partial class FlaUiControlResolver
                         options: new PointerClickOptions { Timeout = RemainingPointerTimeout() });
                     completedClickPoint = clickPoint;
                 }
-                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
+                catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException)
+                    && pointerFallbackException is not TimeoutException
+                    && stopwatch.ElapsedMilliseconds < timeoutMs)
                 {
                     currentTarget = WaitForFreshGridRowTarget(refreshTarget, stopwatch, timeoutMs, description);
                     selectable = FindSelectableGridRowElement(currentTarget);
@@ -4091,18 +4817,21 @@ public sealed partial class FlaUiControlResolver
         var selectionStateWasReadable = false;
         while (stopwatch.ElapsedMilliseconds < timeoutMs)
         {
-            var refreshedTarget = refreshTarget();
-            if (refreshedTarget is null)
+            if (isCurrentRowMatch is null || !isCurrentRowMatch(currentTarget))
             {
-                Thread.Sleep(Math.Max(
-                    1,
-                    Math.Min(25, timeoutMs - (int)stopwatch.ElapsedMilliseconds)));
-                continue;
-            }
+                var refreshedTarget = refreshTarget();
+                if (refreshedTarget is null)
+                {
+                    Thread.Sleep(Math.Max(
+                        1,
+                        Math.Min(25, timeoutMs - (int)stopwatch.ElapsedMilliseconds)));
+                    continue;
+                }
 
-            currentTarget = refreshedTarget;
-            selectionContainer = refreshSelectionContainer?.Invoke() ?? selectionContainer;
-            selectable = FindSelectableGridRowElement(currentTarget);
+                currentTarget = refreshedTarget;
+                selectionContainer = refreshSelectionContainer?.Invoke() ?? selectionContainer;
+                selectable = FindSelectableGridRowElement(currentTarget);
+            }
             if (TryConfirmGridRowSelection(
                     currentTarget,
                     selectable,

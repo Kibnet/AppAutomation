@@ -43,10 +43,6 @@ public static partial class UiPageExtensions
         var operationName = cancel ? nameof(CancelMultiSelection) : nameof(SelectMultiItems);
         var startedAtUtc = DateTimeOffset.UtcNow;
         var control = Resolve(selector, page);
-        IReadOnlyList<string> cachedCommittedItems = [];
-        var hasCachedCommittedItems = cancel
-            && control is IMultiSelectCommittedStateControl committedState
-            && committedState.TryGetCommittedItems(out cachedCommittedItems);
         var expectedItems = ValidateExpectedMultiSelectItems(
             page,
             selector,
@@ -90,9 +86,7 @@ public static partial class UiPageExtensions
         IReadOnlyList<string> committedItems = expectedItems;
         if (cancel)
         {
-            committedItems = hasCachedCommittedItems
-                ? cachedCommittedItems.Select(NormalizeMultiSelectItem).ToArray()
-                : control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
+            committedItems = control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
             EnsureMultiSelectPopupRemainsOpen(
                 page,
                 selector,
@@ -169,6 +163,13 @@ public static partial class UiPageExtensions
             timeoutMs,
             nameof(WaitUntilSelectedItemsEqual),
             startedAtUtc);
+
+        if (control is IMultiSelectCommittedStateControl committedState && !control.IsOpen)
+        {
+            ExecuteMultiSelectAction(page, selector, expectedItems, control, timeoutMs, startedAtUtc,
+                () => committedState.RefreshCommittedItems(),
+                "failed to refresh its committed selection", nameof(WaitUntilSelectedItemsEqual));
+        }
 
         WaitUntil(
             page,
@@ -315,8 +316,13 @@ public static partial class UiPageExtensions
 
     private static string DescribeMultiSelect(IMultiSelectControl control)
     {
+        var selected = !control.IsOpen
+            && control is IMultiSelectCommittedStateControl committedState
+            && !committedState.TryGetCommittedItems(out _)
+                ? "<unobserved>"
+                : FormatMultiSelectItems(control.SelectedItems);
         return $"IsOpen={control.IsOpen}; Available={FormatMultiSelectItems(control.Items)}; "
-            + $"Selected={FormatMultiSelectItems(control.SelectedItems)}";
+            + $"Selected={selected}";
     }
 
     private static UiOperationException CreateMultiSelectException<TSelf>(

@@ -685,6 +685,7 @@ public static partial class UiControlResolverExtensions
     private sealed class AdapterAwareUiControlResolver :
         IUiControlResolver,
         IMultiItemControlRuntimeResolver,
+        INotificationRuntimeResolver,
         IUiClipboardRuntime,
         IUiPointerRuntime
     {
@@ -698,6 +699,10 @@ public static partial class UiControlResolverExtensions
         }
 
         public UiRuntimeCapabilities Capabilities => _innerResolver.Capabilities;
+
+        public IReadOnlyList<NotificationRuntimeSnapshot>? ReadNotifications(
+            UiControlDefinition rootDefinition, NotificationControlParts parts) =>
+            (_innerResolver as INotificationRuntimeResolver)?.ReadNotifications(rootDefinition, parts);
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
@@ -804,6 +809,8 @@ internal interface ISearchPickerExecutionPhases
     void InvokeApplyAction();
 
     void ExpandResults();
+
+    void SelectItem(string itemText, int timeoutMs);
 }
 
 /// <summary>
@@ -1005,6 +1012,8 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         void ISearchPickerExecutionPhases.ExpandResults() => Expand();
 
+        void ISearchPickerExecutionPhases.SelectItem(string itemText, int timeoutMs) => SelectItem(itemText, timeoutMs);
+
         public void Expand()
         {
             if (_isExpanded)
@@ -1025,12 +1034,15 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Select(string itemText) => SelectItem(itemText);
 
-        public void SelectItem(string itemText)
+        public void SelectItem(string itemText) => SelectItem(itemText, 5000);
+
+        private void SelectItem(string itemText, int timeoutMs)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
 
             Expand();
-            _results.SelectItem(itemText);
+            _results.SelectItem(itemText, timeoutMs);
         }
 
         private void EnterSearchInput(string value)
@@ -1058,7 +1070,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         void Expand();
 
-        void SelectItem(string itemText);
+        void SelectItem(string itemText, int timeoutMs);
     }
 
     private sealed class DeferredResultsSurface : ISearchPickerResultsSurface
@@ -1084,7 +1096,7 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Expand() => Resolve().Expand();
 
-        public void SelectItem(string itemText) => Resolve().SelectItem(itemText);
+        public void SelectItem(string itemText, int timeoutMs) => Resolve().SelectItem(itemText, timeoutMs);
 
         private ISearchPickerResultsSurface Resolve()
         {
@@ -1156,9 +1168,15 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
 
         public void Expand() => _comboBox.Expand();
 
-        public void SelectItem(string itemText)
+        public void SelectItem(string itemText, int timeoutMs)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+            if (_comboBox is ISingleSelectOperationControl operationControl)
+            {
+                operationControl.SelectItem(itemText, timeoutMs);
+                return;
+            }
 
             var normalizedTarget = Normalize(itemText);
             var index = _comboBox.Items
@@ -1200,7 +1218,16 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         {
         }
 
-        public void SelectItem(string itemText) => _listBox.SelectItem(itemText);
+        public void SelectItem(string itemText, int timeoutMs)
+        {
+            if (_listBox is ITimedSelectableListBoxControl timedListBox)
+            {
+                timedListBox.SelectItem(itemText, timeoutMs);
+                return;
+            }
+
+            _listBox.SelectItem(itemText);
+        }
     }
 
     private static string Normalize(string? value)
@@ -1792,7 +1819,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         return new NotificationControl(definition.PropertyName, definition, _parts, innerResolver);
     }
 
-    private sealed class NotificationControl : INotificationControl, IReadableTextControl
+    private sealed class NotificationControl : INotificationControl, IReadableTextControl, INotificationMessagesControl
     {
         private readonly UiControlDefinition _rootDefinition;
         private readonly NotificationControlParts _parts;
@@ -1814,15 +1841,28 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
 
         public string Name => TryReadText() ?? AutomationId;
 
-        public bool IsEnabled =>
-            TryResolveLabel("Text", _parts.TextLocator)?.IsEnabled
-            ?? TryResolveRoot()?.IsEnabled
-            ?? false;
+        public bool IsEnabled => ReadInstances()?.Any(instance => instance.IsEnabled)
+            ?? (TryResolveLabel("Text", _parts.TextLocator)?.IsEnabled
+                ?? TryResolveRoot()?.IsEnabled
+                ?? false);
 
-        public string Text =>
-            ReadText(TryResolveLabel("Text", _parts.TextLocator)?.Text)
-            ?? ReadText(TryResolveRoot()?.Name)
-            ?? string.Empty;
+        public string Text
+        {
+            get
+            {
+                var instances = ReadInstances();
+                if (instances is null)
+                {
+                    return ReadLegacyText();
+                }
+
+                EnsureSingleInstance(instances.Count);
+                return instances.Count == 0 ? string.Empty : instances[0].Text;
+            }
+        }
+
+        public IReadOnlyList<string> ReadVisibleMessages() =>
+            ReadInstances()?.Select(instance => instance.Text).ToArray() ?? [ReadLegacyText()];
 
         public void Dismiss()
         {
@@ -1832,7 +1872,38 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
                     $"Notification '{AutomationId}' cannot be dismissed because 'DismissButton' is not configured.");
             }
 
-            ResolveButton("DismissButton", _parts.DismissButtonLocator).Invoke();
+            var instances = ReadInstances();
+            if (instances is null)
+            {
+                ResolveButton("DismissButton", _parts.DismissButtonLocator).Invoke();
+                return;
+            }
+
+            EnsureSingleInstance(instances.Count);
+            if (instances.Count == 0)
+            {
+                throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                    $"Notification '{AutomationId}' has no visible instance to dismiss.");
+            }
+
+            instances[0].Dismiss();
+        }
+
+        private IReadOnlyList<NotificationRuntimeSnapshot>? ReadInstances() =>
+            (_innerResolver as INotificationRuntimeResolver)?.ReadNotifications(_rootDefinition, _parts);
+
+        private string ReadLegacyText() => ReadText(TryResolveLabel("Text", _parts.TextLocator)?.Text)
+            ?? ReadText(TryResolveRoot()?.Name)
+            ?? string.Empty;
+
+        private void EnsureSingleInstance(int count)
+        {
+            if (count > 1)
+            {
+                throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
+                    $"Notification '{AutomationId}' has {count} visible instances; scalar text or dismissal "
+                    + "requires exactly one. Use WaitUntilNotificationContains to check each visible message.");
+            }
         }
 
         private string? TryReadText()

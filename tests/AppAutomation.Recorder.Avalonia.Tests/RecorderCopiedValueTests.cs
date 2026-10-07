@@ -43,6 +43,44 @@ public sealed class RecorderCopiedValueTests
     }
 
     [Test]
+    public async Task ClipboardPaste_IntoConfiguredSearchInput_RecordsLogicalSearchWithCopiedValue()
+    {
+        var source = TextBox("SourceValue", "Search result");
+        var searchInput = TextBox("TableSearchInput");
+        var searchRoot = new StackPanel { Children = { searchInput } };
+        AutomationProperties.SetAutomationId(searchRoot, "TableSearch");
+        var root = new StackPanel { Children = { source, searchRoot } };
+        using var session = CreateSession(root, configureSearchControl: true);
+        RecorderCopiedValueTargetSelection? selection = null;
+        session.CopiedValueTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.Start();
+        session.RefreshObservedControlsForTesting();
+
+        session.BeginCopiedValueTargetSelection();
+        session.SelectCopiedValueTargetForTesting(source);
+        await session.CommitCopiedValueAsync(selection!, static (_, _) => Task.CompletedTask);
+
+        session.RegisterCopiedValuePasteForTesting(searchInput);
+        session.RegisterKeyboardInputForTesting(searchInput);
+        searchInput.Text = "Search result";
+        session.FlushPendingStateForTesting();
+
+        var preview = session.ExportPreview();
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.StepCount).IsEqualTo(2);
+            await Assert.That(session.PersistableStepCount).IsEqualTo(2);
+            await Assert.That(session.StepJournal[^1].CanPersist).IsTrue();
+            await Assert.That(session.StepJournal[^1].StatusMessage).Contains("Enter copied value");
+            await Assert.That(preview).Contains(
+                "Page.EnterSearch(static page => page.TableSearch, copiedSourceValue);");
+            await Assert.That(preview).DoesNotContain(
+                "Page.EnterSearch(static page => page.TableSearch, \"Search result\");");
+            await Assert.That(preview).DoesNotContain("Page.EnterText(static page => page.TableSearchInput");
+        }
+    }
+
+    [Test]
     public async Task ClipboardPaste_WithDifferentText_RemainsLiteralEnterText()
     {
         var source = TextBox("SourceValue", "Search result");
@@ -253,7 +291,19 @@ public sealed class RecorderCopiedValueTests
         var steps = new[]
         {
             CopiedValueDefinition("SourceValue", copiedValueId),
-            CopiedValueUse("TargetValue", copiedValueId)
+            CopiedValueUse("TargetValue", copiedValueId),
+            new RecordedStep(
+                RecordedActionKind.EnterSearch,
+                new RecordedControlDescriptor(
+                    "TableSearch",
+                    UiControlType.Search,
+                    "TableSearch",
+                    UiLocatorKind.AutomationId,
+                    FallbackToName: false,
+                    AvaloniaTypeName: nameof(StackPanel),
+                    Warning: null),
+                StringValue: "Search result",
+                InputCopiedValueId: copiedValueId)
         };
         var autosave = await project.AutosaveAsync(context, steps);
         var autosaveRead = RecorderAutosaveStateSerializer.TryRead(
@@ -270,6 +320,7 @@ public sealed class RecorderCopiedValueTests
             await Assert.That(autosaveError).IsNull();
             await Assert.That(autosaveState!.Steps[0].CopiedValueId).IsEqualTo(copiedValueId);
             await Assert.That(autosaveState.Steps[1].InputCopiedValueId).IsEqualTo(copiedValueId);
+            await Assert.That(autosaveState.Steps[2].InputCopiedValueId).IsEqualTo(copiedValueId);
             await Assert.That(save.Success).IsTrue();
             await Assert.That(source).Contains("public async Task Recorded_CopyValueFlow_");
             await Assert.That(source).Contains(
@@ -278,6 +329,8 @@ public sealed class RecorderCopiedValueTests
                 "await Page.CopyTextToClipboardAsync(copiedSourceValue);");
             await Assert.That(source).Contains(
                 "await Page.PasteTextFromClipboardAsync(static page => page.TargetValue, copiedSourceValue);");
+            await Assert.That(source).Contains(
+                "Page.EnterSearch(static page => page.TableSearch, copiedSourceValue);");
             await Assert.That(compileErrors).IsEmpty();
         }
     }
@@ -291,19 +344,28 @@ public sealed class RecorderCopiedValueTests
 
     private static RecorderSession CreateSession(
         Control root,
-        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? autosaveOperation = null)
+        Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? autosaveOperation = null,
+        bool configureSearchControl = false)
     {
+        var options = new AppAutomationRecorderOptions
+        {
+            Validation = new RecorderValidationOptions
+            {
+                ValidateSelectors = true,
+                ValidateRuntimeTargets = false,
+                CaptureInvalidSteps = true
+            }
+        };
+        if (configureSearchControl)
+        {
+            options.SearchControlHints.Add(new RecorderSearchControlHint(
+                "TableSearch",
+                SearchControlParts.ByAutomationIds("TableSearchInput", "SearchHistoryItemButton")));
+        }
+
         return new RecorderSession(
             RecorderTestWindow.CreateStub(),
-            new AppAutomationRecorderOptions
-            {
-                Validation = new RecorderValidationOptions
-                {
-                    ValidateSelectors = true,
-                    ValidateRuntimeTargets = false,
-                    CaptureInvalidSteps = true
-                }
-            },
+            options,
             validationRootProvider: () => root,
             attachWindowHandlers: false,
             autosaveOperation: autosaveOperation);

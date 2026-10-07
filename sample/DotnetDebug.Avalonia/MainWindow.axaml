@@ -230,6 +230,9 @@
                                automation:AutomationProperties.AutomationId="MultiSelectStatusLabel"
                                VerticalContentAlignment="Center"
                                Content="Selected: Alpha" />
+                        <Button Content="Reset selection"
+                                Click="OnResetMultiSelectionClick"
+                                automation:AutomationProperties.AutomationId="MultiSelectionResetButton" />
                     </StackPanel>
                 </StackPanel>
 
@@ -472,8 +475,7 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Key}"
-                                                   Focusable="True"
-                                                   automation:AutomationProperties.AutomationId="ArmGridRowCommitTarget" />
+                                                   Focusable="True" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -503,7 +505,9 @@
                                                     Width="95">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding IsApproved}" />
+                                        <TextBlock Text="{Binding IsApproved}"
+                                                   Focusable="True"
+                                                   automation:AutomationProperties.AutomationId="ArmGridRowCommitTarget" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                                 <DataGridTemplateColumn.CellEditingTemplate>
@@ -526,6 +530,7 @@
                                     <DataTemplate>
                                         <ComboBox ItemsSource="{Binding $parent[DataGrid].DataContext.ArmGridStateOptions}"
                                                   SelectedItem="{Binding State, Mode=TwoWay}"
+                                                  Loaded="OnArmGridStateEditorLoaded"
                                                   automation:AutomationProperties.AutomationId="ArmGridStateEditor" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>

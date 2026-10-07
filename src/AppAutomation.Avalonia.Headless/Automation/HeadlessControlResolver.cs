@@ -15,7 +15,7 @@ using AvaloniaWindow = Avalonia.Controls.Window;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
 
-public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime
+public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, INotificationRuntimeResolver
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
@@ -70,6 +70,60 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             return clipboard.SetTextAsync(text);
         }, cancellationToken);
         await writeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    IReadOnlyList<NotificationRuntimeSnapshot>? INotificationRuntimeResolver.ReadNotifications(
+        UiControlDefinition rootDefinition, NotificationControlParts parts)
+    {
+        return HeadlessRuntime.Dispatch(() =>
+        {
+            var searchRoots = rootDefinition.Scope is null
+                ? new AvaloniaControl[] { _window.Native }
+                : ControlTree.EnumerateDescendants(_window.Native)
+                    .Where(control => MatchesLocator(control, rootDefinition.Scope)).ToArray();
+            var roots = FindVisibleNotificationMatches(
+                searchRoots.SelectMany(root => ControlTree.EnumerateDescendants(root).Prepend(root)),
+                rootDefinition.LocatorValue, rootDefinition.LocatorKind, rootDefinition.FallbackToName);
+            return (IReadOnlyList<NotificationRuntimeSnapshot>)roots.Select(root =>
+            {
+                var text = FindNotificationPart(root, rootDefinition, parts, parts.TextLocator);
+                return new NotificationRuntimeSnapshot(
+                    ReadControlVisibleText(text) ?? AutomationElement.ReadControlName(text),
+                    root.IsEffectivelyEnabled && text.IsEffectivelyEnabled,
+                    () =>
+                    {
+                        var button = HeadlessRuntime.Dispatch(() => FindNotificationPart(
+                            root, rootDefinition, parts, parts.DismissButtonLocator!));
+                        new HeadlessButtonControl(AutomationElement.WrapControl(button).AsButton()).Invoke();
+                    });
+            }).ToArray();
+        });
+    }
+
+    private static AvaloniaControl FindNotificationPart(
+        AvaloniaControl root, UiControlDefinition definition, NotificationControlParts parts, string locator)
+    {
+        var matches = FindVisibleNotificationMatches(ControlTree.EnumerateDescendants(root),
+            locator, parts.LocatorKind, parts.FallbackToName);
+        return matches.Length == 1 ? matches[0] : throw new UiControlResolutionException(
+            matches.Length == 0 ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous,
+            $"Notification '{definition.PropertyName}' part [{parts.LocatorKind}:{locator}] "
+            + $"matched {matches.Length} visible controls inside its notification root; expected exactly one.");
+    }
+
+    private static AvaloniaControl[] FindVisibleNotificationMatches(
+        IEnumerable<AvaloniaControl> candidates,
+        string locator,
+        UiLocatorKind locatorKind,
+        bool fallbackToName)
+    {
+        var visible = candidates.Where(static candidate => candidate.IsEffectivelyVisible).Distinct().ToArray();
+        var primary = visible.Where(candidate => MatchesLocator(candidate,
+            new UiControlScope(locator, locatorKind, FallbackToName: false))).ToArray();
+        return primary.Length > 0 || !fallbackToName || locatorKind == UiLocatorKind.Name
+            ? primary
+            : visible.Where(candidate => MatchesLocator(candidate,
+                new UiControlScope(locator, UiLocatorKind.Name, FallbackToName: false))).ToArray();
     }
 
     public TControl Resolve<TControl>(UiControlDefinition definition)
@@ -989,7 +1043,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public string Text => Inner.Text ?? Name;
     }
 
-    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, IExactSelectableListBoxControl
+    private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, IExactSelectableListBoxControl, ITimedSelectableListBoxControl
     {
         public HeadlessListBoxControl(ListBox inner) : base(inner)
         {
@@ -1002,6 +1056,12 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         public void SelectItem(string itemText)
         {
+            Inner.SelectItem(itemText);
+        }
+
+        public void SelectItem(string itemText, int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             Inner.SelectItem(itemText);
         }
 

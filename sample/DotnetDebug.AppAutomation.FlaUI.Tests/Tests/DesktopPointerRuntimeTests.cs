@@ -316,7 +316,7 @@ public sealed class DesktopPointerRuntimeTests
             ["APPAUTOMATION_POINTER_REPLACEMENT_FIXTURE"] = replaceClickTarget ? "1" : "0",
             ["APPAUTOMATION_POINTER_FIXTURE_TRACE_PATH"] = Artifact("fixture-native-events.jsonl")
         };
-        return DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
         {
             ExecutablePath = defaults.ExecutablePath,
             WorkingDirectory = defaults.WorkingDirectory,
@@ -327,6 +327,22 @@ public sealed class DesktopPointerRuntimeTests
             PollInterval = defaults.PollInterval,
             WindowPlacement = defaults.WindowPlacement
         });
+        try
+        {
+            session.MainWindow.SetForeground();
+            Find(session, ClickTarget.LocatorValue).Focus();
+            _ = UiWait.Until(
+                () => WindowsPointerBackend.ForegroundBelongsTo(session.MainWindow.Properties.ProcessId.Value),
+                static ownsForeground => ownsForeground,
+                new UiWaitOptions { Timeout = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(25) },
+                "The native pointer fixture did not become foreground before the test.");
+            return session;
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
     }
 
     private static PointerPage CreatePage(DesktopAppSession session) =>

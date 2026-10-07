@@ -62,11 +62,13 @@ public sealed class VersioningScriptsTests
     public async Task ResolvePackageVersion_RejectsInvalidTag()
     {
         var result = InvokePowerShellScript("-Tag", $"release-{GetSampleStableVersion()}");
+        var normalizedOutput = string.Join(' ',
+            result.CombinedOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
         using (Assert.Multiple())
         {
-            await Assert.That(result.ExitCode == 0).IsEqualTo(false);
-            await Assert.That(result.CombinedOutput).Contains("must be '<version>', 'v<version>', or 'appautomation-v<version>'");
+            await Assert.That(result.ExitCode == 0).IsFalse();
+            await Assert.That(normalizedOutput).Contains("must be '<version>', 'v<version>', or 'appautomation-v<version>'");
         }
     }
 

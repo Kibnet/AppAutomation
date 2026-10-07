@@ -114,8 +114,14 @@ public static class DesktopPointer
     internal static void ClickFallback(AutomationElement target, string reason, PointerClickOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(target);
+        ClickFallback(() => target, reason, options);
+    }
+
+    internal static void ClickFallback(Func<AutomationElement> target, string reason, PointerClickOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        ClickCore(() => target, options ?? new PointerClickOptions(), null, null, default, reason).GetAwaiter().GetResult();
+        ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason).GetAwaiter().GetResult();
     }
 
     internal static void Scroll(AutomationElement target, Point point, double amount, bool horizontal = false, Action? prepare = null)
@@ -131,9 +137,9 @@ public static class DesktopPointer
         }, session: session).GetAwaiter().GetResult();
     }
 
-    internal static void Drag(AutomationElement target, Point start, Point end, Action? prepare = null)
+    internal static void Drag(AutomationElement target, Point start, Point end, Action? prepare = null, TimeSpan? timeout = null)
     {
-        var (session, remaining, processId) = PrepareCall(() => target, TimeSpan.FromSeconds(5), default);
+        var (session, remaining, processId) = PrepareCall(() => target, timeout ?? TimeSpan.FromSeconds(5), default);
         Controller.RunAsync("scrollbar-drag-fallback", remaining, operation =>
         {
             operation.Log("physical-fallback", detail: "grid scrollbar fallback");
@@ -141,7 +147,15 @@ public static class DesktopPointer
             operation.Check();
             // Scrollbar thumbs capture on Down and can legitimately move by less than the shell
             // drag-and-drop threshold; keep the requested endpoint to preserve virtual-row coverage.
-            return operation.DragAsync(start, end, new PointerDragOptions(), resolved.ValidateOwner,
+            var dragRemaining = operation.Remaining;
+            if (dragRemaining <= TimeSpan.Zero)
+                throw new TimeoutException("The scrollbar drag exhausted its timeout before pointer input.");
+            var options = timeout.HasValue ? new PointerDragOptions
+            {
+                Timeout = remaining,
+                Duration = TimeSpan.FromMilliseconds(Math.Min(200, dragRemaining.TotalMilliseconds / 2))
+            } : new PointerDragOptions();
+            return operation.DragAsync(start, end, options, resolved.ValidateOwner,
                 requireDragThreshold: false, validateSource: resolved.ValidateExact);
         }, session: session).GetAwaiter().GetResult();
     }

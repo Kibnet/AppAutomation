@@ -369,6 +369,11 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             await Assert.That(Page.MultiSelection.SelectedItems).IsEquivalentTo(expectedItems);
             await Assert.That(Page.MultiSelectStatusLabel.Text).IsEqualTo("Selected: Alpha, Omega");
         }
+
+        Page.ClickButton(static page => page.MultiSelectionResetButton)
+            .WaitUntilTextEquals(static page => page.MultiSelectStatusLabel, "Selected: none")
+            .WaitUntilSelectedItemsEqual(static page => page.MultiSelection, []);
+        await Assert.That(Page.MultiSelection.IsOpen).IsFalse();
     }
 
     [Test]
@@ -470,6 +475,34 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
             Page.InvokeContextMenuItem(p => p.ContextTarget, ["Disabled action"]));
 
         await Assert.That(exception.Message).Contains("disabled");
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task Notifications_WithRepeatedParts_ReadEachVisibleMessage()
+    {
+        const string firstPath = @"C:\Exports\First";
+        const string secondPath = @"C:\Exports\Second";
+        Page.SelectTabItem(p => p.ArmDesktopTabItem);
+        var notification = Page.ArmNotification;
+        await Assert.That(notification.Text).IsEqualTo("Export ready");
+
+        Page.SelectExportFolder(p => p.ArmFolderExport, firstPath)
+            .WaitUntilNotificationContains(p => p.ArmNotification, firstPath)
+            .SelectExportFolder(p => p.ArmFolderExport, secondPath)
+            .WaitUntilNotificationContains(p => p.ArmNotification, secondPath)
+            .WaitUntilNotificationContains(p => p.ArmNotification, firstPath)
+            .WaitUntilNotificationContains(p => p.ArmNotification, "Export ready");
+
+        await Assert.That(() => notification.Text).Throws<UiControlResolutionException>();
+        await Assert.That(() => notification.Dismiss()).Throws<UiControlResolutionException>();
+        // A failed ambiguous dismiss must not remove either notification.
+        Page.WaitUntilNotificationContains(p => p.ArmNotification, firstPath)
+            .WaitUntilNotificationContains(p => p.ArmNotification, secondPath);
+        var failure = await Assert.That(() => Page.WaitUntilNotificationContains(
+            p => p.ArmNotification, "Absent message", timeoutMs: 150)).Throws<UiOperationException>();
+        await Assert.That(failure.Message).Contains(firstPath);
+        await Assert.That(failure.Message).Contains(secondPath);
     }
 
     [Test]

@@ -152,6 +152,11 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
             return false;
         }
 
+        public IReadOnlyList<string> RefreshCommittedItems() =>
+            _inner is IMultiSelectCommittedStateControl committedState
+                ? committedState.RefreshCommittedItems()
+                : _inner.SelectedItems;
+
         public void Open() => _inner.Open();
 
         public void SetSelectedItems(IReadOnlyCollection<string> values) => _inner.SetSelectedItems(values);

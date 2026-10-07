@@ -34,6 +34,7 @@ public sealed class SingleSelectControlTests
         {
             await Assert.That(string.Join(" > ", fixture.Actions)).IsEqualTo("Open > Select:Item 42 > Confirm");
             await Assert.That(ReadSelection()).IsEqualTo("Item 42");
+            await Assert.That(((FakeListBox)fixture.Results).ItemsReadCount).IsEqualTo(useSearchPicker ? 2 : 1);
         }
 
         fixture.Input.Enter("Another query");
@@ -295,10 +296,11 @@ public sealed class SingleSelectControlTests
     private sealed class FakeListBox : ISelectableListBoxControl
     {
         private readonly List<string> _actions;
+        private readonly IReadOnlyList<IListBoxItem> _items;
 
         public FakeListBox(IEnumerable<string> items, List<string> actions)
         {
-            Items = items.Select(static item => (IListBoxItem)new FakeListItem(item)).ToArray();
+            _items = items.Select(static item => (IListBoxItem)new FakeListItem(item)).ToArray();
             _actions = actions;
         }
 
@@ -308,7 +310,16 @@ public sealed class SingleSelectControlTests
 
         public bool IsEnabled => true;
 
-        public IReadOnlyList<IListBoxItem> Items { get; }
+        public int ItemsReadCount { get; private set; }
+
+        public IReadOnlyList<IListBoxItem> Items
+        {
+            get
+            {
+                ItemsReadCount++;
+                return _items;
+            }
+        }
 
         public string? SelectedItemText { get; private set; }
 

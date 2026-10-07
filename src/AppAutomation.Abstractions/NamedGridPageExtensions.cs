@@ -478,7 +478,7 @@ public static partial class UiPageExtensions
         string searchText,
         string itemText,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = 10000)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchText);

@@ -1818,10 +1818,13 @@ internal sealed class RecorderSession :
             _pendingTargetSelectionCandidates = ResolveCheckTargetCandidates(
                 source,
                 positionRoot,
-                e.GetPosition(positionRoot));
+                e.GetPosition(positionRoot),
+                preserveReadOnlyText: _targetSelectionMode == RecorderTargetSelectionMode.Check);
             _pendingTargetSelectionControl = _pendingTargetSelectionCandidates.Count > 0
                 ? _pendingTargetSelectionCandidates[0]
-                : ResolveInteractionOwner(source) ?? source;
+                : _targetSelectionMode == RecorderTargetSelectionMode.Check && source is not null
+                    ? ResolveCheckTargetOwner(source)
+                    : ResolveInteractionOwner(source) ?? source;
             e.Handled = true;
             return;
         }
@@ -3326,7 +3329,7 @@ internal sealed class RecorderSession :
             return false;
         }
 
-        CompleteCheckTargetSelection(ResolveInteractionOwner(source) ?? source);
+        CompleteCheckTargetSelection(ResolveCheckTargetOwner(source));
         return true;
     }
 
@@ -3342,7 +3345,7 @@ internal sealed class RecorderSession :
         }
 
         CompleteCheckTargetSelection(
-            ResolveInteractionOwner(eventSource) ?? eventSource,
+            ResolveCheckTargetOwner(eventSource),
             ResolveCheckTargetCandidates(eventSource, visualCandidates, visualCandidates));
         return true;
     }
@@ -3361,7 +3364,7 @@ internal sealed class RecorderSession :
         }
 
         CompleteCheckTargetSelection(
-            ResolveInteractionOwner(eventSource) ?? eventSource,
+            ResolveCheckTargetOwner(eventSource),
             ResolveCheckTargetCandidates(eventSource, inputCandidates, visualCandidates));
         return true;
     }
@@ -3380,7 +3383,7 @@ internal sealed class RecorderSession :
 
         var candidates = ResolveCheckTargetCandidates(eventSource, positionRoot, position);
         CompleteCheckTargetSelection(
-            candidates.FirstOrDefault() ?? ResolveInteractionOwner(eventSource) ?? eventSource,
+            candidates.FirstOrDefault() ?? ResolveCheckTargetOwner(eventSource),
             candidates);
         return true;
     }
@@ -4166,7 +4169,8 @@ internal sealed class RecorderSession :
     private List<Control> ResolveCheckTargetCandidates(
         Control? eventTarget,
         Control positionRoot,
-        Point position)
+        Point position,
+        bool preserveReadOnlyText = true)
     {
         var rootIsAttached = TopLevel.GetTopLevel(positionRoot) is not null;
         var configuredGridCells = EnumerateConfiguredGridCellCandidates(positionRoot, position)
@@ -4184,7 +4188,8 @@ internal sealed class RecorderSession :
                 .OfType<Control>(),
             visualCandidates,
             requireAttachedVisual: rootIsAttached,
-            nonHitTestCandidates);
+            nonHitTestCandidates,
+            preserveReadOnlyText);
     }
 
     private IEnumerable<Control> EnumerateConfiguredGridCellCandidates(
@@ -4267,7 +4272,8 @@ internal sealed class RecorderSession :
             input,
             visual,
             requireAttachedVisual: false,
-            nonHitTestCandidates);
+            nonHitTestCandidates,
+            preserveReadOnlyText: true);
     }
 
     private List<Control> ResolveCheckTargetCandidatesCore(
@@ -4275,7 +4281,8 @@ internal sealed class RecorderSession :
         IEnumerable<Control> inputCandidates,
         IEnumerable<Control> visualCandidates,
         bool requireAttachedVisual,
-        IReadOnlySet<Control> nonHitTestCandidates)
+        IReadOnlySet<Control> nonHitTestCandidates,
+        bool preserveReadOnlyText)
     {
         var visitedSpatial = new HashSet<Control>(ReferenceEqualityComparer.Instance);
         var spatialCandidates = visualCandidates
@@ -4307,9 +4314,7 @@ internal sealed class RecorderSession :
         var visitedPath = new HashSet<Control>(ReferenceEqualityComparer.Instance);
         foreach (var selected in selectedPaths)
         {
-            var selectedOwner = _stepFactory.IsCatalogGridCell(selected)
-                ? selected
-                : ResolveInteractionOwner(selected) ?? selected;
+            var selectedOwner = ResolveCheckTargetOwner(selected, preserveReadOnlyText);
             AddCheckTargetAndRelations(
                 selectedOwner,
                 candidates,
@@ -5550,6 +5555,19 @@ internal sealed class RecorderSession :
         return control;
     }
 
+    private Control ResolveCheckTargetOwner(Control selected, bool preserveReadOnlyText = true)
+    {
+        if (_stepFactory.IsCatalogGridCell(selected))
+        {
+            return selected;
+        }
+
+        var owner = ResolveInteractionOwner(selected);
+        return preserveReadOnlyText && selected is (TextBlock or Label) && owner is TabControl
+            ? selected
+            : owner ?? selected;
+    }
+
     private static Control? FindContextMenuOwner(Control? control)
     {
         return EnumerateRelatedControls(control)
@@ -6080,7 +6098,7 @@ internal sealed class RecorderSession :
                 : $"Enter generated value {generatedValue?.VariableName ?? step.GeneratedValueVariableName ?? "value"} into {step.Control.ProposedPropertyName}";
         }
 
-        if (step.ActionKind == RecordedActionKind.EnterText
+        if (step.ActionKind is (RecordedActionKind.EnterText or RecordedActionKind.EnterSearch)
             && step.InputCopiedValueId is { } inputCopiedValueId)
         {
             context.CopiedValuesById.TryGetValue(inputCopiedValueId, out var copiedValue);

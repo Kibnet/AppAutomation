@@ -27,10 +27,20 @@ public sealed record GridRuntimeColumn
     public int ColumnIndex { get; }
 
     /// <summary>
+    /// Gets the configured runtime captions in their logical left-to-right order.
+    /// Providers can use this metadata to navigate a horizontally virtualized layout
+    /// without first probing an arbitrary scroll direction.
+    /// </summary>
+    public IReadOnlyList<string> DeclaredRuntimeColumnNames { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Gets the current visible provider index when the column is present in runtime metadata.
     /// A null value means the configured column is currently hidden or otherwise unavailable visually.
     /// </summary>
     public int? RuntimeColumnIndex { get; init; }
+
+    /// <summary>Gets the configured runtime caption used to re-resolve a column after layout changes.</summary>
+    public string? RuntimeColumnName { get; init; }
 
     /// <summary>Gets the real row metadata property used when an identity column is hidden.</summary>
     public GridRowAutomationProperty? RowIdentityAutomationProperty { get; init; }

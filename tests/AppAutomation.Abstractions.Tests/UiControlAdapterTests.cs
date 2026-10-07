@@ -133,9 +133,9 @@ public sealed class UiControlAdapterTests
         {
             await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
             await Assert.That(context.Items.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
-            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(4);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(8);
             await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(3);
-            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(5);
         }
     }
 
@@ -150,7 +150,7 @@ public sealed class UiControlAdapterTests
         using (Assert.Multiple())
         {
             await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
-            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(3);
             await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(0);
         }
     }
@@ -204,9 +204,9 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.Categories.IsOpen).IsFalse();
             await Assert.That(page.Categories.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
             await Assert.That(items.SelectedItems).IsEquivalentTo(["Alpha", "Gamma"]);
-            await Assert.That(openButton.InvokeCount).IsEqualTo(2);
+            await Assert.That(openButton.InvokeCount).IsEqualTo(4);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
-            await Assert.That(cancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(cancelButton.InvokeCount).IsEqualTo(3);
         }
 
         await Assert.That(() => page.SelectMultiItems(
@@ -226,19 +226,29 @@ public sealed class UiControlAdapterTests
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
         context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending"]);
-        context.Items.SetSelectedItems(["Closed"]);
+        context.SetCommittedItems(["Closed"]);
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending"]);
+        context.Items.SetAvailableItems(["Closed", "New"]);
+        context.Items.ResetObservationCounts();
 
         context.Page.StatusFilter.Open();
 
+        await Assert.That(context.Page.StatusFilter.Items).IsEquivalentTo(["Closed", "New"]);
         await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
+        await Assert.That(context.Items.ItemsReadCount).IsEqualTo(1);
+        context.Items.SetSelectedItems(["New"]);
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["New"]);
         context.Items.IsAvailable = false;
     }
 
     [Test]
-    public async Task MultiSelectAdapter_ReadsInitialCommittedSelectionWhileClosed()
+    public async Task MultiSelectAdapter_RefreshesInitialCommittedSelectionExplicitly()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
 
+        await Assert.That(() => context.Page.StatusFilter.SelectedItems).Throws<InvalidOperationException>();
+        await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(0);
+        context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, ["Open"]);
         var selectedItems = context.Page.StatusFilter.SelectedItems;
 
         using (Assert.Multiple())
@@ -251,7 +261,24 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task MultiSelectAdapter_UsesProviderSelectionSnapshotWithoutPreReadingItems()
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task MultiSelectAdapter_ReadsSelectionWhenPopupClosesDuringObservation(bool closesAfterRead)
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true, closesOnCancel: !closesAfterRead);
+        if (closesAfterRead)
+        {
+            context.Items.OnSelectedItemsRead = () => context.Items.IsAvailable = false;
+        }
+
+        context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, ["Open"]);
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Open"]);
+        await Assert.That(context.Items.IsAvailable).IsFalse();
+        await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(closesAfterRead ? 0 : 1);
+    }
+
+    [Test]
+    public async Task MultiSelectAdapter_UsesProviderSelectionSnapshotAndRefreshesAvailableItemsOnReopen()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
 
@@ -260,12 +287,12 @@ public sealed class UiControlAdapterTests
         using (Assert.Multiple())
         {
             await Assert.That(context.Items.SelectionSnapshotCount).IsEqualTo(1);
-            await Assert.That(context.Items.ItemsReadCount).IsEqualTo(0);
+            await Assert.That(context.Items.ItemsReadCount).IsEqualTo(1);
         }
     }
 
     [Test]
-    public async Task CancelMultiSelection_ReusesKnownCommittedItemsWithoutScanningPopupSelection()
+    public async Task CancelMultiSelection_ReReadsCommittedItemsBeforeChangingPendingSelection()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
         context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
@@ -273,11 +300,14 @@ public sealed class UiControlAdapterTests
 
         context.Page.CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
 
-        await Assert.That(context.Items.SelectedItemsReadCount).IsEqualTo(0);
+        await Assert.That(context.Items.SelectedItemsReadCount).IsGreaterThan(0);
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
     }
 
     [Test]
-    public async Task SearchPickerAdapter_SupportsSharedPageFlow()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task SearchPickerAdapter_SupportsSharedPageFlow(bool useTimedSelection)
     {
         var searchInput = new FakeTextBoxControl("HistoryFilterInput");
         var applyButton = new FakeButtonControl("ApplyFilterButton");
@@ -288,11 +318,12 @@ public sealed class UiControlAdapterTests
                 new FakeComboBoxItem("Greatest Common Divisor", "Greatest Common Divisor"),
                 new FakeComboBoxItem("Least Common Multiple", "Least Common Multiple")
             });
+        var timedComboBox = new TimedComboBoxControl(comboBox);
 
         var resolver = new FakeResolver(
             ("HistoryFilterInput", searchInput),
             ("ApplyFilterButton", applyButton),
-            ("OperationCombo", comboBox))
+            ("OperationCombo", useTimedSelection ? timedComboBox : comboBox))
             .WithSearchPicker(
                 "HistoryOperationPicker",
                 SearchPickerParts.ByAutomationIds(
@@ -304,7 +335,8 @@ public sealed class UiControlAdapterTests
         page.SearchAndSelect(
             static candidate => candidate.HistoryOperationPicker,
             "least",
-            "Least Common Multiple");
+            "Least Common Multiple",
+            timeoutMs: 11000);
 
         using (Assert.Multiple())
         {
@@ -313,6 +345,11 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(comboBox.SelectedIndex).IsEqualTo(1);
+            if (useTimedSelection)
+            {
+                await Assert.That(timedComboBox.SelectionTimeoutMs).IsGreaterThan(5000);
+                await Assert.That(timedComboBox.SelectionTimeoutMs).IsLessThanOrEqualTo(11000);
+            }
         }
     }
 
@@ -476,7 +513,8 @@ public sealed class UiControlAdapterTests
         page.SearchAndSelect(
             static candidate => candidate.HistoryOperationPicker,
             "least",
-            "Least Common Multiple");
+            "Least Common Multiple",
+            timeoutMs: 11000);
 
         using (Assert.Multiple())
         {
@@ -485,6 +523,8 @@ public sealed class UiControlAdapterTests
             await Assert.That(page.HistoryOperationPicker.Items.Count).IsEqualTo(2);
             await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
             await Assert.That(expandButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(listBox.SelectionTimeoutMs ?? 0).IsGreaterThan(5000);
+            await Assert.That(listBox.SelectionTimeoutMs ?? 0).IsLessThanOrEqualTo(11000);
         }
     }
 
@@ -1268,7 +1308,7 @@ public sealed class UiControlAdapterTests
             .Throws<ArgumentNullException>();
     }
 
-    private static ComboBoxFilterTestContext CreateComboBoxFilterContext(bool hasApplyButton)
+    private static ComboBoxFilterTestContext CreateComboBoxFilterContext(bool hasApplyButton, bool closesOnCancel = false)
     {
         var items = new FakeMultiSelectItemsControl(
             "StatusFilterItems",
@@ -1277,7 +1317,7 @@ public sealed class UiControlAdapterTests
         var committedItems = new[] { "Open" };
         var openButton = new FakeButtonControl("StatusFilterOpenButton")
         {
-            OnInvoke = () => items.IsAvailable = true
+            OnInvoke = () => items.IsAvailable = hasApplyButton || !items.IsAvailable
         };
         var applyButton = new FakeButtonControl("StatusFilterApplyButton")
         {
@@ -1291,6 +1331,12 @@ public sealed class UiControlAdapterTests
         {
             OnInvoke = () =>
             {
+                if (closesOnCancel)
+                {
+                    items.IsAvailable = false;
+                    throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                        "The popup closed before its cancel button could be resolved.");
+                }
                 items.SetSelectedItems(committedItems);
                 items.IsAvailable = false;
             }
@@ -1315,7 +1361,12 @@ public sealed class UiControlAdapterTests
             items,
             openButton,
             applyButton,
-            cancelButton);
+            cancelButton,
+            values =>
+            {
+                committedItems = values.ToArray();
+                items.SetSelectedItems(values);
+            });
     }
 
     private sealed record ComboBoxFilterTestContext(
@@ -1323,7 +1374,8 @@ public sealed class UiControlAdapterTests
         FakeMultiSelectItemsControl Items,
         FakeButtonControl OpenButton,
         FakeButtonControl ApplyButton,
-        FakeButtonControl CancelButton);
+        FakeButtonControl CancelButton,
+        Action<string[]> SetCommittedItems);
 
     public static class SearchPickerPageDefinitions
     {
@@ -1797,7 +1849,7 @@ public sealed class UiControlAdapterTests
 
     private sealed class FakeMultiSelectItemsControl : FakeControlBase, IMultiSelectItemsControl, IUiControlAvailability
     {
-        private readonly string[] _items;
+        private string[] _items;
         private string[] _selectedItems;
 
         public FakeMultiSelectItemsControl(
@@ -1824,6 +1876,7 @@ public sealed class UiControlAdapterTests
             get
             {
                 SelectedItemsReadCount++;
+                OnSelectedItemsRead?.Invoke();
                 return _selectedItems;
             }
         }
@@ -1836,7 +1889,11 @@ public sealed class UiControlAdapterTests
 
         public int SelectedItemsReadCount { get; private set; }
 
+        public Action? OnSelectedItemsRead { get; set; }
+
         public Action<IReadOnlyCollection<string>>? OnSetSelectedItems { get; set; }
+
+        public void SetAvailableItems(IReadOnlyCollection<string> values) => _items = values.ToArray();
 
         public void SetSelectedItems(IReadOnlyCollection<string> values)
         {
@@ -1954,6 +2011,34 @@ public sealed class UiControlAdapterTests
         }
     }
 
+    private sealed class TimedComboBoxControl(FakeComboBoxControl inner) : IComboBoxControl, ISingleSelectOperationControl
+    {
+        public string AutomationId => inner.AutomationId;
+
+        public string Name => inner.Name;
+
+        public bool IsEnabled => inner.IsEnabled;
+
+        public IReadOnlyList<IComboBoxItem> Items => inner.Items;
+
+        public IComboBoxItem? SelectedItem => inner.SelectedItem;
+
+        public int SelectedIndex { get => inner.SelectedIndex; set => inner.SelectedIndex = value; }
+
+        public int SelectionTimeoutMs { get; private set; }
+
+        public void SelectByIndex(int index) => inner.SelectByIndex(index);
+
+        public void Expand() => inner.Expand();
+
+        public void SelectItem(string itemText, int timeoutMs)
+        {
+            SelectionTimeoutMs = timeoutMs;
+            inner.SelectByIndex(inner.Items.Select((item, index) => (item, index))
+                .Single(candidate => candidate.item.Text == itemText).index);
+        }
+    }
+
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
 
     private sealed class FakeTabControl : FakeControlBase, ITabControl
@@ -2057,7 +2142,7 @@ public sealed class UiControlAdapterTests
         }
     }
 
-    private sealed class FakeSelectableListBoxControl : FakeControlBase, ISelectableListBoxControl
+    private sealed class FakeSelectableListBoxControl : FakeControlBase, ITimedSelectableListBoxControl
     {
         public FakeSelectableListBoxControl(string automationId, IReadOnlyList<IListBoxItem> items)
             : base(automationId)
@@ -2068,6 +2153,14 @@ public sealed class UiControlAdapterTests
         public IReadOnlyList<IListBoxItem> Items { get; }
 
         public string? SelectedItemText { get; private set; }
+
+        public int? SelectionTimeoutMs { get; private set; }
+
+        public void SelectItem(string itemText, int timeoutMs)
+        {
+            SelectionTimeoutMs = timeoutMs;
+            SelectItem(itemText);
+        }
 
         public void SelectItem(string itemText)
         {

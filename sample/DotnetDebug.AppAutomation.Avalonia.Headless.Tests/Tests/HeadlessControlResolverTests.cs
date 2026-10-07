@@ -11,6 +11,67 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 public sealed class HeadlessControlResolverTests
 {
     [Test]
+    [Arguments(-1)]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    [NotInParallel("DesktopUi")]
+    public async Task NotificationParts_AreReadOnlyInsideVisibleOwningRoot(int partCount)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var host = new global::Avalonia.Controls.StackPanel();
+            var outside = new global::Avalonia.Controls.Label { Content = "Outside message" };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(outside, "ArmNotificationText");
+            host.Children.Add(outside);
+            var sameNameRoot = new global::Avalonia.Controls.StackPanel();
+            global::Avalonia.Automation.AutomationProperties.SetName(sameNameRoot, "ArmNotification");
+            host.Children.Add(sameNameRoot);
+            foreach (var visible in new[] { true, false })
+            {
+                var root = new global::Avalonia.Controls.StackPanel { IsVisible = visible };
+                global::Avalonia.Automation.AutomationProperties.SetAutomationId(root, "ArmNotification");
+                for (var i = 0; i < (visible ? partCount : 1); i++)
+                {
+                    var label = new global::Avalonia.Controls.Label { Content = visible ? "Own message" : "Hidden message" };
+                    global::Avalonia.Automation.AutomationProperties.SetAutomationId(label, "ArmNotificationText");
+                    root.Children.Add(label);
+                }
+
+                if (visible && partCount == 1)
+                {
+                    var sameNamePart = new global::Avalonia.Controls.Label { Content = "Decoy message" };
+                    global::Avalonia.Automation.AutomationProperties.SetName(sameNamePart, "ArmNotificationText");
+                    root.Children.Add(sameNamePart);
+                }
+
+                if (!visible || partCount >= 0)
+                {
+                    host.Children.Add(root);
+                }
+            }
+
+            session.MainWindow.Content = host;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow)
+            .WithNotification("ArmNotification", NotificationControlParts.ByAutomationIds("ArmNotificationText"));
+        var page = new MainWindowPage(resolver);
+        var notification = page.ArmNotification;
+        if (partCount is -1 or 1)
+        {
+            await Assert.That(notification.Text).IsEqualTo(partCount == -1 ? string.Empty : "Own message");
+        }
+        else
+        {
+            var exception = await Assert.That(() => notification.Text).Throws<UiControlResolutionException>();
+            await Assert.That(exception.Failure).IsEqualTo(partCount == 0
+                ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous);
+            await Assert.That(exception.Message).Contains("inside its notification root");
+        }
+    }
+
+    [Test]
     [Arguments(true)]
     [Arguments(false)]
     [NotInParallel("DesktopUi")]

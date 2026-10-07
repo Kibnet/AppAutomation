@@ -194,10 +194,10 @@ internal static class RecorderScenarioGraphValidator
         int index,
         IReadOnlyDictionary<Guid, string> variables)
     {
-        if (step.ActionKind != RecordedActionKind.EnterText)
+        if (step.ActionKind is not (RecordedActionKind.EnterText or RecordedActionKind.EnterSearch))
         {
             return RecorderGraphStepValidationResult.Invalid(
-                $"Copied value use {index + 1} must be an EnterText action.");
+                $"Copied value use {index + 1} must be an EnterText or EnterSearch action.");
         }
 
         var copiedValueId = step.InputCopiedValueId!.Value;

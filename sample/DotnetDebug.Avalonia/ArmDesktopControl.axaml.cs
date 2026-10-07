@@ -230,9 +230,17 @@ public partial class ArmDesktopControl : UserControl
     {
         var path = ArmFolderExportPathInput.Text ?? string.Empty;
         ArmFolderExportStatusLabel.Content = $"Export folder selected: {path}";
-        ArmNotificationText.Content = "Export ready";
-        ArmNotificationText.IsEnabled = true;
-        ArmNotificationDismissButton.IsEnabled = true;
+        var notification = new StackPanel { Spacing = 6 };
+        AutomationProperties.SetAutomationId(notification, "ArmNotification");
+        AutomationProperties.SetAccessibilityView(notification, AccessibilityView.Control);
+        var text = new Label { Content = $"Export ready: {path}" };
+        AutomationProperties.SetAutomationId(text, "ArmNotificationText");
+        var dismiss = new Button { Content = "Dismiss notification" };
+        AutomationProperties.SetAutomationId(dismiss, "ArmNotificationDismissButton");
+        dismiss.Click += (_, _) => ArmNotificationsHost.Children.Remove(notification);
+        notification.Children.Add(text);
+        notification.Children.Add(dismiss);
+        ArmNotificationsHost.Children.Add(notification);
     }
 
     private void OnArmFolderExportCancelClick(object? sender, RoutedEventArgs e)

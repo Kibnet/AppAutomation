@@ -253,15 +253,26 @@ internal static class GridValueConversion
         return TryConvertText(
             snapshot,
             "date",
-            static (string text, System.Globalization.CultureInfo culture, out DateTime parsed) =>
+            (string text, System.Globalization.CultureInfo culture, out DateTime parsed) =>
             {
-                var success = DateTime.TryParse(
-                    text, culture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out parsed);
+                var success = string.IsNullOrWhiteSpace(snapshot.FormatString)
+                    ? DateTime.TryParse(
+                        text,
+                        culture,
+                        System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+                        out parsed)
+                    : DateTime.TryParseExact(
+                        text,
+                        snapshot.FormatString,
+                        culture,
+                        System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+                        out parsed);
                 parsed = parsed.Date;
                 return success;
             },
             out value,
-            out diagnostic);
+            out diagnostic,
+            snapshot.FormatString);
     }
 
     public static bool TryConvertTime(
@@ -299,7 +310,8 @@ internal static class GridValueConversion
         string valueKind,
         TryParseValue<TValue> tryParse,
         out TValue value,
-        out string? diagnostic)
+        out string? diagnostic,
+        string? configuredFormat = null)
         where TValue : struct
     {
         var text = snapshot.DisplayText;
@@ -320,7 +332,9 @@ internal static class GridValueConversion
             }
 
             diagnostic =
-                $"Grid cell value '{text}' cannot be read as {valueKind} using configured culture '{culture.Name}'.";
+                $"Grid cell value '{text}' cannot be read as {valueKind}"
+                + DescribeConfiguredParsing(configuredFormat, culture.Name)
+                + ".";
             return false;
         }
 
@@ -345,7 +359,9 @@ internal static class GridValueConversion
 
         value = default;
         diagnostic = distinctValues.Length == 0
-            ? $"Grid cell value '{text}' cannot be read as {valueKind} using the UI, current, or invariant culture."
+            ? $"Grid cell value '{text}' cannot be read as {valueKind}"
+                + DescribeConfiguredParsing(configuredFormat, cultureName: null)
+                + " using the UI, current, or invariant culture."
             : $"Grid cell value '{text}' is culture-ambiguous and resolves to different {valueKind} values: "
                 + string.Join(
                     ", ",
@@ -353,6 +369,17 @@ internal static class GridValueConversion
                         $"{(candidate.Name.Length == 0 ? "Invariant" : candidate.Name)}={candidate.Value}"))
                 + ". Configure the grid column culture explicitly.";
         return false;
+    }
+
+    private static string DescribeConfiguredParsing(string? format, string? cultureName)
+    {
+        return (string.IsNullOrWhiteSpace(format), string.IsNullOrWhiteSpace(cultureName)) switch
+        {
+            (false, false) => $" using configured format '{format}' and culture '{cultureName}'",
+            (false, true) => $" using configured format '{format}'",
+            (true, false) => $" using configured culture '{cultureName}'",
+            _ => string.Empty
+        };
     }
 
     private delegate bool TryParseValue<TValue>(

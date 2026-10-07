@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
@@ -58,6 +59,60 @@ public partial class MainWindow : Window
         _viewModel.SelectedMultiSelectItems.CollectionChanged += (_, _) => UpdateMultiSelectStatus();
         UpdateMultiSelectStatus();
         InitializeFlaUiCalendarFallbackFixture();
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_FLAUI_GRID_COMPOSITE_COMBO") == "1")
+        {
+            var column = ArmComplexDataGridControl.Columns.OfType<DataGridTemplateColumn>()
+                .Single(static candidate => candidate.SortMemberPath == "State");
+            column.CellEditingTemplate = new FuncDataTemplate<ArmDesktopGridRowViewModel>(
+                (row, _) => CreateGridComboFixture(row!));
+        }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_FLAUI_GRID_NARROW_LAYOUT") == "1")
+        {
+            ArmComplexDataGridControl.Width = 420;
+            ArmComplexDataGridControl.HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left;
+        }
+        if (UsesOneClickGridComboFixture())
+        {
+            var column = ArmComplexDataGridControl.Columns.OfType<DataGridTemplateColumn>()
+                .Single(static candidate => string.Equals(candidate.SortMemberPath, "State", StringComparison.Ordinal));
+            column.CellTemplate = column.CellEditingTemplate;
+            column.IsReadOnly = true;
+        }
+    }
+
+    private Control CreateGridComboFixture(ArmDesktopGridRowViewModel row)
+    {
+        var input = new TextBox { Text = row.State, IsReadOnly = true };
+        AutomationProperties.SetAutomationId(input, "GridCombo_Input");
+        var open = new Button { Content = "▼" };
+        AutomationProperties.SetAutomationId(open, "GridCombo_Open");
+        var list = new ListBox { ItemsSource = _viewModel.ArmGridStateOptions, SelectedItem = row.State };
+        AutomationProperties.SetAutomationId(list, "GridCombo_Results");
+        var popup = new Popup { Child = list, PlacementTarget = input, Placement = PlacementMode.Bottom };
+        var pendingState = row.State;
+        open.Click += (_, _) => popup.IsOpen = !popup.IsOpen;
+        list.SelectionChanged += (_, _) =>
+        {
+            if (list.SelectedItem is string selected)
+            {
+                pendingState = selected;
+                input.Text = selected;
+                popup.IsOpen = false;
+                input.Focus();
+            }
+        };
+        input.KeyDown += (_, args) =>
+        {
+            if (args.Key is global::Avalonia.Input.Key.Enter or global::Avalonia.Input.Key.Tab)
+            {
+                row.State = pendingState;
+            }
+        };
+        var panel = new StackPanel { Orientation = global::Avalonia.Layout.Orientation.Horizontal };
+        panel.Children.Add(input);
+        panel.Children.Add(open);
+        panel.Children.Add(popup);
+        return panel;
     }
 
     private void OnDemoDataGridLoadingRow(object? sender, DataGridRowEventArgs e)
@@ -173,7 +228,42 @@ public partial class MainWindow : Window
         if (spinEditor.RealEditor is Control input)
         {
             AutomationProperties.SetAutomationId(input, "ArmGridRequiredEditor_Input");
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("APPAUTOMATION_FLAUI_GRID_DELAYED_NUMBER_FOCUS"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                input.AddHandler(
+                    global::Avalonia.Input.InputElement.PointerPressedEvent,
+                    (_, args) =>
+                    {
+                        args.Handled = true;
+                        ArmComplexDataGridControl.Focus();
+                        DispatcherTimer.RunOnce(
+                            () => input.Focus(),
+                            TimeSpan.FromMilliseconds(150));
+                    },
+                    RoutingStrategies.Tunnel);
+            }
         }
+    }
+
+    private static bool UsesOneClickGridComboFixture() => string.Equals(
+        Environment.GetEnvironmentVariable("APPAUTOMATION_FLAUI_GRID_ONE_CLICK_COMBO"),
+        "1",
+        StringComparison.Ordinal);
+
+    private static void OnArmGridStateEditorLoaded(object? sender, RoutedEventArgs e)
+    {
+        if (!UsesOneClickGridComboFixture() || sender is not ComboBox editor)
+        {
+            return;
+        }
+
+        var openings = 0;
+        AutomationProperties.SetHelpText(editor, "Popup openings: 0");
+        editor.DropDownOpened += (_, _) =>
+            AutomationProperties.SetHelpText(editor, $"Popup openings: {++openings}");
     }
 
     private void InitializeFlaUiCalendarFallbackFixture()
@@ -321,6 +411,9 @@ public partial class MainWindow : Window
             MultiSelectEditorAutomation.Apply(popupEditor, "MultiSelection");
         }
     }
+
+    private void OnResetMultiSelectionClick(object? sender, RoutedEventArgs e) =>
+        _viewModel.SelectedMultiSelectItems.Clear();
 
     private void UpdateMultiSelectStatus()
     {

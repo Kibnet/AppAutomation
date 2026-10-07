@@ -22,6 +22,7 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("StepsList", UiControlType.ListBox, "StepsList")]
 [UiControl("MultiSelection", UiControlType.MultiSelect, "MultiSelection")]
 [UiControl("MultiSelectStatusLabel", UiControlType.Label, "MultiSelectStatusLabel")]
+[UiControl("MultiSelectionResetButton", UiControlType.Button, "MultiSelectionResetButton")]
 [UiControl("MixInput", UiControlType.TextBox, "MixInput")]
 [UiControl("MixModeCombo", UiControlType.ComboBox, "MixModeCombo")]
 [UiControl("MixShowDetailsCheck", UiControlType.CheckBox, "MixShowDetailsCheck")]

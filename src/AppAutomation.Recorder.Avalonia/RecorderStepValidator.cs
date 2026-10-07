@@ -57,9 +57,10 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.CaptureCheckpoint
                 or RecordedActionKind.CaptureCopiedValue
                 or RecordedActionKind.AssertValue => true,
-            RecordedActionKind.EnterText
-                or RecordedActionKind.EnterSearch
-                or RecordedActionKind.ClearSearch => source is TextBox,
+            RecordedActionKind.EnterText => source is TextBox,
+            RecordedActionKind.EnterSearch
+                or RecordedActionKind.ClearSearch => source is TextBox
+                    || SupportsConfiguredSearchAction(step, source),
             RecordedActionKind.SetSpinnerValue => source is TextBox or NumericUpDown,
             RecordedActionKind.SetMultiItemSpinnerValue => SupportsMultiItemSpinnerAction(step, source),
             RecordedActionKind.SetTime => source is TimePicker,
@@ -140,6 +141,34 @@ internal sealed class RecorderStepValidator
             UiControlType.Calendar => source is Calendar,
             _ => false
         };
+    }
+
+    private bool SupportsConfiguredSearchAction(RecordedStep step, Control source)
+    {
+        if (step.Control.ControlType != UiControlType.Search)
+        {
+            return false;
+        }
+
+        var matchingHints = _options.SearchControlHints
+            .Where(hint =>
+                hint.LocatorKind == step.Control.LocatorKind
+                && string.Equals(hint.LocatorValue, step.Control.LocatorValue, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matchingHints.Length != 1)
+        {
+            return false;
+        }
+
+        var hint = matchingHints[0];
+        return HasLocator(source, hint.LocatorKind, hint.LocatorValue)
+            && source.GetVisualDescendants()
+                .OfType<Control>()
+                .Any(control => HasLocator(
+                    control,
+                    hint.Parts.LocatorKind,
+                    hint.Parts.SearchInputLocator));
     }
 
     private bool SupportsMultiItemSpinnerAction(RecordedStep step, Control source)

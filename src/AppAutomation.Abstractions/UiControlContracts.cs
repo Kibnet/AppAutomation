@@ -140,6 +140,15 @@ public interface ISelectableListBoxControl : IListBoxControl
 }
 
 /// <summary>
+/// Optional list-box capability for selecting an item within the caller's remaining operation time.
+/// </summary>
+public interface ITimedSelectableListBoxControl : ISelectableListBoxControl
+{
+    /// <summary>Selects an item by display text within the supplied timeout.</summary>
+    void SelectItem(string itemText, int timeoutMs);
+}
+
+/// <summary>
 /// Optional list-box capability for selecting one item by exact display text.
 /// </summary>
 public interface IExactSelectableListBoxControl : ISelectableListBoxControl
@@ -767,7 +776,9 @@ public interface IAddressableDialogControl : IDialogControl
 public interface INotificationControl : IUiControl
 {
     /// <summary>
-    /// Gets the current notification text.
+    /// Gets the current notification text. A composite family with several visible
+    /// instances requires <see cref="UiPageExtensions.WaitUntilNotificationContains{TSelf}"/>
+    /// instead of choosing an arbitrary instance.
     /// </summary>
     string Text { get; }
 
@@ -775,6 +786,20 @@ public interface INotificationControl : IUiControl
     /// Dismisses the notification when a dismiss action is configured by the runtime adapter.
     /// </summary>
     void Dismiss();
+}
+
+// Optional built-in provider capability; public notification registrations remain unchanged.
+internal interface INotificationRuntimeResolver
+{
+    IReadOnlyList<NotificationRuntimeSnapshot>? ReadNotifications(
+        UiControlDefinition rootDefinition, NotificationControlParts parts);
+}
+
+internal sealed record NotificationRuntimeSnapshot(string Text, bool IsEnabled, Action Dismiss);
+
+internal interface INotificationMessagesControl
+{
+    IReadOnlyList<string> ReadVisibleMessages();
 }
 
 /// <summary>

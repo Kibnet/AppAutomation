@@ -3,6 +3,8 @@ namespace AppAutomation.Abstractions;
 internal interface IMultiSelectCommittedStateControl
 {
     bool TryGetCommittedItems(out IReadOnlyList<string> items);
+
+    IReadOnlyList<string> RefreshCommittedItems();
 }
 
 /// <summary>
@@ -199,27 +201,19 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             {
                 if (IsOpen)
                 {
-                    if (_state.TryGetPendingItems(out var pendingItems))
-                    {
-                        return pendingItems;
-                    }
-
                     if (!TryResolveItems(out var items))
                     {
-                        return _state.CommittedItems;
+                        throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                            $"Multi-select popup '{AutomationId}' disappeared while reading its current selection.");
                     }
-
-                    var selectedItems = items.SelectedItems.ToArray();
-                    _state.Observe(items.Items, selectedItems);
-                    return selectedItems;
+                    return ReadCurrentSelection(items);
                 }
 
-                if (_state.TryGetCommittedItems(out var committedItems))
-                {
-                    return committedItems;
-                }
-
-                return ReadInitialCommittedItems();
+                return _state.TryGetCommittedItems(out var committedItems)
+                    ? committedItems
+                    : throw new InvalidOperationException(
+                        $"Multi-select popup '{AutomationId}' has no committed selection snapshot. "
+                        + "Refresh its selection explicitly before reading it while closed.");
             }
         }
 
@@ -243,6 +237,9 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             return _state.TryGetCommittedItems(out items);
         }
+
+        public IReadOnlyList<string> RefreshCommittedItems() =>
+            IsOpen ? ReadCurrentSelection(ResolveItems()) : ReadInitialCommittedItems();
 
         public void Open()
         {
@@ -294,23 +291,43 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             Open();
             var items = ResolveItems();
+            var selectedItems = ReadCurrentSelection(items);
+
+            if (IsOpen)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(_parts.CancelButtonLocator))
+                    {
+                        Cancel();
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
+                    {
+                        Apply();
+                    }
+                    else
+                    {
+                        ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+                        _state.DiscardPending();
+                    }
+                }
+                catch (UiControlResolutionException exception) when (exception.IsTransient && !IsOpen)
+                {
+                    // The popup closed after the snapshot; this read did not change its selection.
+                    _state.DiscardPending();
+                }
+            }
+
+            return selectedItems;
+        }
+
+        private string[] ReadCurrentSelection(IMultiSelectItemsControl items)
+        {
+            var availableItems = _state.TryGetAvailableItems(out var cachedItems)
+                ? cachedItems
+                : items.Items;
             var selectedItems = items.SelectedItems.ToArray();
-            _state.Observe(items.Items, selectedItems);
-
-            if (!string.IsNullOrWhiteSpace(_parts.CancelButtonLocator))
-            {
-                Cancel();
-            }
-            else if (!string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
-            {
-                Apply();
-            }
-            else
-            {
-                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
-                _state.DiscardPending();
-            }
-
+            _state.Observe(availableItems, selectedItems);
             return selectedItems;
         }
 
@@ -371,7 +388,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         private string[] _pendingItems = [];
         private bool _hasAvailableItems;
         private bool _hasCommittedItems;
-        private bool _hasPendingItems;
         private bool _refreshCommittedOnNextObservation;
 
         public IReadOnlyList<string> AvailableItems
@@ -405,15 +421,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             }
         }
 
-        public bool TryGetPendingItems(out IReadOnlyList<string> items)
-        {
-            lock (_sync)
-            {
-                items = _pendingItems.ToArray();
-                return _hasPendingItems;
-            }
-        }
-
         public bool TryGetCommittedItems(out IReadOnlyList<string> items)
         {
             lock (_sync)
@@ -428,7 +435,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             lock (_sync)
             {
                 _hasAvailableItems = false;
-                _hasPendingItems = false;
                 _pendingItems = [];
                 _refreshCommittedOnNextObservation = true;
             }
@@ -448,7 +454,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 }
 
                 _pendingItems = observedSelection;
-                _hasPendingItems = true;
                 _refreshCommittedOnNextObservation = false;
             }
         }
@@ -460,7 +465,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _availableItems = availableItems.ToArray();
                 _hasAvailableItems = true;
                 _pendingItems = selectedItems.ToArray();
-                _hasPendingItems = true;
                 _refreshCommittedOnNextObservation = false;
             }
         }
@@ -471,7 +475,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             {
                 _committedItems = _pendingItems.ToArray();
                 _hasCommittedItems = true;
-                _hasPendingItems = false;
                 _refreshCommittedOnNextObservation = false;
             }
         }
@@ -481,7 +484,6 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             lock (_sync)
             {
                 _pendingItems = _committedItems.ToArray();
-                _hasPendingItems = false;
                 _refreshCommittedOnNextObservation = false;
             }
         }

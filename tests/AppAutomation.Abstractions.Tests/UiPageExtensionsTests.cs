@@ -1009,9 +1009,14 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
-    public async Task NotificationHelpers_WaitAndDismissNotification()
+    [Arguments(0)]
+    [Arguments(1)]
+    public async Task NotificationHelpers_WaitAndDismissNotification(int transientReadCount)
     {
-        var notification = new FakeNotificationControl("ExportToast", "Export completed");
+        var notification = new FakeNotificationControl("ExportToast", "Export completed")
+        {
+            TransientReadsRemaining = transientReadCount
+        };
         var page = new WorkflowPage(new FakeResolver(("ExportToast", notification)));
 
         var returnedPage = page
@@ -1022,6 +1027,7 @@ public sealed class UiPageExtensionsTests
         {
             await Assert.That(ReferenceEquals(returnedPage, page)).IsEqualTo(true);
             await Assert.That(notification.DismissCount).IsEqualTo(1);
+            await Assert.That(notification.ReadCount).IsEqualTo(1 + transientReadCount);
         }
     }
 
@@ -1609,13 +1615,34 @@ public sealed class UiPageExtensionsTests
 
     private sealed class FakeNotificationControl : FakeControlBase, INotificationControl
     {
+        private string _text;
+
         public FakeNotificationControl(string automationId, string text)
             : base(automationId, automationId)
         {
-            Text = text;
+            _text = text;
         }
 
-        public string Text { get; set; }
+        public string Text
+        {
+            get
+            {
+                ReadCount++;
+                if (TransientReadsRemaining > 0)
+                {
+                    TransientReadsRemaining--;
+                    throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                        "Notification text is being materialized.");
+                }
+
+                return _text;
+            }
+            set => _text = value;
+        }
+
+        public int TransientReadsRemaining { get; set; }
+
+        public int ReadCount { get; private set; }
 
         public Exception? Failure { get; init; }
 

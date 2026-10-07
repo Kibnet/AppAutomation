@@ -348,18 +348,21 @@
                        Content="Dialog idle"
                        automation:AutomationProperties.AutomationId="ArmDialogResultLabel" />
               </StackPanel>
-              <StackPanel Spacing="6"
-                          automation:AutomationProperties.AutomationId="ArmNotification">
-                <Label x:Name="ArmNotificationText"
-                       Content="Export ready"
-                       automation:AutomationProperties.AutomationId="ArmNotificationText" />
-                <Button x:Name="ArmNotificationDismissButton"
-                        Content="Dismiss notification"
-                        Click="OnArmNotificationDismissClick"
-                        automation:AutomationProperties.AutomationId="ArmNotificationDismissButton" />
-                <Label x:Name="ArmNotificationStatusLabel"
-                       Content="Notification visible"
-                       automation:AutomationProperties.AutomationId="ArmNotificationStatusLabel" />
+              <StackPanel x:Name="ArmNotificationsHost" Spacing="6">
+                <StackPanel Spacing="6"
+                            automation:AutomationProperties.AccessibilityView="Control"
+                            automation:AutomationProperties.AutomationId="ArmNotification">
+                  <Label x:Name="ArmNotificationText"
+                         Content="Export ready"
+                         automation:AutomationProperties.AutomationId="ArmNotificationText" />
+                  <Button x:Name="ArmNotificationDismissButton"
+                          Content="Dismiss notification"
+                          Click="OnArmNotificationDismissClick"
+                          automation:AutomationProperties.AutomationId="ArmNotificationDismissButton" />
+                  <Label x:Name="ArmNotificationStatusLabel"
+                         Content="Notification visible"
+                         automation:AutomationProperties.AutomationId="ArmNotificationStatusLabel" />
+                </StackPanel>
               </StackPanel>
             </StackPanel>
 

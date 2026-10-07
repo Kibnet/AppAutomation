@@ -669,13 +669,14 @@ public static partial class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(searchText);
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, nameof(SearchAndSelect));
         var searchPicker = Resolve(selector, page);
         var executionPhases = searchPicker as ISearchPickerExecutionPhases;
         WaitUntil(
             page,
             selector,
             () => executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled,
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Search picker '{searchPicker.AutomationId}' input is not enabled.",
             expectedValue: "SearchInputEnabled=true",
             lastObservedValueFactory: () => $"SearchInputEnabled={executionPhases?.IsSearchInputEnabled ?? searchPicker.IsEnabled}");
@@ -691,7 +692,7 @@ public static partial class UiPageExtensions
                 page,
                 selector,
                 () => executionPhases.IsApplyActionEnabled,
-                timeoutMs,
+                budget.RemainingMilliseconds,
                 $"Search picker '{searchPicker.AutomationId}' apply action is not enabled.",
                 expectedValue: "ApplyActionEnabled=true",
                 lastObservedValueFactory: () => $"ApplyActionEnabled={executionPhases.IsApplyActionEnabled}");
@@ -702,7 +703,7 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => string.Equals(searchPicker.SearchText, searchText, StringComparison.Ordinal),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Search picker '{searchPicker.AutomationId}' did not accept search text.",
             expectedValue: searchText,
             lastObservedValueFactory: () => searchPicker.SearchText);
@@ -717,7 +718,7 @@ public static partial class UiPageExtensions
                 page,
                 selector,
                 () => executionPhases.IsExpandActionEnabled,
-                timeoutMs,
+                budget.RemainingMilliseconds,
                 $"Search picker '{searchPicker.AutomationId}' expand action is not enabled.",
                 expectedValue: "ExpandActionEnabled=true",
                 lastObservedValueFactory: () => $"ExpandActionEnabled={executionPhases.IsExpandActionEnabled}");
@@ -729,17 +730,24 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => searchPicker.Items.Any(item => string.Equals(NormalizeLookupText(item), expectedItem, StringComparison.OrdinalIgnoreCase)),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Search picker '{searchPicker.AutomationId}' did not show expected item.",
             expectedValue: itemText,
             lastObservedValueFactory: () => $"Items: [{string.Join(", ", searchPicker.Items)}]");
 
-        searchPicker.SelectItem(itemText);
+        if (executionPhases is null)
+        {
+            searchPicker.SelectItem(itemText);
+        }
+        else
+        {
+            executionPhases.SelectItem(itemText, budget.RemainingMilliseconds);
+        }
         WaitUntil(
             page,
             selector,
             () => string.Equals(searchPicker.SelectedItemText, itemText, StringComparison.OrdinalIgnoreCase),
-            timeoutMs,
+            budget.RemainingMilliseconds,
             $"Search picker '{searchPicker.AutomationId}' failed to select item.",
             expectedValue: itemText,
             lastObservedValueFactory: () => searchPicker.SelectedItemText);
@@ -913,14 +921,35 @@ public static partial class UiPageExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedText);
 
         var notification = Resolve(selector, page);
+        IReadOnlyList<string> observedMessages = [];
+        string? readFailure = null;
         WaitUntil(
             page,
             selector,
-            () => ContainsText(notification.Text, expectedText),
+            () =>
+            {
+                try
+                {
+                    observedMessages = notification is INotificationMessagesControl messages
+                        ? messages.ReadVisibleMessages()
+                        : [notification.Text];
+                    readFailure = null;
+                    return observedMessages.Any(text => ContainsText(text, expectedText));
+                }
+                catch (UiControlResolutionException exception) when (exception.IsTransient)
+                {
+                    observedMessages = [];
+                    readFailure = exception.Message;
+                    return false;
+                }
+            },
             timeoutMs,
             $"Notification '{notification.AutomationId}' did not contain expected text.",
             expectedValue: $"Contains '{expectedText}'",
-            lastObservedValueFactory: () => notification.Text);
+            lastObservedValueFactory: () => readFailure ?? (observedMessages.Count == 0
+                ? "<no visible notifications>"
+                : observedMessages.Count == 1 ? observedMessages[0]
+                : string.Join("; ", observedMessages.Select(text => $"[{text}]"))));
         return page;
     }
 

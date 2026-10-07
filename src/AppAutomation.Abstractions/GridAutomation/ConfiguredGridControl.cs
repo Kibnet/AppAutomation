@@ -13,7 +13,9 @@ internal class ConfiguredGridControl :
     private readonly IIndexedAddressableGridControl? _indexedGrid;
     private readonly IReadOnlyList<GridColumnDefinition> _columns;
     private readonly IReadOnlyList<string> _runtimeColumnNames;
-    private readonly IReadOnlyList<string> _runtimeMetadataNames;
+    private readonly IReadOnlyList<string> _declaredRuntimeColumnNames;
+    private IReadOnlyList<string> RuntimeMetadataNames => Inner is IGridColumnMetadataControl metadata
+        ? metadata.ColumnNames : Array.Empty<string>();
     private readonly Dictionary<string, int> _columnIndexes;
 
     public ConfiguredGridControl(
@@ -32,13 +34,14 @@ internal class ConfiguredGridControl :
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         _columns = columns ?? throw new ArgumentNullException(nameof(columns));
         GridAutomationFingerprint = catalogFingerprint;
-        _runtimeMetadataNames = inner is IGridColumnMetadataControl metadata
-            ? Array.AsReadOnly(metadata.ColumnNames.ToArray())
-            : Array.Empty<string>();
-        ColumnNames = _runtimeMetadataNames;
         _runtimeColumnNames = Array.AsReadOnly(columns
             .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
             .ToArray());
+        _declaredRuntimeColumnNames = definition.Columns.Count > 0
+            ? Array.AsReadOnly(definition.Columns
+                .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
+                .ToArray())
+            : _runtimeColumnNames;
         _columnIndexes = columns
             .Select(static (column, index) => (column.LogicalName, index))
             .ToDictionary(static item => item.LogicalName, static item => item.index, StringComparer.Ordinal);
@@ -56,7 +59,7 @@ internal class ConfiguredGridControl :
 
     public IReadOnlyList<IGridRowControl> Rows => Inner.Rows;
 
-    public IReadOnlyList<string> ColumnNames { get; }
+    public IReadOnlyList<string> ColumnNames => RuntimeMetadataNames;
 
     public IReadOnlyList<GridColumnDefinition> LogicalColumns => _columns;
 
@@ -73,7 +76,7 @@ internal class ConfiguredGridControl :
         }
 
         var normalized = columnName.Trim();
-        var matches = _runtimeMetadataNames
+        var matches = RuntimeMetadataNames
             .Select((name, index) => (name, index))
             .Where(candidate => string.Equals(candidate.name, normalized, StringComparison.Ordinal))
             .Select(static candidate => candidate.index)
@@ -478,7 +481,9 @@ internal class ConfiguredGridControl :
             column.EditorParts)
         {
             CellContext = Definition.CellContext,
+            DeclaredRuntimeColumnNames = _declaredRuntimeColumnNames,
             RuntimeColumnIndex = FindRuntimeColumnIndex(column),
+            RuntimeColumnName = column.RuntimeColumnName ?? column.SourceFieldName,
             RowIdentityAutomationProperty = column.RowIdentityAutomationProperty,
             BooleanTrueDisplayText = column.BooleanTrueDisplayText,
             BooleanFalseDisplayText = column.BooleanFalseDisplayText
@@ -490,7 +495,7 @@ internal class ConfiguredGridControl :
         var runtimeName = column.RuntimeColumnName;
         if (string.IsNullOrWhiteSpace(runtimeName))
         {
-            return _runtimeMetadataNames.Count == 0
+            return RuntimeMetadataNames.Count == 0
                 ? null
                 : FindUniqueRuntimeIndex(column.SourceFieldName);
         }
@@ -500,7 +505,7 @@ internal class ConfiguredGridControl :
 
     private int? FindUniqueRuntimeIndex(string runtimeName)
     {
-        var matches = _runtimeMetadataNames
+        var matches = RuntimeMetadataNames
             .Select((name, index) => (name, index))
             .Where(candidate => string.Equals(candidate.name, runtimeName, StringComparison.Ordinal))
             .Select(static candidate => candidate.index)
