@@ -791,6 +791,135 @@ public sealed class RecorderStepEditingTests
     }
 
     [Test]
+    public async Task OverlayReplacesRecordedGridRowKeyWithEarlierCheckpoint()
+    {
+        using var session = CreateSession(new StackPanel());
+        var checkpointId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("OrderNumber", UiControlType.TextBox),
+            StringValue: "RU260408-5",
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "ordersNumberCheckpoint"));
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("Quantity", UiControlType.Spinner),
+            ValueKind: RecorderValueKind.Number,
+            ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+            CheckpointId: Guid.NewGuid(),
+            CheckpointVariableName: "quantityCheckpoint"));
+        var assertionStepId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.AssertValue,
+            Descriptor("OrdersGrid", UiControlType.Grid),
+            StepId: assertionStepId,
+            ValueKind: RecorderValueKind.GridCellText,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellText,
+            ComparisonKind: RecorderComparisonKind.IsEmpty)
+        {
+            GridRowConditions = [new RecordedGridRowCondition("Number", "RU260408-5")],
+            GridTargetColumnName = "PlannedToDeliverFromTo"
+        });
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("LaterOrderNumber", UiControlType.TextBox),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: Guid.NewGuid(),
+            CheckpointVariableName: "laterOrderNumber"));
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = OpenEditor(overlay, assertionStepId);
+        var source = editor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderStepEditRowSource0");
+        var variable = editor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderStepEditRowVariable0");
+        var availableVariables = variable.Items.OfType<RecorderGridRowVariableOption>().ToArray();
+
+        source.SelectedItem = "Variable";
+        variable.SelectedItem = availableVariables.Single();
+        var livePreview = editor.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .Single(control => control.Name == "RecorderStepEditCodePreview")
+            .Text;
+        ClickApply(editor);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(availableVariables.Length).IsEqualTo(1);
+            await Assert.That(availableVariables[0].Reference.ValueId).IsEqualTo(checkpointId);
+            await Assert.That(livePreview).Contains("ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(session.StepJournal[2].Preview).Contains("ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(session.StepJournal[2].Preview).DoesNotContain("RU260408-5");
+            await Assert.That(session.StepJournal[2].Preview).Contains("IsEmpty()");
+            await Assert.That(session.StepJournal[2].CanPersist).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task GridRowVariableTracksRenameAndRejectsIgnoredOrLaterDefinition()
+    {
+        using var session = CreateSession(new StackPanel());
+        var checkpointId = Guid.NewGuid();
+        var checkpointStepId = Guid.NewGuid();
+        var assertionStepId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("OrderNumber", UiControlType.TextBox),
+            StepId: checkpointStepId,
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "ordersNumberCheckpoint"));
+        var assertion = GridRowAssertionStep(assertionStepId);
+        session.AddRecordedStepForTesting(assertion with
+        {
+            GridRowConditions =
+            [
+                assertion.GridRowConditions![0] with
+                {
+                    ValueReference = new RecorderGridRowValueReference(
+                        RecorderGridRowValueSourceKind.Checkpoint,
+                        checkpointId)
+                }
+            ]
+        });
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(checkpointStepId, out var checkpointDraft, out _);
+        var renamed = editing.ApplyStepEdit(checkpointDraft! with { VariableName = "currentOrderNumber" });
+        var previewAfterRename = session.StepJournal[1].Preview;
+
+        session.SetStepIgnored(checkpointStepId, isIgnored: true);
+        var ignored = session.StepJournal[1];
+        session.SetStepIgnored(checkpointStepId, isIgnored: false);
+        var restored = session.StepJournal[1];
+        var moved = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
+        var movedAssertion = session.StepJournal[0];
+        var movedBack = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Later);
+        session.RemoveStep(checkpointStepId);
+        var afterRemoval = session.StepJournal.Single();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(renamed.Success).IsTrue();
+            await Assert.That(previewAfterRename).Contains("ByCell(\"Number\", currentOrderNumber)");
+            await Assert.That(ignored.CanPersist).IsFalse();
+            await Assert.That(ignored.StatusMessage).Contains("missing, later or non-text variable");
+            await Assert.That(restored.CanPersist).IsTrue();
+            await Assert.That(moved).IsTrue();
+            await Assert.That(movedAssertion.CanPersist).IsFalse();
+            await Assert.That(movedAssertion.Preview).DoesNotContain("RU260408-5");
+            await Assert.That(movedBack).IsTrue();
+            await Assert.That(afterRemoval.CanPersist).IsFalse();
+            await Assert.That(afterRemoval.Preview).DoesNotContain("RU260408-5");
+        }
+    }
+
+    [Test]
     public async Task OverlayShowsEditOnlyForEditableStepsAndKeepsOneInlineEditorOpen()
     {
         using var session = CreateSession(new StackPanel());
@@ -1143,6 +1272,55 @@ public sealed class RecorderStepEditingTests
         }
     }
 
+    [Test]
+    public async Task EditedGridRowVariableGeneratesCompilableAssertionWithoutRecordedOrderNumber()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage,
+            RecorderScenarioDestinationSources.CompilableScenario);
+        using var session = CreateSession(new StackPanel());
+        var checkpointId = Guid.NewGuid();
+        var checkpoint = new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("OrderNumber", UiControlType.TextBox),
+            StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "ordersNumberCheckpoint");
+        session.AddRecordedStepForTesting(checkpoint);
+        var assertionId = Guid.NewGuid();
+        var assertion = GridRowAssertionStep(assertionId);
+        session.AddRecordedStepForTesting(assertion);
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(assertionId, out var draft, out _);
+        var condition = draft!.GridRowConditions!.Single() with
+        {
+            ValueReference = new RecorderGridRowValueReference(
+                RecorderGridRowValueSourceKind.Checkpoint,
+                checkpointId)
+        };
+        var updatedDraft = draft with { GridRowConditions = [condition] };
+        var edited = editing.ApplyStepEdit(updatedDraft);
+        RecorderStepEditService.TryCreateCandidate(assertion, updatedDraft, out var editedAssertion, out _);
+        var steps = new[] { checkpoint, editedAssertion! };
+        var save = await project.SaveAsync(
+            project.CreateSaveContext("Dynamic order row", "dynamic-row-draft"),
+            steps);
+        var scenarioSource = await File.ReadAllTextAsync(save.ScenarioFilePath!);
+        var compileErrors = RecorderGeneratedSourceCompiler.Compile(project.RootPath);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(edited.Success).IsTrue();
+            await Assert.That(save.Success).IsTrue();
+            await Assert.That(scenarioSource).Contains("ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(scenarioSource).DoesNotContain("RU260408-5");
+            await Assert.That(scenarioSource).Contains("IsEmpty()");
+            await Assert.That(compileErrors).IsEmpty();
+        }
+    }
+
     private static async Task Apply(
         IRecorderStepEditingSessionDetails editing,
         Guid stepId,
@@ -1175,6 +1353,19 @@ public sealed class RecorderStepEditingTests
             ValueAccessorKind: RecorderValueAccessorKind.Text,
             ComparisonKind: RecorderComparisonKind.Equal,
             ExpectedCheckpointId: checkpointId);
+
+    private static RecordedStep GridRowAssertionStep(Guid stepId) =>
+        new(
+            RecordedActionKind.AssertValue,
+            Descriptor("OrdersGrid", UiControlType.Grid),
+            StepId: stepId,
+            ValueKind: RecorderValueKind.GridCellText,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellText,
+            ComparisonKind: RecorderComparisonKind.IsEmpty)
+        {
+            GridRowConditions = [new RecordedGridRowCondition("Number", "RU260408-5")],
+            GridTargetColumnName = "PlannedToDeliverFromTo"
+        };
 
     private static RecordedStep GeneratedTextStep(Guid generatedValueId, string variableName, int ordinal) =>
         new(

@@ -33,6 +33,13 @@ internal enum RecorderStepRetargetRole
     CalculatedRightOperand = 3
 }
 
+internal sealed record RecorderGridRowVariableOption(
+    string DisplayName,
+    RecorderGridRowValueReference Reference)
+{
+    public override string ToString() => DisplayName;
+}
+
 internal sealed record RecorderStepEditDraft(
     Guid StepId,
     long Revision,
@@ -65,6 +72,8 @@ internal sealed record RecorderStepEditDraft(
     string GeneratedPreview,
     IReadOnlyList<RecorderCheckpointOption> CompatibleCheckpoints,
     IReadOnlyList<RecorderGeneratedValueOption> CompatibleGeneratedValues,
+    IReadOnlyList<RecordedGridRowCondition>? GridRowConditions,
+    IReadOnlyList<RecorderGridRowVariableOption> AvailableGridRowVariables,
     bool SupportsCalculatedExpectedValue,
     RecordedStep? RetargetPrototype = null);
 

@@ -57,6 +57,18 @@ internal static class RecorderScenarioGraphValidator
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            var rowReferenceValidation = ValidateGridRowReferences(
+                step,
+                index,
+                checkpointValueKinds,
+                generatedValueVariables,
+                copiedValueVariables);
+            if (!rowReferenceValidation.IsValid)
+            {
+                stepErrors[step.StepId] = rowReferenceValidation.Error;
+                continue;
+            }
+
             if (step.GeneratedValueId is not null && step.InputCopiedValueId is not null)
             {
                 stepErrors[step.StepId] =
@@ -153,6 +165,62 @@ internal static class RecorderScenarioGraphValidator
                 copiedValueVariables,
                 generatedValueSeriesVariable,
                 stepErrors);
+    }
+
+    private static RecorderGraphStepValidationResult ValidateGridRowReferences(
+        RecordedStep step,
+        int index,
+        IReadOnlyDictionary<Guid, RecorderValueKind> checkpointValueKinds,
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables)
+    {
+        var rowConditions = new[]
+        {
+            step.GridRowConditions,
+            step.NumericExpectedExpression?.Left.GridValueReference?.RowConditions,
+            step.NumericExpectedExpression?.Right.GridValueReference?.RowConditions
+        };
+        foreach (var conditions in rowConditions)
+        {
+            if (conditions is null)
+            {
+                continue;
+            }
+
+            foreach (var condition in conditions)
+            {
+                if (condition.ValueReference is not { } reference)
+                {
+                    continue;
+                }
+
+                if (reference.ValueId == Guid.Empty)
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Grid step {index + 1} has an invalid variable reference for row column '{condition.ColumnName}'.");
+                }
+
+                var isAvailable = reference.Kind switch
+                {
+                    RecorderGridRowValueSourceKind.Checkpoint =>
+                        checkpointValueKinds.TryGetValue(reference.ValueId, out var valueKind)
+                        && valueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText,
+                    RecorderGridRowValueSourceKind.GeneratedValue =>
+                        generatedValueVariables.ContainsKey(reference.ValueId),
+                    RecorderGridRowValueSourceKind.CopiedValue =>
+                        copiedValueVariables.ContainsKey(reference.ValueId),
+                    _ => false
+                };
+                if (!isAvailable)
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Grid step {index + 1} references a missing, later or non-text variable "
+                        + $"for row column '{condition.ColumnName}'.");
+                }
+            }
+        }
+
+        return RecorderGraphStepValidationResult.Valid;
     }
 
     private static RecorderGraphStepValidationResult ValidateCopiedValueDefinition(

@@ -14,6 +14,178 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderStableGridSelectorTests
 {
     [Test]
+    public async Task Generator_UsesEarlierTextCheckpointAsGridRowValue()
+    {
+        var checkpointId = Guid.NewGuid();
+        var checkpoint = new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            new RecordedControlDescriptor(
+                "OrderNumber",
+                UiControlType.TextBox,
+                "OrderNumber",
+                UiLocatorKind.AutomationId,
+                FallbackToName: false,
+                AvaloniaTypeName: typeof(TextBox).FullName!,
+                Warning: null),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "ordersNumberCheckpoint");
+        var assertion = new RecordedStep(
+            RecordedActionKind.AssertValue,
+            GridDescriptor(),
+            ValueKind: RecorderValueKind.GridCellText,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellText,
+            ComparisonKind: RecorderComparisonKind.IsEmpty)
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("Number", "RU260408-5")
+                {
+                    ValueReference = new RecorderGridRowValueReference(
+                        RecorderGridRowValueSourceKind.Checkpoint,
+                        checkpointId)
+                }
+            ],
+            GridTargetColumnName = "PlannedToDeliverFromTo"
+        };
+
+        var generator = CreateGenerator();
+        var preview = generator.GeneratePreview([checkpoint, assertion]);
+        var equalPreview = generator.GeneratePreview([
+            checkpoint,
+            assertion with
+            {
+                ComparisonKind = RecorderComparisonKind.Equal,
+                StringValue = "Ready",
+                HasExpectedLiteral = true
+            }
+        ]);
+        var hasValuePreview = generator.GeneratePreview([
+            checkpoint,
+            assertion with
+            {
+                ComparisonKind = RecorderComparisonKind.HasValue,
+                StringValue = "Ready"
+            }
+        ]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(preview).Contains("GridRowSelector.ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(preview).DoesNotContain("RU260408-5");
+            await Assert.That(preview).Contains("IsEmpty()");
+            await Assert.That(equalPreview).Contains("ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(equalPreview).Contains("IsEqualTo(\"Ready\")");
+            await Assert.That(hasValuePreview).Contains("ByCell(\"Number\", ordersNumberCheckpoint)");
+            await Assert.That(hasValuePreview).Contains("IsNotEmpty()");
+        }
+    }
+
+    [Test]
+    public async Task Generator_UsesIndependentTextVariablesInCompositeRowSelector()
+    {
+        var generatedId = Guid.NewGuid();
+        var copiedId = Guid.NewGuid();
+        var steps = new RecordedStep[]
+        {
+            new(
+                RecordedActionKind.EnterText,
+                new RecordedControlDescriptor(
+                    "GeneratedInput", UiControlType.TextBox, "GeneratedInput",
+                    UiLocatorKind.AutomationId, false, typeof(TextBox).FullName!, null),
+                StringValue: "Recorded_value",
+                GeneratedValueId: generatedId,
+                GeneratedValueVariableName: "generatedOrderNumber",
+                GeneratedValueOrdinal: 1,
+                DefinesGeneratedValue: true),
+            new(
+                RecordedActionKind.CaptureCopiedValue,
+                new RecordedControlDescriptor(
+                    "CustomerName", UiControlType.TextBox, "CustomerName",
+                    UiLocatorKind.AutomationId, false, typeof(TextBox).FullName!, null),
+                ValueKind: RecorderValueKind.Text,
+                ValueAccessorKind: RecorderValueAccessorKind.Text,
+                CopiedValueId: copiedId,
+                CopiedValueVariableName: "copiedCustomer"),
+            new(
+                RecordedActionKind.WaitUntilGridCellEquals,
+                GridDescriptor(),
+                StringValue: "Ready")
+            {
+                GridRowConditions =
+                [
+                    new RecordedGridRowCondition("Number", "OLD-1")
+                    {
+                        ValueReference = new RecorderGridRowValueReference(
+                            RecorderGridRowValueSourceKind.GeneratedValue, generatedId)
+                    },
+                    new RecordedGridRowCondition("Customer", "Old customer")
+                    {
+                        ValueReference = new RecorderGridRowValueReference(
+                            RecorderGridRowValueSourceKind.CopiedValue, copiedId)
+                    }
+                ],
+                GridTargetColumnName = "Status"
+            }
+        };
+
+        var preview = CreateGenerator().GeneratePreview(steps);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(preview).Contains(
+                "ByCell(\"Number\", generatedOrderNumber).AndCell(\"Customer\", copiedCustomer)");
+            await Assert.That(preview).DoesNotContain("OLD-1");
+            await Assert.That(preview).DoesNotContain("Old customer");
+        }
+    }
+
+    [Test]
+    public async Task Graph_RejectsLaterAndNonTextGridRowVariables()
+    {
+        var checkpointId = Guid.NewGuid();
+        var assertion = new RecordedStep(
+            RecordedActionKind.AssertValue,
+            GridDescriptor(),
+            StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.GridCellText,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellText,
+            ComparisonKind: RecorderComparisonKind.IsEmpty)
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("Number", "OLD-1")
+                {
+                    ValueReference = new RecorderGridRowValueReference(
+                        RecorderGridRowValueSourceKind.Checkpoint, checkpointId)
+                }
+            ],
+            GridTargetColumnName = "Status"
+        };
+        var numericCheckpoint = new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            new RecordedControlDescriptor(
+                "Quantity", UiControlType.Spinner, "Quantity",
+                UiLocatorKind.AutomationId, false, typeof(NumericUpDown).FullName!, null),
+            ValueKind: RecorderValueKind.Number,
+            ValueAccessorKind: RecorderValueAccessorKind.NumericValue,
+            CheckpointId: checkpointId,
+            CheckpointVariableName: "quantity");
+
+        var later = RecorderScenarioGraphValidator.Validate([assertion, numericCheckpoint]);
+        var wrongType = RecorderScenarioGraphValidator.Validate([numericCheckpoint, assertion]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(later.Success).IsFalse();
+            await Assert.That(later.StepErrors[assertion.StepId]).Contains("row column 'Number'");
+            await Assert.That(wrongType.Success).IsFalse();
+            await Assert.That(wrongType.StepErrors[assertion.StepId]).Contains("non-text variable");
+        }
+    }
+
+    [Test]
     public async Task Generator_RendersCompositeSelectorAndNamedTargetColumn()
     {
         var step = new RecordedStep(

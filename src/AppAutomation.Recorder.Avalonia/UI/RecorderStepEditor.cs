@@ -38,6 +38,7 @@ internal sealed class RecorderStepEditor : Border
     private NumericOperandFields? _rightOperand;
     private readonly List<TextBox> _additionalTextInputs = [];
     private readonly List<ComboBox> _additionalComboInputs = [];
+    private readonly List<GridRowConditionFields> _gridRowConditionFields = [];
 
     public RecorderStepEditor(
         RecorderStepEditDraft draft,
@@ -96,6 +97,11 @@ internal sealed class RecorderStepEditor : Border
         else if (draft.EditKind is not (RecorderStepEditKind.GeneratedValue or RecorderStepEditKind.CopiedValue))
         {
             BuildPayloadFields(fields, draft);
+        }
+
+        if (draft.GridRowConditions is { Count: > 0 })
+        {
+            BuildGridRowFields(fields, draft);
         }
 
         _codePreview = new TextBlock
@@ -450,6 +456,67 @@ internal sealed class RecorderStepEditor : Border
         return result;
     }
 
+    private void BuildGridRowFields(StackPanel fields, RecorderStepEditDraft draft)
+    {
+        fields.Children.Add(new TextBlock
+        {
+            Text = "Row selector",
+            FontWeight = FontWeight.SemiBold
+        });
+
+        for (var index = 0; index < draft.GridRowConditions!.Count; index++)
+        {
+            var condition = draft.GridRowConditions[index];
+            var sourceOptions = draft.AvailableGridRowVariables.Count > 0
+                || condition.ValueReference is not null
+                ? new[] { "Recorded value", "Variable" }
+                : ["Recorded value"];
+            var source = AddComboField(
+                fields,
+                condition.ColumnName,
+                $"RecorderStepEditRowSource{index}",
+                sourceOptions,
+                condition.ValueReference is null ? "Recorded value" : "Variable");
+            var recorded = new TextBlock
+            {
+                Text = $"Recorded: {condition.Value}",
+                TextWrapping = TextWrapping.Wrap
+            };
+            fields.Children.Add(recorded);
+            var selected = draft.AvailableGridRowVariables
+                .FirstOrDefault(option => option.Reference == condition.ValueReference);
+            var variable = new ComboBox
+            {
+                Name = $"RecorderStepEditRowVariable{index}",
+                ItemsSource = draft.AvailableGridRowVariables,
+                SelectedItem = selected,
+                MinWidth = 220
+            };
+            fields.Children.Add(CreateField("Variable", variable));
+            if (draft.AvailableGridRowVariables.Count == 0)
+            {
+                fields.Children.Add(new TextBlock
+                {
+                    Text = "Record a text value before this step to use it as a row key.",
+                    TextWrapping = TextWrapping.Wrap
+                });
+            }
+            void RefreshVisibility()
+            {
+                var useVariable = string.Equals(source.SelectedItem as string, "Variable", StringComparison.Ordinal);
+                SetFieldVisible(variable, useVariable);
+                variable.IsEnabled = draft.AvailableGridRowVariables.Count > 0;
+                recorded.IsVisible = !useVariable;
+            }
+
+            source.SelectionChanged += (_, _) => RefreshVisibility();
+            RefreshVisibility();
+            _gridRowConditionFields.Add(new GridRowConditionFields(condition, source, variable));
+            _additionalComboInputs.Add(source);
+            _additionalComboInputs.Add(variable);
+        }
+    }
+
     private void BuildPayloadFields(StackPanel fields, RecorderStepEditDraft draft)
     {
         if (draft.StringValue is not null)
@@ -565,6 +632,30 @@ internal sealed class RecorderStepEditor : Border
                     .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .ToArray()
         };
+
+        if (_gridRowConditionFields.Count > 0)
+        {
+            var rowConditions = new List<RecordedGridRowCondition>(_gridRowConditionFields.Count);
+            foreach (var field in _gridRowConditionFields)
+            {
+                if (string.Equals(field.Source.SelectedItem as string, "Variable", StringComparison.Ordinal))
+                {
+                    if (field.Variable.SelectedItem is not RecorderGridRowVariableOption option)
+                    {
+                        error = $"Choose an earlier text variable for row column '{field.Condition.ColumnName}'.";
+                        return false;
+                    }
+
+                    rowConditions.Add(field.Condition with { ValueReference = option.Reference });
+                }
+                else
+                {
+                    rowConditions.Add(field.Condition with { ValueReference = null });
+                }
+            }
+
+            draft = draft with { GridRowConditions = rowConditions };
+        }
 
         if (_variableName is not null
             && !RecorderNaming.TryValidateExactVariableName(draft.VariableName, out error))
@@ -1113,4 +1204,9 @@ internal sealed class RecorderStepEditor : Border
         ComboBox Checkpoint,
         TextBlock SelectedControl,
         RecorderNumericOperand? ControlOperand);
+
+    private sealed record GridRowConditionFields(
+        RecordedGridRowCondition Condition,
+        ComboBox Source,
+        ComboBox Variable);
 }
