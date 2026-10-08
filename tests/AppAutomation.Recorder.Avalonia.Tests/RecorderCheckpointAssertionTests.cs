@@ -292,6 +292,147 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
+    public async Task Factory_OpenMultiSelectPopupUsesOnlyVerifiedAppliedSnapshot()
+    {
+        var root = new StackPanel();
+        var editor = new AppliedFilterEditor
+        {
+            SelectedItem = "First",
+            SelectedItems = ["First"],
+            Child = new TextBlock { Text = "First" }
+        };
+        var results = new ListBox
+        {
+            ItemsSource = new[] { "First", "Second" },
+            SelectedItem = "Second",
+            IsVisible = true
+        };
+        AutomationProperties.SetAutomationId(editor, "StatusFilter");
+        AutomationProperties.SetAutomationId(results, "StatusFilterItems");
+        root.Children.Add(editor);
+        root.Children.Add(results);
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "StatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "StatusFilter", "StatusFilterOpen", "StatusFilterItems", "StatusFilterApply")));
+        var appliedStep = new RecordedStep(
+            RecordedActionKind.ApplyFilterSelection,
+            Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+            StringValues: ["First"]);
+        var factory = new RecorderStepFactory(options, () => root, () => [appliedStep]);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(results, out var snapshot, out var error);
+        editor.SelectedItem = "Second";
+        editor.SelectedItems = ["Second"];
+        var pendingCapture = factory.TryCaptureSemanticValueSnapshot(results, out _, out var pendingError);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsTrue();
+            await Assert.That(error).IsEmpty();
+            await Assert.That(snapshot!.Prototype.StringValues).IsEquivalentTo(["First"]);
+            await Assert.That(snapshot.Prototype.StringValue).IsEqualTo("First");
+            await Assert.That(pendingCapture).IsFalse();
+            await Assert.That(pendingError).Contains("Apply or cancel");
+        }
+    }
+
+    [Test]
+    public async Task Factory_ImmediateFilterCheckCapturesAppliedValueAndVisibleText()
+    {
+        var root = new StackPanel();
+        var editor = new Border { Child = new TextBlock { Text = "ООО Тест" } };
+        var results = new ListBox { ItemsSource = new[] { "ООО Тест", "Другое" }, SelectedItem = "ООО Тест" };
+        AutomationProperties.SetAutomationId(editor, "CustomerFilter");
+        AutomationProperties.SetAutomationId(results, "CustomerFilterResults");
+        root.Children.Add(editor);
+        root.Children.Add(results);
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "CustomerFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "CustomerFilter", "CustomerFilterOpen", "CustomerFilterResults")));
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(results, out var snapshot, out var error);
+        var result = factory.TryCreateAssertionStep(snapshot, RecorderAssertionMode.Auto);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsTrue();
+            await Assert.That(error).IsEmpty();
+            await Assert.That(result.Success).IsTrue();
+            await Assert.That(result.Step!.CanPersist).IsTrue();
+            await Assert.That(result.Step.StringValues).IsEquivalentTo(["ООО Тест"]);
+            await Assert.That(result.Step.StringValue).IsEqualTo("ООО Тест");
+            await Assert.That(CreateGenerator().GeneratePreview([result.Step]))
+                .Contains("Page.WaitUntilSelectedItemsEqual(static page => page.CustomerFilter");
+            await Assert.That(CreateGenerator().GeneratePreview([result.Step]))
+                .Contains("Page.WaitUntilTextEquals(static page => page.CustomerFilter, \"ООО Тест\")");
+        }
+    }
+
+    [Test]
+    public async Task Factory_FilterDisplayLocatorReadsTextBlockWithoutOtherCaptions()
+    {
+        var display = new TextBlock { Text = "Pending" };
+        AutomationProperties.SetAutomationId(display, "FilterDisplay");
+        var content = new StackPanel();
+        content.Children.Add(display);
+        content.Children.Add(new TextBlock { Text = "Additional text" });
+        var editor = new AppliedFilterEditor { SelectedItem = "Pending", Child = content };
+        AutomationProperties.SetAutomationId(editor, "StatusFilter");
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "StatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "StatusFilter", "StatusFilterOpen", "StatusFilterResults",
+                displayValueAutomationId: "FilterDisplay")));
+        var factory = new RecorderStepFactory(options, () => editor);
+        var captured = factory.TryCaptureSemanticValueSnapshot(editor, out var snapshot, out var error);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsTrue();
+            await Assert.That(error).IsEmpty();
+            await Assert.That(snapshot!.Prototype.StringValue).IsEqualTo("Pending");
+        }
+    }
+
+    [Test]
+    public async Task Factory_ClosedFilterCheckDoesNotReadPendingPopupValues()
+    {
+        var root = new StackPanel();
+        var editor = new AppliedFilterEditor
+        {
+            SelectedItem = "ООО Тест",
+            Child = new TextBlock { Text = "ООО Тест" }
+        };
+        var results = new ListBox { ItemsSource = new[] { "ООО Тест", "Другое" }, SelectedItem = "Другое", IsVisible = false };
+        AutomationProperties.SetAutomationId(editor, "CustomerFilter");
+        AutomationProperties.SetAutomationId(results, "CustomerFilterResults");
+        root.Children.Add(editor);
+        root.Children.Add(results);
+        var options = new AppAutomationRecorderOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "CustomerFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "CustomerFilter", "CustomerFilterOpen", "CustomerFilterResults")));
+        var factory = new RecorderStepFactory(options, () => root);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(editor, out var snapshot, out var error);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsTrue();
+            await Assert.That(error).IsEmpty();
+            await Assert.That(snapshot!.Prototype.StringValues).IsEquivalentTo(["ООО Тест"]);
+            await Assert.That(snapshot.Prototype.StringValue).IsEqualTo("ООО Тест");
+        }
+    }
+
+    [Test]
     public async Task Preview_ReadsCheckpointAtReplayAndUsesItInTUnitAssertion()
     {
         var checkpointId = Guid.NewGuid();
@@ -792,6 +933,15 @@ public sealed class RecorderCheckpointAssertionTests
                     ExpectedCheckpointId: checkpointId),
                 new RecordedStep(
                     RecordedActionKind.AssertValue,
+                    Descriptor("StatusFilter", UiControlType.ComboBoxFilter),
+                    StringValue: "Pending",
+                    StringValues: ["Pending"],
+                    ValueKind: RecorderValueKind.StringSet,
+                    ValueAccessorKind: RecorderValueAccessorKind.SelectedItems,
+                    ComparisonKind: RecorderComparisonKind.Equivalent,
+                    HasExpectedLiteral: true),
+                new RecordedStep(
+                    RecordedActionKind.AssertValue,
                     Descriptor("OptionalDate", UiControlType.DateTimePicker),
                     ValueKind: RecorderValueKind.Date,
                     ValueAccessorKind: RecorderValueAccessorKind.SelectedDate,
@@ -832,7 +982,10 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(scenarioSource).Contains(
                 "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-20\"), \"RequiredAmount\")).IsEqualTo(GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-10\"), \"RequiredAmount\") + 2)");
             await Assert.That(scenarioSource).DoesNotContain("global::TUnit.Assertions");
-            await Assert.That(scenarioSource).DoesNotContain("WaitUntilTextEquals");
+            await Assert.That(scenarioSource)
+                .Contains("Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, new[] { \"Pending\" });");
+            await Assert.That(scenarioSource)
+                .Contains("Page.WaitUntilTextEquals(static page => page.StatusFilter, \"Pending\");");
             await Assert.That(CountOccurrences(controlsSource, "ObservedValue")).IsEqualTo(2);
             await Assert.That(CountOccurrences(controlsSource, "AdjustmentValue")).IsEqualTo(2);
             await Assert.That(compileErrors).IsEmpty();
@@ -2196,6 +2349,57 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(selection.ValueDescriptionError).Contains("cannot prove the selected row's current view position");
             await Assert.That(session.StepJournal).IsEmpty();
         }
+    }
+    
+    [Test]
+    public async Task CheckMode_FilterInputKeepsItsLogicalTargetWhenAnotherSurfaceIsCandidate()
+    {
+        var root = new StackPanel();
+        var input = new TextBox { Text = "First" };
+        AutomationProperties.SetAutomationId(input, "StatusFilterInput");
+        var filter = new AppliedFilterEditor { SelectedItem = "First", Child = input };
+        AutomationProperties.SetAutomationId(filter, "StatusFilter");
+        var unrelated = new TextBox { Text = "Unrelated" };
+        AutomationProperties.SetAutomationId(unrelated, "UnrelatedValue");
+        root.Children.Add(filter);
+        root.Children.Add(unrelated);
+        var options = CreateSessionOptions();
+        options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+            "StatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "StatusFilter", "StatusFilterOpen", "StatusFilterResults")));
+        using var session = CreateSession(root, options);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(input, [input, filter, unrelated]);
+        var committedSelection = selection;
+        input.Text = "Search only";
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(input, [input, filter]);
+        var uncommittedSelection = selection;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(committedSelection).IsNotNull();
+            await Assert.That(committedSelection!.ValueDescriptionError).IsNullOrEmpty();
+            await Assert.That(committedSelection.ValueSnapshot?.Prototype.Control.LocatorValue)
+                .IsEqualTo("StatusFilter");
+            await Assert.That(committedSelection.ValueDescription?.CurrentValueText).IsEqualTo("First");
+            await Assert.That(uncommittedSelection?.ValueSnapshot).IsNull();
+            await Assert.That(uncommittedSelection?.ValueDescriptionError)
+                .Contains("does not expose its displayed value");
+        }
+    }
+
+    private sealed class AppliedFilterEditor : Border
+    {
+        public object? SelectedItem { get; set; }
+
+        public IReadOnlyList<object?> SelectedItems { get; set; } = [];
+        
     }
 
     private sealed record ProductGridRow(string PositionNumber, ProductValue MarketProduct);

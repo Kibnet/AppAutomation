@@ -20,6 +20,7 @@ internal sealed partial class RecorderStepFactory
 
     private readonly AppAutomationRecorderOptions _options;
     private readonly Func<Control?>? _validationRootProvider;
+    private readonly Func<IReadOnlyList<RecordedStep>>? _recordedStepsProvider;
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
@@ -36,11 +37,15 @@ internal sealed partial class RecorderStepFactory
     {
     }
 
-    internal RecorderStepFactory(AppAutomationRecorderOptions options, Func<Control?>? validationRootProvider)
+    internal RecorderStepFactory(
+        AppAutomationRecorderOptions options,
+        Func<Control?>? validationRootProvider,
+        Func<IReadOnlyList<RecordedStep>>? recordedStepsProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _ = _options.FreezeGridHints();
         _validationRootProvider = validationRootProvider;
+        _recordedStepsProvider = recordedStepsProvider;
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _assertionExtractors = CreateAssertionExtractors(options);
@@ -618,6 +623,14 @@ internal sealed partial class RecorderStepFactory
                 StringComparison.Ordinal));
     }
 
+    internal bool IsConfiguredComboBoxFilterRoot(Control source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return _options.ComboBoxFilterHints.Any(hint =>
+            TryGetLocator(source, hint.Parts.LocatorKind, out var locatorValue)
+            && string.Equals(hint.Parts.RootLocator, locatorValue, StringComparison.Ordinal));
+    }
+
     public bool ShouldSuppressCatalogGridTextEntry(TextBox textBox)
     {
         ArgumentNullException.ThrowIfNull(textBox);
@@ -977,15 +990,16 @@ internal sealed partial class RecorderStepFactory
             || _options.FolderExportHints.Any(hint =>
                 MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
             || _options.MultiSelectHints.Any(hint =>
-                MatchesAnyLocator(
-                    source,
-                    hint.Parts.LocatorKind,
-                    hint.Parts.OpenButtonLocator,
-                    hint.Parts.ItemsContainerLocator))
+                MatchesAnyLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)
+                || (MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)
+                    && !MatchesAnyLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator)
+                    && !MatchesAnyLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator)))
             || _options.ComboBoxFilterHints.Any(hint =>
                 MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)
                 || (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
-                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)))
+                    && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.ItemsContainerLocator)
+                    && !MatchesAnyLocator(source, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator)
+                    && !MatchesAnyLocator(source, hint.Parts.LocatorKind, hint.Parts.CancelButtonLocator)))
             || _options.SearchControlHints.Any(hint =>
                 MatchesAnyLocator(
                     source,
@@ -2303,7 +2317,10 @@ internal sealed partial class RecorderStepFactory
         var step = CreateSemanticValueStep(
             RecordedActionKind.AssertValue,
             candidate,
-            comparisonKind: RecorderComparisonKind.Equal,
+            comparisonKind: candidate.Control.ControlType == UiControlType.ComboBoxFilter
+                && candidate.ValueKind == RecorderValueKind.StringSet
+                ? RecorderComparisonKind.Equivalent
+                : RecorderComparisonKind.Equal,
             hasExpectedLiteral: true);
         return CreateStepFromSnapshot(snapshot, step, "Added current semantic value assertion.");
     }
@@ -3347,17 +3364,8 @@ internal sealed partial class RecorderStepFactory
             .ToArray();
         if (filterHints.Length > 0)
         {
-            return TryCreateMultiSelectSemanticValue(
-                source,
-                filterHints.Select(hint => (
-                    hint.LocatorValue,
-                    hint.LocatorKind,
-                    hint.FallbackToName,
-                    ToMultiSelectParts(hint.Parts),
-                    UiControlType.ComboBoxFilter)).ToArray(),
-                requireLiteral,
-                out candidate,
-                out error);
+            return TryCreateComboBoxFilterSemanticValue(
+                source, filterHints, requireLiteral, out candidate, out error);
         }
 
         var multiSelectHints = _options.MultiSelectHints
@@ -4423,6 +4431,264 @@ internal sealed partial class RecorderStepFactory
                 warning: null),
             RecorderValueKind.StringSet,
             RecorderValueAccessorKind.SelectedItems);
+        error = string.Empty;
+        return true;
+    }
+
+    private bool TryCreateComboBoxFilterSemanticValue(
+        Control source,
+        IReadOnlyList<RecorderComboBoxFilterHint> hints,
+        bool requireLiteral,
+        out SemanticValueCandidate candidate,
+        out string error)
+    {
+        candidate = null!;
+        if (hints.Count != 1)
+        {
+            error = $"Value source matches {hints.Count} combo-box filter hints; configure unique part locators.";
+            return false;
+        }
+
+        var hint = hints[0];
+        var parts = hint.Parts;
+        var root = FindFromRelatedControlTrees(source, parts.RootLocator, parts.LocatorKind)
+            ?? FindFromValidationRoot(parts.RootLocator, parts.LocatorKind);
+        if (root is null)
+        {
+            error = $"Combo-box filter root '{parts.RootLocator}' was not found.";
+            return false;
+        }
+
+        var itemsContainer = FindFromRelatedControlTrees(source, parts.ItemsContainerLocator, parts.LocatorKind)
+            ?? FindFromValidationRoot(parts.ItemsContainerLocator, parts.LocatorKind);
+        var isPopupOpen = itemsContainer?.IsEffectivelyVisible == true;
+        IReadOnlyList<string> selectedValues;
+        if (isPopupOpen && !string.IsNullOrWhiteSpace(parts.ApplyButtonLocator))
+        {
+            if (!TryReadFilterRootSelection(root, allowSingleItemFallback: false, out var currentValues, out _)
+                || !TryGetRecordedAppliedFilterValues(hint, out var appliedValues)
+                || !currentValues.ToHashSet(StringComparer.Ordinal).SetEquals(appliedValues))
+            {
+                error = "Apply or cancel the open multi-select popup before asserting its committed value. "
+                    + "The applied selection could not be independently confirmed.";
+                return false;
+            }
+
+            selectedValues = appliedValues;
+        }
+        else if (isPopupOpen)
+        {
+            if (!TryReadSelectionValues(source, ToMultiSelectParts(parts), "combo-box filter",
+                    out selectedValues, out error))
+            {
+                return false;
+            }
+        }
+        else if (!TryReadFilterRootSelection(
+                     root,
+                     allowSingleItemFallback: string.IsNullOrWhiteSpace(parts.ApplyButtonLocator),
+                     out selectedValues,
+                     out error))
+        {
+            return false;
+        }
+
+        if (!TryReadFilterDisplayedText(source, root, parts, selectedValues, out var displayedText, out error))
+        {
+            return false;
+        }
+
+        if (requireLiteral && selectedValues.Count == 0)
+        {
+            error = $"Combo-box filter '{parts.RootLocator}' has no applied value to check.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            CreateCompositeDescriptor(
+                hint.LocatorValue,
+                UiControlType.ComboBoxFilter,
+                hint.LocatorKind,
+                hint.FallbackToName,
+                source,
+                warning: null),
+            RecorderValueKind.StringSet,
+            RecorderValueAccessorKind.SelectedItems,
+            StringValue: displayedText,
+            StringValues: selectedValues.OrderBy(static value => value, StringComparer.Ordinal).ToArray());
+        error = string.Empty;
+        return true;
+    }
+
+    private bool TryGetRecordedAppliedFilterValues(
+        RecorderComboBoxFilterHint hint,
+        out IReadOnlyList<string> values)
+    {
+        var appliedStep = _recordedStepsProvider?.Invoke()
+            .LastOrDefault(step => !step.IsIgnored
+                && step.CanPersist
+                && step.ActionKind == RecordedActionKind.ApplyFilterSelection
+                && step.Control.ControlType == UiControlType.ComboBoxFilter
+                && step.Control.LocatorKind == hint.LocatorKind
+                && string.Equals(step.Control.LocatorValue, hint.LocatorValue, StringComparison.Ordinal));
+        values = appliedStep?.StringValues ?? [];
+        return appliedStep?.StringValues is not null;
+    }
+
+    private static bool TryReadFilterRootSelection(
+        Control root,
+        bool allowSingleItemFallback,
+        out IReadOnlyList<string> selectedValues,
+        out string error)
+    {
+        selectedValues = [];
+        object? selection = root switch
+        {
+            ComboBox comboBox => comboBox.SelectedItem,
+            ListBox listBox => listBox.SelectedItems,
+            _ => null
+        };
+        if (selection is null)
+        {
+            TryReadObjectProperty(root, "SelectedItems", out selection);
+            if (selection is null)
+            {
+                TryReadObjectProperty(root, "SelectedItem", out selection);
+            }
+        }
+
+        if (selection is null)
+        {
+            error = $"Combo-box filter '{AutomationProperties.GetAutomationId(root)}' does not expose its applied selection on the logical root.";
+            return false;
+        }
+
+        var rawItems = selection is IEnumerable enumerable and not string
+            ? enumerable.Cast<object?>().ToArray()
+            : [selection];
+        if (rawItems.Length == 0 && allowSingleItemFallback)
+        {
+            var selectedItem = root is ListBox listBox ? listBox.SelectedItem : null;
+            if (selectedItem is null)
+            {
+                TryReadObjectProperty(root, "SelectedItem", out selectedItem);
+            }
+
+            if (selectedItem is not null)
+            {
+                rawItems = [selectedItem];
+            }
+        }
+        var captions = rawItems
+            .Select(static item => item is Control control
+                ? ReadRenderedSelectionCaption(control) ?? ReadSelectionDataCaption(item)
+                : ReadSelectionDataCaption(item))
+            .ToArray();
+        if (captions.Any(string.IsNullOrWhiteSpace)
+            || captions.Distinct(StringComparer.OrdinalIgnoreCase).Count() != captions.Length)
+        {
+            error = "Applied combo-box filter selection has missing or duplicate visible item captions.";
+            return false;
+        }
+
+        selectedValues = captions.Select(static text => text!.Trim()).ToArray();
+        error = string.Empty;
+        return true;
+    }
+
+    private bool TryReadFilterDisplayedText(
+        Control source,
+        Control root,
+        ComboBoxFilterParts parts,
+        IReadOnlyList<string> selectedValues,
+        out string displayedText,
+        out string error)
+    {
+        var displaySource = string.IsNullOrWhiteSpace(parts.DisplayValueLocator)
+            ? root
+            : FindFromRelatedControlTrees(source, parts.DisplayValueLocator, parts.LocatorKind)
+                ?? FindFromValidationRoot(parts.DisplayValueLocator, parts.LocatorKind);
+        if (displaySource is null)
+        {
+            displayedText = string.Empty;
+            error = $"Combo-box filter display part '{parts.DisplayValueLocator}' was not found.";
+            return false;
+        }
+
+        if (!TryReadFilterDisplayText(
+                displaySource,
+                parts.DisplayValueLocator ?? parts.RootLocator,
+                out var text,
+                out error))
+        {
+            displayedText = string.Empty;
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(text)
+            && string.IsNullOrWhiteSpace(parts.DisplayValueLocator)
+            && selectedValues.Count == 1)
+        {
+            var matchingEditors = root.GetVisualDescendants()
+                .OfType<TextBox>()
+                .Where(static editor => editor.IsEffectivelyVisible)
+                .Select(static editor => editor.Text?.Trim())
+                .Where(value => string.Equals(value, selectedValues[0], StringComparison.Ordinal))
+                .ToArray();
+            if (matchingEditors.Length == 1)
+            {
+                text = matchingEditors[0];
+            }
+        }
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            displayedText = string.Empty;
+            error = $"Combo-box filter '{parts.RootLocator}' does not expose its displayed value. "
+                + "Expose visible text or configure DisplayValueLocator.";
+            return false;
+        }
+
+        displayedText = text.Trim();
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadFilterDisplayText(
+        Control source,
+        string filterLocator,
+        out string? text,
+        out string error)
+    {
+        text = source switch
+        {
+            TextBox input when input.IsEffectivelyVisible => input.Text,
+            TextBlock block when block.IsEffectivelyVisible => block.Text,
+            Label label when label.IsEffectivelyVisible => label.Content?.ToString(),
+            _ => null
+        };
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        var visibleTexts = source.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .Where(static block => block.IsEffectivelyVisible && !string.IsNullOrWhiteSpace(block.Text))
+            .Select(static block => block.Text!.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+        if (visibleTexts.Length > 1)
+        {
+            text = null;
+            error = $"Combo-box filter display part '{filterLocator}' has multiple visible text values. "
+                + "Configure DisplayValueLocator for the committed value.";
+            return false;
+        }
+
+        text = visibleTexts.FirstOrDefault()
+            ?? AutomationProperties.GetName(source)
+            ?? (source as ContentControl)?.Content as string;
         error = string.Empty;
         return true;
     }
@@ -8048,9 +8314,8 @@ internal sealed partial class RecorderStepFactory
         out IReadOnlyList<string> selectedValues,
         out string message)
     {
-        var editorRoot = FindFromValidationRoot(parts.RootLocator, parts.LocatorKind)
-            ?? EnumerateRelatedControls(source)
-                .FirstOrDefault(candidate => HasExactLocator(candidate, parts.LocatorKind, parts.RootLocator));
+        var editorRoot = FindFromRelatedControlTrees(source, parts.RootLocator, parts.LocatorKind)
+            ?? FindFromValidationRoot(parts.RootLocator, parts.LocatorKind);
         if (editorRoot is null)
         {
             selectedValues = [];
@@ -8073,6 +8338,14 @@ internal sealed partial class RecorderStepFactory
         if (!TryReadSelectionItemSnapshots(itemsContainer, controlDescription, out var items, out message))
         {
             selectedValues = [];
+            return false;
+        }
+
+        if (items.Any(static item => item.IsSelected && string.IsNullOrWhiteSpace(item.Text)))
+        {
+            selectedValues = [];
+            message = $"Recorder {controlDescription} item does not expose a readable UI caption. "
+                + "Expose visible text or AutomationProperties.Name on the item.";
             return false;
         }
 
@@ -8183,7 +8456,7 @@ internal sealed partial class RecorderStepFactory
             .Select(checkBox => new SelectionItemSnapshot(
                 ReadSelectionItemText(checkBox),
                 checkBox.IsChecked == true))
-            .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
+            .Where(static item => item.IsSelected || !string.IsNullOrWhiteSpace(item.Text))
             .ToArray();
         if (checkBoxItems.Length > 0)
         {
@@ -8193,15 +8466,16 @@ internal sealed partial class RecorderStepFactory
         var listBox = EnumerateDescendantControls(root).OfType<ListBox>().FirstOrDefault();
         if (listBox is not null)
         {
-            var selectedTexts = (listBox.SelectedItems?.Cast<object?>()
+            var selectedItems = (listBox.SelectedItems?.Cast<object?>()
                     ?? (listBox.SelectedItem is null ? [] : [listBox.SelectedItem]))
-                .Select(ExtractSelectionText)
-                .Where(static text => !string.IsNullOrWhiteSpace(text))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .ToArray();
             return listBox.Items
-                .Select(ExtractSelectionText)
-                .Where(static text => !string.IsNullOrWhiteSpace(text))
-                .Select(text => new SelectionItemSnapshot(text!, selectedTexts.Contains(text!)))
+                .Select((item, index) => new SelectionItemSnapshot(
+                    ReadRenderedSelectionCaption(listBox.ContainerFromIndex(index))
+                        ?? ReadSelectionDataCaption(item)
+                        ?? string.Empty,
+                    selectedItems.Any(selected => ReferenceEquals(selected, item) || Equals(selected, item))))
+                .Where(static item => item.IsSelected || !string.IsNullOrWhiteSpace(item.Text))
                 .ToArray();
         }
 
@@ -8211,13 +8485,13 @@ internal sealed partial class RecorderStepFactory
             return [];
         }
 
-        var selectedText = ExtractSelectionText(comboBox.SelectedItem);
         return comboBox.Items
-            .Select(ExtractSelectionText)
-            .Where(static text => !string.IsNullOrWhiteSpace(text))
-            .Select(text => new SelectionItemSnapshot(
-                text!,
-                string.Equals(text, selectedText, StringComparison.OrdinalIgnoreCase)))
+            .Select((item, index) => new SelectionItemSnapshot(
+                ReadRenderedSelectionCaption(comboBox.ContainerFromIndex(index))
+                    ?? ReadSelectionDataCaption(item)
+                    ?? string.Empty,
+                ReferenceEquals(comboBox.SelectedItem, item) || Equals(comboBox.SelectedItem, item)))
+            .Where(static item => item.IsSelected || !string.IsNullOrWhiteSpace(item.Text))
             .ToArray();
     }
 
@@ -8247,24 +8521,64 @@ internal sealed partial class RecorderStepFactory
             : null;
     }
 
-    private static IEnumerable<Control> EnumerateDescendantControls(Control root)
-    {
-        return root
-            .GetLogicalDescendants()
-            .OfType<Control>()
-            .Concat(root.GetVisualDescendants().OfType<Control>())
-            .Prepend(root)
-            .Distinct<Control>(ReferenceEqualityComparer.Instance);
-    }
+    private static IEnumerable<Control> EnumerateDescendantControls(Control root) =>
+        RecorderControlTree.EnumerateReachableControls(root);
 
     private static string ReadSelectionItemText(CheckBox checkBox)
     {
-        return (AutomationProperties.GetName(checkBox)
-                ?? checkBox.Content?.ToString()
-                ?? checkBox.Name
-                ?? AutomationProperties.GetAutomationId(checkBox)
+        return (ReadRenderedSelectionCaption(checkBox)
+                ?? ReadSelectionDataCaption(checkBox.Content)
                 ?? string.Empty)
             .Trim();
+    }
+
+    private static string? ReadSelectionDataCaption(object? item)
+    {
+        if (item is null)
+        {
+            return null;
+        }
+
+        if (item is string or Control || item.GetType().IsEnum)
+        {
+            return ExtractSelectionText(item);
+        }
+
+        foreach (var propertyName in new[] { "Header", "Title", "Text", "Name" })
+        {
+            if (TryReadPropertyValue(item, propertyName, out var value)
+                && !string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadRenderedSelectionCaption(Control? control)
+    {
+        if (control is null)
+        {
+            return null;
+        }
+
+        var text = string.Join(" ", control.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .Where(static block => block.IsEffectivelyVisible && !string.IsNullOrWhiteSpace(block.Text))
+            .Select(static block => block.Text!.Trim()));
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        return AutomationProperties.GetName(control) switch
+        {
+            { } name when !string.IsNullOrWhiteSpace(name) => name.Trim(),
+            _ => control is ContentControl { Content: string caption } && !string.IsNullOrWhiteSpace(caption)
+                ? caption.Trim()
+                : null
+        };
     }
 
     private sealed record SelectionItemSnapshot(string Text, bool IsSelected);

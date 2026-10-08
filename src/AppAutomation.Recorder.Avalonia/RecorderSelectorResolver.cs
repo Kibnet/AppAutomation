@@ -1,7 +1,6 @@
 using AppAutomation.Abstractions;
 using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Recorder.Avalonia;
@@ -535,13 +534,12 @@ internal sealed class RecorderSelectorResolver
             return [];
         }
 
-        IEnumerable<Control> candidates = root.GetVisualDescendants().OfType<Control>().Prepend(root);
+        IEnumerable<Control> candidates = RecorderControlTree.EnumerateReachableControls(
+            root,
+            includeLogicalDescendants);
         if (includeLogicalDescendants)
         {
-            var attachedControls = candidates
-                .Concat(root.GetLogicalDescendants().OfType<Control>())
-                .Distinct()
-                .ToArray();
+            var attachedControls = candidates.ToArray();
             candidates = attachedControls
                 .Concat(EnumerateDetachedMenuItems(attachedControls))
                 .Distinct();

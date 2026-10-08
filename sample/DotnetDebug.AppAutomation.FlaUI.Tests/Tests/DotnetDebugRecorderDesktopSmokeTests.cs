@@ -301,13 +301,23 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         var armScrollViewer = FindElement(session, "ArmDesktopScrollViewer");
         var initialScrollPosition = ReadVerticalScrollPercent(armScrollViewer);
 
-        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending"]);
+        var filter = page.ArmStatusFilter;
+        filter.Open();
+        filter.SetSelectedItems(["Pending"]);
+        filter.Apply();
         TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-one-value.png");
+        page.WaitUntilTextEquals(static candidate => candidate.ArmStatusFilter, "Pending");
 
-        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending", "Closed"]);
+        filter.Open();
+        filter.SetSelectedItems(["Pending", "Closed"]);
+        filter.Apply();
         TryCaptureDesktopElement(session.MainWindow, "combo-box-filter-several-values.png");
+        page.WaitUntilTextEquals(static candidate => candidate.ArmStatusFilter, "Pending;Closed");
 
-        page.CancelFilterSelection(static candidate => candidate.ArmStatusFilter, []);
+        filter.Open();
+        filter.SetSelectedItems([]);
+        filter.Cancel();
+        page.WaitUntilTextEquals(static candidate => candidate.ArmStatusFilter, "Pending;Closed");
 
         var scenarioSource = await WaitForAutosaveScenarioSourceAsync(
             outputDirectory.FullPath,
@@ -325,6 +335,76 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "Page.CancelFilterSelection(static page => page.ArmStatusFilter, global::System.Array.Empty<string>());");
             await Assert.That(scenarioSource).DoesNotContain("Page.SetChecked");
             await Assert.That(scenarioSource).DoesNotContain("ArmStatusFilter_ApplyButton");
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderCheckHotkeyCapturesAppliedFilterFromOpenPopup()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var scenarioName = CreateScenarioName("CheckOpenFilter");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderSmoke");
+        using var session = DesktopAppSession.Launch(
+            CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath, showOverlay: true));
+        using var automation = new UIA3Automation();
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Pending"]);
+
+        page.ArmStatusFilter.Open();
+        AutomationElement? FindPopupResults() => automation.GetDesktop()
+            .FindAllDescendants(session.ConditionFactory.ByAutomationId("ArmStatusFilter_Results"))
+            .FirstOrDefault(element => element.Properties.ProcessId.Value ==
+                session.MainWindow.Properties.ProcessId.Value && !element.IsOffscreen);
+        var results = UiWait.Until(
+            FindPopupResults,
+            static element => element is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "The filter popup did not expose its result list.")!;
+
+        results.Focus();
+        Keyboard.TypeSimultaneously(
+            VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_Q);
+        await Assert.That(FindPopupResults() is not null).IsTrue();
+
+        var otherItem = UiWait.Until(
+            () => results.FindAllDescendants(session.ConditionFactory.ByName("Closed"))
+                .FirstOrDefault(element => !element.IsOffscreen),
+            static element => element is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "The other filter item was not visible.")!;
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(otherItem);
+
+        var assertFilter = UiWait.Until(
+            () => automation.GetDesktop()
+                .FindAllDescendants(session.ConditionFactory.ByName("Assert active filter"))
+                .FirstOrDefault(element => element.Properties.ProcessId.Value ==
+                    session.MainWindow.Properties.ProcessId.Value && !element.IsOffscreen),
+            static element => element is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "Check did not offer the applied-filter assertion.")!;
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(assertFilter);
+
+        var scenarioPath = await WaitForScenarioFileAsync(
+            outputDirectory.FullPath,
+            scenarioName,
+            patternOverride: $"MainWindowScenariosBase.{scenarioName}.autosave.*.g.cs.autosave");
+        var scenarioSource = UiWait.Until(
+            () => File.ReadAllText(scenarioPath),
+            source => source.Contains(
+                "WaitUntilSelectedItemsEqual(static page => page.ArmStatusFilter",
+                StringComparison.Ordinal),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(8), PollInterval = PollInterval },
+            "Recorder did not save the applied-filter assertion.");
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.ArmStatusFilter.SelectedItems).IsEquivalentTo(["Pending"]);
+            await Assert.That(scenarioSource)
+                .Contains("Page.WaitUntilSelectedItemsEqual(static page => page.ArmStatusFilter, new[] { \"Pending\" });");
+            await Assert.That(scenarioSource)
+                .Contains("Page.WaitUntilTextEquals(static page => page.ArmStatusFilter, \"Pending\");");
         }
     }
 
@@ -421,10 +501,13 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         }
     }
 
-    private static DesktopAppLaunchOptions CreateRecorderLaunchOptions(string scenarioName, string outputDirectory)
+    private static DesktopAppLaunchOptions CreateRecorderLaunchOptions(
+        string scenarioName,
+        string outputDirectory,
+        bool showOverlay = false)
     {
         var baseOptions = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildConfiguration: "Debug");
-        return CreateRecorderLaunchOptions(baseOptions, scenarioName, outputDirectory);
+        return CreateRecorderLaunchOptions(baseOptions, scenarioName, outputDirectory, showOverlay);
     }
 
     private static DesktopAppLaunchOptions CreateInteractiveRecorderLaunchOptions(string outputDirectory)
@@ -456,7 +539,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     private static DesktopAppLaunchOptions CreateRecorderLaunchOptions(
         DesktopAppLaunchOptions baseOptions,
         string scenarioName,
-        string outputDirectory)
+        string outputDirectory,
+        bool showOverlay = false)
     {
         ArgumentNullException.ThrowIfNull(baseOptions);
         ArgumentException.ThrowIfNullOrWhiteSpace(scenarioName);
@@ -468,7 +552,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             [RecorderScenarioEnvironmentVariable] = scenarioName,
             [RecorderOutputDirectoryEnvironmentVariable] = Path.GetFullPath(outputDirectory),
             [RecorderAuthoringProjectEnvironmentVariable] = ResolveAuthoringProjectDirectory(),
-            [RecorderOverlayEnvironmentVariable] = "0",
+            [RecorderOverlayEnvironmentVariable] = showOverlay ? "1" : "0",
             [RecorderDiagnosticsEnvironmentVariable] = "1",
             [RecorderSaveHotkeyEnvironmentVariable] = "1"
         };
