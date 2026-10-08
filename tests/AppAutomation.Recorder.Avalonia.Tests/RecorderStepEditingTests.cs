@@ -900,6 +900,7 @@ public sealed class RecorderStepEditingTests
         var moved = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
         var movedAssertion = session.StepJournal[0];
         var movedBack = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Later);
+        var restoredAfterMove = session.StepJournal[1];
         session.RemoveStep(checkpointStepId);
         var afterRemoval = session.StepJournal.Single();
 
@@ -914,6 +915,8 @@ public sealed class RecorderStepEditingTests
             await Assert.That(movedAssertion.CanPersist).IsFalse();
             await Assert.That(movedAssertion.Preview).DoesNotContain("RU260408-5");
             await Assert.That(movedBack).IsTrue();
+            await Assert.That(restoredAfterMove.CanPersist).IsTrue();
+            await Assert.That(restoredAfterMove.Preview).Contains("ByCell(\"Number\", currentOrderNumber)");
             await Assert.That(afterRemoval.CanPersist).IsFalse();
             await Assert.That(afterRemoval.Preview).DoesNotContain("RU260408-5");
         }
