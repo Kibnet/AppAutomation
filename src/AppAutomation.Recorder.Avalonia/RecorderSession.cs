@@ -808,6 +808,10 @@ internal sealed class RecorderSession :
             .Where(static candidate => candidate.GeneratedValueId.HasValue)
             .Select(static candidate => candidate.GeneratedValueId!.Value)
             .ToHashSet();
+        var precedingCopiedValueIds = precedingSteps
+            .Where(static candidate => candidate.CopiedValueId.HasValue)
+            .Select(static candidate => candidate.CopiedValueId!.Value)
+            .ToHashSet();
         var generatedPreview = _codeGenerator.GeneratePreviewForStep(step, context.PreviewSteps);
         if (!RecorderStepEditService.TryCreateDraft(
                 step,
@@ -820,6 +824,9 @@ internal sealed class RecorderSession :
                     .ToArray(),
                 context.GeneratedValues
                     .Where(option => precedingGeneratedValueIds.Contains(option.GeneratedValueId))
+                    .ToArray(),
+                context.CopiedValues
+                    .Where(option => precedingCopiedValueIds.Contains(option.CopiedValueId))
                     .ToArray(),
                 out draft))
         {
@@ -4641,7 +4648,8 @@ internal sealed class RecorderSession :
 
         return left.Zip(right).All(pair =>
             string.Equals(pair.First.ColumnName, pair.Second.ColumnName, StringComparison.Ordinal)
-            && string.Equals(pair.First.Value, pair.Second.Value, StringComparison.Ordinal));
+            && string.Equals(pair.First.Value, pair.Second.Value, StringComparison.Ordinal)
+            && pair.First.ValueReference == pair.Second.ValueReference);
     }
 
     private void BeginPointerGesture()

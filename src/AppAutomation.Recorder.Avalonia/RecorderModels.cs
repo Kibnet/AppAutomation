@@ -510,7 +510,21 @@ internal sealed record RecordedStep(
     public RecorderStepValidationState? ValidationBeforeGraphError { get; init; }
 }
 
-internal sealed record RecordedGridRowCondition(string ColumnName, string Value);
+internal enum RecorderGridRowValueSourceKind
+{
+    Checkpoint = 0,
+    GeneratedValue = 1,
+    CopiedValue = 2
+}
+
+internal sealed record RecorderGridRowValueReference(
+    RecorderGridRowValueSourceKind Kind,
+    Guid ValueId);
+
+internal sealed record RecordedGridRowCondition(string ColumnName, string Value)
+{
+    public RecorderGridRowValueReference? ValueReference { get; init; }
+}
 
 internal sealed record RecorderStepValidationState(
     RecorderValidationStatus ValidationStatus,

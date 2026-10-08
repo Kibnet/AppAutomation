@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json.Nodes;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -1142,6 +1144,14 @@ public sealed class RecorderCheckpointAssertionTests
     {
         using var directory = new TemporaryDirectory();
         var filePath = Path.Combine(directory.Path, "calculated-grid.autosave.cs");
+        var rowKeyCheckpointId = Guid.NewGuid();
+        var rowKeyCheckpoint = new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("ItemKey", UiControlType.TextBox),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: rowKeyCheckpointId,
+            CheckpointVariableName: "itemKey");
         var step = new RecordedStep(
             RecordedActionKind.AssertValue,
             Descriptor("ItemsGrid", UiControlType.Grid),
@@ -1160,7 +1170,14 @@ public sealed class RecorderCheckpointAssertionTests
                     GridReference("ITEM-20"))),
             StepId: Guid.NewGuid())
         {
-            GridRowConditions = [new RecordedGridRowCondition("Key", "ITEM-30")],
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("Key", "ITEM-30")
+                {
+                    ValueReference = new RecorderGridRowValueReference(
+                        RecorderGridRowValueSourceKind.Checkpoint, rowKeyCheckpointId)
+                }
+            ],
             GridTargetColumnName = "RequiredAmount"
         };
         var state = new RecorderAutosaveState(
@@ -1168,14 +1185,31 @@ public sealed class RecorderCheckpointAssertionTests
             "calculated-grid-draft",
             "Autosave_CalculatedGridValues",
             DateTimeOffset.UtcNow,
-            [step]);
+            [rowKeyCheckpoint, step]);
         await File.WriteAllTextAsync(
             filePath,
             RecorderAutosaveStateSerializer.CreateMarker(state) + Environment.NewLine);
 
         var read = RecorderAutosaveStateSerializer.TryRead(filePath, out var restoredState, out var error);
-        var restoredStep = restoredState?.Steps.Single();
-        var graph = RecorderScenarioGraphValidator.Validate([restoredStep!]);
+        var restoredStep = restoredState?.Steps.Last();
+        var graph = RecorderScenarioGraphValidator.Validate(restoredState!.Steps);
+        var legacyStep = step with
+        {
+            GridRowConditions = [new RecordedGridRowCondition("Key", "ITEM-30")]
+        };
+        var legacyMarker = RecorderAutosaveStateSerializer.CreateMarker(state with { Steps = [legacyStep] });
+        var legacyPayload = Encoding.UTF8.GetString(Convert.FromBase64String(
+            legacyMarker[RecorderAutosaveStateSerializer.MarkerPrefix.Length..]));
+        var legacyJson = JsonNode.Parse(legacyPayload)!;
+        legacyJson["Steps"]!.AsArray()[0]!["GridRowConditions"]!.AsArray()[0]!
+            .AsObject().Remove("ValueReference");
+        await File.WriteAllTextAsync(
+            filePath,
+            RecorderAutosaveStateSerializer.MarkerPrefix
+            + Convert.ToBase64String(Encoding.UTF8.GetBytes(legacyJson.ToJsonString())));
+        var legacyRead = RecorderAutosaveStateSerializer.TryRead(
+            filePath, out var legacyState, out var legacyError);
+        var legacyCondition = legacyState?.Steps.Single().GridRowConditions?.Single();
 
         using (Assert.Multiple())
         {
@@ -1183,7 +1217,13 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(error).IsNull();
             await Assert.That(restoredStep).IsNotNull();
             await Assert.That(restoredStep!.GridRowConditions)
-                .IsEquivalentTo([new RecordedGridRowCondition("Key", "ITEM-30")]);
+                .IsEquivalentTo(step.GridRowConditions!);
+            await Assert.That(legacyRead).IsTrue();
+            await Assert.That(legacyError).IsNull();
+            await Assert.That(legacyCondition).IsNotNull();
+            await Assert.That(legacyCondition!.ColumnName).IsEqualTo("Key");
+            await Assert.That(legacyCondition.Value).IsEqualTo("ITEM-30");
+            await Assert.That(legacyCondition!.ValueReference).IsNull();
             await Assert.That(restoredStep.NumericExpectedExpression!.Left.GridValueReference!.RowConditions)
                 .IsEquivalentTo([new RecordedGridRowCondition("Key", "ITEM-10")]);
             await Assert.That(restoredStep.NumericExpectedExpression.Right.GridValueReference!.RowConditions)

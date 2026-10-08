@@ -2546,7 +2546,8 @@ internal sealed partial class RecorderStepFactory
         for (var index = 0; index < left.Count; index++)
         {
             if (!string.Equals(left[index].ColumnName, right[index].ColumnName, StringComparison.Ordinal)
-                || !string.Equals(left[index].Value, right[index].Value, StringComparison.Ordinal))
+                || !string.Equals(left[index].Value, right[index].Value, StringComparison.Ordinal)
+                || left[index].ValueReference != right[index].ValueReference)
             {
                 return false;
             }

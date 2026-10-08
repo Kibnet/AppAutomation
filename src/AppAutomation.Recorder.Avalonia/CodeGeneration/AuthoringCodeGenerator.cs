@@ -1449,22 +1449,32 @@ internal sealed class AuthoringCodeGenerator
         string? generatedValueSeriesVariable,
         IReadOnlyDictionary<string, string>? controlPropertyNames = null)
     {
+        var rowVariables = new GridRowVariableNames(
+            checkpointVariables,
+            generatedValueVariables,
+            copiedValueVariables);
+        var rowSelector = HasNamedGridRow(step)
+            ? FormatGridRowSelector(step, rowVariables)
+            : string.Empty;
         var statement = step.ActionKind switch
         {
             RecordedActionKind.CaptureCheckpoint => GenerateCheckpointStatement(
                 step,
                 propertyName,
-                checkpointVariables),
+                checkpointVariables,
+                rowVariables),
             RecordedActionKind.CaptureCopiedValue => GenerateCopiedValueStatement(
                 step,
                 propertyName,
-                copiedValueVariables),
+                copiedValueVariables,
+                rowVariables),
             RecordedActionKind.AssertValue => GenerateAssertionStatement(
                 step,
                 propertyName,
                 checkpointVariables,
                 generatedValueVariables,
-                controlPropertyNames),
+                controlPropertyNames,
+                rowVariables),
             RecordedActionKind.EnterText => GenerateEnterTextStatement(
                 step,
                 propertyName,
@@ -1502,9 +1512,9 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilIsEnabled => $"Page.WaitUntilIsEnabled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.WaitUntilExists => $"Page.WaitUntilExists(static page => page.{propertyName});",
             RecordedActionKind.WaitUntilGridRowsAtLeast => $"Page.WaitUntilGridRowsAtLeast(static page => page.{propertyName}, {FormatInt(step.IntValue)});",
-            RecordedActionKind.WaitUntilGridContainsRow => $"Page.WaitUntilGridContainsRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});",
+            RecordedActionKind.WaitUntilGridContainsRow => $"Page.WaitUntilGridContainsRow(static page => page.{propertyName}, {rowSelector});",
             RecordedActionKind.WaitUntilGridCellEquals => HasNamedGridRow(step)
-                ? $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");"
+                ? $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");"
                 : $"Page.WaitUntilGridCellEquals(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.WaitUntilProgressAtLeast => $"Page.WaitUntilProgressAtLeast(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.WaitUntilListBoxContains => $"Page.WaitUntilListBoxContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
@@ -1512,44 +1522,44 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.WaitUntilNotificationContains => $"Page.WaitUntilNotificationContains(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SearchAndSelect => $"Page.SearchAndSelect(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
             RecordedActionKind.SearchAndSelectGridCell => HasNamedGridRow(step)
-                ? $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");"
+                ? $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");"
                 : $"Page.SearchAndSelectGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\", \"{EscapeString(step.ItemValue ?? string.Empty)}\");",
             RecordedActionKind.OpenGridRow => HasNamedGridRow(step)
-                ? $"Page.OpenGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});"
+                ? $"Page.OpenGridRow(static page => page.{propertyName}, {rowSelector});"
                 : $"Page.OpenGridRow(static page => page.{propertyName}, {FormatInt(step.RowIndex)});",
             RecordedActionKind.SelectGridRow when HasNamedGridRow(step) =>
-                $"Page.SelectGridRow(static page => page.{propertyName}, {FormatGridRowSelector(step)});",
+                $"Page.SelectGridRow(static page => page.{propertyName}, {rowSelector});",
             RecordedActionKind.SelectGridRow =>
                 throw new InvalidOperationException("SelectGridRow requires a stable named row selector."),
             RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
             RecordedActionKind.CopyGridCell => HasNamedGridRow(step)
-                ? $"Page.CopyGridCell(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)});"
+                ? $"Page.CopyGridCell(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)});"
                 : $"Page.CopyGridCell(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)});",
             RecordedActionKind.ExportGrid => $"Page.ExportGrid(static page => page.{propertyName});",
             RecordedActionKind.SetDateRangeFilter => $"Page.SetDateRangeFilter(static page => page.{propertyName}, {FormatNullableDate(step.DateValue, step.DateExpression)}, {FormatNullableDate(step.SecondDateValue, step.SecondDateExpression)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SetNumericRangeFilter => $"Page.SetNumericRangeFilter(static page => page.{propertyName}, {FormatNullableDouble(step.DoubleValue)}, {FormatNullableDouble(step.SecondDoubleValue)}{FormatOptionalFilterCommitMode(step.FilterCommitMode)});",
             RecordedActionKind.SelectExportFolder => $"Page.SelectExportFolder(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalFolderExportCommitMode(step.FolderExportCommitMode)});",
             RecordedActionKind.EditGridCellText => HasNamedGridRow(step)
-                ? $"Page.EditGridCellText(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.EditGridCellText(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellText(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellNumber => HasNamedGridRow(step)
-                ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellNumberArguments(step)});"
+                ? $"Page.EditGridCellNumber(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellNumberArguments(step)});"
                 : $"Page.EditGridCellNumber(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDouble(step.DoubleValue)}{FormatOptionalGridCellNumberArguments(step)});",
             RecordedActionKind.EditGridCellDate => HasNamedGridRow(step)
-                ? $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.EditGridCellDate(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellDate(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatDate(step.DateValue, step.DateExpression)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellTime => HasNamedGridRow(step)
-                ? $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.EditGridCellTime(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellTime(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatTimeSpan(step.TimeValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.EditGridCellColor => HasNamedGridRow(step)
-                ? $"Page.EditGridCellColor(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.EditGridCellColor(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.EditGridCellColor(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.SelectGridCellComboItem => HasNamedGridRow(step)
-                ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.SelectGridCellComboItem(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, \"{EscapeString(step.StringValue ?? string.Empty)}\"{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.SetGridCellChecked => HasNamedGridRow(step)
-                ? $"Page.SetGridCellChecked(static page => page.{propertyName}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)}, {FormatBoolean(step.BoolValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
+                ? $"Page.SetGridCellChecked(static page => page.{propertyName}, {rowSelector}, {FormatGridTargetColumn(step)}, {FormatBoolean(step.BoolValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});"
                 : $"Page.SetGridCellChecked(static page => page.{propertyName}, {FormatInt(step.RowIndex)}, {FormatInt(step.ColumnIndex)}, {FormatBoolean(step.BoolValue)}{FormatOptionalGridCellEditCommitMode(step.GridCellEditCommitMode)});",
             RecordedActionKind.ConfirmDialog => $"Page.ConfirmDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
             RecordedActionKind.CancelDialog => $"Page.CancelDialog(static page => page.{propertyName}{FormatOptionalStringArgument(step.StringValue)});",
@@ -1588,7 +1598,8 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateCheckpointStatement(
         RecordedStep step,
         string propertyName,
-        IReadOnlyDictionary<Guid, string> checkpointVariables)
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        GridRowVariableNames rowVariables)
     {
         var checkpointId = step.CheckpointId
             ?? throw new InvalidOperationException("Checkpoint step does not contain an id.");
@@ -1597,7 +1608,7 @@ internal sealed class AuthoringCodeGenerator
             throw new InvalidOperationException($"Checkpoint '{checkpointId}' was not validated.");
         }
 
-        var expression = GenerateValueExpression(step, propertyName);
+        var expression = GenerateValueExpression(step, propertyName, rowVariables);
         if (step.ValueKind == RecorderValueKind.StringSet)
         {
             expression = $"global::System.Linq.Enumerable.ToArray({expression})";
@@ -1611,9 +1622,10 @@ internal sealed class AuthoringCodeGenerator
         string propertyName,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
-        IReadOnlyDictionary<string, string>? controlPropertyNames)
+        IReadOnlyDictionary<string, string>? controlPropertyNames,
+        GridRowVariableNames rowVariables)
     {
-        var actual = GenerateValueExpression(step, propertyName);
+        var actual = GenerateValueExpression(step, propertyName, rowVariables);
         if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
         {
             if (step.ValueKind is not { } valueKind
@@ -1644,7 +1656,8 @@ internal sealed class AuthoringCodeGenerator
             expected = GenerateNumericExpectedExpression(
                 numericExpression,
                 checkpointVariables,
-                controlPropertyNames);
+                controlPropertyNames,
+                rowVariables);
         }
         else if (step.ExpectedCheckpointId is { } checkpointId)
         {
@@ -1685,10 +1698,11 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateNumericExpectedExpression(
         RecorderNumericExpectedExpression expression,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
-        IReadOnlyDictionary<string, string>? controlPropertyNames)
+        IReadOnlyDictionary<string, string>? controlPropertyNames,
+        GridRowVariableNames rowVariables)
     {
-        var left = GenerateNumericOperand(expression.Left, checkpointVariables, controlPropertyNames);
-        var right = GenerateNumericOperand(expression.Right, checkpointVariables, controlPropertyNames);
+        var left = GenerateNumericOperand(expression.Left, checkpointVariables, controlPropertyNames, rowVariables);
+        var right = GenerateNumericOperand(expression.Right, checkpointVariables, controlPropertyNames, rowVariables);
         var operation = expression.Operation switch
         {
             RecorderArithmeticOperation.Add => "+",
@@ -1704,7 +1718,8 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateNumericOperand(
         RecorderNumericOperand operand,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
-        IReadOnlyDictionary<string, string>? controlPropertyNames)
+        IReadOnlyDictionary<string, string>? controlPropertyNames,
+        GridRowVariableNames rowVariables)
     {
         return operand.Kind switch
         {
@@ -1718,7 +1733,8 @@ internal sealed class AuthoringCodeGenerator
                     control,
                     operand.ValueAccessorKind,
                     operand.GridValueReference,
-                    controlPropertyNames),
+                    controlPropertyNames,
+                    rowVariables),
             _ => throw new InvalidOperationException(
                 $"Calculated assertion contains an invalid numeric operand '{operand.Kind}'.")
         };
@@ -1728,7 +1744,8 @@ internal sealed class AuthoringCodeGenerator
         RecordedControlDescriptor control,
         RecorderValueAccessorKind? accessorKind,
         RecorderGridValueReference? gridValueReference,
-        IReadOnlyDictionary<string, string>? controlPropertyNames)
+        IReadOnlyDictionary<string, string>? controlPropertyNames,
+        GridRowVariableNames rowVariables)
     {
         var propertyName = control.ProposedPropertyName;
         if (controlPropertyNames is not null)
@@ -1747,7 +1764,7 @@ internal sealed class AuthoringCodeGenerator
                 $"Page.{propertyName}.Value",
             RecorderValueAccessorKind.GridCellValue when gridValueReference is not null =>
                 $"GridValueReader.ReadCellNumber(Page.{propertyName}, "
-                + $"{FormatGridRowSelector(gridValueReference.RowConditions)}, "
+                + $"{FormatGridRowSelector(gridValueReference.RowConditions, rowVariables)}, "
                 + $"\"{EscapeString(gridValueReference.TargetColumnName)}\")",
             _ => throw new InvalidOperationException(
                 $"Control operand '{control.ProposedPropertyName}' does not expose a valid numeric value reference.")
@@ -1820,7 +1837,8 @@ internal sealed class AuthoringCodeGenerator
     private static string GenerateCopiedValueStatement(
         RecordedStep step,
         string propertyName,
-        IReadOnlyDictionary<Guid, string> copiedValueVariables)
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
+        GridRowVariableNames rowVariables)
     {
         if (step.CopiedValueId is not { } copiedValueId
             || !copiedValueVariables.TryGetValue(copiedValueId, out var variableName))
@@ -1828,11 +1846,14 @@ internal sealed class AuthoringCodeGenerator
             throw new InvalidOperationException("Copied value definition was not validated.");
         }
 
-        var valueExpression = GenerateValueExpression(step, propertyName);
+        var valueExpression = GenerateValueExpression(step, propertyName, rowVariables);
         return $"var {variableName} = {valueExpression} ?? string.Empty;{Environment.NewLine}await Page.CopyTextToClipboardAsync({variableName});";
     }
 
-    private static string GenerateValueExpression(RecordedStep step, string propertyName)
+    private static string GenerateValueExpression(
+        RecordedStep step,
+        string propertyName,
+        GridRowVariableNames rowVariables)
     {
         var control = $"Page.{propertyName}";
         return step.ValueAccessorKind switch
@@ -1858,13 +1879,16 @@ internal sealed class AuthoringCodeGenerator
             RecorderValueAccessorKind.IsExpanded => $"{control}.IsExpanded",
             RecorderValueAccessorKind.IsEnabled => $"{control}.IsEnabled",
             RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue =>
-                GenerateGridCellExpression(step, control),
+                GenerateGridCellExpression(step, control, rowVariables),
             _ => throw new InvalidOperationException(
                 $"Value accessor '{step.ValueAccessorKind}' is not supported for {step.Control.ControlType}.")
         };
     }
 
-    private static string GenerateGridCellExpression(RecordedStep step, string control)
+    private static string GenerateGridCellExpression(
+        RecordedStep step,
+        string control,
+        GridRowVariableNames rowVariables)
     {
         if (!HasNamedGridRow(step))
         {
@@ -1881,7 +1905,7 @@ internal sealed class AuthoringCodeGenerator
                 _ => "ReadCellText"
             }
             : "ReadCellText";
-        return $"GridValueReader.{methodName}({control}, {FormatGridRowSelector(step)}, {FormatGridTargetColumn(step)})";
+        return $"GridValueReader.{methodName}({control}, {FormatGridRowSelector(step, rowVariables)}, {FormatGridTargetColumn(step)})";
     }
 
     private static string FormatExpectedLiteral(RecordedStep step)
@@ -1968,14 +1992,16 @@ internal sealed class AuthoringCodeGenerator
         return step.GridRowConditions is { Count: > 0 };
     }
 
-    private static string FormatGridRowSelector(RecordedStep step)
+    private static string FormatGridRowSelector(RecordedStep step, GridRowVariableNames variables)
     {
         var conditions = step.GridRowConditions
             ?? throw new InvalidOperationException("Named grid step does not contain row conditions.");
-        return FormatGridRowSelector(conditions);
+        return FormatGridRowSelector(conditions, variables);
     }
 
-    private static string FormatGridRowSelector(IReadOnlyList<RecordedGridRowCondition> conditions)
+    private static string FormatGridRowSelector(
+        IReadOnlyList<RecordedGridRowCondition> conditions,
+        GridRowVariableNames variables)
     {
         if (conditions.Count == 0)
         {
@@ -1986,21 +2012,49 @@ internal sealed class AuthoringCodeGenerator
         var first = conditions[0];
         builder.Append("GridRowSelector.ByCell(\"")
             .Append(EscapeString(first.ColumnName))
-            .Append("\", \"")
-            .Append(EscapeString(first.Value))
-            .Append("\")");
+            .Append("\", ")
+            .Append(FormatGridRowValue(first, variables))
+            .Append(')');
         for (var index = 1; index < conditions.Count; index++)
         {
             var condition = conditions[index];
             builder.Append(".AndCell(\"")
                 .Append(EscapeString(condition.ColumnName))
-                .Append("\", \"")
-                .Append(EscapeString(condition.Value))
-                .Append("\")");
+                .Append("\", ")
+                .Append(FormatGridRowValue(condition, variables))
+                .Append(')');
         }
 
         return builder.ToString();
     }
+
+    private static string FormatGridRowValue(
+        RecordedGridRowCondition condition,
+        GridRowVariableNames variables)
+    {
+        if (condition.ValueReference is not { } reference)
+        {
+            return $"\"{EscapeString(condition.Value)}\"";
+        }
+
+        var names = reference.Kind switch
+        {
+            RecorderGridRowValueSourceKind.Checkpoint => variables.Checkpoints,
+            RecorderGridRowValueSourceKind.GeneratedValue => variables.GeneratedValues,
+            RecorderGridRowValueSourceKind.CopiedValue => variables.CopiedValues,
+            _ => throw new InvalidOperationException(
+                $"Grid row value source '{reference.Kind}' is not supported.")
+        };
+        return names.TryGetValue(reference.ValueId, out var variableName)
+            ? variableName
+            : throw new InvalidOperationException(
+                $"Grid row column '{condition.ColumnName}' references an unvalidated variable '{reference.ValueId}'.");
+    }
+
+    private readonly record struct GridRowVariableNames(
+        IReadOnlyDictionary<Guid, string> Checkpoints,
+        IReadOnlyDictionary<Guid, string> GeneratedValues,
+        IReadOnlyDictionary<Guid, string> CopiedValues);
 
     private static string FormatGridTargetColumn(RecordedStep step)
     {

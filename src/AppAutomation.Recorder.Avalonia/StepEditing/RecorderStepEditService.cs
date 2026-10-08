@@ -16,11 +16,13 @@ internal static class RecorderStepEditService
         string? resolvedVariableName,
         IReadOnlyList<RecorderCheckpointOption> checkpoints,
         IReadOnlyList<RecorderGeneratedValueOption> generatedValues,
+        IReadOnlyList<RecorderCopiedValueOption> copiedValues,
         out RecorderStepEditDraft? draft)
     {
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(checkpoints);
         ArgumentNullException.ThrowIfNull(generatedValues);
+        ArgumentNullException.ThrowIfNull(copiedValues);
 
         if (!TryResolveEditKind(step, out var editKind))
         {
@@ -45,6 +47,20 @@ internal static class RecorderStepEditService
         var compatibleGeneratedValues = step.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
             ? generatedValues.ToArray()
             : Array.Empty<RecorderGeneratedValueOption>();
+        var rowVariables = checkpoints
+            .Where(static option => option.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
+            .Select(static option => new RecorderGridRowVariableOption(
+                $"{option.VariableName} (checkpoint)",
+                new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.Checkpoint, option.CheckpointId)))
+            .Concat(generatedValues.Select(static option => new RecorderGridRowVariableOption(
+                $"{option.VariableName} (generated)",
+                new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.GeneratedValue, option.GeneratedValueId))))
+            .Concat(copiedValues
+                .Where(static option => option.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
+                .Select(static option => new RecorderGridRowVariableOption(
+                    $"{option.VariableName} (copied)",
+                    new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.CopiedValue, option.CopiedValueId))))
+            .ToArray();
         var supportsCalculatedExpectedValue = step.ActionKind == RecordedActionKind.AssertValue
             && step.ValueKind is { } numericValueKind
             && step.ValueAccessorKind is { } numericAccessorKind
@@ -89,6 +105,8 @@ internal static class RecorderStepEditService
             generatedPreview,
             compatibleCheckpoints,
             compatibleGeneratedValues,
+            step.GridRowConditions,
+            rowVariables,
             supportsCalculatedExpectedValue);
         return true;
     }
@@ -169,6 +187,7 @@ internal static class RecorderStepEditService
             SecondDateValue = draft.SecondDateValue,
             TimeValue = draft.TimeValue,
             StringValues = draft.StringValues?.ToArray(),
+            GridRowConditions = draft.GridRowConditions?.ToArray(),
             DateExpression = RecorderValueCodec.NormalizeDateExpression(draft.DateExpression),
             SecondDateExpression = RecorderValueCodec.NormalizeDateExpression(draft.SecondDateExpression)
         };
@@ -362,6 +381,12 @@ internal static class RecorderStepEditService
 
         if (populatedKinds == 0)
         {
+            if (step.GridRowConditions is { Count: > 0 })
+            {
+                editKind = RecorderStepEditKind.Composite;
+                return true;
+            }
+
             editKind = default;
             return false;
         }

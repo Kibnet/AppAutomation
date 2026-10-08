@@ -1966,6 +1966,7 @@ internal sealed partial class RecorderOverlay : UserControl
             ValueKind = snapshot.Prototype.ValueKind,
             ValueAccessorKind = snapshot.Prototype.ValueAccessorKind,
             CurrentPreview = snapshot.Description.CurrentValueText,
+            GridRowConditions = snapshot.Prototype.GridRowConditions,
             RetargetPrototype = snapshot.Prototype
         };
         RenderStepJournal();
