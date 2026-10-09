@@ -4712,9 +4712,21 @@ public sealed class RecorderTests
 
         public void Dispose()
         {
-            if (Directory.Exists(Path))
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            while (Directory.Exists(Path))
             {
-                Directory.Delete(Path, recursive: true);
+                try
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+                catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Thread.Sleep(50);
+                }
+                catch (UnauthorizedAccessException) when (elapsed.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    Thread.Sleep(50);
+                }
             }
         }
     }

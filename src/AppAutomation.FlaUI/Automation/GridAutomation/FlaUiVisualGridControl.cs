@@ -43,7 +43,8 @@ public sealed partial class FlaUiControlResolver
         IAddressableGridControl,
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
-        IGridColumnMetadataControl
+        IGridColumnMetadataControl,
+        IGridRowPositionIdentityControl
     {
         private readonly Window _searchRoot;
         private readonly IGridControl? _fallback;
@@ -95,6 +96,124 @@ public sealed partial class FlaUiControlResolver
             }
 
             return _fallback?.GetRowByIndex(index);
+        }
+
+        public GridRowPositionIdentity ReadRowIdentityAtPosition(
+            int position,
+            IReadOnlyList<GridRuntimeColumn> identityColumns,
+            string rowPath,
+            int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(position);
+            ArgumentNullException.ThrowIfNull(identityColumns);
+            ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (!HasNativeDataRows() && _fallback is IGridRowPositionIdentityControl positionedFallback)
+            {
+                return positionedFallback.ReadRowIdentityAtPosition(
+                    position, identityColumns, rowPath, timeoutMs);
+            }
+
+            var visibleIndexes = identityColumns
+                .Where(static column => column.RowIdentityAutomationProperty is null)
+                .Select(ResolveRuntimeColumnIndex)
+                .Distinct()
+                .ToArray();
+            var rowProperties = identityColumns
+                .Select(static column => column.RowIdentityAutomationProperty)
+                .Where(static property => property.HasValue)
+                .Select(static property => property!.Value)
+                .Distinct()
+                .ToArray();
+            var stopwatch = Stopwatch.StartNew();
+            var visibleSnapshots = new List<NativeGridRowSnapshot>();
+            AppendNativeRows(
+                visibleSnapshots,
+                WaitForNativeDataRows(stopwatch, timeoutMs),
+                ReadGridScrollPosition(FindGridScrollState()),
+                visibleIndexes,
+                rowProperties);
+            var visibleIndexed = visibleSnapshots.Where(row => row.RowIndex == position).ToArray();
+            if (visibleIndexed.Length == 1)
+            {
+                return new GridRowPositionIdentity(ReadIdentity(visibleIndexed[0]), IsUnique: false);
+            }
+
+            if (visibleIndexed.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' exposes {visibleIndexed.Length} logical rows at view position {position}.");
+            }
+
+            var visibleScroll = FindGridScrollState();
+            var hasNoScrollControls = visibleScroll.ScrollPattern is null
+                && visibleScroll.RangeValuePattern is null
+                && visibleScroll.ScrollBar is null
+                && visibleScroll.BackwardButton is null
+                && visibleScroll.ForwardButton is null;
+            var visibleAtPosition = NativeGridRowNormalizer.AtVisibleStartPosition(
+                visibleSnapshots,
+                position,
+                hasNoScrollControls || IsGridScrollAtBoundary(visibleScroll, forward: false));
+            if (visibleAtPosition is not null)
+            {
+                return new GridRowPositionIdentity(ReadIdentity(visibleAtPosition), IsUnique: false);
+            }
+
+            var scan = ScanNativeRows(
+                visibleIndexes,
+                rowProperties,
+                static _ => false,
+                static _ => false,
+                stopwatch,
+                timeoutMs,
+                hasDeclaredUniqueIdentity: false,
+                provePositionOrder: true);
+            var indexed = scan.Rows.Where(row => row.RowIndex == position).ToArray();
+            if (indexed.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' exposes {indexed.Length} logical rows at view position {position}.");
+            }
+
+            var selected = indexed.SingleOrDefault()
+                ?? NativeGridRowNormalizer.AtScannedPosition(
+                    scan.Rows, position, scan.PositionOrderProven);
+            if (selected is null)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' cannot prove logical view position {position}: "
+                    + "the scrollable grid exposes neither an absolute row index nor a contiguous "
+                    + "traversal from its confirmed start. "
+                    + $"Scanned logical rows: {scan.Rows.Count}.");
+            }
+
+            if (!scan.CompletedAtEnd)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' cannot prove the stable key at view position {position} is unique: "
+                    + "the provider did not confirm that the row traversal reached the end.");
+            }
+
+            var selectedValues = ReadIdentity(selected);
+            if (scan.Rows.Count(row => ReadIdentity(row).SequenceEqual(selectedValues, StringComparer.Ordinal)) != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' row at current view position {position} has a non-unique runtime key.");
+            }
+
+            return new GridRowPositionIdentity(selectedValues, IsUnique: true);
+
+            IReadOnlyList<string?> ReadIdentity(NativeGridRowSnapshot row) => identityColumns.Select(column =>
+            {
+                if (column.RowIdentityAutomationProperty is { } property)
+                {
+                    return row.RowAutomationValues.GetValueOrDefault(property);
+                }
+
+                var index = ResolveRuntimeColumnIndex(column);
+                return index < row.CellTexts.Count ? row.CellTexts[index] : null;
+            }).ToArray();
         }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)
@@ -834,7 +953,8 @@ public sealed partial class FlaUiControlResolver
             Func<NativeFlaUiRow, bool> liveRowMatches,
             Stopwatch stopwatch,
             int timeoutMs,
-            bool hasDeclaredUniqueIdentity)
+            bool hasDeclaredUniqueIdentity,
+            bool provePositionOrder = false)
         {
             var rows = new List<NativeGridRowSnapshot>();
             var visibleRows = WaitForNativeDataRows(stopwatch, timeoutMs);
@@ -871,21 +991,48 @@ public sealed partial class FlaUiControlResolver
 
             MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
             scroll = FindGridScrollState();
+            var startedAtBoundary = IsGridScrollAtBoundary(scroll, forward: false);
+            var contiguousObservations = true;
+            NativeGridRowSnapshot[]? previousObservation = null;
+            var requiredCellCount = provePositionOrder ? ReadNativeColumnHeaders().Length : 0;
+            IReadOnlyList<NativeFlaUiRow> CompleteRows(IReadOnlyList<NativeFlaUiRow> observed) =>
+                provePositionOrder
+                    ? observed.Where(row => row.Cells.Count == requiredCellCount).ToArray()
+                    : observed;
+            Func<NativeFlaUiRow[]> readRows = provePositionOrder
+                ? () => ReadNativeDataRows(includeIncompleteRows: true)
+                : TakePrefetchedNativeRows;
             visibleRows = NativeGridTraversal.Scan(
-                TakePrefetchedNativeRows,
-                observed => AppendNativeRows(
-                    rows,
-                    observed,
-                    ReadGridScrollPosition(scroll),
-                    selectorColumnIndexes,
-                    selectorRowProperties),
-                observed => CreateNativeRowSignature(observed),
+                readRows,
+                observed =>
+                {
+                    var complete = CompleteRows(observed);
+                    if (complete.Count != observed.Count)
+                    {
+                        contiguousObservations = false;
+                    }
+
+                    var observation = AppendNativeRows(
+                        rows,
+                        complete,
+                        ReadGridScrollPosition(scroll),
+                        selectorColumnIndexes,
+                        selectorRowProperties);
+                    if (!NativeGridRowNormalizer.HasContinuousObservation(
+                            previousObservation, observation, HasSameNativeRow))
+                    {
+                        contiguousObservations = false;
+                    }
+
+                    previousObservation = observation;
+                },
+                observed => CreateNativeRowSignature(CompleteRows(observed)),
                 (previousSignature, observed) => MoveGridScrollForward(
                     scroll,
                     stopwatch,
                     timeoutMs,
                     previousSignature,
-                    EstimateNativeScrollIncrement(observed)));
+                    EstimateNativeScrollIncrement(CompleteRows(observed))));
 
             var matchingRows = rows.Where(snapshotMatches).ToArray();
             return new NativeGridScan(
@@ -893,10 +1040,12 @@ public sealed partial class FlaUiControlResolver
                 matchingRows,
                 matchingRows.Length == 1
                     ? visibleRows.FirstOrDefault(row => row.IsVisible && liveRowMatches(row))
-                    : null);
+                    : null,
+                PositionOrderProven: startedAtBoundary && contiguousObservations,
+                CompletedAtEnd: IsGridScrollAtBoundary(FindGridScrollState(), forward: true));
         }
 
-        private void AppendNativeRows(
+        private NativeGridRowSnapshot[] AppendNativeRows(
             List<NativeGridRowSnapshot> accumulated,
             IReadOnlyList<NativeFlaUiRow> visibleRows,
             GridScrollPosition scrollPosition,
@@ -905,7 +1054,7 @@ public sealed partial class FlaUiControlResolver
         {
             if (visibleRows.Count == 0)
             {
-                return;
+                return Array.Empty<NativeGridRowSnapshot>();
             }
 
             var observationIndex = accumulated.Count == 0 ? 0 : accumulated.Max(static row => row.ObservationIndex) + 1;
@@ -952,6 +1101,7 @@ public sealed partial class FlaUiControlResolver
             var snapshots = new List<NativeGridRowSnapshot>();
             NativeGridRowNormalizer.Append(snapshots, rawSnapshots, HasSameNativeRow);
             NativeGridRowNormalizer.Append(accumulated, snapshots, HasSameNativeRow);
+            return snapshots.ToArray();
         }
 
         private static string CreateNativeSnapshotSignature(
@@ -3214,7 +3364,9 @@ public sealed partial class FlaUiControlResolver
                 && Math.Abs(previous.Value - current.Value) >= 0.001;
         }
 
-        private NativeFlaUiRow[] ReadNativeDataRows(bool includeCells = true)
+        private NativeFlaUiRow[] ReadNativeDataRows(
+            bool includeCells = true,
+            bool includeIncompleteRows = false)
         {
             var root = FindGridRoot();
             var headers = ReadNativeColumnHeaders();
@@ -3247,7 +3399,7 @@ public sealed partial class FlaUiControlResolver
                 .Select(row => new NativeFlaUiRow(
                     row.Element,
                     includeCells ? ResolveNativeRowCells(row.Element, headers) : Array.Empty<AutomationElement>()))
-                .Where(row => !includeCells || row.Cells.Count == headers.Length)
+                .Where(row => !includeCells || includeIncompleteRows || row.Cells.Count == headers.Length)
                 .ToArray();
         }
 
@@ -4565,7 +4717,9 @@ public sealed partial class FlaUiControlResolver
         private sealed record NativeGridScan(
             IReadOnlyList<NativeGridRowSnapshot> Rows,
             IReadOnlyList<NativeGridRowSnapshot> MatchingRows,
-            NativeFlaUiRow? LiveMatchingRow);
+            NativeFlaUiRow? LiveMatchingRow,
+            bool PositionOrderProven = false,
+            bool CompletedAtEnd = false);
 
         private sealed record GridScrollState(
             IScrollPattern? ScrollPattern,

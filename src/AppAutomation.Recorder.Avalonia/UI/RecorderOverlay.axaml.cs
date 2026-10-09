@@ -1960,15 +1960,7 @@ internal sealed partial class RecorderOverlay : UserControl
             return;
         }
 
-        _activeStepEditDraft = draft with
-        {
-            ControlName = snapshot.Prototype.Control.ProposedPropertyName,
-            ValueKind = snapshot.Prototype.ValueKind,
-            ValueAccessorKind = snapshot.Prototype.ValueAccessorKind,
-            CurrentPreview = snapshot.Description.CurrentValueText,
-            GridRowConditions = snapshot.Prototype.GridRowConditions,
-            RetargetPrototype = snapshot.Prototype
-        };
+        _activeStepEditDraft = RecorderStepEditService.RetargetDraft(draft, snapshot);
         RenderStepJournal();
     }
 

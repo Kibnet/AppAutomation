@@ -501,6 +501,12 @@ internal sealed record RecordedStep(
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 
+    public RecorderGridRowSourceMode GridRowSourceMode { get; init; }
+
+    public int? GridCapturedRowPosition { get; init; }
+
+    public Guid? GridRowAnchorCheckpointId { get; init; }
+
     public string? GridTargetColumnName { get; init; }
 
     public string? NumericInputText { get; init; }
@@ -508,6 +514,12 @@ internal sealed record RecordedStep(
     public string? NumericInputCultureName { get; init; }
 
     public RecorderStepValidationState? ValidationBeforeGraphError { get; init; }
+}
+
+internal enum RecorderGridRowSourceMode
+{
+    RecordedStableKey = 0,
+    CurrentTableRow = 1
 }
 
 internal enum RecorderGridRowValueSourceKind

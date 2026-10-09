@@ -73,9 +73,15 @@ internal sealed record RecorderStepEditDraft(
     IReadOnlyList<RecorderCheckpointOption> CompatibleCheckpoints,
     IReadOnlyList<RecorderGeneratedValueOption> CompatibleGeneratedValues,
     IReadOnlyList<RecordedGridRowCondition>? GridRowConditions,
+    string? GridTargetColumnName,
     IReadOnlyList<RecorderGridRowVariableOption> AvailableGridRowVariables,
     bool SupportsCalculatedExpectedValue,
-    RecordedStep? RetargetPrototype = null);
+    RecordedStep? RetargetPrototype = null)
+{
+    public RecorderGridRowSourceMode GridRowSourceMode { get; init; }
+
+    public int? GridCapturedRowPosition { get; init; }
+}
 
 internal sealed record RecorderStepEditResult(
     bool Success,

@@ -17,12 +17,14 @@ internal static class RecorderStepEditService
         IReadOnlyList<RecorderCheckpointOption> checkpoints,
         IReadOnlyList<RecorderGeneratedValueOption> generatedValues,
         IReadOnlyList<RecorderCopiedValueOption> copiedValues,
+        IReadOnlyList<RecordedStep> precedingSteps,
         out RecorderStepEditDraft? draft)
     {
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(checkpoints);
         ArgumentNullException.ThrowIfNull(generatedValues);
         ArgumentNullException.ThrowIfNull(copiedValues);
+        ArgumentNullException.ThrowIfNull(precedingSteps);
 
         if (!TryResolveEditKind(step, out var editKind))
         {
@@ -47,10 +49,44 @@ internal static class RecorderStepEditService
         var compatibleGeneratedValues = step.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
             ? generatedValues.ToArray()
             : Array.Empty<RecorderGeneratedValueOption>();
+        var isKeyCheckpoint = step.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && step.GridRowConditions is { Count: > 0 } identity
+            && identity.Any(condition => string.Equals(
+                condition.ColumnName,
+                step.GridTargetColumnName,
+                StringComparison.Ordinal));
+        bool CanOfferAsRowValue(RecorderGridRowValueReference reference)
+        {
+            if (!isKeyCheckpoint)
+            {
+                return true;
+            }
+
+            var source = precedingSteps.FirstOrDefault(candidate => reference.Kind switch
+            {
+                RecorderGridRowValueSourceKind.Checkpoint => candidate.CheckpointId == reference.ValueId,
+                RecorderGridRowValueSourceKind.GeneratedValue =>
+                    candidate.DefinesGeneratedValue && candidate.GeneratedValueId == reference.ValueId,
+                RecorderGridRowValueSourceKind.CopiedValue => candidate.CopiedValueId == reference.ValueId,
+                _ => false
+            });
+            return source is not null
+                && source.GridRowConditions is not { Count: > 0 }
+                && !source.RowIndex.HasValue
+                && source.Control.ControlType != AppAutomation.Abstractions.UiControlType.Grid
+                && source.ValueAccessorKind is not (
+                    RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue)
+                && !string.IsNullOrWhiteSpace(source.StringValue)
+                && step.GridRowConditions!.Any(condition => string.Equals(
+                    condition.Value,
+                    source.StringValue,
+                    StringComparison.Ordinal));
+        }
+
         var rowVariables = checkpoints
             .Where(static option => option.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
             .Select(static option => new RecorderGridRowVariableOption(
-                $"{option.VariableName} (checkpoint)",
+                $"{option.VariableName} (checkpoint · {option.ControlName})",
                 new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.Checkpoint, option.CheckpointId)))
             .Concat(generatedValues.Select(static option => new RecorderGridRowVariableOption(
                 $"{option.VariableName} (generated)",
@@ -58,8 +94,9 @@ internal static class RecorderStepEditService
             .Concat(copiedValues
                 .Where(static option => option.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
                 .Select(static option => new RecorderGridRowVariableOption(
-                    $"{option.VariableName} (copied)",
+                    $"{option.VariableName} (copied · {option.ControlName})",
                     new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.CopiedValue, option.CopiedValueId))))
+            .Where(option => CanOfferAsRowValue(option.Reference))
             .ToArray();
         var supportsCalculatedExpectedValue = step.ActionKind == RecordedActionKind.AssertValue
             && step.ValueKind is { } numericValueKind
@@ -106,8 +143,14 @@ internal static class RecorderStepEditService
             compatibleCheckpoints,
             compatibleGeneratedValues,
             step.GridRowConditions,
+            step.GridTargetColumnName,
             rowVariables,
-            supportsCalculatedExpectedValue);
+            supportsCalculatedExpectedValue)
+        {
+            GridRowSourceMode = step.GridRowSourceMode,
+            GridCapturedRowPosition = step.GridCapturedRowPosition
+                ?? (step.RowIndex is >= 0 ? step.RowIndex : null)
+        };
         return true;
     }
 
@@ -188,6 +231,8 @@ internal static class RecorderStepEditService
             TimeValue = draft.TimeValue,
             StringValues = draft.StringValues?.ToArray(),
             GridRowConditions = draft.GridRowConditions?.ToArray(),
+            GridRowSourceMode = draft.GridRowSourceMode,
+            GridCapturedRowPosition = draft.GridCapturedRowPosition,
             DateExpression = RecorderValueCodec.NormalizeDateExpression(draft.DateExpression),
             SecondDateExpression = RecorderValueCodec.NormalizeDateExpression(draft.SecondDateExpression)
         };
@@ -273,6 +318,34 @@ internal static class RecorderStepEditService
         return true;
     }
 
+    public static RecorderStepEditDraft RetargetDraft(
+        RecorderStepEditDraft draft,
+        RecorderSemanticValueSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var prototype = snapshot.Prototype;
+        var rowPosition = prototype.Control.ControlType == AppAutomation.Abstractions.UiControlType.Grid
+            ? prototype.GridCapturedRowPosition
+            : null;
+        return draft with
+        {
+            ControlName = prototype.Control.ProposedPropertyName,
+            ValueKind = prototype.ValueKind,
+            ValueAccessorKind = prototype.ValueAccessorKind,
+            CurrentPreview = snapshot.Description.CurrentValueText,
+            GridRowConditions = prototype.GridRowConditions,
+            GridTargetColumnName = prototype.GridTargetColumnName,
+            GridCapturedRowPosition = rowPosition,
+            GridRowSourceMode = rowPosition is >= 0
+                && draft.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+                    ? RecorderGridRowSourceMode.CurrentTableRow
+                    : prototype.GridRowSourceMode,
+            RetargetPrototype = prototype
+        };
+    }
+
     private static RecordedStep ApplyRetarget(RecordedStep source, RecordedStep? prototype)
     {
         if (prototype is null)
@@ -289,6 +362,9 @@ internal static class RecorderStepEditService
             ColumnIndex = prototype.ColumnIndex,
             GridRowConditions = prototype.GridRowConditions,
             GridTargetColumnName = prototype.GridTargetColumnName,
+            GridCapturedRowPosition = prototype.GridCapturedRowPosition,
+            GridRowSourceMode = prototype.GridRowSourceMode,
+            GridRowAnchorCheckpointId = null,
             StringValue = prototype.StringValue,
             BoolValue = prototype.BoolValue,
             DoubleValue = prototype.DoubleValue,

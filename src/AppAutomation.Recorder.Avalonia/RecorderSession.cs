@@ -828,6 +828,7 @@ internal sealed class RecorderSession :
                 context.CopiedValues
                     .Where(option => precedingCopiedValueIds.Contains(option.CopiedValueId))
                     .ToArray(),
+                precedingSteps,
                 out draft))
         {
             error = "This recorded step does not contain editable data.";
@@ -933,6 +934,7 @@ internal sealed class RecorderSession :
         }
 
         _steps[index] = candidate;
+        RebindEditedGridRowAnchors(_steps, index);
         var appliedGraphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps(notify: false);
         LogRecordedStepDiagnostics("EditStep", null, _steps[index]);
@@ -1042,6 +1044,7 @@ internal sealed class RecorderSession :
 
         var candidateSteps = _steps.Select(RestoreValidationBeforeGraphError).ToArray();
         candidateSteps[index] = candidate;
+        RebindEditedGridRowAnchors(candidateSteps, index);
         graphSteps = candidateSteps
             .Where(static step => !step.IsIgnored && step.CanPersist)
             .ToArray();
@@ -4504,7 +4507,7 @@ internal sealed class RecorderSession :
             return false;
         }
 
-        var recordedStep = RevalidateStep(result.Step);
+        var recordedStep = LinkTableRowCheckpoint(RevalidateStep(result.Step), _steps);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
         var tentativeSteps = _steps
             .Where(static step => !step.IsIgnored)
@@ -4546,6 +4549,60 @@ internal sealed class RecorderSession :
             effectiveStep.ValidationStatus);
         RequestAutosaveIfRecording();
         return effectiveStep.CanPersist;
+    }
+
+    private static void RebindEditedGridRowAnchors(IList<RecordedStep> steps, int editedIndex)
+    {
+        var edited = steps[editedIndex];
+        if (edited.GridRowAnchorCheckpointId is null)
+        {
+            steps[editedIndex] = LinkTableRowCheckpoint(edited, steps.Take(editedIndex));
+        }
+
+        if (edited.CheckpointId is not { } checkpointId)
+        {
+            return;
+        }
+
+        for (var index = editedIndex + 1; index < steps.Count; index++)
+        {
+            var dependent = steps[index].GridRowAnchorCheckpointId == checkpointId;
+            if (dependent)
+            {
+                steps[index] = steps[index] with { GridRowAnchorCheckpointId = null };
+            }
+
+            if (dependent || edited.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+            {
+                steps[index] = LinkTableRowCheckpoint(steps[index], steps.Take(index));
+            }
+        }
+    }
+
+    private static RecordedStep LinkTableRowCheckpoint(
+        RecordedStep step,
+        IEnumerable<RecordedStep> precedingSteps)
+    {
+        if (step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+            || step.GridRowAnchorCheckpointId is not null
+            || step.GridRowConditions is not { Count: > 0 } conditions
+            || conditions.Any(static condition => condition.ValueReference is not null))
+        {
+            return step;
+        }
+
+        var anchor = precedingSteps
+            .Where(candidate => !candidate.IsIgnored
+                && candidate.ActionKind == RecordedActionKind.CaptureCheckpoint
+                && candidate.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+                && candidate.GridRowConditions is { Count: > 0 } identity
+                && identity.SequenceEqual(conditions)
+                && candidate.Control.LocatorKind == step.Control.LocatorKind
+                && string.Equals(candidate.Control.LocatorValue, step.Control.LocatorValue, StringComparison.Ordinal))
+            .LastOrDefault();
+        return anchor?.CheckpointId is { } checkpointId
+            ? step with { GridRowAnchorCheckpointId = checkpointId }
+            : step;
     }
 
     private bool TryRecordGridAction(Control? source)

@@ -1,7 +1,9 @@
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation.GridAutomation;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
+using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Controls;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
@@ -15,7 +17,8 @@ public sealed partial class HeadlessControlResolver
         IAddressableGridControl,
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
-        IGridColumnMetadataControl
+        IGridColumnMetadataControl,
+        IGridRowPositionIdentityControl
     {
         private readonly AutomationElement _searchRoot;
 
@@ -35,6 +38,132 @@ public sealed partial class HeadlessControlResolver
             var rows = Rows;
             return index >= 0 && index < rows.Count
                 ? rows[index]
+                : null;
+        }
+
+        public GridRowPositionIdentity ReadRowIdentityAtPosition(
+            int position,
+            IReadOnlyList<GridRuntimeColumn> identityColumns,
+            string rowPath,
+            int timeoutMs)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(position);
+            ArgumentNullException.ThrowIfNull(identityColumns);
+            ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var rows = ReadIndexedRows();
+            if (rows.Length > 0 && rows[0].Item is not null)
+            {
+                var displayedItems = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    ReadDisplayedItemOrder(Inner.Control, rows, rowPath));
+                if (displayedItems is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' cannot prove the displayed position {position}: "
+                        + "the visible rows do not establish their position in the current view.");
+                }
+
+                if (position >= displayedItems.Length)
+                {
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' has no logical row at current view position {position}.");
+                }
+
+                var item = displayedItems[position];
+                var selected = rows.Single(row => ReferenceEquals(row.Item, item));
+                return CaptureUniqueIdentity(selected);
+            }
+
+            if (position >= rows.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' has no logical row at current view position {position}; "
+                    + $"available rows: {rows.Length}.");
+            }
+
+            var row = rows[position];
+            if (row.Item is not null)
+            {
+                return CaptureUniqueIdentity(row);
+            }
+
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                CaptureUniqueIdentity(row));
+
+            GridRowPositionIdentity CaptureUniqueIdentity(IndexedHeadlessRow selected)
+            {
+                var identities = rows.Select(candidate => identityColumns
+                    .Select(column => ReadCellSnapshot(candidate, column).DisplayText)
+                    .ToArray()).ToArray();
+                var selectedIndex = Array.IndexOf(rows, selected);
+                var selectedValues = identities[selectedIndex];
+                if (identities.Count(values => values.SequenceEqual(selectedValues, StringComparer.Ordinal)) != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' row at current view position {position} has a non-unique runtime key.");
+                }
+
+                return new GridRowPositionIdentity(selectedValues, IsUnique: true);
+            }
+        }
+
+        private static object[]? ReadDisplayedItemOrder(
+            Control grid,
+            IReadOnlyList<IndexedHeadlessRow> rows,
+            string rowPath)
+        {
+            var itemIndexes = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+            for (var index = 0; index < rows.Count; index++)
+            {
+                if (rows[index].Item is not { } item || !itemIndexes.TryAdd(item, index))
+                {
+                    return null;
+                }
+            }
+
+            var positions = new Dictionary<object, double>(ReferenceEqualityComparer.Instance);
+            foreach (var candidate in grid.GetVisualDescendants().OfType<Control>())
+            {
+                if (!candidate.IsEffectivelyVisible
+                    || candidate.Opacity <= 0.01
+                    || candidate.Bounds.Width <= 0
+                    || candidate.Bounds.Height <= 0
+                    || candidate.DataContext is not { } context)
+                {
+                    continue;
+                }
+
+                var item = itemIndexes.ContainsKey(context)
+                    ? context
+                    : GridPropertyValueReader.TryReadPath(context, rowPath, out var contextRow)
+                        ? contextRow
+                        : null;
+                if (item is null || !itemIndexes.ContainsKey(item))
+                {
+                    continue;
+                }
+
+                var point = candidate.TranslatePoint(new Point(0, 0), grid);
+                if (point is null || point.Value.Y < 0 || point.Value.Y >= grid.Bounds.Height)
+                {
+                    continue;
+                }
+
+                if (!positions.TryGetValue(item, out var currentY) || point.Value.Y < currentY)
+                {
+                    positions[item] = point.Value.Y;
+                }
+            }
+
+            var ordered = positions.OrderBy(static entry => entry.Value).ToArray();
+            if (ordered.Zip(ordered.Skip(1), static (left, right) => right.Value - left.Value)
+                .Any(static distance => distance < 1))
+            {
+                return null;
+            }
+
+            return positions.Count == rows.Count
+                ? ordered.Select(static entry => entry.Key).ToArray()
                 : null;
         }
 

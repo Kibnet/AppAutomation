@@ -351,6 +351,54 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task DynamicGridKeyFromUiReadsEachConfiguredRow()
+    {
+        Page.SelectTabItem(static page => page.DataGridTabItem);
+        var grid = Page.ArmComplexDataGridControl;
+        foreach (var (key, expectedValue) in new[]
+        {
+            ("ARM-01", "Value-1"),
+            ("ARM-02", "Value-2"),
+            ("ARM-03", "Value-3")
+        })
+        {
+            Page.EnterText(static page => page.DataGridSelectRowInput, key);
+            var keyFromUi = Page.DataGridSelectRowInput.Text
+                ?? throw new InvalidOperationException("The key source has no text.");
+            var row = GridRowSelector.ByCell("Key", keyFromUi);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(GridValueReader.ReadCellText(grid, row, "Key")).IsEqualTo(keyFromUi);
+                await Assert.That(GridValueReader.ReadCellText(grid, row, "Value")).IsEqualTo(expectedValue);
+            }
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task DynamicGridKeyFromCurrentTableRowReadsThreePositions()
+    {
+        Page.SelectTabItem(static page => page.DataGridTabItem);
+        var grid = Page.ArmComplexDataGridControl;
+        foreach (var (position, expectedKey, expectedValue) in new[]
+        {
+            (0, "ARM-01", "Value-1"),
+            (1, "ARM-02", "Value-2"),
+            (2, "ARM-03", "Value-3")
+        })
+        {
+            var row = GridRowKeyReader.Capture(grid, position);
+            using (Assert.Multiple())
+            {
+                await Assert.That(row.Conditions.Single().Value).IsEqualTo(expectedKey);
+                await Assert.That(GridValueReader.ReadCellText(grid, row, "Value")).IsEqualTo(expectedValue);
+            }
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task MultiSelectPopup_SelectsExactItemsAndCloses()
     {
         string[] expectedItems = ["Alpha", "Omega"];

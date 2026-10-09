@@ -2610,7 +2610,7 @@ internal sealed partial class RecorderStepFactory
             checkpointVariableName: string.IsNullOrWhiteSpace(variableName)
                 ? $"{candidate.Control.ProposedPropertyName}Checkpoint"
                 : variableName.Trim());
-        return candidate.GridContext is { } grid
+        var result = candidate.GridContext is { } grid
             ? CreateGridStep(
                 source!,
                 step,
@@ -2621,6 +2621,7 @@ internal sealed partial class RecorderStepFactory
                 grid.ColumnIndex,
                 excludeTargetColumnFromIdentity: false)
             : CreateStep(source!, step, "Remembered semantic value for replay-time checkpoint.");
+        return PreferCurrentTableRow(result);
     }
 
     internal StepCreationResult TryCreateCheckpointStep(
@@ -2640,7 +2641,20 @@ internal sealed partial class RecorderStepFactory
             checkpointVariableName: string.IsNullOrWhiteSpace(variableName)
                 ? snapshot.Description.SuggestedCheckpointName
                 : variableName.Trim());
-        return CreateStepFromSnapshot(snapshot, step, "Remembered semantic value for replay-time checkpoint.");
+        return PreferCurrentTableRow(CreateStepFromSnapshot(
+            snapshot,
+            step,
+            "Remembered semantic value for replay-time checkpoint."));
+    }
+
+    private static StepCreationResult PreferCurrentTableRow(StepCreationResult result)
+    {
+        return result.Success && result.Step is { GridCapturedRowPosition: >= 0 } checkpoint
+            ? result with
+            {
+                Step = checkpoint with { GridRowSourceMode = RecorderGridRowSourceMode.CurrentTableRow }
+            }
+            : result;
     }
 
     internal StepCreationResult TryCreateCopiedValueStep(
@@ -3227,7 +3241,8 @@ internal sealed partial class RecorderStepFactory
                 StepId = Guid.NewGuid(),
                 LastValidationAt = DateTimeOffset.UtcNow,
                 GridRowConditions = prototype.GridRowConditions,
-                GridTargetColumnName = prototype.GridTargetColumnName
+                GridTargetColumnName = prototype.GridTargetColumnName,
+                GridCapturedRowPosition = prototype.GridCapturedRowPosition
             },
             message);
     }
@@ -6853,6 +6868,19 @@ internal sealed partial class RecorderStepFactory
                 + "Add another column to IdentifyRowsBy(...).");
         }
 
+        var capturedViewPosition = TryResolveCurrentGridViewPosition(
+            gridSource,
+            definition,
+            items,
+            item);
+        if (step.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && capturedViewPosition is null)
+        {
+            return StepCreationResult.Unsupported(
+                $"Grid '{definition.PagePropertyName}' cannot prove the selected row's current view position. "
+                + "The visible rows do not establish the complete sorted or filtered view order; "
+                + "capture a key from a source that exposes its current view order.");
+        }
         var conditions = effectiveIdentityColumns
             .Select((columnName, index) => new RecordedGridRowCondition(columnName, identityValues[index]))
             .ToArray();
@@ -6862,10 +6890,93 @@ internal sealed partial class RecorderStepFactory
             {
                 GridRowConditions = conditions,
                 GridTargetColumnName = targetColumnName,
+                GridCapturedRowPosition = capturedViewPosition,
                 RowIndex = null,
                 ColumnIndex = null
             },
             warning);
+    }
+
+    private static int? TryResolveCurrentGridViewPosition(
+        Control gridSource,
+        GridAutomationDefinition definition,
+        IReadOnlyList<object?> items,
+        object selectedRow)
+    {
+        var itemIndexes = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        for (var index = 0; index < items.Count; index++)
+        {
+            if (items[index] is not { } item || !itemIndexes.TryAdd(item, index))
+            {
+                return null;
+            }
+        }
+
+        var positions = new Dictionary<object, double>(ReferenceEqualityComparer.Instance);
+        foreach (var candidate in EnumerateDescendantControls(gridSource))
+        {
+            if (!(TopLevel.GetTopLevel(candidate) is null
+                    ? candidate.IsVisible
+                    : candidate.IsEffectivelyVisible)
+                || candidate.Opacity <= 0.01
+                || candidate.Bounds.Width <= 0
+                || candidate.Bounds.Height <= 0
+                || candidate.DataContext is not { } context)
+            {
+                continue;
+            }
+
+            var row = itemIndexes.ContainsKey(context)
+                ? context
+                : GridPropertyValueReader.TryReadPath(
+                    context,
+                    definition.CellContext.RowPath,
+                    out var contextRow)
+                    ? contextRow
+                    : null;
+            if (row is null || !itemIndexes.ContainsKey(row))
+            {
+                continue;
+            }
+
+            var point = candidate.TranslatePoint(new Point(0, 0), gridSource);
+            if (point is null || point.Value.Y < 0 || point.Value.Y >= gridSource.Bounds.Height)
+            {
+                continue;
+            }
+
+            if (!positions.TryGetValue(row, out var currentY) || point.Value.Y < currentY)
+            {
+                positions[row] = point.Value.Y;
+            }
+        }
+
+        if (!positions.ContainsKey(selectedRow))
+        {
+            return null;
+        }
+
+        var ordered = positions.OrderBy(static entry => entry.Value).ToArray();
+        if (ordered.Zip(ordered.Skip(1), static (left, right) => right.Value - left.Value)
+            .Any(static distance => distance < 1))
+        {
+            return null;
+        }
+
+        if (positions.Count == items.Count)
+        {
+            for (var position = 0; position < ordered.Length; position++)
+            {
+                if (ReferenceEquals(ordered[position].Key, selectedRow))
+                {
+                    return position;
+                }
+            }
+
+            return null;
+        }
+
+        return null;
     }
 
     private static bool TryValidateAutomaticGridIdentityValues(
