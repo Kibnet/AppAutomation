@@ -63,7 +63,64 @@ public sealed class HeadlessControlResolverTests
 
         public IReadOnlyList<VirtualOrderColumn> Columns { get; } =
             [new VirtualOrderColumn("Key")];
+
     }
+    
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task CompositeFilterReadsRenderedValueFromItsLogicalRoot()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var editor = new global::Avalonia.Controls.Border
+            {
+                Child = new global::Avalonia.Controls.TextBlock { Text = "ООО Тест" }
+            };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(editor, "FilterEditor");
+            session.MainWindow.Content = editor;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow)
+            .WithComboBoxFilter(
+                "ArmStatusFilter",
+                ComboBoxFilterParts.ByAutomationIds("FilterEditor", "FilterOpen", "FilterResults"));
+        var page = new MainWindowPage(resolver);
+
+        page.WaitUntilTextEquals(static candidate => candidate.ArmStatusFilter, "ООО Тест", timeoutMs: 250);
+        await Assert.That(UiControlText.Read(page.ArmStatusFilter)).IsEqualTo("ООО Тест");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task CompositeFilterReadsExplicitDisplayPartWithoutChangingGenericText()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var root = new global::Avalonia.Controls.StackPanel();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(root, "FilterEditor");
+            var value = new global::Avalonia.Controls.TextBlock { Text = "Pending" };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(value, "FilterDisplay");
+            root.Children.Add(value);
+            root.Children.Add(new global::Avalonia.Controls.TextBlock { Text = "Additional text" });
+            session.MainWindow.Content = root;
+        });
+        var baseResolver = new HeadlessControlResolver(session.MainWindow);
+        var generic = baseResolver.Resolve<IReadableTextControl>(new UiControlDefinition(
+            "FilterEditor", UiControlType.AutomationElement, "FilterEditor"));
+        var resolver = baseResolver.WithComboBoxFilter(
+            "ArmStatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "FilterEditor", "FilterOpen", "FilterResults", displayValueAutomationId: "FilterDisplay"));
+        var page = new MainWindowPage(resolver);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(generic.Text).IsEmpty();
+            await Assert.That(UiControlText.Read(page.ArmStatusFilter)).IsEqualTo("Pending");
+        }
+    }
+    
 
     [Test]
     [Arguments(-1)]

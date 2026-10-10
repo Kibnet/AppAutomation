@@ -1669,6 +1669,18 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyDictionary<string, string>? controlPropertyNames,
         GridRowVariableNames rowVariables)
     {
+        if (step.Control.ControlType == UiControlType.ComboBoxFilter
+            && step.ValueKind == RecorderValueKind.StringSet
+            && step.ComparisonKind == RecorderComparisonKind.Equivalent
+            && step.HasExpectedLiteral
+            && step.StringValues is not null
+            && step.StringValue is not null)
+        {
+            return $"Page.WaitUntilSelectedItemsEqual(static page => page.{propertyName}, {FormatStringValues(step.StringValues)});"
+                + Environment.NewLine
+                + $"Page.WaitUntilTextEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue)}\");";
+        }
+
         var actual = GenerateValueExpression(step, propertyName, rowVariables);
         if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
         {

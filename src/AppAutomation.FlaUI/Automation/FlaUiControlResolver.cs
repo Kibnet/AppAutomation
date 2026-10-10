@@ -18,7 +18,7 @@ using NumberStyles = System.Globalization.NumberStyles;
 
 namespace AppAutomation.FlaUI.Automation;
 
-public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, IUiPointerRuntime, INotificationRuntimeResolver
+public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, IUiPointerRuntime, INotificationRuntimeResolver, IComboBoxFilterDisplayValueReader
 {
     private const uint WindowMessageKeyDown = 0x0100;
     private const uint WindowMessageKeyUp = 0x0101;
@@ -50,6 +50,42 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         SupportsClipboardText = true,
         SupportsPointerInput = true
     };
+
+    public string? ReadDisplayedValue(UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var source = FindElement(definition);
+        if (TryRead(() => source.IsOffscreen) == true)
+        {
+            return null;
+        }
+
+        var controlType = TryRead(() => source.ControlType);
+        if (controlType == ControlType.Text)
+        {
+            return TryRead(() => source.Name);
+        }
+
+        var visibleTexts = FindAutomationDescendants(source)
+            .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Text
+                && TryRead(() => candidate.IsOffscreen) != true)
+            .Select(static candidate => TryRead(() => candidate.Name))
+            .Where(IsUsefulAutomationText)
+            .Select(static value => value!.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+        if (visibleTexts.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Combo-box filter display part '{definition.LocatorValue}' has multiple visible text values. "
+                + "Configure DisplayValueLocator for the committed value.");
+        }
+
+        return visibleTexts.FirstOrDefault()
+            ?? TryRead(() => source.Patterns.Value.PatternOrDefault?.Value.Value)
+            ?? TryRead(() => source.Name);
+    }
 
     public Task PointerClickAsync(UiControlDefinition target, PointerClickOptions? options = null,
         CancellationToken cancellationToken = default)

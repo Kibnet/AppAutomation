@@ -687,7 +687,8 @@ public static partial class UiControlResolverExtensions
         IMultiItemControlRuntimeResolver,
         INotificationRuntimeResolver,
         IUiClipboardRuntime,
-        IUiPointerRuntime
+        IUiPointerRuntime,
+        IComboBoxFilterDisplayValueReader
     {
         private readonly IUiControlResolver _innerResolver;
         private readonly IReadOnlyList<IUiControlAdapter> _adapters;
@@ -703,6 +704,23 @@ public static partial class UiControlResolverExtensions
         public IReadOnlyList<NotificationRuntimeSnapshot>? ReadNotifications(
             UiControlDefinition rootDefinition, NotificationControlParts parts) =>
             (_innerResolver as INotificationRuntimeResolver)?.ReadNotifications(rootDefinition, parts);
+
+        public string? ReadDisplayedValue(UiControlDefinition definition)
+        {
+            if (_innerResolver is IComboBoxFilterDisplayValueReader reader)
+            {
+                return reader.ReadDisplayedValue(definition);
+            }
+
+            var display = _innerResolver.Resolve<IUiControl>(definition);
+            return display switch
+            {
+                IReadableTextControl readable => readable.Text,
+                ILabelControl label => label.Text,
+                ITextBoxControl input => input.Text,
+                _ => null
+            };
+        }
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class

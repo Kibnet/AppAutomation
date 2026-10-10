@@ -366,6 +366,8 @@ public sealed class RecorderHotkeys
 
     public string? CaptureAssertExists { get; init; } = "Ctrl+Shift+F";
 
+    public string? BeginCheckTargetSelection { get; init; } = "Ctrl+Shift+Q";
+
     public string? CaptureCheckpoint { get; init; } = "Ctrl+Shift+M";
 
     public string? CaptureCheckpointAssertion { get; init; } = "Ctrl+Shift+V";

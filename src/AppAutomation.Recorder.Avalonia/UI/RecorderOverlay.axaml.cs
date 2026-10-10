@@ -1,3 +1,4 @@
+using AppAutomation.Abstractions;
 using Avalonia;
 using Avalonia.Controls;
 using System.Globalization;
@@ -746,6 +747,15 @@ internal sealed partial class RecorderOverlay : UserControl
 
         menu.Items.Add(compareWithGenerated);
 
+        if (selection.ValueSnapshot?.Prototype.Control.ControlType == UiControlType.ComboBoxFilter
+            && hasReadableValue)
+        {
+            var assertActiveFilter = new MenuItem { Header = "Assert active filter" };
+            assertActiveFilter.Click += (_, _) =>
+                _checkpointDetails.CaptureCurrentValueAssertion(selection);
+            menu.Items.Add(assertActiveFilter);
+        }
+
         if (currentValue is not null
             && RecorderValueAssertions.TryGetHasValueAssertionKind(currentValue.ValueKind, out _))
         {
@@ -756,6 +766,7 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             Header = "Assert expected value…",
             IsEnabled = hasReadableValue
+                && selection.ValueSnapshot?.Prototype.Control.ControlType != UiControlType.ComboBoxFilter
         };
         assertExpected.Click += (_, _) => ShowLiteralAssertionEditor(selection);
         menu.Items.Add(assertExpected);

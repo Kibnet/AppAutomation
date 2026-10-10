@@ -1,4 +1,3 @@
-using System.Reflection;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -29,7 +28,6 @@ internal sealed class RecorderSession :
 {
     private static readonly TimeSpan RecentInputWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ObservationRefreshInterval = TimeSpan.FromMilliseconds(200);
-    private static readonly string[] DetachedContentPropertyNames = ["PopupContent", "Child", "Content"];
 
     private readonly Window _window;
     private readonly ILogger _logger;
@@ -44,6 +42,8 @@ internal sealed class RecorderSession :
     private readonly List<RecordedStep> _steps = new();
     private readonly List<Action> _detachActions = new();
     private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<FlyoutBase, Action> _observedFlyoutDetachers = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Control> _additionalInputRoots = new(ReferenceEqualityComparer.Instance);
     private readonly DispatcherTimer _textDebounceTimer;
     private readonly DispatcherTimer _sliderDebounceTimer;
     private readonly DispatcherTimer _spinnerDebounceTimer;
@@ -149,7 +149,7 @@ internal sealed class RecorderSession :
         _hotkeySettings = initialHotkeySettings
             ?? LoadEffectiveHotkeySettings(options, hotkeySettingsStore ?? new RecorderHotkeySettingsStore(), out hotkeySettingsLoadError);
         _hotkeyMap = _hotkeySettings.ToMap();
-        _stepFactory = new RecorderStepFactory(options, _validationRootProvider);
+        _stepFactory = new RecorderStepFactory(options, _validationRootProvider, () => _steps);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _runtimeValidator = new RecorderCommandRuntimeValidator(options);
@@ -589,6 +589,13 @@ internal sealed class RecorderSession :
         }
 
         _observedControlDetachers.Clear();
+
+        foreach (var detachAction in _observedFlyoutDetachers.Values)
+        {
+            detachAction();
+        }
+
+        _observedFlyoutDetachers.Clear();
 
         foreach (var detachAction in _detachActions)
         {
@@ -1535,7 +1542,10 @@ internal sealed class RecorderSession :
 
     private void RebindInputHandlers()
     {
-        var inputRoot = _validationRootProvider() ?? _window;
+        var validationRoot = _validationRootProvider();
+        var inputRoot = validationRoot is null
+            ? _window
+            : TopLevel.GetTopLevel(validationRoot) ?? validationRoot;
         if (ReferenceEquals(inputRoot, _inputRoot))
         {
             return;
@@ -1543,45 +1553,60 @@ internal sealed class RecorderSession :
 
         DetachInputHandlers();
         _inputRoot = inputRoot;
-        _inputRoot.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
-        _inputRoot.AddHandler(
+        AttachInputHandlers(inputRoot);
+    }
+
+    private void AttachInputHandlers(Control root)
+    {
+        root.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
+        root.AddHandler(
             InputElement.PointerReleasedEvent,
             OnPointerReleased,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
-        _inputRoot.AddHandler(
+        root.AddHandler(
             InputElement.PointerReleasedEvent,
             OnPointerGestureCompleted,
             RoutingStrategies.Bubble,
             handledEventsToo: true);
-        _inputRoot.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
-        _inputRoot.AddHandler(InputElement.PointerExitedEvent, OnPointerExited, RoutingStrategies.Tunnel);
-        _inputRoot.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
-        _inputRoot.AddHandler(
+        root.AddHandler(InputElement.PointerMovedEvent, OnPointerMoved, RoutingStrategies.Tunnel);
+        root.AddHandler(InputElement.PointerExitedEvent, OnPointerExited, RoutingStrategies.Tunnel);
+        root.AddHandler(InputElement.TextInputEvent, OnTextInput, RoutingStrategies.Tunnel);
+        root.AddHandler(
             InputElement.KeyDownEvent,
             OnKeyDown,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
-        _inputRoot.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
+        root.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
     }
 
     private void DetachInputHandlers()
     {
-        if (_inputRoot is null)
+        foreach (var root in _additionalInputRoots)
         {
-            return;
+            DetachInputHandlers(root);
         }
 
-        _inputRoot.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
-        _inputRoot.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
-        _inputRoot.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerGestureCompleted);
-        _inputRoot.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
-        _inputRoot.RemoveHandler(InputElement.PointerExitedEvent, OnPointerExited);
-        _inputRoot.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
-        _inputRoot.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
-        _inputRoot.RemoveHandler(Button.ClickEvent, OnButtonClick);
+        _additionalInputRoots.Clear();
+        if (_inputRoot is not null)
+        {
+            DetachInputHandlers(_inputRoot);
+        }
+
         _inputRoot = null;
         _lastSpatialCaptureTarget = null;
+    }
+
+    private void DetachInputHandlers(Control root)
+    {
+        root.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+        root.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
+        root.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerGestureCompleted);
+        root.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
+        root.RemoveHandler(InputElement.PointerExitedEvent, OnPointerExited);
+        root.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
+        root.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+        root.RemoveHandler(Button.ClickEvent, OnButtonClick);
     }
 
     private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -1596,6 +1621,8 @@ internal sealed class RecorderSession :
     private void RefreshObservedControls()
     {
         var currentControls = CollectObservableControls();
+        RebindFlyoutHandlers(currentControls);
+        RebindPopupInputRoots(currentControls);
 
         if (_pendingTextBox is not null && !currentControls.Contains(_pendingTextBox))
         {
@@ -1634,15 +1661,94 @@ internal sealed class RecorderSession :
         }
     }
 
+    private void RebindFlyoutHandlers(IReadOnlyCollection<Control> controls)
+    {
+        var currentFlyouts = new HashSet<FlyoutBase>(ReferenceEqualityComparer.Instance);
+        foreach (var control in controls)
+        {
+            foreach (var flyout in RecorderControlTree.EnumerateAssociatedFlyouts(control))
+            {
+                currentFlyouts.Add(flyout);
+            }
+        }
+
+        foreach (var flyout in _observedFlyoutDetachers.Keys.Except(currentFlyouts).ToArray())
+        {
+            _observedFlyoutDetachers[flyout]();
+            _observedFlyoutDetachers.Remove(flyout);
+        }
+
+        foreach (var flyout in currentFlyouts.Except(_observedFlyoutDetachers.Keys))
+        {
+            flyout.Opened += OnFlyoutOpened;
+            flyout.Closed += OnFlyoutClosed;
+            _observedFlyoutDetachers.Add(flyout, () =>
+            {
+                flyout.Opened -= OnFlyoutOpened;
+                flyout.Closed -= OnFlyoutClosed;
+            });
+        }
+    }
+
+    private void OnFlyoutOpened(object? sender, EventArgs e)
+    {
+        RefreshObservedControls();
+        Dispatcher.UIThread.Post(RefreshObservedControlsAfterPopupLayout, DispatcherPriority.Loaded);
+    }
+
+    private void OnFlyoutClosed(object? sender, EventArgs e) => RefreshObservedControls();
+
+    private void RebindPopupInputRoots(IReadOnlyCollection<Control> controls)
+    {
+        var currentRoots = new HashSet<Control>(ReferenceEqualityComparer.Instance);
+        foreach (var control in controls)
+        {
+            if (TopLevel.GetTopLevel(control) is { } root
+                && !ReferenceEquals(root, _inputRoot))
+            {
+                currentRoots.Add(root);
+            }
+        }
+
+        foreach (var root in _additionalInputRoots.Except(currentRoots).ToArray())
+        {
+            DetachInputHandlers(root);
+            _additionalInputRoots.Remove(root);
+        }
+
+        foreach (var root in currentRoots.Except(_additionalInputRoots))
+        {
+            AttachInputHandlers(root);
+            _additionalInputRoots.Add(root);
+        }
+    }
+
+    private void OnPopupOpened(object? sender, EventArgs e)
+    {
+        RefreshObservedControls();
+        Dispatcher.UIThread.Post(RefreshObservedControlsAfterPopupLayout, DispatcherPriority.Loaded);
+    }
+
+    private void RefreshObservedControlsAfterPopupLayout()
+    {
+        if (_state == RecorderSessionState.Recording)
+        {
+            RefreshObservedControls();
+        }
+    }
+
+    private void OnPopupClosed(object? sender, EventArgs e) => RefreshObservedControls();
+
     private HashSet<Control> CollectObservableControls()
     {
         var controls = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var root = _validationRootProvider();
-        if (root is null)
+        var validationRoot = _validationRootProvider();
+        if (validationRoot is null)
         {
             return controls;
         }
 
+        var root = TopLevel.GetTopLevel(validationRoot) ?? validationRoot;
         var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
         CollectObservableControls(root, controls, visited);
 
@@ -1666,7 +1772,7 @@ internal sealed class RecorderSession :
                 controls.Add(control);
             }
 
-            foreach (var detachedRoot in EnumerateDetachedContentRoots(control))
+            foreach (var detachedRoot in RecorderControlTree.EnumerateDetachedContentRoots(control))
             {
                 CollectObservableControls(detachedRoot, controls, visited);
             }
@@ -1718,29 +1824,18 @@ internal sealed class RecorderSession :
         }
     }
 
-    private static IEnumerable<Control> EnumerateDetachedContentRoots(Control control)
-    {
-        foreach (var propertyName in DetachedContentPropertyNames)
-        {
-            var property = control.GetType().GetProperty(
-                propertyName,
-                BindingFlags.Instance | BindingFlags.Public);
-            if (property is null || property.GetIndexParameters().Length != 0)
-            {
-                continue;
-            }
-
-            if (property.GetValue(control) is Control contentRoot)
-            {
-                yield return contentRoot;
-            }
-        }
-    }
-
     private Action AttachObservedControl(Control control)
     {
         switch (control)
         {
+            case Popup popup:
+                popup.Opened += OnPopupOpened;
+                popup.Closed += OnPopupClosed;
+                return () =>
+                {
+                    popup.Opened -= OnPopupOpened;
+                    popup.Closed -= OnPopupClosed;
+                };
             case NumericUpDown spinner:
                 spinner.PropertyChanged += OnSpinnerPropertyChanged;
                 return () => spinner.PropertyChanged -= OnSpinnerPropertyChanged;
@@ -1785,12 +1880,36 @@ internal sealed class RecorderSession :
                 calendar.PropertyChanged += OnCalendarPropertyChanged;
                 return () => calendar.PropertyChanged -= OnCalendarPropertyChanged;
             default:
+                if (RecorderControlTree.ExposesDetachedPopupContent(control))
+                {
+                    control.PropertyChanged += OnDetachedPopupHostPropertyChanged;
+                    return () => control.PropertyChanged -= OnDetachedPopupHostPropertyChanged;
+                }
+
                 return static () => { };
+        }
+    }
+
+    private void OnDetachedPopupHostPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property.Name is "IsPopupOpen" or "PopupContent")
+        {
+            RefreshObservedControls();
+            Dispatcher.UIThread.Post(RefreshObservedControlsAfterPopupLayout, DispatcherPriority.Loaded);
         }
     }
 
     private static bool IsObservableControl(Control control)
     {
+        if (control.ContextFlyout is not null
+            || control is Button { Flyout: not null }
+            || control is SplitButton { Flyout: not null }
+            || control.GetValue(FlyoutBase.AttachedFlyoutProperty) is not null
+            || RecorderControlTree.ExposesDetachedPopupContent(control))
+        {
+            return true;
+        }
+
         if (control is TextBox
             && (FindAncestorOrSelf<NumericUpDown>(control) is not null
                 || FindAncestorOrSelf<TimePicker>(control) is not null))
@@ -1799,6 +1918,7 @@ internal sealed class RecorderSession :
         }
 
         return control is TextBox
+            or Popup
             or ComboBox
             or ListBox
             or TabControl
@@ -1821,10 +1941,16 @@ internal sealed class RecorderSession :
 
         BeginPointerGesture();
         var source = e.Source as Control;
+        if (FindAncestorOrSelf<ListBox>(source) is { } listBox
+            && !_observedControlDetachers.ContainsKey(listBox))
+        {
+            RefreshObservedControls();
+        }
+
         RememberSpatialCaptureTarget(source, e);
         if (_targetSelectionMode != RecorderTargetSelectionMode.None)
         {
-            var positionRoot = _inputRoot ?? _window;
+            var positionRoot = GetPointerPositionRoot(source);
             _pendingTargetSelectionCandidates = ResolveCheckTargetCandidates(
                 source,
                 positionRoot,
@@ -1840,7 +1966,7 @@ internal sealed class RecorderSession :
         }
 
         var control = ResolveInteractionOwner(source);
-        var isRightButtonPressed = e.GetCurrentPoint(_inputRoot ?? _window).Properties.IsRightButtonPressed;
+        var isRightButtonPressed = e.GetCurrentPoint(GetPointerPositionRoot(source)).Properties.IsRightButtonPressed;
         if (isRightButtonPressed)
         {
             _pendingContextMenuOwner = FindContextMenuOwner(source);
@@ -1921,7 +2047,7 @@ internal sealed class RecorderSession :
 
     private void RememberSpatialCaptureTarget(Control? eventTarget, PointerEventArgs e)
     {
-        var positionRoot = _inputRoot ?? _validationRootProvider() ?? _window;
+        var positionRoot = GetPointerPositionRoot(eventTarget);
         var position = e.GetPosition(positionRoot);
         if (position.X < 0
             || position.Y < 0
@@ -1934,6 +2060,11 @@ internal sealed class RecorderSession :
 
         _lastSpatialCaptureTarget = new SpatialCaptureTarget(eventTarget, positionRoot, position);
     }
+
+    private Control GetPointerPositionRoot(Control? source) =>
+        source is not null
+            ? TopLevel.GetTopLevel(source) ?? _inputRoot ?? _window
+            : _inputRoot ?? _window;
 
     private void OnTextInput(object? sender, TextInputEventArgs e)
     {
@@ -2082,6 +2213,9 @@ internal sealed class RecorderSession :
                 break;
             case RecorderCommandKind.CaptureAssertExists:
                 CaptureAssertion(RecorderAssertionMode.Exists);
+                break;
+            case RecorderCommandKind.BeginCheckTargetSelection:
+                BeginCheckTargetSelection();
                 break;
             case RecorderCommandKind.CaptureCheckpoint:
                 CaptureCheckpoint();
@@ -3518,6 +3652,13 @@ internal sealed class RecorderSession :
             "Assertion:IsEnabled");
     }
 
+    void IRecorderCheckpointSessionDetails.CaptureCurrentValueAssertion(
+        RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        CaptureAssertion(selection, RecorderAssertionMode.Auto);
+    }
+
     void IRecorderCheckpointSessionDetails.CaptureCalculatedAssertion(
         RecorderCheckTargetSelection selection,
         RecorderNumericExpectedExpression expression)
@@ -4071,6 +4212,12 @@ internal sealed class RecorderSession :
     {
         CancelTargetSelectionCore(RecorderTargetSelectionMode.Check);
         var selection = ResolveCheckTargetSelection(target, visualCandidates);
+        if (!selection.CanCaptureAssertions
+            && !string.IsNullOrWhiteSpace(selection.ValueDescriptionError))
+        {
+            LogCaptureFailure("CheckTargetSelection", target, selection.ValueDescriptionError);
+        }
+
         CheckTargetSelected?.Invoke(
             this,
             new RecorderCheckTargetSelectedEventArgs(selection));
@@ -4307,6 +4454,16 @@ internal sealed class RecorderSession :
                 nonHitTestCandidates.Contains(candidate)))
             .Where(candidate => !IsPlaybackOnlyGridSurface(candidate))
             .ToArray();
+        var filterRoot = eventTarget is null
+            ? null
+            : EnumerateRelatedControls(eventTarget)
+                .FirstOrDefault(_stepFactory.IsConfiguredComboBoxFilterRoot);
+        if (filterRoot is not null)
+        {
+            spatialCandidates = spatialCandidates
+                .Where(candidate => IsAncestorOrSelf(filterRoot, candidate))
+                .ToArray();
+        }
         var leafCandidates = spatialCandidates
             .Where(candidate => !spatialCandidates.Any(other =>
                 !ReferenceEquals(candidate, other)
@@ -4415,7 +4572,8 @@ internal sealed class RecorderSession :
 
             candidates.Add(current);
             if (_stepFactory.IsCatalogGridCell(current)
-                || _stepFactory.IsConfiguredGridRoot(current))
+                || _stepFactory.IsConfiguredGridRoot(current)
+                || _stepFactory.IsConfiguredComboBoxFilterRoot(current))
             {
                 continue;
             }
@@ -5012,6 +5170,7 @@ internal sealed class RecorderSession :
             step.Control.LocatorKind,
             step.Control.LocatorValue,
             step.StringValue ?? string.Empty,
+            step.StringValues is null ? string.Empty : string.Join("\u001F", step.StringValues),
             step.ItemValue ?? string.Empty,
             step.BoolValue?.ToString() ?? string.Empty,
             step.DoubleValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,

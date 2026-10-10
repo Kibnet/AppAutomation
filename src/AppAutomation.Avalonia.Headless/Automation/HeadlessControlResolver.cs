@@ -15,7 +15,7 @@ using AvaloniaWindow = Avalonia.Controls.Window;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
 
-public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, INotificationRuntimeResolver
+public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, INotificationRuntimeResolver, IComboBoxFilterDisplayValueReader
 {
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
@@ -57,6 +57,44 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
     {
         SupportsClipboardText = true
     };
+
+    public string? ReadDisplayedValue(UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var source = FindElement(definition).Control;
+        return HeadlessRuntime.Dispatch(() =>
+        {
+            if (!source.IsEffectivelyVisible)
+            {
+                return null;
+            }
+
+            if (source is global::Avalonia.Controls.TextBox
+                or global::Avalonia.Controls.TextBlock
+                or global::Avalonia.Controls.Label)
+            {
+                return ReadControlVisibleText(source);
+            }
+
+            var visibleTexts = ControlTree.EnumerateDescendants(source)
+                .OfType<global::Avalonia.Controls.TextBlock>()
+                .Where(static block => block.IsEffectivelyVisible && !string.IsNullOrWhiteSpace(block.Text))
+                .Select(static block => block.Text!.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .Take(2)
+                .ToArray();
+            if (visibleTexts.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Combo-box filter display part '{definition.LocatorValue}' has multiple visible text values. "
+                    + "Configure DisplayValueLocator for the committed value.");
+            }
+
+            return visibleTexts.FirstOrDefault()
+                ?? ReadControlVisibleText(source)
+                ?? AutomationProperties.GetName(source);
+        });
+    }
 
     public async Task SetTextAsync(string text, CancellationToken cancellationToken = default)
     {

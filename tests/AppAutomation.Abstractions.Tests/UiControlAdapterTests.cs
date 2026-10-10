@@ -261,6 +261,29 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task ComboBoxFilterCheckReadsAppliedItemsAndDisplayedTextIndependently()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true);
+        context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending"]);
+
+        context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, ["Pending"]);
+        context.Page.WaitUntilTextEquals(static page => page.StatusFilter, "Pending");
+        context.Root.Text = "Old value";
+
+        await Assert.That(() => context.Page.WaitUntilTextEquals(
+                static page => page.StatusFilter, "Pending", timeoutMs: 50))
+            .Throws<UiOperationException>();
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending"]);
+
+        context.SetCommittedItems(["Closed"]);
+        context.Root.Text = "Pending";
+        context.Page.WaitUntilTextEquals(static page => page.StatusFilter, "Pending");
+        await Assert.That(() => context.Page.WaitUntilSelectedItemsEqual(
+                static page => page.StatusFilter, ["Pending"], timeoutMs: 50))
+            .Throws<UiOperationException>();
+    }
+
+    [Test]
     [Arguments(true)]
     [Arguments(false)]
     public async Task MultiSelectAdapter_ReadsSelectionWhenPopupClosesDuringObservation(bool closesAfterRead)
@@ -1310,6 +1333,7 @@ public sealed class UiControlAdapterTests
 
     private static ComboBoxFilterTestContext CreateComboBoxFilterContext(bool hasApplyButton, bool closesOnCancel = false)
     {
+        var root = new FakeLabelControl("StatusFilterRoot", "Open");
         var items = new FakeMultiSelectItemsControl(
             "StatusFilterItems",
             ["Open", "Pending", "Closed"],
@@ -1324,6 +1348,7 @@ public sealed class UiControlAdapterTests
             OnInvoke = () =>
             {
                 committedItems = items.SelectedItems.ToArray();
+                root.Text = string.Join(", ", committedItems);
                 items.IsAvailable = false;
             }
         };
@@ -1342,7 +1367,7 @@ public sealed class UiControlAdapterTests
             }
         };
         var resolver = new FakeResolver(
-                ("StatusFilterRoot", new FakeControl("StatusFilterRoot")),
+                ("StatusFilterRoot", root),
                 ("StatusFilterOpenButton", openButton),
                 ("StatusFilterItems", items),
                 ("StatusFilterApplyButton", applyButton),
@@ -1358,6 +1383,7 @@ public sealed class UiControlAdapterTests
 
         return new ComboBoxFilterTestContext(
             new ComboBoxFilterPage(resolver),
+            root,
             items,
             openButton,
             applyButton,
@@ -1365,12 +1391,14 @@ public sealed class UiControlAdapterTests
             values =>
             {
                 committedItems = values.ToArray();
+                root.Text = string.Join(", ", committedItems);
                 items.SetSelectedItems(values);
             });
     }
 
     private sealed record ComboBoxFilterTestContext(
         ComboBoxFilterPage Page,
+        FakeLabelControl Root,
         FakeMultiSelectItemsControl Items,
         FakeButtonControl OpenButton,
         FakeButtonControl ApplyButton,

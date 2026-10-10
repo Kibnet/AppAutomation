@@ -1502,6 +1502,40 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task CheckHotkey_EntersTargetSelectionWithoutCreatingStep()
+    {
+        var root = new StackPanel();
+        var label = new TextBlock { Text = "Active" };
+        AutomationProperties.SetAutomationId(label, "StatusLabel");
+        root.Children.Add(label);
+        var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions { ShowOverlay = false },
+            () => root,
+            attachWindowHandlers: false);
+        var details = (IAppAutomationRecorderSessionDetails)session;
+        session.Start();
+
+        var resolved = session.HotkeySettings.ToMap().TryGetCommand(
+            Key.Q,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var command);
+        if (resolved)
+        {
+            session.HandleRecorderCommandForTesting(command);
+        }
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(resolved).IsEqualTo(true);
+            await Assert.That(session.IsCheckTargetSelectionActive).IsEqualTo(true);
+            await Assert.That(details.StepJournal.Count).IsEqualTo(0);
+        }
+
+        await Assert.That(session.SelectCheckTargetForTesting(label)).IsEqualTo(true);
+    }
+
+    [Test]
     public async Task HotkeySettings_RejectsDuplicateNormalizedGestures()
     {
         var settings = RecorderHotkeySettings.FromGestures(new Dictionary<RecorderCommandKind, string?>
@@ -1585,6 +1619,10 @@ public sealed class RecorderTests
         var effective = RecorderHotkeySettings.CreateEffective(new RecorderHotkeys(), settings);
         var startStopResolved = effective.ToMap().TryGetCommand(Key.R, KeyModifiers.Alt, out var startStopCommand);
         var overlayResolved = effective.ToMap().TryGetCommand(Key.M, KeyModifiers.Shift, out _);
+        var checkResolved = effective.ToMap().TryGetCommand(
+            Key.Q,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            out var checkCommand);
 
         using (Assert.Multiple())
         {
@@ -1594,6 +1632,8 @@ public sealed class RecorderTests
             await Assert.That(startStopResolved).IsEqualTo(true);
             await Assert.That(startStopCommand).IsEqualTo(RecorderCommandKind.StartStop);
             await Assert.That(overlayResolved).IsEqualTo(false);
+            await Assert.That(checkResolved).IsTrue();
+            await Assert.That(checkCommand).IsEqualTo(RecorderCommandKind.BeginCheckTargetSelection);
         }
     }
 
