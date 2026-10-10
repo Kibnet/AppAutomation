@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using AppAutomation.Session.Contracts;
 using AppAutomation.FlaUI.Input;
 using FlaUI.Core;
@@ -12,6 +13,8 @@ namespace AppAutomation.FlaUI.Session;
 
 public sealed class DesktopAppSession : IDisposable
 {
+    private const int UiAutomationTimeoutHResult = unchecked((int)0x80131505);
+
     private readonly Application _application;
     private readonly UIA3Automation _automation;
     private readonly Action? _disposeCallback;
@@ -75,22 +78,16 @@ public sealed class DesktopAppSession : IDisposable
 
         try
         {
-            var mainWindowResult = Retry.WhileNull(
+            var mainWindow = WaitForMainWindow(
                 () => application.GetMainWindow(automation),
-                timeout: options.MainWindowTimeout,
-                interval: options.PollInterval,
-                throwOnTimeout: false);
+                options.MainWindowTimeout,
+                options.PollInterval);
 
-            if (!mainWindowResult.Success || mainWindowResult.Result is null)
-            {
-                throw new TimeoutException("Main window was not found within timeout.");
-            }
-
-            DesktopWindowPlacementService.Apply(application, mainWindowResult.Result, options);
-            WaitForAutomationTree(mainWindowResult.Result, options.MainWindowTimeout, options.PollInterval);
+            DesktopWindowPlacementService.Apply(application, mainWindow, options);
+            WaitForAutomationTree(mainWindow, options.MainWindowTimeout, options.PollInterval);
 
             var conditionFactory = new ConditionFactory(new UIA3PropertyLibrary());
-            return new DesktopAppSession(application, automation, mainWindowResult.Result, conditionFactory, options.DisposeCallback);
+            return new DesktopAppSession(application, automation, mainWindow, conditionFactory, options.DisposeCallback);
         }
         catch (Exception launchException)
         {
@@ -185,6 +182,38 @@ public sealed class DesktopAppSession : IDisposable
         }
 
         return startInfo;
+    }
+
+    internal static T WaitForMainWindow<T>(Func<T?> findWindow, TimeSpan timeout, TimeSpan pollInterval)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(findWindow);
+
+        Exception? lastTransientFailure = null;
+        var result = Retry.WhileNull(
+            () =>
+            {
+                try
+                {
+                    return findWindow();
+                }
+                catch (TimeoutException exception)
+                {
+                    lastTransientFailure = exception;
+                    return null;
+                }
+                catch (COMException exception) when (exception.HResult == UiAutomationTimeoutHResult)
+                {
+                    lastTransientFailure = exception;
+                    return null;
+                }
+            },
+            timeout: timeout,
+            interval: pollInterval,
+            throwOnTimeout: false);
+
+        return result.Result
+            ?? throw new TimeoutException("Main window was not found within timeout.", lastTransientFailure);
     }
 
     private static void WaitForAutomationTree(Window mainWindow, TimeSpan timeout, TimeSpan pollInterval)
