@@ -59,6 +59,75 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
+    public async Task TableRowKeyBootstrapReadsCurrentPositionThenSurvivesReorder()
+    {
+        var fixture = new GridFixture(
+            Row("ORD-1", "Draft", "10"),
+            Row("ORD-2", "Ready", "20"),
+            Row("ORD-3", "New", "30"));
+        var grid = fixture.CreateCatalogPage().Orders;
+        var selector = GridRowKeyReader.Capture(grid, 1);
+        fixture.Rows.Reverse();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selector.Conditions.Single().Value).IsEqualTo("ORD-2");
+            await Assert.That(GridValueReader.ReadCellText(grid, selector, "State")).IsEqualTo("Ready");
+            await Assert.That(GridRowKeyReader.Capture(grid, 0).Conditions.Single().Value).IsEqualTo("ORD-3");
+        }
+    }
+
+    [Test]
+    public async Task TableRowKeyBootstrapRejectsMissingEmptyAndDuplicateKeys()
+    {
+        var missing = new GridFixture(Row("ORD-1", "Draft", "10")).CreateCatalogPage().Orders;
+        var empty = new GridFixture(Row(string.Empty, "Draft", "10")).CreateCatalogPage().Orders;
+        var duplicate = new GridFixture(
+            Row("ORD-1", "Draft", "10"), Row("ORD-1", "Ready", "20")).CreateCatalogPage().Orders;
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(() => GridRowKeyReader.Capture(missing, 2)).Throws<InvalidOperationException>();
+            await Assert.That(() => GridRowKeyReader.Capture(empty, 0)).Throws<InvalidOperationException>();
+            await Assert.That(() => GridRowKeyReader.Capture(duplicate, 0)).Throws<InvalidOperationException>();
+        }
+    }
+
+    [Test]
+    public async Task TableRowKeyBootstrapReadsCompositeIdentityFromOneRow()
+    {
+        var grid = new ActionEditableGrid("OrdersGrid", new[]
+        {
+            Row("ORD-1", "Draft", "10"),
+            Row("ORD-2", "Ready", "20"),
+            Row("ORD-2", "Draft", "30")
+        })
+        {
+            ColumnNames = ["OrderId", "Status", "Amount"]
+        };
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(
+                    GridColumnDefinition.Map("Code").FromField("OrderId")
+                        .ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
+                    GridColumnDefinition.Map("State").FromField("Status"),
+                    GridColumnDefinition.Auto("Amount"))
+                .IdentifyRowsBy("Code", "State"));
+        var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
+
+        var selector = GridRowKeyReader.Capture(page.Orders, 1);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selector.Conditions.Count).IsEqualTo(2);
+            await Assert.That(selector.Conditions[0].Value).IsEqualTo("ORD-2");
+            await Assert.That(selector.Conditions[1].Value).IsEqualTo("Ready");
+            await Assert.That(grid.ResolveRowCount).IsEqualTo(0);
+            await Assert.That(GridValueReader.ReadCellText(page.Orders, selector, "Amount")).IsEqualTo("20");
+        }
+    }
+
+    [Test]
     public async Task SelectGridRow_UsesStableIdentityAfterReorder()
     {
         var fixture = new GridFixture(
@@ -869,11 +938,35 @@ public sealed class GridRowSelectorTests
 
     private sealed class ActionEditableGrid(string automationId, IReadOnlyList<MutableRow> rows)
         : ReadOnlyGrid(automationId, rows), IGridUserActionControl, IEditableGridControl,
-            IIndexedAddressableGridControl, IIndexedGridRowSelectionControl, IGridColumnMetadataControl
+            IIndexedAddressableGridControl, IIndexedGridRowSelectionControl, IGridColumnMetadataControl,
+            IGridRowPositionIdentityControl
     {
         public IReadOnlyList<string> ColumnNames { get; init; } = Array.Empty<string>();
 
         public GridRuntimeColumn? LastIndexedColumn { get; private set; }
+
+        public int ResolveRowCount { get; private set; }
+
+        public GridRowPositionIdentity ReadRowIdentityAtPosition(
+            int position,
+            IReadOnlyList<GridRuntimeColumn> identityColumns,
+            string rowPath,
+            int timeoutMs)
+        {
+            var row = GetRowByIndex(position)
+                ?? throw new InvalidOperationException($"No logical row exists at position {position}.");
+            var values = identityColumns.Select(column =>
+                column.ColumnIndex < row.Cells.Count ? row.Cells[column.ColumnIndex].Value : null).ToArray();
+            var matches = Rows.Count(candidate => identityColumns.Select(column =>
+                    column.ColumnIndex < candidate.Cells.Count ? candidate.Cells[column.ColumnIndex].Value : null)
+                .SequenceEqual(values, StringComparer.Ordinal));
+            if (matches != 1)
+            {
+                throw new InvalidOperationException("The positioned row identity is not unique.");
+            }
+
+            return new GridRowPositionIdentity(values, IsUnique: true);
+        }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)
         {
@@ -942,6 +1035,7 @@ public sealed class GridRowSelectorTests
 
         public GridRowResolution ResolveRow(GridIndexedRowSelector row, int timeoutMs)
         {
+            ResolveRowCount++;
             var matches = FindMatches(row);
             return matches.Count switch
             {

@@ -552,11 +552,15 @@ public sealed class RecorderStableGridSelectorTests
                     new RecordedGridRowCondition("Key", expectedKey)
                 ]);
                 await Assert.That(result.Step.GridTargetColumnName).IsEqualTo(column.LogicalName);
+                await Assert.That(result.Step.GridCapturedRowPosition).IsEqualTo(rowIndex);
+                await Assert.That(result.Step.GridRowSourceMode).IsEqualTo(RecorderGridRowSourceMode.CurrentTableRow);
                 await Assert.That(result.Step.RowIndex).IsNull();
                 await Assert.That(result.Step.ColumnIndex).IsNull();
                 await Assert.That(preview).Contains(
                     $"var {column.CheckpointName} = GridValueReader.{column.ReaderMethod}(Page.ItemsGrid, "
-                    + $"GridRowSelector.ByCell(\"Key\", \"{expectedKey}\"), \"{column.LogicalName}\");");
+                    + $"gridRow, \"{column.LogicalName}\");");
+                await Assert.That(preview).Contains($"GridRowKeyReader.Capture(Page.ItemsGrid, {rowIndex})");
+                await Assert.That(preview).DoesNotContain($"\"{expectedKey}\"");
                 await Assert.That(preview).DoesNotContain("ArchiveGrid");
             }
         }
@@ -583,6 +587,11 @@ public sealed class RecorderStableGridSelectorTests
         details.BeginNumericOperandTargetSelection();
         fixture.Session.SelectNumericOperandTargetForTesting(fixture.RightEditor);
         var rightOperand = operandSelection?.Operand;
+
+        await Assert.That(targetSelection!.ValueDescriptionError).IsNullOrEmpty();
+        await Assert.That(targetSelection.CanCaptureAssertions).IsTrue();
+        await Assert.That(leftOperand).IsNotNull();
+        await Assert.That(rightOperand).IsNotNull();
 
         details.CaptureCalculatedAssertion(
             targetSelection!,
@@ -1595,7 +1604,7 @@ public sealed class RecorderStableGridSelectorTests
     private sealed class CatalogGridCaptureFixture
     {
         private readonly RecorderStepFactory _factory;
-        private readonly TextBlock _selectedCell;
+        private readonly Border _selectedCell;
         private readonly Border _rowPresenter;
         private readonly StackPanel _root;
         private readonly AppAutomationRecorderOptions _options;
@@ -1629,12 +1638,12 @@ public sealed class RecorderStableGridSelectorTests
             var archiveRow = new CatalogItemRow("ITEM-10", 999m);
             var archiveGrid = new GridHost { ItemsSource = new[] { archiveRow } };
             var archiveRuntimeGrid = new Border();
-            var sourceGrid = new GridHost { ItemsSource = rows };
+            var sourceGrid = new CatalogGridHost { ItemsSource = rows };
             _rowPresenter = new Border { DataContext = cellContext };
-            _selectedCell = new TextBlock
+            _selectedCell = new Border
             {
-                Text = selectedValue.ToString(),
-                DataContext = cellContext
+                DataContext = cellContext,
+                Height = 20
             };
             var runtimeGrid = new Border();
 
@@ -1643,11 +1652,18 @@ public sealed class RecorderStableGridSelectorTests
             AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
             AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
             _rowPresenter.Child = _selectedCell;
-            sourceGrid.Children.Add(_rowPresenter);
+            foreach (var currentRow in rows)
+            {
+                sourceGrid.Children.Add(ReferenceEquals(currentRow, row)
+                    ? _rowPresenter
+                    : new Border { DataContext = currentRow, Height = 20 });
+            }
             _root.Children.Add(archiveGrid);
             _root.Children.Add(archiveRuntimeGrid);
             _root.Children.Add(sourceGrid);
             _root.Children.Add(runtimeGrid);
+            _root.Measure(new Size(500, 1000));
+            _root.Arrange(new Rect(0, 0, 500, 1000));
 
             var definition = CreateDefinition("ItemsGrid", "ItemsGridVisual", "ItemsGrid");
             if (includeRowIdentity)
@@ -1725,17 +1741,31 @@ public sealed class RecorderStableGridSelectorTests
                 new CatalogItemRow("ITEM-30", 30.5m)
             };
             var root = new StackPanel();
-            var sourceGrid = new GridHost { ItemsSource = rows };
+            var sourceGrid = new CatalogGridHost { ItemsSource = rows };
             var runtimeGrid = new Border();
             AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
             AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
 
-            LeftEditor = AddNumericCell(sourceGrid, rows[0], "LeftAmountEditor");
-            RightEditor = AddNumericCell(sourceGrid, rows[1], "RightAmountEditor");
-            TargetEditor = AddNumericCell(sourceGrid, rows[2], "TargetAmountEditor");
-            TextCell = AddTextCell(sourceGrid, rows[0]);
+            var rowPanels = rows.Select(row => new StackPanel
+            {
+                Orientation = global::Avalonia.Layout.Orientation.Horizontal,
+                DataContext = row,
+                Width = 200,
+                Height = 24
+            }).ToArray();
+            foreach (var rowPanel in rowPanels)
+            {
+                sourceGrid.Children.Add(rowPanel);
+            }
+
+            LeftEditor = AddNumericCell(rowPanels[0], rows[0], "LeftAmountEditor");
+            RightEditor = AddNumericCell(rowPanels[1], rows[1], "RightAmountEditor");
+            TargetEditor = AddNumericCell(rowPanels[2], rows[2], "TargetAmountEditor");
+            TextCell = AddTextCell(rowPanels[0], rows[0]);
             root.Children.Add(sourceGrid);
             root.Children.Add(runtimeGrid);
+            root.Measure(new Size(500, 1000));
+            root.Arrange(new Rect(0, 0, 500, 1000));
 
             var definition = GridAutomationDefinition
                 .ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
@@ -1766,11 +1796,11 @@ public sealed class RecorderStableGridSelectorTests
 
         public TextBox TargetEditor { get; }
 
-        public TextBlock TextCell { get; }
+        public Border TextCell { get; }
 
         public void Dispose() => Session.Dispose();
 
-        private static TextBox AddNumericCell(GridHost grid, CatalogItemRow row, string automationId)
+        private static TextBox AddNumericCell(Panel rowPanel, CatalogItemRow row, string automationId)
         {
             var context = new CatalogCellContext(
                 row,
@@ -1784,20 +1814,20 @@ public sealed class RecorderStableGridSelectorTests
             };
             AutomationProperties.SetAutomationId(editor, automationId);
             cell.Child = editor;
-            grid.Children.Add(cell);
+            rowPanel.Children.Add(cell);
             return editor;
         }
 
-        private static TextBlock AddTextCell(GridHost grid, CatalogItemRow row)
+        private static Border AddTextCell(Panel rowPanel, CatalogItemRow row)
         {
             var context = new CatalogCellContext(
                 row,
                 new GridColumnContext("Key"),
                 row.Key);
             var cell = new Border { DataContext = context };
-            var text = new TextBlock { Text = row.Key, DataContext = context };
+            var text = new Border { DataContext = context, Width = 100, Height = 20 };
             cell.Child = text;
-            grid.Children.Add(cell);
+            rowPanel.Children.Add(cell);
             return text;
         }
     }
@@ -1994,6 +2024,11 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     private sealed class GridHost : Panel
+    {
+        public object? ItemsSource { get; init; }
+    }
+
+    private sealed class CatalogGridHost : StackPanel
     {
         public object? ItemsSource { get; init; }
     }

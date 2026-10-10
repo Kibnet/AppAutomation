@@ -53,16 +53,26 @@ internal static class RecorderScenarioGraphValidator
         var generatedValueOrdinals = new HashSet<int>();
         var reservedNames = new HashSet<string>(StringComparer.Ordinal);
         var stepErrors = new Dictionary<Guid, string>();
+        var rowValueSources = new Dictionary<RecorderGridRowValueReference, RecordedStep>();
+        var tableRowAnchors = new Dictionary<Guid, RecordedStep>();
 
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            var tableRowValidation = ValidateTableRowAnchor(step, index, tableRowAnchors);
+            if (!tableRowValidation.IsValid)
+            {
+                stepErrors[step.StepId] = tableRowValidation.Error;
+                continue;
+            }
+
             var rowReferenceValidation = ValidateGridRowReferences(
                 step,
                 index,
                 checkpointValueKinds,
                 generatedValueVariables,
-                copiedValueVariables);
+                copiedValueVariables,
+                rowValueSources);
             if (!rowReferenceValidation.IsValid)
             {
                 stepErrors[step.StepId] = rowReferenceValidation.Error;
@@ -88,6 +98,14 @@ internal static class RecorderScenarioGraphValidator
                 {
                     stepErrors[step.StepId] = generatedValueValidation.Error;
                 }
+                else if (step.DefinesGeneratedValue)
+                {
+                    rowValueSources.Add(
+                        new RecorderGridRowValueReference(
+                            RecorderGridRowValueSourceKind.GeneratedValue,
+                            step.GeneratedValueId!.Value),
+                        step);
+                }
             }
 
             if (step.ActionKind == RecordedActionKind.CaptureCopiedValue)
@@ -100,6 +118,14 @@ internal static class RecorderScenarioGraphValidator
                 if (!copiedValueValidation.IsValid)
                 {
                     stepErrors[step.StepId] = copiedValueValidation.Error;
+                }
+                else
+                {
+                    rowValueSources.Add(
+                        new RecorderGridRowValueReference(
+                            RecorderGridRowValueSourceKind.CopiedValue,
+                            step.CopiedValueId!.Value),
+                        step);
                 }
 
                 continue;
@@ -128,6 +154,18 @@ internal static class RecorderScenarioGraphValidator
                 if (!checkpointValidation.IsValid)
                 {
                     stepErrors[step.StepId] = checkpointValidation.Error;
+                }
+                else
+                {
+                    rowValueSources.Add(
+                        new RecorderGridRowValueReference(
+                            RecorderGridRowValueSourceKind.Checkpoint,
+                            step.CheckpointId!.Value),
+                        step);
+                    if (step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+                    {
+                        tableRowAnchors.Add(step.CheckpointId.Value, step);
+                    }
                 }
 
                 continue;
@@ -172,7 +210,8 @@ internal static class RecorderScenarioGraphValidator
         int index,
         IReadOnlyDictionary<Guid, RecorderValueKind> checkpointValueKinds,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
-        IReadOnlyDictionary<Guid, string> copiedValueVariables)
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
+        IReadOnlyDictionary<RecorderGridRowValueReference, RecordedStep> rowValueSources)
     {
         var rowConditions = new[]
         {
@@ -218,6 +257,124 @@ internal static class RecorderScenarioGraphValidator
                         + $"for row column '{condition.ColumnName}'.");
                 }
             }
+        }
+
+        return ValidateDynamicGridKeyCheckpoint(step, index, rowValueSources);
+    }
+
+    private static RecorderGraphStepValidationResult ValidateTableRowAnchor(
+        RecordedStep step,
+        int index,
+        IReadOnlyDictionary<Guid, RecordedStep> anchors)
+    {
+        if (step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+        {
+            if (step.ActionKind != RecordedActionKind.CaptureCheckpoint
+                || step.Control.ControlType != AppAutomation.Abstractions.UiControlType.Grid
+                || step.CheckpointId is null
+                || step.GridCapturedRowPosition is not >= 0
+                || step.GridRowConditions is not { Count: > 0 }
+                || string.IsNullOrWhiteSpace(step.GridTargetColumnName)
+                || step.GridRowConditions.Any(static condition => condition.ValueReference is not null))
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid step {index + 1} needs a captured logical row position and a configured stable key "
+                    + "for Current table row mode.");
+            }
+        }
+
+        if (step.GridRowAnchorCheckpointId is not { } anchorId)
+        {
+            return RecorderGraphStepValidationResult.Valid;
+        }
+
+        if (!anchors.TryGetValue(anchorId, out var source)
+            || step.GridRowConditions is not { Count: > 0 } conditions
+            || source.GridRowConditions is not { Count: > 0 } sourceConditions
+            || !string.Equals(step.Control.LocatorValue, source.Control.LocatorValue, StringComparison.Ordinal)
+            || step.Control.LocatorKind != source.Control.LocatorKind
+            || conditions.Count != sourceConditions.Count
+            || conditions.Where((condition, conditionIndex) =>
+                !string.Equals(condition.ColumnName, sourceConditions[conditionIndex].ColumnName, StringComparison.Ordinal)
+                || !string.Equals(condition.Value, sourceConditions[conditionIndex].Value, StringComparison.Ordinal)
+                || condition.ValueReference is not null).Any())
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Grid step {index + 1} references a missing, later or different table-row checkpoint.");
+        }
+
+        return RecorderGraphStepValidationResult.Valid;
+    }
+
+    private static RecorderGraphStepValidationResult ValidateDynamicGridKeyCheckpoint(
+        RecordedStep step,
+        int index,
+        IReadOnlyDictionary<RecorderGridRowValueReference, RecordedStep> rowValueSources)
+    {
+        if (step.ActionKind != RecordedActionKind.CaptureCheckpoint
+            || step.GridRowConditions is not { Count: > 0 } conditions
+            || string.IsNullOrWhiteSpace(step.GridTargetColumnName)
+            || !conditions.Any(condition => string.Equals(
+                condition.ColumnName,
+                step.GridTargetColumnName,
+                StringComparison.Ordinal))
+            || !conditions.Any(static condition => condition.ValueReference is not null))
+        {
+            return RecorderGraphStepValidationResult.Valid;
+        }
+
+        if (step.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText)
+            || step.ValueAccessorKind is not (
+                RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Grid key checkpoint step {index + 1} must read text from its selected key cell.");
+        }
+
+        foreach (var condition in conditions)
+        {
+            if (condition.ValueReference is not { } reference)
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid key checkpoint step {index + 1} requires an earlier UI value for every stable row identity column; "
+                    + $"'{condition.ColumnName}' still uses a recorded literal.");
+            }
+
+            if (!rowValueSources.TryGetValue(reference, out var source)
+                || source.GridRowConditions is { Count: > 0 }
+                || source.RowIndex.HasValue
+                || source.Control.ControlType == AppAutomation.Abstractions.UiControlType.Grid
+                || source.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
+                    or RecorderValueAccessorKind.GridCellValue)
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid key checkpoint step {index + 1} needs an independent earlier UI value "
+                    + $"for row column '{condition.ColumnName}'; another grid cell is not an independent source.");
+            }
+
+            if (string.IsNullOrWhiteSpace(source.StringValue))
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid key checkpoint step {index + 1} source for row column '{condition.ColumnName}' "
+                    + "has no readable current text. Record its value before this step.");
+            }
+
+            if (!string.Equals(source.StringValue, condition.Value, StringComparison.Ordinal))
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid key checkpoint step {index + 1} source for row column '{condition.ColumnName}' "
+                    + "does not match the selected row key.");
+            }
+        }
+
+        var selectedKey = conditions.First(condition => string.Equals(
+            condition.ColumnName,
+            step.GridTargetColumnName,
+            StringComparison.Ordinal));
+        if (!string.Equals(step.StringValue, selectedKey.Value, StringComparison.Ordinal))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Grid key checkpoint step {index + 1} displayed key does not match the selected row identity.");
         }
 
         return RecorderGraphStepValidationResult.Valid;

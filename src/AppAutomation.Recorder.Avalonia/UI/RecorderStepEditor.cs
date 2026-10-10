@@ -11,6 +11,7 @@ namespace AppAutomation.Recorder.Avalonia.UI;
 internal sealed class RecorderStepEditor : Border
 {
     private static readonly bool[] BooleanOptions = [true, false];
+    private static readonly string[] GridRowSourceOptions = ["Current table row", "Recorded stable key"];
 
     private readonly RecorderStepEditDraft _sourceDraft;
     private readonly TextBlock _validation;
@@ -36,6 +37,7 @@ internal sealed class RecorderStepEditor : Border
     private ComboBox? _calculatedOperation;
     private NumericOperandFields? _leftOperand;
     private NumericOperandFields? _rightOperand;
+    private ComboBox? _gridRowMode;
     private readonly List<TextBox> _additionalTextInputs = [];
     private readonly List<ComboBox> _additionalComboInputs = [];
     private readonly List<GridRowConditionFields> _gridRowConditionFields = [];
@@ -464,25 +466,71 @@ internal sealed class RecorderStepEditor : Border
             FontWeight = FontWeight.SemiBold
         });
 
+        if (draft.EditKind == RecorderStepEditKind.Checkpoint
+            && draft.GridCapturedRowPosition is >= 0)
+        {
+            _gridRowMode = AddComboField(
+                fields,
+                "Row source",
+                "RecorderStepEditGridRowMode",
+                GridRowSourceOptions,
+                draft.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+                    ? "Current table row"
+                    : "Recorded stable key");
+            var currentRowWarning = new TextBlock
+            {
+                Text = $"Current table row: position {draft.GridCapturedRowPosition.Value + 1}. "
+                    + "Sorting or filtering before this checkpoint can change which item is at this position. "
+                    + "Later steps use the runtime stable key.",
+                TextWrapping = TextWrapping.Wrap
+            };
+            fields.Children.Add(currentRowWarning);
+            void RefreshCurrentRowWarning() => currentRowWarning.IsVisible = string.Equals(
+                _gridRowMode.SelectedItem as string,
+                "Current table row",
+                StringComparison.Ordinal);
+            _gridRowMode.SelectionChanged += (_, _) => RefreshCurrentRowWarning();
+            RefreshCurrentRowWarning();
+            _additionalComboInputs.Add(_gridRowMode);
+        }
+        else if (draft.EditKind == RecorderStepEditKind.Checkpoint)
+        {
+            fields.Children.Add(new TextBlock
+            {
+                Text = "Current table row is unavailable: Recorder could not prove the row's displayed position. "
+                    + "The recorded stable key or an earlier UI value can still be used.",
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        var recordedKeyFields = new StackPanel { Spacing = 4 };
+        fields.Children.Add(recordedKeyFields);
+
         for (var index = 0; index < draft.GridRowConditions!.Count; index++)
         {
             var condition = draft.GridRowConditions[index];
+            var keyCheckpoint = draft.EditKind == RecorderStepEditKind.Checkpoint
+                && draft.GridRowConditions.Any(row => string.Equals(
+                    row.ColumnName,
+                    draft.GridTargetColumnName,
+                    StringComparison.Ordinal));
+            var variableSourceLabel = keyCheckpoint ? "Previous UI value" : "Variable";
             var sourceOptions = draft.AvailableGridRowVariables.Count > 0
                 || condition.ValueReference is not null
-                ? new[] { "Recorded value", "Variable" }
+                ? new[] { "Recorded value", variableSourceLabel }
                 : ["Recorded value"];
             var source = AddComboField(
-                fields,
+                recordedKeyFields,
                 condition.ColumnName,
                 $"RecorderStepEditRowSource{index}",
                 sourceOptions,
-                condition.ValueReference is null ? "Recorded value" : "Variable");
+                condition.ValueReference is null ? "Recorded value" : variableSourceLabel);
             var recorded = new TextBlock
             {
                 Text = $"Recorded: {condition.Value}",
                 TextWrapping = TextWrapping.Wrap
             };
-            fields.Children.Add(recorded);
+            recordedKeyFields.Children.Add(recorded);
             var selected = draft.AvailableGridRowVariables
                 .FirstOrDefault(option => option.Reference == condition.ValueReference);
             var variable = new ComboBox
@@ -492,18 +540,24 @@ internal sealed class RecorderStepEditor : Border
                 SelectedItem = selected,
                 MinWidth = 220
             };
-            fields.Children.Add(CreateField("Variable", variable));
+            recordedKeyFields.Children.Add(CreateField("Variable", variable));
             if (draft.AvailableGridRowVariables.Count == 0)
             {
-                fields.Children.Add(new TextBlock
+                recordedKeyFields.Children.Add(new TextBlock
                 {
-                    Text = "Record a text value before this step to use it as a row key.",
+                    Text = keyCheckpoint
+                        ? "Record this row key from an independent UI control before the checkpoint. "
+                          + "A row position cannot identify the same item after sorting."
+                        : "Record a text value before this step to use it as a row key.",
                     TextWrapping = TextWrapping.Wrap
                 });
             }
             void RefreshVisibility()
             {
-                var useVariable = string.Equals(source.SelectedItem as string, "Variable", StringComparison.Ordinal);
+                var useVariable = string.Equals(
+                    source.SelectedItem as string,
+                    variableSourceLabel,
+                    StringComparison.Ordinal);
                 SetFieldVisible(variable, useVariable);
                 variable.IsEnabled = draft.AvailableGridRowVariables.Count > 0;
                 recorded.IsVisible = !useVariable;
@@ -511,9 +565,23 @@ internal sealed class RecorderStepEditor : Border
 
             source.SelectionChanged += (_, _) => RefreshVisibility();
             RefreshVisibility();
-            _gridRowConditionFields.Add(new GridRowConditionFields(condition, source, variable));
+            _gridRowConditionFields.Add(new GridRowConditionFields(
+                condition,
+                source,
+                variable,
+                variableSourceLabel));
             _additionalComboInputs.Add(source);
             _additionalComboInputs.Add(variable);
+        }
+
+        if (_gridRowMode is not null)
+        {
+            void RefreshRowSource() => recordedKeyFields.IsVisible = !string.Equals(
+                _gridRowMode.SelectedItem as string,
+                "Current table row",
+                StringComparison.Ordinal);
+            _gridRowMode.SelectionChanged += (_, _) => RefreshRowSource();
+            RefreshRowSource();
         }
     }
 
@@ -633,12 +701,20 @@ internal sealed class RecorderStepEditor : Border
                     .ToArray()
         };
 
+        var currentTableRowSelected = _gridRowMode is not null
+            && string.Equals(
+                _gridRowMode.SelectedItem as string,
+                "Current table row",
+                StringComparison.Ordinal);
         if (_gridRowConditionFields.Count > 0)
         {
             var rowConditions = new List<RecordedGridRowCondition>(_gridRowConditionFields.Count);
             foreach (var field in _gridRowConditionFields)
             {
-                if (string.Equals(field.Source.SelectedItem as string, "Variable", StringComparison.Ordinal))
+                if (!currentTableRowSelected && string.Equals(
+                    field.Source.SelectedItem as string,
+                    field.VariableSourceLabel,
+                    StringComparison.Ordinal))
                 {
                     if (field.Variable.SelectedItem is not RecorderGridRowVariableOption option)
                     {
@@ -655,6 +731,25 @@ internal sealed class RecorderStepEditor : Border
             }
 
             draft = draft with { GridRowConditions = rowConditions };
+        }
+
+        if (_gridRowMode is not null)
+        {
+            draft = draft with
+            {
+                GridRowSourceMode = currentTableRowSelected
+                    ? RecorderGridRowSourceMode.CurrentTableRow
+                    : RecorderGridRowSourceMode.RecordedStableKey
+            };
+            if (draft.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+            {
+                draft = draft with
+                {
+                    GridRowConditions = draft.GridRowConditions?
+                        .Select(static condition => condition with { ValueReference = null })
+                        .ToArray()
+                };
+            }
         }
 
         if (_variableName is not null
@@ -1208,5 +1303,6 @@ internal sealed class RecorderStepEditor : Border
     private sealed record GridRowConditionFields(
         RecordedGridRowCondition Condition,
         ComboBox Source,
-        ComboBox Variable);
+        ComboBox Variable,
+        string VariableSourceLabel);
 }

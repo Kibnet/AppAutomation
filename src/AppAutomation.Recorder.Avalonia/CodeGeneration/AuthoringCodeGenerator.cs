@@ -381,6 +381,7 @@ internal sealed class AuthoringCodeGenerator
             static pair => pair.Key,
             static pair => pair.Value.PropertyName,
             StringComparer.Ordinal);
+        var gridRowAnchorNames = CreateGridRowAnchorNames(persistableSteps, graphValidation);
         foreach (var step in persistableSteps)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -396,6 +397,7 @@ internal sealed class AuthoringCodeGenerator
                 graphValidation.GeneratedValueVariables,
                 graphValidation.CopiedValueVariables,
                 graphValidation.GeneratedValueSeriesVariable,
+                gridRowAnchorNames,
                 propertyNamesByControlKey));
         }
 
@@ -612,6 +614,7 @@ internal sealed class AuthoringCodeGenerator
         }
 
         var builder = new StringBuilder();
+        var gridRowAnchorNames = CreateGridRowAnchorNames(steps, graphValidation);
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
         {
             builder.Append("var ")
@@ -627,7 +630,8 @@ internal sealed class AuthoringCodeGenerator
                 graphValidation.CheckpointVariables,
                 graphValidation.GeneratedValueVariables,
                 graphValidation.CopiedValueVariables,
-                graphValidation.GeneratedValueSeriesVariable));
+                graphValidation.GeneratedValueSeriesVariable,
+                gridRowAnchorNames));
         }
 
         return builder.ToString().TrimEnd();
@@ -671,7 +675,10 @@ internal sealed class AuthoringCodeGenerator
             checkpointVariables,
             graphValidation.GeneratedValueVariables,
             graphValidation.CopiedValueVariables,
-            graphValidation.GeneratedValueSeriesVariable);
+            graphValidation.GeneratedValueSeriesVariable,
+            CreateGridRowAnchorNames(
+                scenarioSteps,
+                graphValidation with { CheckpointVariables = checkpointVariables }));
         return step.DefinesGeneratedValue && graphValidation.GeneratedValueSeriesVariable is { } seriesVariable
             ? $"var {seriesVariable} = RecordedValueGenerator.Start();{Environment.NewLine}{statement}"
             : statement;
@@ -1447,12 +1454,14 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
         IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable,
+        IReadOnlyDictionary<Guid, string> gridRowAnchorNames,
         IReadOnlyDictionary<string, string>? controlPropertyNames = null)
     {
         var rowVariables = new GridRowVariableNames(
             checkpointVariables,
             generatedValueVariables,
-            copiedValueVariables);
+            copiedValueVariables,
+            gridRowAnchorNames);
         var rowSelector = HasNamedGridRow(step)
             ? FormatGridRowSelector(step, rowVariables)
             : string.Empty;
@@ -1608,13 +1617,48 @@ internal sealed class AuthoringCodeGenerator
             throw new InvalidOperationException($"Checkpoint '{checkpointId}' was not validated.");
         }
 
+        if (step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+        {
+            var position = step.GridCapturedRowPosition
+                ?? throw new InvalidOperationException("Current table row checkpoint has no captured position.");
+            var rowVariable = FormatGridRowAnchorName(checkpointId, rowVariables);
+            var keyedStep = step with { GridRowAnchorCheckpointId = checkpointId };
+            var keyedExpression = GenerateValueExpression(keyedStep, propertyName, rowVariables);
+            return $"var {rowVariable} = GridRowKeyReader.Capture(Page.{propertyName}, {position});"
+                + Environment.NewLine
+                + $"var {variableName} = {keyedExpression};";
+        }
+
         var expression = GenerateValueExpression(step, propertyName, rowVariables);
         if (step.ValueKind == RecorderValueKind.StringSet)
         {
             expression = $"global::System.Linq.Enumerable.ToArray({expression})";
         }
 
-        return $"var {variableName} = {expression};";
+        var statement = $"var {variableName} = {expression};";
+        if (!IsDynamicGridKeyCheckpoint(step))
+        {
+            return statement;
+        }
+
+        var rowConditions = step.GridRowConditions!;
+        var guards = rowConditions.Select(condition =>
+        {
+            var sourceVariable = FormatGridRowValue(condition, rowVariables);
+            return $"if (global::System.String.IsNullOrWhiteSpace({sourceVariable})) "
+                + $"throw new global::System.InvalidOperationException(\"Grid '{EscapeString(propertyName)}' "
+                + $"dynamic row key '{EscapeString(condition.ColumnName)}' is empty.\");";
+        });
+        var keyCondition = rowConditions.First(condition => string.Equals(
+            condition.ColumnName,
+            step.GridTargetColumnName,
+            StringComparison.Ordinal));
+        var keySource = FormatGridRowValue(keyCondition, rowVariables);
+        var confirmation = $"if (!global::System.String.Equals({variableName}, {keySource}, "
+            + "global::System.StringComparison.Ordinal)) "
+            + $"throw new global::System.InvalidOperationException(\"Grid '{EscapeString(propertyName)}' "
+            + $"confirmed key '{EscapeString(keyCondition.ColumnName)}' differs from its UI source.\");";
+        return string.Join(Environment.NewLine, guards.Append(statement).Append(confirmation));
     }
 
     private static string GenerateAssertionStatement(
@@ -1992,11 +2036,63 @@ internal sealed class AuthoringCodeGenerator
         return step.GridRowConditions is { Count: > 0 };
     }
 
+    private static bool IsDynamicGridKeyCheckpoint(RecordedStep step) =>
+        step.ActionKind == RecordedActionKind.CaptureCheckpoint
+        && step.ValueKind is (RecorderValueKind.Text or RecorderValueKind.GridCellText)
+        && step.ValueAccessorKind is (
+            RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue)
+        && step.GridRowConditions is { Count: > 0 } conditions
+        && conditions.Any(condition => string.Equals(
+            condition.ColumnName,
+            step.GridTargetColumnName,
+            StringComparison.Ordinal))
+        && conditions.Any(static condition => condition.ValueReference is not null);
+
     private static string FormatGridRowSelector(RecordedStep step, GridRowVariableNames variables)
     {
+        if (step.GridRowAnchorCheckpointId is { } checkpointId)
+        {
+            return FormatGridRowAnchorName(checkpointId, variables);
+        }
+
         var conditions = step.GridRowConditions
             ?? throw new InvalidOperationException("Named grid step does not contain row conditions.");
         return FormatGridRowSelector(conditions, variables);
+    }
+
+    private static string FormatGridRowAnchorName(Guid checkpointId, GridRowVariableNames variables) =>
+        variables.RowAnchors.TryGetValue(checkpointId, out var name)
+            ? name
+            : throw new InvalidOperationException($"Grid row checkpoint '{checkpointId}' has no generated variable name.");
+
+    private static IReadOnlyDictionary<Guid, string> CreateGridRowAnchorNames(
+        IReadOnlyList<RecordedStep> steps,
+        RecorderScenarioGraphValidationResult graphValidation)
+    {
+        var checkpoints = steps
+            .Where(static step => step.ActionKind == RecordedActionKind.CaptureCheckpoint
+                && step.CheckpointId.HasValue
+                && step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
+            .ToArray();
+        var reservedNames = graphValidation.CheckpointVariables.Values
+            .Concat(graphValidation.GeneratedValueVariables.Values)
+            .Concat(graphValidation.CopiedValueVariables.Values)
+            .ToHashSet(StringComparer.Ordinal);
+        if (graphValidation.GeneratedValueSeriesVariable is { } seriesVariable)
+        {
+            reservedNames.Add(seriesVariable);
+        }
+
+        var names = new Dictionary<Guid, string>();
+        for (var index = 0; index < checkpoints.Length; index++)
+        {
+            var proposedName = checkpoints.Length == 1 ? "gridRow" : $"gridRow{index + 1}";
+            names.Add(
+                checkpoints[index].CheckpointId!.Value,
+                RecorderNaming.EnsureUniqueName(proposedName, reservedNames));
+        }
+
+        return names;
     }
 
     private static string FormatGridRowSelector(
@@ -2054,7 +2150,8 @@ internal sealed class AuthoringCodeGenerator
     private readonly record struct GridRowVariableNames(
         IReadOnlyDictionary<Guid, string> Checkpoints,
         IReadOnlyDictionary<Guid, string> GeneratedValues,
-        IReadOnlyDictionary<Guid, string> CopiedValues);
+        IReadOnlyDictionary<Guid, string> CopiedValues,
+        IReadOnlyDictionary<Guid, string> RowAnchors);
 
     private static string FormatGridTargetColumn(RecordedStep step)
     {

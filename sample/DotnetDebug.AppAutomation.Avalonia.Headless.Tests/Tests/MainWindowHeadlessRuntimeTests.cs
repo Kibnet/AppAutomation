@@ -120,7 +120,9 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
             await Assert.That(result.StepCount).IsEqualTo(1);
             await Assert.That(result.PersistableStepCount).IsEqualTo(1);
             await Assert.That(result.Preview).Contains("var savedProduct =");
-            await Assert.That(result.Preview).Contains("GridRowSelector.ByCell(\"Key\", \"ARM-01\")");
+            await Assert.That(result.Preview).Contains("GridRowKeyReader.Capture(Page.ArmComplexDataGridControl, 0)");
+            await Assert.That(result.Preview).Contains("GridValueReader.ReadCellText(Page.ArmComplexDataGridControl, gridRow, \"Product\")");
+            await Assert.That(result.Preview).DoesNotContain("GridRowSelector.ByCell(\"Key\", \"ARM-01\")");
             await Assert.That(result.Preview).Contains("\"Product\"");
             await Assert.That(result.Preview).DoesNotContain("ArmGridProductEditor");
         }

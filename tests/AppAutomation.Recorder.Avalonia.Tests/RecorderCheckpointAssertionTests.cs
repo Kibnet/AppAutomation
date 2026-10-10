@@ -1140,7 +1140,7 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task Autosave_RoundTripsCalculatedGridValueReferences()
+    public async Task Autosave_RoundTripsCalculatedAndDynamicGridValueReferences()
     {
         using var directory = new TemporaryDirectory();
         var filePath = Path.Combine(directory.Path, "calculated-grid.autosave.cs");
@@ -1148,10 +1148,31 @@ public sealed class RecorderCheckpointAssertionTests
         var rowKeyCheckpoint = new RecordedStep(
             RecordedActionKind.CaptureCheckpoint,
             Descriptor("ItemKey", UiControlType.TextBox),
+            StringValue: "ITEM-30",
             ValueKind: RecorderValueKind.Text,
             ValueAccessorKind: RecorderValueAccessorKind.Text,
             CheckpointId: rowKeyCheckpointId,
             CheckpointVariableName: "itemKey");
+        var dynamicKeyCheckpoint = new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("ItemsGrid", UiControlType.Grid),
+            StringValue: "ITEM-30",
+            StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+            CheckpointId: Guid.NewGuid(),
+            CheckpointVariableName: "confirmedItemKey")
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("Key", "ITEM-30")
+                {
+                    ValueReference = new RecorderGridRowValueReference(
+                        RecorderGridRowValueSourceKind.Checkpoint, rowKeyCheckpointId)
+                }
+            ],
+            GridTargetColumnName = "Key"
+        };
         var step = new RecordedStep(
             RecordedActionKind.AssertValue,
             Descriptor("ItemsGrid", UiControlType.Grid),
@@ -1185,13 +1206,14 @@ public sealed class RecorderCheckpointAssertionTests
             "calculated-grid-draft",
             "Autosave_CalculatedGridValues",
             DateTimeOffset.UtcNow,
-            [rowKeyCheckpoint, step]);
+            [rowKeyCheckpoint, dynamicKeyCheckpoint, step]);
         await File.WriteAllTextAsync(
             filePath,
             RecorderAutosaveStateSerializer.CreateMarker(state) + Environment.NewLine);
 
         var read = RecorderAutosaveStateSerializer.TryRead(filePath, out var restoredState, out var error);
         var restoredStep = restoredState?.Steps.Last();
+        var restoredDynamicKey = restoredState?.Steps.ElementAtOrDefault(1);
         var graph = RecorderScenarioGraphValidator.Validate(restoredState!.Steps);
         var legacyStep = step with
         {
@@ -1218,6 +1240,8 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(restoredStep).IsNotNull();
             await Assert.That(restoredStep!.GridRowConditions)
                 .IsEquivalentTo(step.GridRowConditions!);
+            await Assert.That(restoredDynamicKey!.GridRowConditions)
+                .IsEquivalentTo(dynamicKeyCheckpoint.GridRowConditions!);
             await Assert.That(legacyRead).IsTrue();
             await Assert.That(legacyError).IsNull();
             await Assert.That(legacyCondition).IsNotNull();
@@ -1858,6 +1882,8 @@ public sealed class RecorderCheckpointAssertionTests
         }
 
         var preview = session.ExportPreview();
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(session.StepJournal[0].StepId, out var gridDraft, out _);
         session.Stop();
         session.Start();
         session.SetLastHoveredControlForTesting(eventSource);
@@ -1874,7 +1900,10 @@ public sealed class RecorderCheckpointAssertionTests
             await Assert.That(editorSnapshot.ValueDescription?.ValueKind).IsEqualTo(RecorderValueKind.Text);
             await Assert.That(session.StepCount).IsEqualTo(2);
             await Assert.That(session.PersistableStepCount).IsEqualTo(2);
-            await Assert.That(preview).Contains("GridRowSelector.ByCell(\"PositionNumber\", \"10\")");
+            await Assert.That(gridDraft!.GridCapturedRowPosition).IsEqualTo(0);
+            await Assert.That(gridDraft.GridRowSourceMode)
+                .IsEqualTo(RecorderGridRowSourceMode.CurrentTableRow);
+            await Assert.That(preview).Contains("GridRowKeyReader.Capture(");
             await Assert.That(preview).Contains("\"Product\"");
             await Assert.That(preview).DoesNotContain("ProductEditor");
             await Assert.That(preview).DoesNotContain("MainSurface");
@@ -2010,6 +2039,162 @@ public sealed class RecorderCheckpointAssertionTests
         public void AddLogicalLayer(Control control)
         {
             LogicalChildren.Add(control);
+        }
+    }
+
+    [Test]
+    public async Task GridCheckpointUsesDisplayedRowPositionAfterVisualReorder()
+    {
+        var first = new ProductGridRow("10", new ProductValue("First"));
+        var second = new ProductGridRow("20", new ProductValue("Second"));
+        var third = new ProductGridRow("30", new ProductValue("Third"));
+        var grid = new ProductGridHost
+        {
+            ItemsSource = [first, second, third],
+            Width = 240,
+            Height = 240
+        };
+        AutomationProperties.SetAutomationId(grid, "ItemsGrid");
+        TextBox? firstEditor = null;
+        foreach (var row in new[] { second, third, first })
+        {
+            var context = new ProductGridCellContext(
+                row,
+                new ProductGridColumn("MarketProduct"),
+                row.MarketProduct);
+            var cell = new Border { DataContext = context, Width = 240, Height = 80 };
+            var editor = new TextBox
+            {
+                Text = row.MarketProduct.Name,
+                DataContext = context
+            };
+            AutomationProperties.SetAutomationId(editor, $"Product{row.PositionNumber}Editor");
+            cell.Child = editor;
+            var presenter = new ProductGridRowPresenter
+            {
+                DataContext = row,
+                Width = 240,
+                Height = 80,
+                MaterializedCells = [cell]
+            };
+            presenter.Children.Add(cell);
+            grid.Children.Add(presenter);
+            if (ReferenceEquals(row, first))
+            {
+                firstEditor = editor;
+            }
+        }
+
+        grid.Measure(new Size(240, 240));
+        grid.Arrange(new Rect(0, 0, 240, 240));
+        var options = new AppAutomationRecorderOptions
+        {
+            Validation = new RecorderValidationOptions
+            {
+                ValidateSelectors = true,
+                ValidateRuntimeTargets = false,
+                CaptureInvalidSteps = true
+            },
+            GridAutomation = new GridAutomationCatalog().Add(
+                GridAutomationDefinition.ByAutomationIds("ItemsGrid", "ItemsGrid", "ItemsGrid")
+                    .WithColumns(
+                        GridColumnDefinition.Map("PositionNumber").FromField("PositionNumber"),
+                        GridColumnDefinition.Map("Product").FromField("MarketProduct")
+                            .DisplayValueFrom("MarketProduct.Name")
+                            .AsValue(GridCellValueKind.Reference)
+                            .EditWith(GridCellEditorKind.SearchPicker))
+                    .IdentifyRowsBy("PositionNumber"))
+        };
+        using var session = CreateSession(grid, options);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, args) => selection = args.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(firstEditor!);
+        ((IRecorderCheckpointSessionDetails)session).CaptureCheckpoint(selection!, "firstProduct");
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(session.StepJournal.Single().StepId, out var draft, out _);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(draft!.GridCapturedRowPosition).IsEqualTo(2);
+            await Assert.That(draft.GridRowSourceMode)
+                .IsEqualTo(RecorderGridRowSourceMode.CurrentTableRow);
+        }
+    }
+
+    [Test]
+    public async Task GridCheckpointRejectsUnprovenViewPositionAfterVirtualizedReorder()
+    {
+        const int selectedIndex = 21;
+        var visibleStart = Math.Clamp(selectedIndex - 1, 0, 57);
+        var rows = Enumerable.Range(0, 60)
+            .Select(index => new ProductGridRow($"ORDER-{index:D2}", new ProductValue($"Value-{index:D2}")))
+            .ToArray();
+        var grid = new ProductGridHost
+        {
+            ItemsSource = rows,
+            Width = 240,
+            Height = 240
+        };
+        AutomationProperties.SetAutomationId(grid, "ItemsGrid");
+        TextBox? selectedEditor = null;
+        foreach (var row in rows.Skip(visibleStart).Take(3).Reverse())
+        {
+            var context = new ProductGridCellContext(
+                row,
+                new ProductGridColumn("PositionNumber"),
+                row.MarketProduct);
+            var cell = new Border { DataContext = context, Width = 240, Height = 80 };
+            var editor = new TextBox { Text = row.PositionNumber, DataContext = context };
+            cell.Child = editor;
+            var presenter = new ProductGridRowPresenter
+            {
+                DataContext = row,
+                Width = 240,
+                Height = 80,
+                MaterializedCells = [cell]
+            };
+            presenter.Children.Add(cell);
+            grid.Children.Add(presenter);
+            if (ReferenceEquals(row, rows[selectedIndex]))
+            {
+                selectedEditor = editor;
+            }
+        }
+
+        grid.Measure(new Size(240, 240));
+        grid.Arrange(new Rect(0, 0, 240, 240));
+        var options = new AppAutomationRecorderOptions
+        {
+            Validation = new RecorderValidationOptions
+            {
+                ValidateSelectors = true,
+                ValidateRuntimeTargets = false,
+                CaptureInvalidSteps = true
+            },
+            GridAutomation = new GridAutomationCatalog().Add(
+                GridAutomationDefinition.ByAutomationIds("ItemsGrid", "ItemsGrid", "ItemsGrid")
+                    .WithColumns(
+                        GridColumnDefinition.Map("PositionNumber").FromField("PositionNumber"),
+                        GridColumnDefinition.Map("Product").FromField("MarketProduct")
+                            .DisplayValueFrom("MarketProduct.Name")
+                            .AsValue(GridCellValueKind.Reference))
+                    .IdentifyRowsBy("PositionNumber"))
+        };
+        using var session = CreateSession(grid, options);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, args) => selection = args.Selection;
+        session.BeginCheckTargetSelection();
+        var selected = session.SelectCheckTargetForTesting(selectedEditor!);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected).IsTrue();
+            await Assert.That(selection!.ValueSnapshot).IsNull();
+            await Assert.That(selection.ValueDescriptionError).Contains("cannot prove the selected row's current view position");
+            await Assert.That(session.StepJournal).IsEmpty();
         }
     }
 

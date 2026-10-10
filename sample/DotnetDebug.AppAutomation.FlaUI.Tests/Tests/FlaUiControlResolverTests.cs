@@ -473,6 +473,88 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
+    public async Task NativeRowsAtKnownScrollStartResolveVisiblePositionsWithoutGridItemIndex()
+    {
+        var rows = new[]
+        {
+            new NativeGridRowSnapshot(["ORDER-22"], null,
+                new System.Drawing.Rectangle(10, 80, 300, 25), new GridScrollPosition(0, null)),
+            new NativeGridRowSnapshot(["ORDER-20"], null,
+                new System.Drawing.Rectangle(10, 20, 300, 25), new GridScrollPosition(0, null)),
+            new NativeGridRowSnapshot(["ORDER-21"], null,
+                new System.Drawing.Rectangle(10, 50, 300, 25), new GridScrollPosition(0, null))
+        };
+
+        var selected = NativeGridRowNormalizer.AtVisibleStartPosition(rows, 1, atStart: true);
+        var withoutBoundary = NativeGridRowNormalizer.AtVisibleStartPosition(rows, 1, atStart: false);
+        var overlapping = NativeGridRowNormalizer.AtVisibleStartPosition(
+            [rows[0] with { Bounds = new System.Drawing.Rectangle(10, 50, 300, 25) }, rows[2]],
+            0,
+            atStart: true);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected!.CellTexts.Single()).IsEqualTo("ORDER-21");
+            await Assert.That(withoutBoundary).IsNull();
+            await Assert.That(overlapping).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task NativeRowsWithoutGridItemIndexResolveLaterPositionOnlyAfterContiguousTraversal()
+    {
+        static NativeGridRowSnapshot Row(string key, int top, double scroll, int observation) =>
+            new([key], null, new System.Drawing.Rectangle(10, top, 300, 25),
+                new GridScrollPosition(scroll, null))
+            {
+                StableValues = [key], RuntimeId = key, ObservationIndex = observation
+            };
+
+        var first = new[] { Row("R1", 20, 0, 0), Row("R2", 50, 0, 0), Row("R3", 80, 0, 0) };
+        var second = new[] { Row("R3", 20, 25, 1), Row("R4", 50, 25, 1), Row("R5", 80, 25, 1) };
+        var third = new[] { Row("R5", 20, 50, 2), Row("R6", 50, 50, 2), Row("R7", 80, 50, 2) };
+        var accumulated = new List<NativeGridRowSnapshot>();
+        foreach (var observation in new[] { first, second, third })
+        {
+            NativeGridRowNormalizer.Append(accumulated, observation,
+                static (current, previous) => current.HasSameStableRow(previous));
+        }
+
+        var contiguous = NativeGridRowNormalizer.HasContinuousObservation(first, second,
+            static (current, previous) => current.HasSameStableRow(previous))
+            && NativeGridRowNormalizer.HasContinuousObservation(second, third,
+                static (current, previous) => current.HasSameStableRow(previous));
+        var gap = NativeGridRowNormalizer.HasContinuousObservation(second,
+            [Row("R8", 20, 50, 2), Row("R9", 50, 50, 2)],
+            static (current, previous) => current.HasSameStableRow(previous));
+        var missingInteriorRow = new[]
+        {
+            Row("R3", 20, 25, 1), Row("R5", 80, 25, 1), Row("R6", 110, 25, 1)
+        };
+        var incompleteObservation = NativeGridRowNormalizer.HasContinuousObservation(
+            first, missingInteriorRow,
+            static (current, previous) => current.HasSameStableRow(previous));
+        var misplacedOverlap = NativeGridRowNormalizer.HasContinuousObservation(
+            first,
+            [Row("R4", 20, 25, 1), Row("R2", 50, 25, 1), Row("R5", 80, 25, 1)],
+            static (current, previous) => current.StableValues.SequenceEqual(previous.StableValues));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(contiguous).IsTrue();
+            await Assert.That(accumulated.Count).IsEqualTo(7);
+            await Assert.That(NativeGridRowNormalizer.AtScannedPosition(accumulated, 5, contiguous)!.CellTexts[0])
+                .IsEqualTo("R6");
+            await Assert.That(gap).IsFalse();
+            await Assert.That(NativeGridRowNormalizer.AtScannedPosition(accumulated, 5, gap)).IsNull();
+            await Assert.That(incompleteObservation).IsFalse();
+            await Assert.That(misplacedOverlap).IsFalse();
+            await Assert.That(NativeGridRowNormalizer.AtVisibleStartPosition(
+                missingInteriorRow, 1, atStart: true)).IsNull();
+        }
+    }
+
+    [Test]
     public async Task VirtualizedExactItemSelector_ReResolvesReusedContainerBeforeSelection()
     {
         const string expected = "Search result";
