@@ -17,6 +17,107 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
+    [Test]
+    public async Task UiaLookup_RetriesOnlyKnownTransientComFailureBeforeInvokingAnAction()
+    {
+        var reads = 0;
+        var value = FlaUiControlResolver.ReadTransientUiaLookup(() =>
+        {
+            if (++reads == 1)
+            {
+                throw new System.Runtime.InteropServices.COMException(
+                    "Сбой чтения UIA",
+                    unchecked((int)0x80004005));
+            }
+
+            return "OpenButton";
+        });
+        var permanentReads = 0;
+        var permanent = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup<string>(() =>
+            {
+                permanentReads++;
+                throw new System.Runtime.InteropServices.COMException("Access denied", unchecked((int)0x80070005));
+            }));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value).IsEqualTo("OpenButton");
+            await Assert.That(reads).IsEqualTo(2);
+            await Assert.That(permanentReads).IsEqualTo(1);
+            await Assert.That(permanent.HResult).IsEqualTo(unchecked((int)0x80070005));
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectItemProjectionsMergeOverlappingCopiesWithoutHidingDistinctRows()
+    {
+        var sameRow = new[]
+        {
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 40, 180, 24), Actionable: false),
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(24, 42, 170, 20), Actionable: true)
+        };
+        var textReads = 0;
+        var boundsReads = 0;
+        var actionabilityReads = 0;
+        var logical = FlaUiMultiSelectItemProjections.Normalize(
+            sameRow,
+            item => { textReads++; return item.Text; },
+            item => { boundsReads++; return item.Bounds; },
+            item => { actionabilityReads++; return item.Actionable; });
+        var separateRows = new[]
+        {
+            sameRow[0],
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 72, 180, 24), Actionable: true)
+        };
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(logical.Length).IsEqualTo(1);
+            await Assert.That(logical[0].Actionable).IsTrue();
+            await Assert.That(textReads).IsEqualTo(2);
+            await Assert.That(boundsReads).IsEqualTo(2);
+            await Assert.That(actionabilityReads).IsEqualTo(2);
+            await Assert.That(() => FlaUiMultiSelectItemProjections.Normalize(
+                    separateRows,
+                    static item => item.Text,
+                    static item => item.Bounds,
+                    static item => item.Actionable))
+                .Throws<InvalidOperationException>();
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectItemProjectionsPreferRealItemsOverServiceCheckBox()
+    {
+        var preferListItems = FlaUiMultiSelectItemProjections.PreferSelectableItems(
+            ["Select all"],
+            ["Customer A", "Customer B"]);
+        var preferCheckBoxes = FlaUiMultiSelectItemProjections.PreferSelectableItems(
+            ["Open", "Closed"],
+            ["Open", "Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(preferListItems).IsTrue();
+            await Assert.That(preferCheckBoxes).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectVisibleSelectionSkipsTraversalOnlyWhenSelectionIsComplete()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Target"], ["Other", "Target"], ["Other"])).IsTrue();
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Target"], ["Other", "Target"], ["Hidden selection"])).IsFalse();
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Hidden target"], ["Other", "Target"], [])).IsFalse();
+        }
+    }
+
     private const string CalendarFallbackFixtureEnvironmentVariable =
         "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
 

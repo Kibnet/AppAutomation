@@ -76,7 +76,7 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => control.IsOpen,
+            () => ReadMultiSelectState(() => control.IsOpen),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not open.",
             expectedValue: "IsOpen=true",
@@ -111,7 +111,7 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => MultiSelectSetsEqual(control.SelectedItems, expectedItems),
+            () => ReadMultiSelectState(() => MultiSelectSetsEqual(control.SelectedItems, expectedItems)),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not reach the requested pending selection.",
             expectedValue: FormatMultiSelectItems(expectedItems),
@@ -132,14 +132,56 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => !control.IsOpen,
+            () => ReadMultiSelectState(() => !control.IsOpen),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not close after {(cancel ? "Cancel" : "Apply")}.",
             expectedValue: "IsOpen=false",
             lastObservedValueFactory: () => DescribeMultiSelect(control),
             operationName: operationName);
 
+        if (!cancel && IsConfirmedByClosedFilterDisplay(control, expectedItems))
+        {
+            return page;
+        }
+
         return WaitUntilSelectedItemsEqual(page, selector, committedItems, timeoutMs);
+    }
+
+    private static bool IsConfirmedByClosedFilterDisplay(
+        IMultiSelectControl control,
+        IReadOnlyList<string> expectedItems)
+    {
+        if (expectedItems.Count == 0
+            || control is not IComboBoxFilterControl
+            || control is not IReadableTextControl display)
+        {
+            return false;
+        }
+
+        try
+        {
+            var displayedText = display.Text?.Trim();
+            if (expectedItems.Count == 1)
+            {
+                return string.Equals(displayedText, expectedItems[0], StringComparison.OrdinalIgnoreCase);
+            }
+
+            char[] separators = [',', ';'];
+            var availableItems = control.Items;
+            if (availableItems.Count == 0
+                || availableItems.Any(item => item is null || item.IndexOfAny(separators) >= 0))
+            {
+                return false;
+            }
+
+            var displayedItems = (displayedText ?? string.Empty)
+                .Split(separators, StringSplitOptions.TrimEntries);
+            return MultiSelectSetsEqual(displayedItems, expectedItems);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -174,7 +216,7 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => MultiSelectSetsEqual(control.SelectedItems, expectedItems),
+            () => ReadMultiSelectState(() => MultiSelectSetsEqual(control.SelectedItems, expectedItems)),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not expose the expected committed selection.",
             expectedValue: FormatMultiSelectItems(expectedItems),
@@ -284,7 +326,7 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => control.IsOpen,
+            () => ReadMultiSelectState(() => control.IsOpen),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not reopen after reading the committed selection.",
             expectedValue: "IsOpen=true",
@@ -305,6 +347,18 @@ public static partial class UiPageExtensions
             .OrderBy(static item => item, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return actual.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool ReadMultiSelectState(Func<bool> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception exception) when (IsRetryableResolveFailure(exception))
+        {
+            return false;
+        }
     }
 
     private static string NormalizeMultiSelectItem(string? value) => value?.Trim() ?? string.Empty;

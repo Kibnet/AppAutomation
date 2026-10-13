@@ -16,6 +16,7 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
         Button? applyButton,
         Button? cancelButton,
         ListBox? immediateResults,
+        TextBox? input,
         IReadOnlyDictionary<string, CheckBox> items)
     {
         Session = session;
@@ -23,6 +24,7 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
         ApplyButton = applyButton;
         CancelButton = cancelButton;
         ImmediateResults = immediateResults;
+        Input = input;
         _items = items;
     }
 
@@ -36,6 +38,8 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
 
     public ListBox? ImmediateResults { get; }
 
+    public TextBox? Input { get; }
+
     public static ComboBoxFilterCaptureFixture Create(params string[] selectedItems)
     {
         var options = CreateOptions(hasCommitButtons: true);
@@ -45,6 +49,8 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
             item => CreateCheckBox(item, selected.Contains(item)),
             StringComparer.Ordinal);
         var root = WithAutomationId(new Border(), "StatusFilterRoot");
+        var input = WithAutomationId(new TextBox(), "StatusFilter_Input");
+        root.Child = input;
         var openButton = CreateButton("StatusFilterOpenButton");
         var itemsContainer = WithAutomationId(new StackPanel(), "StatusFilterItems");
         var applyButton = CreateButton("StatusFilterApplyButton");
@@ -68,6 +74,7 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
             applyButton,
             cancelButton,
             immediateResults: null,
+            input,
             items);
     }
 
@@ -94,12 +101,21 @@ internal sealed class ComboBoxFilterCaptureFixture : IDisposable
             applyButton: null,
             cancelButton: null,
             results,
+            input: null,
             new Dictionary<string, CheckBox>(StringComparer.Ordinal));
     }
 
     public CheckBox Item(string name) => _items[name];
 
     public void Start() => Session.Start();
+
+    public void EnterInternalSearch(string value)
+    {
+        var input = Input ?? throw new InvalidOperationException("This filter does not expose an input.");
+        Session.RegisterKeyboardInputForTesting(input);
+        input.Text = value;
+        Session.FlushPendingStateForTesting();
+    }
 
     public void Capture(params Control[] controls)
     {

@@ -12,6 +12,53 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 public sealed class HeadlessControlResolverTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task FlyoutButtonInvocationTogglesDetachedPanelAvailability(bool isDropDownButton)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        global::Avalonia.Controls.Flyout? flyout = null;
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var panel = new global::Avalonia.Controls.Border
+            {
+                Child = new global::Avalonia.Controls.TextBlock { Text = "Filter content" }
+            };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(panel, "FilterPanel");
+            flyout = new global::Avalonia.Controls.Flyout { Content = panel };
+            global::Avalonia.Controls.Button button = isDropDownButton
+                ? new global::Avalonia.Controls.DropDownButton()
+                : new global::Avalonia.Controls.Button();
+            button.Content = "Filters";
+            button.Flyout = flyout;
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(button, "FilterButton");
+            session.MainWindow.Content = button;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow);
+        var buttonControl = resolver.Resolve<IButtonControl>(new UiControlDefinition(
+            "FilterButton", UiControlType.Button, "FilterButton"));
+
+        buttonControl.Invoke();
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => flyout!.IsOpen)).IsEqualTo(true);
+        var panelControl = resolver.Resolve<IUiControlAvailability>(new UiControlDefinition(
+            "FilterPanel", UiControlType.AutomationElement, "FilterPanel"));
+        await Assert.That(panelControl.AutomationId).IsEqualTo("FilterPanel");
+        await Assert.That(panelControl.IsAvailable).IsEqualTo(true);
+
+        buttonControl.Invoke();
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => flyout!.IsOpen)).IsEqualTo(false);
+        await Assert.That(panelControl.IsAvailable).IsEqualTo(false);
+
+        buttonControl.Invoke();
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => flyout!.IsOpen)).IsEqualTo(true);
+        await Assert.That(panelControl.IsAvailable).IsEqualTo(true);
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task VirtualizedGridRejectsUnprovenSourcePositionAfterViewReorder()
     {
@@ -431,6 +478,83 @@ public sealed class HeadlessControlResolverTests
         {
             await Assert.That(selected).IsEquivalentTo(["LCM"]);
             await Assert.That(items.SelectedItems).IsEmpty();
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var entries = new[] { new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B") };
+        var list = HeadlessRuntime.Dispatch(() =>
+        {
+            var control = new global::Avalonia.Controls.ListBox
+            {
+                ItemsSource = entries,
+                ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
+                {
+                    var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
+                    global::Avalonia.Automation.AutomationProperties.SetName(text, entry?.Caption);
+                    return text;
+                })
+            };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "CustomerResults");
+            session.MainWindow.Content = control;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+            return control;
+        });
+        var items = new HeadlessControlResolver(session.MainWindow).Resolve<IMultiSelectItemsControl>(
+            new UiControlDefinition("CustomerResults", UiControlType.ListBox, "CustomerResults"));
+
+        var available = items.Items;
+        items.SetSelectedItems(["Customer B"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(available).IsEquivalentTo(["Customer A", "Customer B"]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Customer B"]);
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[1]);
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task MultiSelectItemsSurface_UsesRenderedCheckBoxCaptionsForObjectItems()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var entries = new[] { new DisplayListEntry("Not canceled"), new DisplayListEntry("Canceled") };
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var panel = new global::Avalonia.Controls.StackPanel();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(panel, "CancelResults");
+            foreach (var entry in entries)
+            {
+                panel.Children.Add(new global::Avalonia.Controls.CheckBox
+                {
+                    Content = entry,
+                    ContentTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((value, _) =>
+                        new global::Avalonia.Controls.TextBlock { Text = value?.Caption })
+                });
+            }
+
+            session.MainWindow.Content = panel;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+        });
+        var items = new HeadlessControlResolver(session.MainWindow).Resolve<IMultiSelectItemsControl>(
+            new UiControlDefinition("CancelResults", UiControlType.ListBox, "CancelResults"));
+
+        var available = items.Items;
+        items.SetSelectedItems(["Not canceled"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(available).IsEquivalentTo(["Not canceled", "Canceled"]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Not canceled"]);
         }
     }
 

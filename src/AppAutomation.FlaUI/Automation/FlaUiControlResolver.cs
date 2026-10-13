@@ -360,7 +360,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     + $"inside scope [{definition.Scope.LocatorKind}:{definition.Scope.LocatorValue}].");
         }
 
-        var element = _window.FindFirstDescendant(CreateCondition(definition.LocatorValue, definition.LocatorKind));
+        var element = TryRead(() => _window.FindFirstDescendant(
+            CreateCondition(definition.LocatorValue, definition.LocatorKind)));
         if (element is not null)
         {
             return element;
@@ -368,7 +369,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         if (definition.FallbackToName && definition.LocatorKind != UiLocatorKind.Name)
         {
-            element = _window.FindFirstDescendant(CreateCondition(definition.LocatorValue, UiLocatorKind.Name));
+            element = TryRead(() => _window.FindFirstDescendant(
+                CreateCondition(definition.LocatorValue, UiLocatorKind.Name)));
             if (element is not null)
             {
                 return element;
@@ -539,7 +541,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement? SearchByAutomationId(string locatorValue)
     {
-        var direct = _window.FindAllDescendants(factory => factory.ByAutomationId(locatorValue));
+        var direct = ReadTransientUiaLookup(
+            () => _window.FindAllDescendants(factory => factory.ByAutomationId(locatorValue)));
         if (direct.Length > 0)
         {
             return direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
@@ -552,7 +555,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
 
         var normalized = locatorValue.Trim().ToLowerInvariant();
-        var descendant = _window.FindAllDescendants()
+        var descendant = ReadTransientUiaLookup(() => _window.FindAllDescendants())
             .FirstOrDefault(candidate =>
             {
                 if (!candidate.IsAvailable)
@@ -569,7 +572,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement? SearchByName(string locatorValue)
     {
-        var direct = _window.FindAllDescendants(factory => factory.ByName(locatorValue));
+        var direct = ReadTransientUiaLookup(
+            () => _window.FindAllDescendants(factory => factory.ByName(locatorValue)));
         if (direct.Length > 0)
         {
             return direct.FirstOrDefault(candidate => candidate?.IsAvailable == true);
@@ -582,7 +586,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
 
         var normalized = locatorValue.Trim().ToLowerInvariant();
-        var descendant = _window.FindAllDescendants()
+        var descendant = ReadTransientUiaLookup(() => _window.FindAllDescendants())
             .FirstOrDefault(candidate =>
             {
                 if (!candidate.IsAvailable)
@@ -595,6 +599,22 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             });
 
         return descendant ?? SearchDetachedProcessRootsByNameContains(normalized);
+    }
+
+    internal static T ReadTransientUiaLookup<T>(Func<T> read)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return read();
+            }
+            catch (System.Runtime.InteropServices.COMException exception) when (
+                attempt < 2 && TransientUiaLookupFailure.IsRetryable(exception))
+            {
+                Thread.Sleep(25);
+            }
+        }
     }
 
     private AutomationElement? SearchDetachedProcessRootsByAutomationId(string locatorValue)
@@ -983,12 +1003,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             if (Inner.Patterns.Toggle.IsSupported && IsOpenToggleButton(Inner))
             {
-                var togglePattern = Inner.Patterns.Toggle.Pattern;
-                if (togglePattern.ToggleState.Value != ToggleState.On)
-                {
-                    togglePattern.Toggle();
-                }
-
+                Inner.Patterns.Toggle.Pattern.Toggle();
                 return;
             }
 
@@ -1392,10 +1407,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             get
             {
-                var checkBoxItems = GetItems();
-                return checkBoxItems.Length > 0
-                    ? checkBoxItems.Select(static item => item.Text).ToArray()
-                    : ReadSelectableItems().Select(static item => item.Text).ToArray();
+                var descendants = FindAutomationDescendants(Inner);
+                var checkBoxItems = GetItems(ReadCurrentItems(descendants));
+                var selectableItems = ReadSelectableItems(descendants);
+                return FlaUiMultiSelectItemProjections.PreferSelectableItems(
+                    checkBoxItems.Select(static item => item.Text).ToArray(),
+                    selectableItems.Select(static item => item.Text).ToArray())
+                    ? selectableItems.Select(static item => item.Text).ToArray()
+                    : checkBoxItems.Select(static item => item.Text).ToArray();
             }
         }
 
@@ -1403,10 +1422,18 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             get
             {
-                var checkBoxItems = GetItems();
-                return checkBoxItems.Length > 0
-                    ? checkBoxItems.Where(static item => item.IsChecked).Select(static item => item.Text).ToArray()
-                    : ReadSelectableItems().Where(static item => item.IsSelected).Select(static item => item.Text).ToArray();
+                var descendants = FindAutomationDescendants(Inner);
+                var visibleCheckBoxes = ReadCurrentItems(descendants);
+                var checkBoxItems = TryReadCompleteVisibleSelection(visibleCheckBoxes, out _)
+                    ? visibleCheckBoxes.Select(static item => new MultiSelectItemSnapshot(
+                        item.Text, item.Control.IsChecked == true)).ToArray()
+                    : GetItems(visibleCheckBoxes);
+                var selectableItems = ReadSelectableItems(descendants);
+                return FlaUiMultiSelectItemProjections.PreferSelectableItems(
+                    checkBoxItems.Select(static item => item.Text).ToArray(),
+                    selectableItems.Select(static item => item.Text).ToArray())
+                    ? selectableItems.Where(static item => item.IsSelected).Select(static item => item.Text).ToArray()
+                    : checkBoxItems.Where(static item => item.IsChecked).Select(static item => item.Text).ToArray();
             }
         }
 
@@ -1419,6 +1446,22 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             ArgumentNullException.ThrowIfNull(values);
             var normalizedValues = NormalizeRequestedItems(values);
+            _lastItems = null;
+            var descendants = FindAutomationDescendants(Inner);
+            var visibleCheckBoxes = ReadCurrentItems(descendants);
+            var visibleCheckBoxTexts = visibleCheckBoxes.Select(static item => item.Text).ToArray();
+            if (normalizedValues.Count == 0
+                || !normalizedValues.Overlaps(visibleCheckBoxTexts))
+            {
+                var selectableItems = ReadSelectableItems(descendants);
+                var selectableTexts = selectableItems.Select(static item => item.Text).ToArray();
+                if (FlaUiMultiSelectItemProjections.PreferSelectableItems(visibleCheckBoxTexts, selectableTexts)
+                    && normalizedValues.IsSubsetOf(selectableTexts))
+                {
+                    return SetSelectableItems(normalizedValues, selectableItems);
+                }
+            }
+
             var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
             DiscoverRequestedItems(items, normalizedValues);
             if (items.Count > 0)
@@ -1432,29 +1475,60 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return SetSelectableItems(normalizedValues);
         }
 
-        private MultiSelectItemSnapshot[] GetItems()
+        private MultiSelectItemSnapshot[] GetItems(MultiSelectCheckBox[] initialItems)
         {
-            return _lastItems ??= ReadAllItems();
+            if (_lastItems is not null)
+            {
+                var known = _lastItems.ToDictionary(static item => item.Text,
+                    static item => item.IsChecked,
+                    StringComparer.OrdinalIgnoreCase);
+                if (initialItems.Any(item => !known.TryGetValue(item.Text, out var isChecked)
+                    || isChecked != (item.Control.IsChecked == true)))
+                {
+                    _lastItems = null;
+                }
+            }
+
+            return _lastItems ??= ReadAllItems(initialItems);
         }
 
-        private SelectableItemSnapshot[] ReadSelectableItems()
+        private SelectableItemSnapshot[] ReadSelectableItems(AutomationElement[]? descendants = null)
         {
-            return FindAutomationDescendants(Inner)
+            var candidates = (descendants ?? FindAutomationDescendants(Inner))
                 .Where(static candidate => candidate.ControlType is ControlType.ListItem or ControlType.DataItem)
                 .Select(candidate => new SelectableItemSnapshot(
-                    ReadAutomationElementText(candidate)?.Trim() ?? string.Empty,
+                    ReadMultiSelectItemCaption(candidate)?.Trim() ?? string.Empty,
                     candidate,
                     IsSelected(candidate)))
                 .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
-                .GroupBy(static item => item.Text, StringComparer.OrdinalIgnoreCase)
-                .Select(static group => group.Single())
                 .ToArray();
+            return FlaUiMultiSelectItemProjections.Normalize(
+                candidates,
+                static item => item.Text,
+                static item => TryRead(() => item.Control.BoundingRectangle),
+                static item => TryRead(() => item.Control.Patterns.SelectionItem.IsSupported) == true);
         }
 
-        private string[] SetSelectableItems(HashSet<string> requestedValues)
+        private string[] SetSelectableItems(
+            HashSet<string> requestedValues,
+            SelectableItemSnapshot[]? knownItems = null)
         {
-            var items = ReadSelectableItems();
+            var items = knownItems ?? ReadSelectableItems();
             ValidateAvailableItems(items.Select(static item => item.Text), requestedValues);
+
+            var allowsMultiple = TryRead(() =>
+                Inner.Patterns.Selection.PatternOrDefault?.CanSelectMultiple.Value);
+            if (requestedValues.Count == 1 && allowsMultiple != true)
+            {
+                var target = items.Single(item => requestedValues.Contains(item.Text));
+                if (!target.IsSelected)
+                {
+                    DesktopPointer.ClickFallback(target.Control,
+                        "single-select filter item requires a user click to commit");
+                }
+
+                return items.Select(static item => item.Text).ToArray();
+            }
 
             foreach (var item in items.Where(item => item.IsSelected && !requestedValues.Contains(item.Text)))
             {
@@ -1505,12 +1579,12 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             pattern.RemoveFromSelection();
         }
 
-        private MultiSelectItemSnapshot[] ReadAllItems()
+        private MultiSelectItemSnapshot[] ReadAllItems(MultiSelectCheckBox[] initialItems)
         {
             var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
             var scroll = FindVerticalScrollPattern(Inner);
             var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
-            AddCurrentItems(items);
+            AddCurrentItems(items, initialItems);
 
             if (scroll is not null)
             {
@@ -1548,7 +1622,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         private void AddCurrentItems(
             IDictionary<string, MultiSelectItemSnapshot> items)
         {
-            foreach (var item in ReadCurrentItems())
+            AddCurrentItems(items, ReadCurrentItems());
+        }
+
+        private static void AddCurrentItems(
+            IDictionary<string, MultiSelectItemSnapshot> items,
+            IReadOnlyCollection<MultiSelectCheckBox> currentItems)
+        {
+            foreach (var item in currentItems)
             {
                 items[item.Text] = new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true);
             }
@@ -1644,6 +1725,17 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             IDictionary<string, MultiSelectItemSnapshot> items,
             IReadOnlySet<string> requestedValues)
         {
+            var visible = ReadCurrentItems();
+            if (TryReadCompleteVisibleSelection(visible, out var selectedTexts)
+                && FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                    requestedValues.ToArray(),
+                    visible.Select(static item => item.Text).ToArray(),
+                    selectedTexts))
+            {
+                ApplyCurrentExactSelection(items, requestedValues);
+                return;
+            }
+
             ApplyCurrentExactSelection(items, requestedValues);
 
             var scroll = FindVerticalScrollPattern(Inner);
@@ -1735,27 +1827,66 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
         }
 
-        private MultiSelectCheckBox[] ReadCurrentItems()
+        private MultiSelectCheckBox[] ReadCurrentItems(AutomationElement[]? descendants = null)
         {
-            var currentItems = FindAutomationDescendants(Inner)
+            var currentItems = (descendants ?? FindAutomationDescendants(Inner))
                 .Where(candidate => candidate.ControlType == ControlType.CheckBox && IsVisibleItem(candidate))
                 .Select(candidate =>
                 {
-                    var text = ReadAutomationElementText(candidate)?.Trim() ?? string.Empty;
-                    return new MultiSelectCheckBox(text, new FlaUiCheckBoxControl(candidate.AsCheckBox()));
+                    var text = ReadMultiSelectItemCaption(candidate)?.Trim() ?? string.Empty;
+                    return new MultiSelectCheckBox(text, candidate, new FlaUiCheckBoxControl(candidate.AsCheckBox()));
                 })
                 .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
                 .ToArray();
 
-            if (currentItems
-                    .Select(static item => item.Text)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count() != currentItems.Length)
+            return FlaUiMultiSelectItemProjections.Normalize(
+                currentItems,
+                static item => item.Text,
+                static item => TryRead(() => item.Element.BoundingRectangle),
+                static item => TryRead(() => item.Element.Patterns.Toggle.IsSupported) == true);
+        }
+
+        private static string? ReadMultiSelectItemCaption(AutomationElement item)
+        {
+            static string? ReadSingleRenderedCaption(AutomationElement root)
             {
-                throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+                var captions = FindAutomationDescendants(root)
+                    .Where(static candidate => candidate.ControlType == ControlType.Text)
+                    .Select(static candidate => TryRead(() => candidate.Name)?.Trim())
+                    .Where(static text => !string.IsNullOrWhiteSpace(text))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                return captions.Length == 1 ? captions[0] : null;
             }
 
-            return currentItems;
+            var parent = TryRead(() => item.Parent);
+            return ReadSingleRenderedCaption(item)
+                ?? (parent is null ? null : ReadSingleRenderedCaption(parent))
+                ?? ReadAutomationElementText(item);
+        }
+
+        private bool TryReadCompleteVisibleSelection(
+            IReadOnlyCollection<MultiSelectCheckBox> visible,
+            out string[] selectedTexts)
+        {
+            selectedTexts = [];
+            if (!Inner.Patterns.Selection.IsSupported)
+            {
+                return false;
+            }
+
+            var selected = TryRead(() => Inner.Patterns.Selection.Pattern.Selection.Value);
+            if (selected is null)
+            {
+                return false;
+            }
+
+            selectedTexts = selected.Select(ReadAutomationElementText)
+                .Select(static text => text?.Trim() ?? string.Empty)
+                .ToArray();
+            return selectedTexts.All(static text => !string.IsNullOrWhiteSpace(text))
+                && FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                    [], visible.Select(static item => item.Text).ToArray(), selectedTexts);
         }
 
         private bool IsVisibleItem(AutomationElement candidate)
@@ -1995,7 +2126,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
         }
 
-        private sealed record MultiSelectCheckBox(string Text, FlaUiCheckBoxControl Control);
+        private sealed record MultiSelectCheckBox(
+            string Text,
+            AutomationElement Element,
+            FlaUiCheckBoxControl Control);
 
         private sealed record MultiSelectItemSnapshot(string Text, bool IsChecked);
 

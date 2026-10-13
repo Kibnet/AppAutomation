@@ -5,7 +5,10 @@ using AppAutomation.Avalonia.Headless.Automation.GridAutomation;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Session;
+using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -1201,7 +1204,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
             if (FindListBoxCore() is { } listBox)
             {
-                return listBox.Items.Cast<object?>().Select(ReadItemText).ToArray();
+                return ReadListBoxItemTexts(listBox);
             }
 
             if (FindComboBoxCore() is { } comboBox)
@@ -1227,10 +1230,21 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             {
                 if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
                 {
-                    return listBox.SelectedItem is null ? [] : [ReadItemText(listBox.SelectedItem)];
+                    return listBox.SelectedIndex < 0
+                        ? []
+                        : [ReadListBoxItemText(listBox, listBox.SelectedIndex)];
                 }
 
-                return listBox.SelectedItems?.Cast<object?>().Select(ReadItemText).ToArray() ?? [];
+                var selectedItems = listBox.SelectedItems;
+                if (selectedItems is null)
+                {
+                    return [];
+                }
+
+                return Enumerable.Range(0, listBox.Items.Count)
+                    .Where(index => selectedItems.Contains(listBox.Items[index]))
+                    .Select(index => ReadListBoxItemText(listBox, index))
+                    .ToArray();
             }
 
             if (FindComboBoxCore() is { } comboBox)
@@ -1271,7 +1285,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             HashSet<string> requestedValues)
         {
             var items = listBox.Items.Cast<object?>().ToArray();
-            var available = items.Select(ReadItemText).ToArray();
+            var available = ReadListBoxItemTexts(listBox);
             ValidateAvailableItems(available, requestedValues);
 
             if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
@@ -1281,19 +1295,60 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                     throw new InvalidOperationException("The physical ListBox allows at most one selected item.");
                 }
 
-                listBox.SelectedItem = requestedValues.Count == 0
-                    ? null
-                    : items.Single(item => requestedValues.Contains(ReadItemText(item)));
+                if (requestedValues.Count == 0)
+                {
+                    listBox.SelectedIndex = -1;
+                }
+                else
+                {
+                    ClickListBoxItem(listBox, Array.FindIndex(available, requestedValues.Contains));
+                }
                 return;
             }
 
             var selectedItems = listBox.SelectedItems
                 ?? throw new InvalidOperationException("The physical ListBox does not expose a selected-items collection.");
             selectedItems.Clear();
-            foreach (var item in items.Where(item => requestedValues.Contains(ReadItemText(item))))
+            for (var index = 0; index < items.Length; index++)
             {
-                selectedItems.Add(item);
+                if (requestedValues.Contains(available[index]))
+                {
+                    selectedItems.Add(items[index]);
+                }
             }
+        }
+
+        private static string[] ReadListBoxItemTexts(global::Avalonia.Controls.ListBox listBox)
+        {
+            return Enumerable.Range(0, listBox.Items.Count)
+                .Select(index => ReadListBoxItemText(listBox, index))
+                .ToArray();
+        }
+
+        private static string ReadListBoxItemText(global::Avalonia.Controls.ListBox listBox, int index)
+        {
+            return ListItemCaptionReader.Read(listBox, index)?.Trim() ?? string.Empty;
+        }
+
+        private static void ClickListBoxItem(global::Avalonia.Controls.ListBox listBox, int index)
+        {
+            listBox.ScrollIntoView(index);
+            listBox.UpdateLayout();
+            listBox.Dispatcher.RunJobs();
+            var container = listBox.ContainerFromIndex(index)
+                ?? throw new InvalidOperationException(
+                    $"ListBox item at index {index} did not materialize a clickable container.");
+            var topLevel = global::Avalonia.Controls.TopLevel.GetTopLevel(container)
+                ?? throw new InvalidOperationException(
+                    $"ListBox item at index {index} has no owning top-level window.");
+            var center = new global::Avalonia.Point(container.Bounds.Width / 2, container.Bounds.Height / 2);
+            var point = container.TranslatePoint(center, topLevel)
+                ?? throw new InvalidOperationException(
+                    $"ListBox item at index {index} has no position in its top-level window.");
+            topLevel.MouseMove(point);
+            topLevel.MouseDown(point, MouseButton.Left);
+            topLevel.MouseUp(point, MouseButton.Left);
+            listBox.Dispatcher.RunJobs();
         }
 
         private static void SetComboBoxSelectedItem(
@@ -1319,12 +1374,40 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private static string ReadItemText(global::Avalonia.Controls.CheckBox checkBox)
         {
-            return (AutomationProperties.GetName(checkBox)
-                    ?? checkBox.Content?.ToString()
-                    ?? checkBox.Name
-                    ?? AutomationProperties.GetAutomationId(checkBox)
-                    ?? string.Empty)
-                .Trim();
+            var accessibleName = AutomationProperties.GetName(checkBox);
+            if (!string.IsNullOrWhiteSpace(accessibleName))
+            {
+                return accessibleName.Trim();
+            }
+
+            var visibleContent = checkBox.GetVisualDescendants()
+                .OfType<AvaloniaControl>()
+                .Where(static control => control.IsVisible)
+                .ToArray();
+            accessibleName = visibleContent.Select(AutomationProperties.GetName)
+                .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name));
+            if (!string.IsNullOrWhiteSpace(accessibleName))
+            {
+                return accessibleName.Trim();
+            }
+
+            var caption = string.Join(" ", visibleContent
+                .OfType<global::Avalonia.Controls.TextBlock>()
+                .Select(static text => text.Text?.Trim())
+                .Where(static text => !string.IsNullOrWhiteSpace(text)));
+            if (!string.IsNullOrWhiteSpace(caption))
+            {
+                return caption;
+            }
+
+            if (checkBox.Content is string content)
+            {
+                return content.Trim();
+            }
+
+            throw new InvalidOperationException(
+                $"CheckBox '{AutomationProperties.GetAutomationId(checkBox)}' does not expose a readable UI caption. "
+                + "Expose visible item text or AutomationProperties.Name on the real checkbox.");
         }
 
         private static HashSet<string> NormalizeRequestedItems(IEnumerable<string> values)
@@ -1400,6 +1483,11 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             if (matches.Length > 1)
             {
                 throw new InvalidOperationException($"Search history item '{itemText}' is ambiguous.");
+            }
+
+            if (!matches[0].IsAvailable || !matches[0].IsEnabled)
+            {
+                throw new InvalidOperationException($"Search history item '{itemText}' is not available for selection.");
             }
 
             matches[0].Invoke();

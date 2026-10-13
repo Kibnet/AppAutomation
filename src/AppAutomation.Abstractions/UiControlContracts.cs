@@ -313,6 +313,13 @@ public interface ISearchHistoryItemsControl : IUiControlAvailability
     void Apply(string itemText);
 }
 
+/// <summary>Optional UI capability for opening a history popup without a separate button.</summary>
+public interface ISearchHistoryPopupControl
+{
+    /// <summary>Opens the real popup when its history surface is available.</summary>
+    bool TryOpen();
+}
+
 /// <summary>
 /// Represents the checkbox-items surface inside a multi-select popup.
 /// </summary>

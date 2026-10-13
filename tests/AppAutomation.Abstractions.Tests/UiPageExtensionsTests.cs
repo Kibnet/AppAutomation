@@ -390,6 +390,50 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    public async Task WaitUntilExists_ReportsComHResultBeforeClassifyingTheFailure()
+    {
+        var resolver = new AppearingResolver(
+            "ResultLabel",
+            new FakeLabelControl("ResultLabel", "Ready"),
+            failuresBeforeSuccess: 1,
+            _ => new System.Runtime.InteropServices.COMException(
+                "Unexpected HRESULT has been returned from a call to a COM component.",
+                unchecked((int)0x80070005)));
+        var page = new DiagnosticsPage(resolver);
+
+        var failure = Assert.Throws<UiOperationException>(() =>
+            page.WaitUntilExists(static candidate => candidate.ResultLabel, timeoutMs: 1000));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(failure.Message).Contains("0x80070005");
+            await Assert.That(resolver.ResolveAttempts).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task WaitUntilExists_RetriesOnlyObservedTransientUiaLookupComFailure()
+    {
+        var resolver = new AppearingResolver(
+            "ResultLabel",
+            new FakeLabelControl("ResultLabel", "Ready"),
+            failuresBeforeSuccess: 1,
+            _ => new System.Runtime.InteropServices.COMException(
+                "Сбой чтения UIA",
+                unchecked((int)0x80004005)));
+        var page = new DiagnosticsPage(resolver);
+
+        var returned = page.WaitUntilExists(
+            static candidate => candidate.ResultLabel, timeoutMs: 1000);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(ReferenceEquals(returned, page)).IsTrue();
+            await Assert.That(resolver.ResolveAttempts).IsEqualTo(2);
+        }
+    }
+
+    [Test]
     public async Task WaitUntilTextEquals_OnTypedControl_DoesNotUseNameAsTextFallback()
     {
         var button = new FakeNameOnlyButtonControl("SaveButton", "Save");

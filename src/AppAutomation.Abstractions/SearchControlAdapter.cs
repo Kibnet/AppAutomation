@@ -279,6 +279,12 @@ public sealed class SearchControlAdapter : IUiControlAdapter
                 return;
             }
 
+            if (_history is ISearchHistoryPopupControl popup && popup.TryOpen())
+            {
+                _historyOpenRequested = true;
+                return;
+            }
+
             // Entering the existing value focuses the real editor in desktop providers.
             // Applications can open history from the editor's focus/pointer handlers.
             _input.Enter(_input.Text);
@@ -312,7 +318,7 @@ public sealed class SearchControlAdapter : IUiControlAdapter
         private void InvokeSearchAction() => _searchButton?.Invoke();
     }
 
-    private sealed class DeferredHistoryItemsControl : ISearchHistoryItemsControl
+    private sealed class DeferredHistoryItemsControl : ISearchHistoryItemsControl, ISearchHistoryPopupControl
     {
         private readonly Func<ISearchHistoryItemsControl> _resolve;
         private readonly string _locator;
@@ -334,6 +340,8 @@ public sealed class SearchControlAdapter : IUiControlAdapter
         public IReadOnlyList<string> Items => TryResolve()?.Items ?? Array.Empty<string>();
 
         public void Apply(string itemText) => _resolve().Apply(itemText);
+
+        public bool TryOpen() => TryResolve() is ISearchHistoryPopupControl popup && popup.TryOpen();
 
         private ISearchHistoryItemsControl? TryResolve()
         {
