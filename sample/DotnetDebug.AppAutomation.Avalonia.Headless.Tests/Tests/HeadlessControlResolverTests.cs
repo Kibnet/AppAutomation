@@ -60,6 +60,47 @@ public sealed class HeadlessControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task VirtualizedGridCapturesVisibleSourcePrefixByStableKey()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = Enumerable.Range(0, 60)
+            .Select(index => new VirtualOrderRow($"ORDER-{index:D2}"))
+            .ToArray();
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new VirtualOrdersGrid { ItemsSource = rows, Width = 240, Height = 90 };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "VirtualOrdersGrid");
+            foreach (var row in rows.Take(3))
+            {
+                grid.Children.Add(new global::Avalonia.Controls.Border
+                {
+                    DataContext = row,
+                    Width = 240,
+                    Height = 30,
+                    Child = new global::Avalonia.Controls.TextBlock { Text = row.Key }
+                });
+            }
+
+            session.MainWindow.Content = grid;
+            grid.Measure(new Size(240, 90));
+            grid.Arrange(new Rect(0, 0, 240, 90));
+        });
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds(
+                    "VirtualOrdersGrid", "VirtualOrdersGrid", "VirtualOrdersGrid")
+                .WithColumns(GridColumnDefinition.Map("Key").FromField("Key"))
+                .IdentifyRowsBy("Key"));
+        var resolver = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog);
+        var gridControl = resolver.Resolve<IGridControl>(new UiControlDefinition(
+            "VirtualOrdersGrid", UiControlType.Grid, "VirtualOrdersGrid"));
+
+        var selector = GridRowKeyReader.Capture(gridControl, 2);
+
+        await Assert.That(selector.Conditions.Single().Value).IsEqualTo("ORDER-02");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task VirtualizedGridRejectsUnprovenSourcePositionAfterViewReorder()
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
@@ -592,6 +633,129 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(page.DemoDataGrid.GetRowByIndex(2)!.Cells[2].Value).IsEqualTo("Odd");
         }
     }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task OpenGridRow_DoubleTapsTheResolvedVisualRow()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+        });
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "3")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilGridRowsAtLeast(static candidate => candidate.DemoDataGrid, 3)
+            .OpenGridRow(static candidate => candidate.DemoDataGrid, GridRowSelector.ByCell("Row", "R2"));
+
+        await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("Opened row: R2");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task OpenGridRow_RejectsAnOccludedRowInsteadOfReportingGestureSuccess()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+        });
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow));
+        page
+            .SelectTabItem(static candidate => candidate.DataGridTabItem)
+            .EnterText(static candidate => candidate.DataGridRowsInput, "3")
+            .ClickButton(static candidate => candidate.BuildGridButton)
+            .WaitUntilGridRowsAtLeast(static candidate => candidate.DemoDataGrid, 3);
+
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var originalContent = (global::Avalonia.Controls.Control)session.MainWindow.Content!;
+            session.MainWindow.Content = null;
+            var root = new global::Avalonia.Controls.Grid();
+            root.Children.Add(originalContent);
+            root.Children.Add(new global::Avalonia.Controls.Border
+            {
+                Background = global::Avalonia.Media.Brushes.Transparent,
+                IsHitTestVisible = true
+            });
+            session.MainWindow.Content = root;
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+        });
+
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+            ((IAddressableGridControl)page.DemoDataGrid).OpenRow(
+                GridRowSelector.ByCell("Row", "R2"), 5000));
+        await Assert.That(failure.Message).Contains("occluded");
+        await Assert.That(page.GridOpenMarkerLabel.Text).IsNotEqualTo("Opened row: R2");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ReadGridCell_WaitsForStableRowAfterSourceReload()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var host = HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new DelayedRowsGrid();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "DelayedRowsGrid");
+            session.MainWindow.Content = grid;
+            session.MainWindow.Show();
+            return grid;
+        });
+        var gridControl = new HeadlessControlResolver(session.MainWindow).Resolve<IGridControl>(
+            new UiControlDefinition("DelayedRowsGrid", UiControlType.Grid, "DelayedRowsGrid"));
+
+        var value = GridValueReader.ReadCellText(
+            gridControl,
+            GridRowSelector.ByCell("Key", "K1"),
+            "Value");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value).IsEqualTo("Loaded");
+            await Assert.That(host.ReadCount).IsGreaterThan(1);
+        }
+    }
+
+    private sealed class DelayedRowsGrid : global::Avalonia.Controls.StackPanel
+    {
+        private readonly List<DelayedGridRow> _rows = [];
+        private bool _loadScheduled;
+
+        public int ReadCount { get; private set; }
+
+        public IReadOnlyList<DelayedGridColumn> Columns { get; } =
+            [new("Key"), new("Value")];
+
+        public IEnumerable<DelayedGridRow> ItemsSource
+        {
+            get
+            {
+                ReadCount++;
+                if (!_loadScheduled)
+                {
+                    _loadScheduled = true;
+                    Dispatcher.Post(() => _rows.Add(new DelayedGridRow("K1", "Loaded")),
+                        global::Avalonia.Threading.DispatcherPriority.Background);
+                }
+
+                return _rows;
+            }
+        }
+    }
+
+    private sealed record DelayedGridColumn(string FieldName);
+
+    private sealed record DelayedGridRow(string Key, string Value);
 
     private sealed class DisplayListEntry(string caption)
     {

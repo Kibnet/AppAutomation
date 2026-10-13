@@ -100,7 +100,7 @@ Hotkey Settings dialog
 | Assert auto               [ Ctrl+Shift+A          ]      |
 | Assert text               [ Ctrl+Shift+T          ]      |
 | Assert enabled            [ Ctrl+Shift+E          ]      |
-| Assert checked            [ Ctrl+Shift+K          ]      |
+| Select target for Check   [ Ctrl+Shift+Q          ]      |
 | Minimize/restore overlay  [ Ctrl+Shift+M          ]      |
 |                                                         |
 | Validation/error text                                   |

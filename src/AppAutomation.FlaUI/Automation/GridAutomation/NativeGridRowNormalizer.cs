@@ -70,6 +70,17 @@ internal static class NativeGridRowNormalizer
         return ordered[position];
     }
 
+    public static NativeGridRowSnapshot? AtCompleteVisiblePosition(
+        IReadOnlyList<NativeGridRowSnapshot> rows,
+        int position,
+        int? reportedRowCount)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        return reportedRowCount > 0 && reportedRowCount == rows.Count
+            ? AtVisibleStartPosition(rows, position, atStart: true)
+            : null;
+    }
+
     private static bool HasCompactRowBands(IReadOnlyList<NativeGridRowSnapshot> rows)
     {
         if (rows.Count == 0 || rows.Any(static row => row.Bounds.Width <= 0 || row.Bounds.Height <= 0))

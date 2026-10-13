@@ -182,7 +182,7 @@
   - `CaptureAssertAuto`
   - `CaptureAssertText`
   - `CaptureAssertEnabled`
-  - `CaptureAssertChecked`
+  - `BeginCheckTargetSelection`
   - `ToggleOverlayMinimize`
   - опционально `Export`
 - Отдельный `PauseResume` не добавляется, пока нет реального отдельного state machine и UX выигрыша.

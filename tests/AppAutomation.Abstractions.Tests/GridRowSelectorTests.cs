@@ -444,6 +444,12 @@ public sealed class GridRowSelectorTests
             await Assert.That(metadata.TryGetColumnIndex("HiddenNote", out _)).IsFalse();
             await Assert.That(statusAddress!.ColumnName).IsEqualTo("Status caption");
             await Assert.That(statusAddress.Row.Conditions[0].ColumnName).IsEqualTo("Order identifier");
+            await Assert.That(statusAddress.Row.FindColumnDefinition(statusAddress.ColumnName)?.SourceFieldName)
+                .IsEqualTo("Status");
+            await Assert.That(statusAddress.Row.IsDifferentKnownSourceField(statusAddress.ColumnName, "OrderId"))
+                .IsTrue();
+            await Assert.That(statusAddress.Row.IsDifferentKnownSourceField(statusAddress.ColumnName, "CustomCell_01"))
+                .IsFalse();
             await Assert.That(displayOnlyStatus).IsEqualTo("Rendered status");
             await Assert.That(unmarkedDisplayException!.Message).Contains("Status.Name");
             await Assert.That(nativeGrid.ResolveRowCallCount).IsGreaterThanOrEqualTo(4);
