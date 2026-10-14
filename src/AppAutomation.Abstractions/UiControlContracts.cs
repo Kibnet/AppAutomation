@@ -41,6 +41,17 @@ public interface IUiControlAvailability : IUiControl
 }
 
 /// <summary>
+/// Optional capability for controls that expose whether their value can be edited.
+/// </summary>
+public interface IReadOnlyStateControl : IUiControl
+{
+    /// <summary>
+    /// Tries to read the current read-only state. An unavailable state must not be treated as editable.
+    /// </summary>
+    bool TryGetIsReadOnly(out bool isReadOnly);
+}
+
+/// <summary>
 /// Represents a control that exposes visible read-only text.
 /// </summary>
 public interface IReadableTextControl : IUiControl
@@ -56,6 +67,11 @@ public interface IReadableTextControl : IUiControl
 /// </summary>
 public interface ITextBoxControl : IUiControl
 {
+    /// <summary>
+    /// Gets the confirmed read-only state of the text input.
+    /// </summary>
+    bool IsReadOnly => ReadOnlyStateReader.Read(this);
+
     /// <summary>
     /// Gets or sets the text content of the control.
     /// </summary>
@@ -568,6 +584,11 @@ public interface ICalendarControl : IUiControl
 /// </summary>
 public interface IDateTimePickerControl : IUiControl
 {
+    /// <summary>
+    /// Gets the confirmed read-only state of the date editor.
+    /// </summary>
+    bool IsReadOnly => ReadOnlyStateReader.Read(this);
+
     /// <summary>
     /// Gets or sets the selected date.
     /// </summary>

@@ -3656,6 +3656,23 @@ internal sealed partial class RecorderSession :
             "Assertion:IsEnabled");
     }
 
+    void IRecorderCheckpointSessionDetails.CaptureReadOnlyAssertion(
+        RecorderCheckTargetSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (!CanCaptureCheckSelection(selection))
+        {
+            return;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateReadOnlyAssertionStep(
+                selection.Target,
+                selection.ValueSnapshot),
+            selection.Target,
+            "Assertion:IsReadOnly");
+    }
+
     void IRecorderCheckpointSessionDetails.CaptureCurrentValueAssertion(
         RecorderCheckTargetSelection selection)
     {
@@ -6355,6 +6372,7 @@ internal sealed partial class RecorderSession :
             RecorderValueAccessorKind.IsSelected => "IsSelected",
             RecorderValueAccessorKind.IsExpanded => "IsExpanded",
             RecorderValueAccessorKind.IsEnabled => "IsEnabled",
+            RecorderValueAccessorKind.IsReadOnly => "IsReadOnly",
             RecorderValueAccessorKind.GridCellText => "CellText",
             _ => "Text"
         };

@@ -1035,7 +1035,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         }
     }
 
-    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, IClipboardPasteTarget
+    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl
     {
         public HeadlessTextBoxControl(TextBox inner) : base(inner)
         {
@@ -1050,6 +1050,13 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public void Enter(string value)
         {
             Inner.Enter(value);
+        }
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            isReadOnly = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
+                () => ((global::Avalonia.Controls.TextBox)Inner.Control).IsReadOnly);
+            return true;
         }
 
         public Task PasteFromClipboardAsync(int timeoutMs, CancellationToken cancellationToken = default)

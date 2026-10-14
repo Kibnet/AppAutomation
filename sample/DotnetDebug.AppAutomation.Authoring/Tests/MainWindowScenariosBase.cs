@@ -15,6 +15,44 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task ReadOnlyState_TracksTransitionsWhileEnabled()
+    {
+        Page.SelectTabItem(static page => page.ControlMixTabItem);
+
+        await Assert.That(Page.ReadOnlyStateInput.IsEnabled).IsTrue();
+        await Assert.That(Page.CompositeReadOnlyInput.IsEnabled).IsTrue();
+        await Assert.That(Page.CompositeReadOnlyDate.SelectedDate).IsEqualTo(new DateTime(2026, 10, 14));
+        await Assert.That(Page.ReadOnlyStateInput.IsReadOnly).IsFalse();
+        await Assert.That(Page.CompositeReadOnlyInput.IsReadOnly).IsFalse();
+        await Assert.That(Page.CompositeReadOnlyDate.IsReadOnly).IsFalse();
+
+        Page.ClickButton(static page => page.ReadOnlyStateToggleButton);
+        _ = UiWait.Until(
+            () => UiControlText.Read(Page.ReadOnlyStateToggleButton),
+            caption => caption == "Make editable",
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5) },
+            "The read-only state toggle did not switch to read-only mode.");
+
+        await Assert.That(Page.ReadOnlyStateInput.IsEnabled).IsTrue();
+        await Assert.That(Page.CompositeReadOnlyInput.IsEnabled).IsTrue();
+        await Assert.That(Page.ReadOnlyStateInput.IsReadOnly).IsTrue();
+        await Assert.That(Page.CompositeReadOnlyInput.IsReadOnly).IsTrue();
+        await Assert.That(Page.CompositeReadOnlyDate.IsReadOnly).IsTrue();
+
+        Page.ClickButton(static page => page.ReadOnlyStateToggleButton);
+        _ = UiWait.Until(
+            () => UiControlText.Read(Page.ReadOnlyStateToggleButton),
+            caption => caption == "Make read-only",
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5) },
+            "The read-only state toggle did not return to editable mode.");
+
+        await Assert.That(Page.ReadOnlyStateInput.IsReadOnly).IsFalse();
+        await Assert.That(Page.CompositeReadOnlyInput.IsReadOnly).IsFalse();
+        await Assert.That(Page.CompositeReadOnlyDate.IsReadOnly).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task Checkpoint_ReadsTheSameLogicalValueWithoutRequiredIntermediateActions()
     {
         Page.EnterText(static page => page.NumbersInput, "checkpoint value");

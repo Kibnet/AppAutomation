@@ -79,6 +79,8 @@ internal interface IRecorderCheckpointSessionDetails
 
     void CaptureEnabledAssertion(RecorderCheckTargetSelection selection, bool expectedEnabled);
 
+    void CaptureReadOnlyAssertion(RecorderCheckTargetSelection selection);
+
     void CaptureCurrentValueAssertion(RecorderCheckTargetSelection selection);
 
     void CaptureCalculatedAssertion(

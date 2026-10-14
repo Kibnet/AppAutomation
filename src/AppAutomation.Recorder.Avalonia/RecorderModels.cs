@@ -120,7 +120,8 @@ public enum RecorderValueAccessorKind
     IsExpanded = 10,
     IsEnabled = 11,
     GridCellText = 12,
-    GridCellValue = 13
+    GridCellValue = 13,
+    IsReadOnly = 14
 }
 
 internal enum RecorderComparisonKind

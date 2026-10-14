@@ -8,6 +8,39 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    public async Task ConfiguredResolver_PreservesFailureArtifactCollection()
+    {
+        var resolver = new ArtifactCollectingResolver().WithAdapters(new TestableAdapter());
+        var context = new UiFailureContext(
+            "Test", "fake", TimeSpan.Zero, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            resolver.Capabilities, []);
+
+        var collector = resolver as IUiArtifactCollector;
+        await Assert.That(collector).IsNotNull();
+        var artifacts = await collector!.CollectAsync(context);
+        await Assert.That(artifacts.Select(static artifact => artifact.Kind).ToArray()).Contains("logical-tree");
+    }
+
+    [Test]
+    public async Task CompositeDatePicker_ReadOnlyStateComesFromConfiguredValuePart()
+    {
+        var value = new FakeReadOnlyTextBoxControl("DateValue");
+        var resolver = new FakeResolver(
+                ("DateRoot", new FakeControl("DateRoot")),
+                ("DateValue", value))
+            .WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("DateRoot", "DateValue"));
+        var date = resolver.Resolve<IDateTimePickerControl>(
+            new UiControlDefinition("Date", UiControlType.DateTimePicker, "DateRoot"));
+
+        await Assert.That(date.IsReadOnly).IsFalse();
+        value.ReadOnly = true;
+        await Assert.That(date.IsReadOnly).IsTrue();
+        value.CanRead = false;
+        var unavailable = Assert.Throws<InvalidOperationException>(() => _ = date.IsReadOnly);
+        await Assert.That(unavailable.Message).Contains("DateValue");
+    }
+
+    [Test]
     public async Task DeferredAdapters_OnlySuppressTransientResolutionFailures()
     {
         var inner = new FakeResolver(("Input", new FakeTextBoxControl("Input")))
@@ -1943,6 +1976,24 @@ public sealed class UiControlAdapterTests
         }
     }
 
+    private sealed class FakeReadOnlyTextBoxControl : FakeControlBase, ITextBoxControl, IReadOnlyStateControl
+    {
+        public FakeReadOnlyTextBoxControl(string automationId) : base(automationId)
+        {
+        }
+
+        public string Text { get; set; } = string.Empty;
+        public bool ReadOnly { get; set; }
+        public bool CanRead { get; set; } = true;
+        public void Enter(string value) => Text = value;
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            isReadOnly = ReadOnly;
+            return CanRead;
+        }
+    }
+
     private sealed class FakeLabelControl : FakeControlBase, ILabelControl
     {
         public FakeLabelControl(string automationId, string text)
@@ -2413,6 +2464,20 @@ public sealed class UiControlAdapterTests
         {
             throw new NotSupportedException("MinimalResolver does not resolve controls directly.");
         }
+    }
+
+    private sealed class ArtifactCollectingResolver : IUiControlResolver, IUiArtifactCollector
+    {
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake");
+
+        public TControl Resolve<TControl>(UiControlDefinition definition)
+            where TControl : class => throw new NotSupportedException();
+
+        public ValueTask<IReadOnlyList<UiFailureArtifact>> CollectAsync(
+            UiFailureContext failureContext,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>(
+                [new UiFailureArtifact("logical-tree", "logical-tree", "tree.txt", "text/plain", true)]);
     }
 
     public sealed class TestableAdapter : IUiControlAdapter

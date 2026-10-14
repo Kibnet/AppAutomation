@@ -926,7 +926,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget
+    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl
     {
         private readonly Window? _ownerWindow;
 
@@ -952,6 +952,15 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             Inner.EnterText(value);
+        }
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            var observed = TryRead(() => Inner.Patterns.Value.IsSupported
+                ? (bool?)Inner.Patterns.Value.Pattern.IsReadOnly.Value
+                : null);
+            isReadOnly = observed ?? default;
+            return observed.HasValue;
         }
 
         public Task PasteFromClipboardAsync(int timeoutMs, CancellationToken cancellationToken = default)
@@ -2590,7 +2599,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiDateTimePickerControl : FlaUiControlBase<DateTimePicker>, IDateTimePickerControl
+    private sealed class FlaUiDateTimePickerControl : FlaUiControlBase<DateTimePicker>, IDateTimePickerControl, IReadOnlyStateControl
     {
         public FlaUiDateTimePickerControl(DateTimePicker inner) : base(inner)
         {
@@ -2606,6 +2615,25 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     throw new InvalidOperationException("Unable to set the selected date for this DateTimePicker");
                 }
             }
+        }
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            var inputs = TryRead(() => Inner.FindAllDescendants()
+                .Where(candidate => candidate.ControlType == ControlType.Edit)
+                .ToArray());
+            if (inputs is null || inputs.Length > 1)
+            {
+                isReadOnly = default;
+                return false;
+            }
+
+            var valueSurface = inputs.Length == 1 ? inputs[0] : Inner;
+            var observed = TryRead(() => valueSurface.Patterns.Value.IsSupported
+                ? (bool?)valueSurface.Patterns.Value.Pattern.IsReadOnly.Value
+                : null);
+            isReadOnly = observed ?? default;
+            return observed.HasValue;
         }
 
         private DateTime? ReadSelectedDate()

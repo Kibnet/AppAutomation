@@ -86,6 +86,7 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
 
     private sealed class CompositeDatePickerControl :
         IDateTimePickerControl,
+        IReadOnlyStateControl,
         IUiControlAvailability,
         IDateTimePickerOperationControl
     {
@@ -116,6 +117,21 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
 
         public bool IsAvailable => TryResolveRoot() is { } root
             && (root as IUiControlAvailability)?.IsAvailable != false;
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            IUiControl? value = TryResolveReadOnlyTextValue();
+            value ??= TryResolveNativeValue();
+            if (value is IReadOnlyStateControl readable
+                && readable.TryGetIsReadOnly(out isReadOnly))
+            {
+                return true;
+            }
+
+            throw new InvalidOperationException(
+                $"Date picker '{_parts.RootLocator}' value part '{_parts.ValueLocator}' "
+                + $"({value?.GetType().Name ?? "not found"}) does not expose a readable read-only state.");
+        }
 
         public DateTime? SelectedDate
         {
@@ -263,6 +279,22 @@ public sealed class DatePickerControlAdapter : IUiControlAdapter
                     _parts.ValueLocator));
             }
             catch (UiControlResolutionException exception) when (exception.IsTransient)
+            {
+                return null;
+            }
+        }
+
+        private ITextBoxControl? TryResolveReadOnlyTextValue()
+        {
+            try
+            {
+                return _resolver.Resolve<ITextBoxControl>(CreateDefinition(
+                    "ValueText",
+                    UiControlType.TextBox,
+                    _parts.ValueLocator));
+            }
+            catch (UiControlResolutionException exception) when (
+                exception.IsTransient || exception.Failure == UiControlResolutionFailure.TypeMismatch)
             {
                 return null;
             }
