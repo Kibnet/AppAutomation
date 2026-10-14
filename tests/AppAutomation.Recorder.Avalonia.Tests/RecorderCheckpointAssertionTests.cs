@@ -731,7 +731,10 @@ public sealed class RecorderCheckpointAssertionTests
         session.SelectCheckTargetForTesting(calendar);
 
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions
+        {
+            OverlayTheme = RecorderOverlayTheme.Light
+        });
         var checkMenu = overlay.CreateCheckMenuForTesting(selection!);
         var presence = checkMenu.Items
             .OfType<MenuItem>()

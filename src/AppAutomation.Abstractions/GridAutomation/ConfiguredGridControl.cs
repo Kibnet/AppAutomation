@@ -14,6 +14,7 @@ internal class ConfiguredGridControl :
     private readonly IReadOnlyList<GridColumnDefinition> _columns;
     private readonly IReadOnlyList<string> _runtimeColumnNames;
     private readonly IReadOnlyList<string> _declaredRuntimeColumnNames;
+    private readonly IReadOnlyDictionary<string, GridColumnDefinition> _columnDefinitionMap;
     private IReadOnlyList<string> RuntimeMetadataNames => Inner is IGridColumnMetadataControl metadata
         ? metadata.ColumnNames : Array.Empty<string>();
     private readonly Dictionary<string, int> _columnIndexes;
@@ -37,6 +38,11 @@ internal class ConfiguredGridControl :
         _runtimeColumnNames = Array.AsReadOnly(columns
             .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
             .ToArray());
+        _columnDefinitionMap = new System.Collections.ObjectModel.ReadOnlyDictionary<string, GridColumnDefinition>(
+            columns.Select((column, index) => (Column: column, RuntimeName: _runtimeColumnNames[index]))
+                .ToDictionary(static entry => entry.RuntimeName,
+                    static entry => entry.Column,
+                    StringComparer.Ordinal));
         _declaredRuntimeColumnNames = definition.Columns.Count > 0
             ? Array.AsReadOnly(definition.Columns
                 .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
@@ -545,8 +551,9 @@ internal class ConfiguredGridControl :
 
     private GridCellAddress MapAddressableAddress(GridCellAddress address, int columnIndex)
     {
+        var row = MapAddressableRow(address.Row);
         return new GridCellAddress(
-            MapAddressableRow(address.Row),
+            row.WithColumnDefinitions(_columnDefinitionMap),
             _runtimeColumnNames[columnIndex]);
     }
 

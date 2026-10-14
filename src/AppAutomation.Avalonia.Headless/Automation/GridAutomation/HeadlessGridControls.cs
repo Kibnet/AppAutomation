@@ -4,6 +4,9 @@ using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
@@ -162,9 +165,13 @@ public sealed partial class HeadlessControlResolver
                 return null;
             }
 
-            return positions.Count == rows.Count
-                ? ordered.Select(static entry => entry.Key).ToArray()
-                : null;
+            if (positions.Count != rows.Count
+                && ordered.Where((entry, index) => !ReferenceEquals(entry.Key, rows[index].Item)).Any())
+            {
+                return null;
+            }
+
+            return ordered.Select(static entry => entry.Key).ToArray();
         }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)
@@ -399,15 +406,98 @@ public sealed partial class HeadlessControlResolver
         {
             var match = ResolveUniqueRow(row, timeoutMs);
             EnsureVisualRow(match);
-            if (match.Item is not null
-                && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    HeadlessGridRuntimeAccess.SelectRow(Inner.Control, match.Item)))
+            var rowPaths = row.Conditions
+                .Select(static condition => condition.Column.CellContext.RowPath)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var deliveredPresses = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
-                return;
+                var target = FindOpenRowTarget(match, rowPaths)
+                    ?? throw new NotSupportedException(
+                        $"Visual grid '{AutomationId}' does not expose a visible row target for opening the stable row.");
+                var topLevel = TopLevel.GetTopLevel(target)
+                    ?? throw new InvalidOperationException(
+                        $"Visual grid '{AutomationId}' row target has no owning top-level window.");
+                var center = new Point(target.Bounds.Width / 2, target.Bounds.Height / 2);
+                var point = target.TranslatePoint(center, topLevel)
+                    ?? throw new InvalidOperationException(
+                        $"Visual grid '{AutomationId}' row target has no position in its top-level window.");
+
+                var receivedPresses = 0;
+                EventHandler<PointerPressedEventArgs> onPressed = (_, args) =>
+                {
+                    if (args.Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+                    {
+                        receivedPresses++;
+                    }
+                };
+                target.AddHandler(InputElement.PointerPressedEvent, onPressed,
+                    RoutingStrategies.Bubble, handledEventsToo: true);
+                try
+                {
+                    topLevel.MouseMove(point);
+                    topLevel.MouseDown(point, MouseButton.Left);
+                    topLevel.MouseUp(point, MouseButton.Left);
+                    topLevel.MouseDown(point, MouseButton.Left);
+                    topLevel.MouseUp(point, MouseButton.Left);
+                    Inner.Control.Dispatcher.RunJobs();
+                }
+                finally
+                {
+                    target.RemoveHandler(InputElement.PointerPressedEvent, onPressed);
+                }
+
+                return receivedPresses;
+            });
+            if (deliveredPresses != 2)
+            {
+                throw new InvalidOperationException(
+                    $"Visual grid '{AutomationId}' stable row was occluded: "
+                    + $"the row received {deliveredPresses} of 2 pointer presses.");
+            }
+        }
+
+        private Control? FindOpenRowTarget(
+            IndexedHeadlessRow row,
+            IReadOnlyList<string> rowPaths)
+        {
+            if (row.VisualRow is not null)
+            {
+                return row.VisualRow.Control;
             }
 
-            throw new NotSupportedException(
-                $"Visual grid '{AutomationId}' does not expose a provider-neutral row activation action in Headless runtime.");
+            if (row.Item is null)
+            {
+                return null;
+            }
+
+            if (Inner.Control.Bounds.Width <= 0 || Inner.Control.Bounds.Height <= 0)
+            {
+                return null;
+            }
+
+            var visualRows = Inner.Control.GetVisualDescendants()
+                .OfType<DataGridRow>()
+                .Where(candidate => candidate.IsEffectivelyVisible
+                    && ReferenceEquals(candidate.DataContext, row.Item))
+                .Take(2)
+                .ToArray();
+            if (visualRows.Length == 1)
+            {
+                return visualRows[0];
+            }
+
+            return Inner.Control.GetVisualDescendants()
+                .OfType<Control>()
+                .FirstOrDefault(candidate => candidate.IsEffectivelyVisible
+                    && candidate.Bounds.Width > 0
+                    && candidate.Bounds.Height > 0
+                    && rowPaths.Any(path => GridPropertyValueReader.TryReadPath(
+                            candidate.DataContext,
+                            path,
+                            out var candidateRow)
+                        && (ReferenceEquals(candidateRow, row.Item)
+                            || Equals(candidateRow, row.Item))));
         }
 
         public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
@@ -1270,15 +1360,29 @@ public sealed partial class HeadlessControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            var matches = FindMatchingRows(row, out var rowCount);
-            if (matches.Count != 1)
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            List<IndexedHeadlessRow> matches;
+            int rowCount;
+            do
             {
-                throw new InvalidOperationException(
-                    $"Grid row selector matched {matches.Count} rows in grid '{AutomationId}'; expected exactly one. "
-                    + DescribeResolution(row, matches.Count, rowCount));
-            }
+                matches = FindMatchingRows(row, out rowCount);
+                if (matches.Count == 1)
+                {
+                    return matches[0];
+                }
 
-            return matches[0];
+                if (matches.Count > 1 || stopwatch.ElapsedMilliseconds >= timeoutMs)
+                {
+                    break;
+                }
+
+                Thread.Sleep(Math.Min(20, Math.Max(1, timeoutMs - (int)stopwatch.ElapsedMilliseconds)));
+            }
+            while (true);
+
+            throw new InvalidOperationException(
+                $"Grid row selector matched {matches.Count} rows in grid '{AutomationId}'; expected exactly one. "
+                + DescribeResolution(row, matches.Count, rowCount));
         }
 
         private List<IndexedHeadlessRow> FindMatchingRows(

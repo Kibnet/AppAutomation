@@ -17,6 +17,107 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
+    [Test]
+    public async Task UiaLookup_RetriesOnlyKnownTransientComFailureBeforeInvokingAnAction()
+    {
+        var reads = 0;
+        var value = FlaUiControlResolver.ReadTransientUiaLookup(() =>
+        {
+            if (++reads == 1)
+            {
+                throw new System.Runtime.InteropServices.COMException(
+                    "Сбой чтения UIA",
+                    unchecked((int)0x80004005));
+            }
+
+            return "OpenButton";
+        });
+        var permanentReads = 0;
+        var permanent = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup<string>(() =>
+            {
+                permanentReads++;
+                throw new System.Runtime.InteropServices.COMException("Access denied", unchecked((int)0x80070005));
+            }));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(value).IsEqualTo("OpenButton");
+            await Assert.That(reads).IsEqualTo(2);
+            await Assert.That(permanentReads).IsEqualTo(1);
+            await Assert.That(permanent.HResult).IsEqualTo(unchecked((int)0x80070005));
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectItemProjectionsMergeOverlappingCopiesWithoutHidingDistinctRows()
+    {
+        var sameRow = new[]
+        {
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 40, 180, 24), Actionable: false),
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(24, 42, 170, 20), Actionable: true)
+        };
+        var textReads = 0;
+        var boundsReads = 0;
+        var actionabilityReads = 0;
+        var logical = FlaUiMultiSelectItemProjections.Normalize(
+            sameRow,
+            item => { textReads++; return item.Text; },
+            item => { boundsReads++; return item.Bounds; },
+            item => { actionabilityReads++; return item.Actionable; });
+        var separateRows = new[]
+        {
+            sameRow[0],
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 72, 180, 24), Actionable: true)
+        };
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(logical.Length).IsEqualTo(1);
+            await Assert.That(logical[0].Actionable).IsTrue();
+            await Assert.That(textReads).IsEqualTo(2);
+            await Assert.That(boundsReads).IsEqualTo(2);
+            await Assert.That(actionabilityReads).IsEqualTo(2);
+            await Assert.That(() => FlaUiMultiSelectItemProjections.Normalize(
+                    separateRows,
+                    static item => item.Text,
+                    static item => item.Bounds,
+                    static item => item.Actionable))
+                .Throws<InvalidOperationException>();
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectItemProjectionsPreferRealItemsOverServiceCheckBox()
+    {
+        var preferListItems = FlaUiMultiSelectItemProjections.PreferSelectableItems(
+            ["Select all"],
+            ["Customer A", "Customer B"]);
+        var preferCheckBoxes = FlaUiMultiSelectItemProjections.PreferSelectableItems(
+            ["Open", "Closed"],
+            ["Open", "Closed"]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(preferListItems).IsTrue();
+            await Assert.That(preferCheckBoxes).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task MultiSelectVisibleSelectionSkipsTraversalOnlyWhenSelectionIsComplete()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Target"], ["Other", "Target"], ["Other"])).IsTrue();
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Target"], ["Other", "Target"], ["Hidden selection"])).IsFalse();
+            await Assert.That(FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
+                ["Hidden target"], ["Other", "Target"], [])).IsFalse();
+        }
+    }
+
     private const string CalendarFallbackFixtureEnvironmentVariable =
         "APPAUTOMATION_FLAUI_CALENDAR_FALLBACK_FIXTURE";
 
@@ -229,10 +330,8 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
     [NotInParallel("DesktopUi")]
-    public async Task VisibleGridRowSelection_ConfirmsResolvedRowWithoutRedundantRefresh(bool lookupTimesOut)
+    public async Task VisibleGridRowSelection_ConfirmsResolvedRowWithoutRedundantRefresh()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
@@ -248,7 +347,6 @@ public sealed class FlaUiControlResolverTests
             var row = grid.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.DataItem))
                 .Single(candidate => string.Equals(candidate.ItemStatus, key, StringComparison.Ordinal));
             var refreshes = 0;
-            var lookupTimeout = new TimeoutException("The row lookup exhausted the remaining selection budget.");
             void SelectResolvedRow() =>
                 FlaUiControlResolver.SelectAndConfirmGridRow(
                     row,
@@ -258,10 +356,6 @@ public sealed class FlaUiControlResolverTests
                     () =>
                     {
                         refreshes++;
-                        if (lookupTimesOut)
-                        {
-                            throw lookupTimeout;
-                        }
                         if (refreshes > 3)
                         {
                             throw new TimeoutException("Redundant row scans exhausted the selection budget before confirmation.");
@@ -271,25 +365,51 @@ public sealed class FlaUiControlResolverTests
                     },
                     isCurrentRowMatch: candidate => string.Equals(candidate.ItemStatus, key, StringComparison.Ordinal));
 
-            if (lookupTimesOut)
-            {
-                var observed = await Assert.ThrowsAsync<TimeoutException>(() =>
-                {
-                    SelectResolvedRow();
-                    return Task.CompletedTask;
-                });
-                await Assert.That(observed).IsSameReferenceAs(lookupTimeout);
-                await Assert.That(refreshes).IsEqualTo(1);
-                return;
-            }
-
             SelectResolvedRow();
 
-            await Assert.That(refreshes).IsLessThanOrEqualTo(3);
+            await Assert.That(refreshes).IsEqualTo(0);
             page
                 .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton)
                 .ClickButton(static candidate => candidate.SaveArmGridProductButton)
                 .WaitUntilIsEnabled(static candidate => candidate.SaveArmGridProductButton, expected: false);
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NarrowGridReadsOffscreenColumnThenVisibleColumnByStableRow()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
+        var environment = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            ["APPAUTOMATION_FLAUI_GRID_NARROW_LAYOUT"] = "1"
+        };
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            EnvironmentVariables = environment,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement
+        });
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+
+        var grid = page.ArmComplexDataGridControl;
+        var row = GridRowKeyReader.Capture(grid, 0);
+        var product = GridValueReader.ReadCellText(grid, row, "Product");
+        var value = GridValueReader.ReadCellText(grid, row, "Value");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(product).Contains("Product");
+            await Assert.That(value).IsEqualTo("Value-1");
         }
     }
 
@@ -319,6 +439,33 @@ public sealed class FlaUiControlResolverTests
                 "1", "07.10.2026 19:48", ControlType.Group, hasTextPattern: false, descendantCount: 0)).IsFalse();
             await Assert.That(FlaUiControlResolver.IsEmptyNativeDateCellProjection(
                 "1", null, ControlType.Group, hasTextPattern: false, descendantCount: 1)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task NativeGridCellSourceField_RebindsToItsOwnProjectionAndRejectsNeighbor()
+    {
+        var sourceIndex = FlaUiControlResolver.SelectNativeCellBySourceField(
+            "DeletionReason", "ReadyDate", ["ReadyDate", "DeletionReason"],
+            selectedIdBelongsToDifferentSourceField: true);
+        var wrongNeighbor = Assert.Throws<InvalidOperationException>(() =>
+            FlaUiControlResolver.SelectNativeCellBySourceField(
+                "DeletionReason", "ReadyDate", ["ReadyDate"],
+                selectedIdBelongsToDifferentSourceField: true));
+        var duplicate = Assert.Throws<InvalidOperationException>(() =>
+            FlaUiControlResolver.SelectNativeCellBySourceField(
+                "DeletionReason", "ReadyDate", ["DeletionReason", "DeletionReason"],
+                selectedIdBelongsToDifferentSourceField: true));
+        var customAutomationId = FlaUiControlResolver.SelectNativeCellBySourceField(
+            "DeletionReason", "CustomCell_01", ["CustomCell_01"],
+            selectedIdBelongsToDifferentSourceField: false);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(sourceIndex).IsEqualTo(1);
+            await Assert.That(customAutomationId).IsEqualTo(-1);
+            await Assert.That(wrongNeighbor.Message).Contains("ReadyDate");
+            await Assert.That(duplicate.Message).Contains("multiple UIA cell projections");
         }
     }
 
@@ -501,6 +648,31 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
+    public async Task NativeRowsResolveVisiblePositionWhenGridReportsCompleteLogicalRowCount()
+    {
+        var rows = new[]
+        {
+            new NativeGridRowSnapshot(["ORDER-22"], null,
+                new System.Drawing.Rectangle(10, 80, 300, 25), new GridScrollPosition(null, null)),
+            new NativeGridRowSnapshot(["ORDER-20"], null,
+                new System.Drawing.Rectangle(10, 20, 300, 25), new GridScrollPosition(null, null)),
+            new NativeGridRowSnapshot(["ORDER-21"], null,
+                new System.Drawing.Rectangle(10, 50, 300, 25), new GridScrollPosition(null, null))
+        };
+
+        var complete = NativeGridRowNormalizer.AtCompleteVisiblePosition(rows, 2, reportedRowCount: 3);
+        var incomplete = NativeGridRowNormalizer.AtCompleteVisiblePosition(rows, 2, reportedRowCount: 4);
+        var unknown = NativeGridRowNormalizer.AtCompleteVisiblePosition(rows, 2, reportedRowCount: null);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(complete?.CellTexts.Single()).IsEqualTo("ORDER-22");
+            await Assert.That(incomplete).IsNull();
+            await Assert.That(unknown).IsNull();
+        }
+    }
+
+    [Test]
     public async Task NativeRowsWithoutGridItemIndexResolveLaterPositionOnlyAfterContiguousTraversal()
     {
         static NativeGridRowSnapshot Row(string key, int top, double scroll, int observation) =>
@@ -643,6 +815,23 @@ public sealed class FlaUiControlResolverTests
             forward: true);
 
         await Assert.That(reached).IsFalse();
+    }
+
+    [Test]
+    public async Task GridScrollBoundary_DoesNotMistakeBottomHorizontalButtonsForVerticalScrolling()
+    {
+        var horizontal = GridScrollBoundary.AreHorizontalScrollButtons(
+            new System.Drawing.Rectangle(32, 975, 487, 19),
+            new System.Drawing.Rectangle(1888, 979, 12, 12));
+        var vertical = GridScrollBoundary.AreHorizontalScrollButtons(
+            new System.Drawing.Rectangle(1888, 100, 12, 12),
+            new System.Drawing.Rectangle(1888, 975, 12, 12));
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(horizontal).IsTrue();
+            await Assert.That(vertical).IsFalse();
+        }
     }
 
     private static string[] ReadElementNames(AutomationElement root)

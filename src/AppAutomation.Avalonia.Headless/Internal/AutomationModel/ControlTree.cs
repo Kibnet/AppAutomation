@@ -48,6 +48,12 @@ internal static class ControlTree
             }
         }
 
+        if (control is global::Avalonia.Controls.Button
+            { Flyout: Flyout { IsOpen: true, Content: Control flyoutContent } })
+        {
+            queue.Enqueue(flyoutContent);
+        }
+
         switch (control)
         {
             case ContentControl { Content: not null } contentControl:

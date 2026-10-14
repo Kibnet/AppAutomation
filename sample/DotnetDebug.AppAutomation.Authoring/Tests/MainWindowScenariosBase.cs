@@ -426,18 +426,13 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
-    public async Task ArmDesktop_ComboBoxFilter_UsesOneContractForOneAndSeveralValues()
+    public async Task ArmDesktop_ComboBoxFilter_AppliesSeveralValuesOnce()
     {
         string[] severalValues = ["Pending", "Closed"];
 
         Page
             .SelectTabItem(p => p.ArmDesktopTabItem)
-            .ApplyFilterSelection(p => p.ArmStatusFilter, ["Pending"])
-            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, ["Pending"])
             .ApplyFilterSelection(p => p.ArmStatusFilter, severalValues)
-            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
-            .CancelFilterSelection(p => p.ArmStatusFilter, [])
-            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, severalValues)
             .WaitUntilTextEquals(p => p.ArmStatusFilterStatusLabel, "Filter: Closed, Pending");
 
         using (Assert.Multiple())

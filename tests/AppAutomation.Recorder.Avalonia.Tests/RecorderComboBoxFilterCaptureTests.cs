@@ -36,6 +36,20 @@ public sealed class RecorderComboBoxFilterCaptureTests
     }
 
     [Test]
+    public async Task Apply_AfterInternalSearch_DoesNotRecordSeparateTextEntry()
+    {
+        using var recorder = ComboBoxFilterCaptureFixture.Create("Pending");
+
+        recorder.Start();
+        recorder.EnterInternalSearch("Pend");
+        recorder.Capture(recorder.ApplyButton!);
+
+        await AssertSemanticStep(
+            recorder.Session,
+            "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"Pending\" });");
+    }
+
+    [Test]
     public async Task Apply_WithSeveralValues_UsesSameFilterCommand()
     {
         using var recorder = ComboBoxFilterCaptureFixture.Create("Pending", "Closed");

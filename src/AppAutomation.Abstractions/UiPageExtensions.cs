@@ -1430,7 +1430,9 @@ public static partial class UiPageExtensions
                     }
                     catch (Exception ex) when (IsRetryableResolveFailure(ex))
                     {
-                        lastObservedValue = $"<not found: {ex.Message}>";
+                        lastObservedValue = ex is System.Runtime.InteropServices.COMException comException
+                            ? $"<transient UIA lookup: HRESULT=0x{comException.HResult:X8}>"
+                            : $"<not found: {ex.Message}>";
                         return false;
                     }
                 },
@@ -1453,6 +1455,11 @@ public static partial class UiPageExtensions
         }
         catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
         {
+            if (ex is System.Runtime.InteropServices.COMException comException)
+            {
+                lastObservedValue = $"<UIA lookup failed: HRESULT=0x{comException.HResult:X8}>";
+            }
+
             throw CreateUiOperationException(
                 page,
                 selector,
@@ -3290,6 +3297,11 @@ public static partial class UiPageExtensions
 
     private static bool IsRetryableResolveFailure(Exception exception)
     {
+        if (exception is System.Runtime.InteropServices.COMException comException)
+        {
+            return TransientUiaLookupFailure.IsRetryable(comException);
+        }
+
         if (!IsKnownResolveFailureException(exception) || string.IsNullOrWhiteSpace(exception.Message))
         {
             return false;

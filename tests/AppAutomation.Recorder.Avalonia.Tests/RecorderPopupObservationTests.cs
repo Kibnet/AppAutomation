@@ -404,10 +404,12 @@ public sealed class RecorderPopupObservationTests
         {
             var steps = headless.Dispatch(() =>
             {
-                Click(fixture.Second);
-                Click(fixture.Apply);
-                Click(fixture.First);
-                Click(fixture.Cancel);
+                fixture.Second.IsChecked = true;
+                fixture.Session.CaptureButtonPressForTesting(fixture.Apply);
+                fixture.Apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                fixture.First.IsChecked = false;
+                fixture.Session.CaptureButtonPressForTesting(fixture.Cancel);
+                fixture.Cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 return fixture.Session.StepJournal.ToArray();
             }, CancellationToken.None).GetAwaiter().GetResult();
 
@@ -525,17 +527,6 @@ public sealed class RecorderPopupObservationTests
         var session = new RecorderSession(window, options);
         session.Start();
         return new MultiSelectPopupFixture(window, session, first, second, apply, cancel);
-    }
-
-    private static void Click(Control control)
-    {
-        var host = TopLevel.GetTopLevel(control)
-            ?? throw new InvalidOperationException("The popup control has no TopLevel.");
-        var clickPoint = control.TranslatePoint(
-            new Point(control.Bounds.Width / 2, control.Bounds.Height / 2),
-            host) ?? throw new InvalidOperationException("The popup control has no host position.");
-        host.MouseDown(clickPoint, MouseButton.Left);
-        host.MouseUp(clickPoint, MouseButton.Left);
     }
 
     [Test]

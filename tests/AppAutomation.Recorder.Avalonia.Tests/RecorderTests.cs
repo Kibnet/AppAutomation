@@ -1638,6 +1638,34 @@ public sealed class RecorderTests
     }
 
     [Test]
+    public async Task HotkeySettingsStore_IgnoresRetiredCommandsWithoutDiscardingKnownOverrides()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hotkeys.json");
+        File.WriteAllText(path, """
+            {
+              "Gestures": {
+                "startstop": "Alt+R",
+                "RetiredCommand": "Shift+R"
+              }
+            }
+            """);
+        var store = new RecorderHotkeySettingsStore(path);
+
+        var loaded = store.TryLoad(out var settings, out var error);
+        var asyncLoaded = await store.LoadAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(loaded).IsTrue();
+            await Assert.That(error).IsNull();
+            await Assert.That(settings!.Gestures[RecorderCommandKind.StartStop]).IsEqualTo("Alt+R");
+            await Assert.That(asyncLoaded!.Gestures[RecorderCommandKind.StartStop]).IsEqualTo("Alt+R");
+            await Assert.That(settings.Gestures.Count).IsEqualTo(1);
+        }
+    }
+
+    [Test]
     public async Task HotkeySettingsStore_TryLoad_ReturnsErrorForCorruptJson()
     {
         using var directory = new TemporaryDirectory();

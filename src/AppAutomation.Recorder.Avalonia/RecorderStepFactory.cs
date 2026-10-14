@@ -1461,6 +1461,10 @@ internal sealed partial class RecorderStepFactory
             || MatchesTimePickerInputPart(textBox)
             || MatchesDatePickerValuePart(textBox)
             || ShouldSuppressSingleSelectInput(textBox)
+            || _options.ComboBoxFilterHints.Any(hint => MatchesLocator(
+                textBox,
+                hint.Parts.LocatorKind,
+                hint.Parts.RootLocator))
             || _options.ColorPickerHints.Any(hint => IsColorPickerInput(textBox, hint))
             || MatchesGridEditValuePart(textBox);
     }

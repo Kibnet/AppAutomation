@@ -708,6 +708,47 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessSearchHistory_OpensClosedPopupWithAvailableItem()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(CreateClosedPopupSearchHistoryWindow);
+        var page = new SearchControlPage(
+            new HeadlessControlResolver(context.Window)
+                .WithSearchControl(
+                    "TableSearch",
+                    SearchControlParts.ByAutomationIds(
+                        "TableSearchInput",
+                        "SearchHistoryItemButton",
+                        historyRootAutomationId: "TableSearchHistoryRoot")));
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => context.Popup!.IsOpen)).IsFalse();
+        var history = new HeadlessControlResolver(context.Window).Resolve<ISearchHistoryItemsControl>(
+            new UiControlDefinition("HistoryItem", UiControlType.Button, "SearchHistoryItemButton")
+            {
+                Scope = new UiControlScope("TableSearchHistoryRoot")
+                {
+                    AnchorLocatorValue = "TableSearchInput"
+                }
+            });
+        var hiddenItemFailure = Assert.Throws<InvalidOperationException>(() => history.Apply("orders"));
+        await Assert.That(hiddenItemFailure.Message).Contains("not available");
+
+        page.TableSearch.OpenHistory();
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => context.Popup!.IsOpen)).IsTrue();
+        await Assert.That(page.TableSearch.IsHistoryOpen).IsTrue();
+        page.ApplySearchFromHistory(static candidate => candidate.TableSearch, "orders");
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(context.ClickCounts).IsEquivalentTo([1]);
+            await Assert.That(page.TableSearch.Text).IsEqualTo("orders");
+            await Assert.That(page.TableSearch.IsHistoryOpen).IsFalse();
+        }
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessShellNavigation_ActivatesExistingPaneByAutomationId()
     {
         using var headless = StartHeadlessRuntime();
@@ -1284,6 +1325,32 @@ Console.WriteLine("Fake desktop");
         return new SearchHistoryWindowContext(new Window { Content = root }, clickCounts);
     }
 
+    private static SearchHistoryWindowContext CreateClosedPopupSearchHistoryWindow()
+    {
+        var clickCounts = new int[1];
+        var root = new StackPanel();
+        var input = new TextBox();
+        AutomationProperties.SetAutomationId(input, "TableSearchInput");
+        root.Children.Add(input);
+
+        var historyRoot = new StackPanel();
+        AutomationProperties.SetAutomationId(historyRoot, "TableSearchHistoryRoot");
+        var popup = new Popup { PlacementTarget = input, Child = historyRoot };
+        input.GotFocus += (_, _) => popup.IsOpen = true;
+        AddHistoryButton(historyRoot, "orders", () =>
+        {
+            clickCounts[0]++;
+            input.Text = "orders";
+            popup.IsOpen = false;
+        });
+        root.Children.Add(popup);
+
+        var window = new Window { Width = 400, Height = 200, Content = root };
+        window.Show();
+        window.Dispatcher.RunJobs();
+        return new SearchHistoryWindowContext(window, clickCounts, popup);
+    }
+
     private static void AddHistoryButton(Panel root, string text, Action onClick)
     {
         var button = new Button { Content = text };
@@ -1313,7 +1380,7 @@ Console.WriteLine("Fake desktop");
 
     private sealed record LaunchPayload(string UserName);
 
-    private sealed record SearchHistoryWindowContext(Window Window, int[] ClickCounts);
+    private sealed record SearchHistoryWindowContext(Window Window, int[] ClickCounts, Popup? Popup = null);
 
     private sealed class VisualGridPage : UiPage
     {

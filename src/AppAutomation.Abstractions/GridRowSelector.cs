@@ -58,17 +58,27 @@ public sealed class GridRowSelector
 
     internal GridRowSelector WithColumnDefinitions(IReadOnlyDictionary<string, GridColumnDefinition> definitions)
     {
+        var snapshot = definitions is System.Collections.ObjectModel.ReadOnlyDictionary<string, GridColumnDefinition>
+            ? definitions
+            : new System.Collections.ObjectModel.ReadOnlyDictionary<string, GridColumnDefinition>(
+                definitions.ToDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal));
         return new GridRowSelector(
             _conditions.ToArray(),
             HasDeclaredUniqueIdentity,
-            new System.Collections.ObjectModel.ReadOnlyDictionary<string, GridColumnDefinition>(
-                definitions.ToDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal)));
+            snapshot);
     }
 
     internal GridColumnDefinition? FindColumnDefinition(string columnName) =>
         _columnDefinitions is not null && _columnDefinitions.TryGetValue(columnName, out var definition)
             ? definition
             : null;
+
+    internal bool IsDifferentKnownSourceField(string runtimeColumnName, string? automationId) =>
+        !string.IsNullOrWhiteSpace(automationId)
+        && _columnDefinitions is not null
+        && _columnDefinitions.Any(entry =>
+            !string.Equals(entry.Key, runtimeColumnName, StringComparison.Ordinal)
+            && string.Equals(entry.Value.SourceFieldName, automationId, StringComparison.Ordinal));
 
     private static GridRowCondition CreateCondition(string columnName, string value)
     {

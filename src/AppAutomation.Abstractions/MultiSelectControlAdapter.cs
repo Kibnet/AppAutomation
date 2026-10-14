@@ -271,6 +271,10 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             {
                 ResolveButton("ApplyButton", _parts.ApplyButtonLocator).Invoke();
             }
+            else if (IsOpen)
+            {
+                ResolveButton("OpenButton", _parts.OpenButtonLocator).Invoke();
+            }
 
             _state.CommitPending();
         }

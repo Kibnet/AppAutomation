@@ -119,8 +119,9 @@ internal sealed class RecorderHotkeySettingsStore
         }
 
         await using var stream = File.OpenRead(_filePath);
-        return await JsonSerializer.DeserializeAsync<RecorderHotkeySettings>(stream, JsonOptions, cancellationToken)
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+        return ReadSettings(document.RootElement);
     }
 
     public bool TryLoad(out RecorderHotkeySettings? settings, out string? error)
@@ -135,7 +136,8 @@ internal sealed class RecorderHotkeySettingsStore
         try
         {
             var json = File.ReadAllText(_filePath);
-            settings = JsonSerializer.Deserialize<RecorderHotkeySettings>(json, JsonOptions);
+            using var document = JsonDocument.Parse(json);
+            settings = ReadSettings(document.RootElement);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -157,6 +159,55 @@ internal sealed class RecorderHotkeySettingsStore
 
         await using var stream = File.Create(_filePath);
         await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static RecorderHotkeySettings? ReadSettings(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Hotkey settings must be a JSON object.");
+        }
+
+        if (!root.TryGetProperty(nameof(RecorderHotkeySettings.Gestures), out var gestures))
+        {
+            return new RecorderHotkeySettings();
+        }
+
+        if (gestures.ValueKind == JsonValueKind.Null)
+        {
+            return new RecorderHotkeySettings { Gestures = null! };
+        }
+
+        if (gestures.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Hotkey gestures must be a JSON object.");
+        }
+
+        var values = new Dictionary<RecorderCommandKind, string?>();
+        foreach (var gesture in gestures.EnumerateObject())
+        {
+            if (!Enum.TryParse<RecorderCommandKind>(gesture.Name, ignoreCase: true, out var command)
+                || !Enum.IsDefined(command))
+            {
+                continue;
+            }
+
+            if (gesture.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            {
+                throw new JsonException($"Hotkey gesture '{gesture.Name}' must be a string or null.");
+            }
+
+            values[command] = gesture.Value.ValueKind == JsonValueKind.Null
+                ? null
+                : gesture.Value.GetString();
+        }
+
+        return new RecorderHotkeySettings { Gestures = values };
     }
 
     public void Reset()

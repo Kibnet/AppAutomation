@@ -27,7 +27,9 @@ internal class AutomationElement
 
     public bool IsEnabled => Ui(() => Control.IsEffectivelyEnabled);
 
-    public bool IsAvailable => true;
+    public bool IsAvailable => Ui(() => !Control.GetLogicalAncestors()
+        .OfType<global::Avalonia.Controls.Primitives.Popup>()
+        .Any(static popup => !popup.IsOpen));
 
     public bool IsOffscreen => false;
 
@@ -306,6 +308,8 @@ internal class AutomationElement
 
     protected static void InvokeButton(global::Avalonia.Controls.Button button)
     {
+        var flyout = button.Flyout;
+        var flyoutWasOpen = flyout?.IsOpen == true;
         if (button is global::Avalonia.Controls.Primitives.ToggleButton toggleButton)
         {
             toggleButton.IsChecked = !(toggleButton.IsChecked ?? false);
@@ -317,6 +321,15 @@ internal class AutomationElement
         }
 
         button.RaiseEvent(new RoutedEventArgs(global::Avalonia.Controls.Button.ClickEvent));
+        if (flyoutWasOpen && flyout?.IsOpen == true)
+        {
+            flyout.Hide();
+        }
+        else if (!flyoutWasOpen && flyout?.IsOpen == false)
+        {
+            flyout.ShowAt(button);
+        }
+
         button.Dispatcher.RunJobs();
     }
 }

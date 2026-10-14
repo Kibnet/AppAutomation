@@ -2208,9 +2208,6 @@ internal sealed class RecorderSession :
             case RecorderCommandKind.CaptureAssertEnabled:
                 CaptureAssertion(RecorderAssertionMode.Enabled);
                 break;
-            case RecorderCommandKind.CaptureAssertChecked:
-                CaptureAssertion(RecorderAssertionMode.Checked);
-                break;
             case RecorderCommandKind.CaptureAssertExists:
                 CaptureAssertion(RecorderAssertionMode.Exists);
                 break;
