@@ -55,7 +55,9 @@ internal static class RecorderStepEditService
                 condition.ColumnName,
                 step.GridTargetColumnName,
                 StringComparison.Ordinal));
-        bool CanOfferAsRowValue(RecorderGridRowValueReference reference)
+        bool CanOfferAsRowValue(
+            RecorderGridRowValueReference reference,
+            RecordedGridRowCondition condition)
         {
             if (!isKeyCheckpoint)
             {
@@ -71,19 +73,11 @@ internal static class RecorderStepEditService
                 _ => false
             });
             return source is not null
-                && source.GridRowConditions is not { Count: > 0 }
-                && !source.RowIndex.HasValue
-                && source.Control.ControlType != AppAutomation.Abstractions.UiControlType.Grid
-                && source.ValueAccessorKind is not (
-                    RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue)
-                && !string.IsNullOrWhiteSpace(source.StringValue)
-                && step.GridRowConditions!.Any(condition => string.Equals(
-                    condition.Value,
-                    source.StringValue,
-                    StringComparison.Ordinal));
+                && RecorderGridRowValuePolicy.Validate(source, condition)
+                    == RecorderGridRowValueSourceStatus.Valid;
         }
 
-        var rowVariables = checkpoints
+        var rowVariableCandidates = checkpoints
             .Where(static option => option.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
             .Select(static option => new RecorderGridRowVariableOption(
                 $"{option.VariableName} (checkpoint · {option.ControlName})",
@@ -96,8 +90,13 @@ internal static class RecorderStepEditService
                 .Select(static option => new RecorderGridRowVariableOption(
                     $"{option.VariableName} (copied · {option.ControlName})",
                     new RecorderGridRowValueReference(RecorderGridRowValueSourceKind.CopiedValue, option.CopiedValueId))))
-            .Where(option => CanOfferAsRowValue(option.Reference))
             .ToArray();
+        IReadOnlyList<IReadOnlyList<RecorderGridRowVariableOption>> rowVariablesByCondition =
+            step.GridRowConditions?.Select(condition =>
+                (IReadOnlyList<RecorderGridRowVariableOption>)rowVariableCandidates
+                    .Where(option => CanOfferAsRowValue(option.Reference, condition))
+                    .ToArray()).ToArray()
+            ?? [];
         var supportsCalculatedExpectedValue = step.ActionKind == RecordedActionKind.AssertValue
             && step.ValueKind is { } numericValueKind
             && step.ValueAccessorKind is { } numericAccessorKind
@@ -144,7 +143,7 @@ internal static class RecorderStepEditService
             compatibleGeneratedValues,
             step.GridRowConditions,
             step.GridTargetColumnName,
-            rowVariables,
+            rowVariablesByCondition,
             supportsCalculatedExpectedValue)
         {
             GridRowSourceMode = step.GridRowSourceMode,

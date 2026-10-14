@@ -203,6 +203,127 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task RecorderStepDragDropAndUndoSavesFinalOrder()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var scenarioName = CreateScenarioName("DragUndo");
+        using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderDragUndo");
+        using var session = DesktopAppSession.Launch(
+            CreateRecorderLaunchOptions(scenarioName, outputDirectory.FullPath, showOverlay: true));
+        using var automation = new UIA3Automation();
+        Window FindWindow(string title) => UiWait.Until(
+            () => automation.GetDesktop().FindAllChildren(session.ConditionFactory.ByControlType(ControlType.Window))
+                .Select(element => element.AsWindow()).FirstOrDefault(window => window.Name == title
+                    && window.Properties.ProcessId.Value == session.MainWindow.Properties.ProcessId.Value),
+            window => window is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval })!;
+        var overlay = FindWindow("AppAutomation Recorder");
+        var app = FindWindow("DotnetDebug - Math Operations Showcase");
+        var record = FindElement(overlay, session, "RecordButton").AsButton();
+        var save = FindElement(overlay, session, "SaveButton").AsButton();
+        var artifactDirectory = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+        void ForegroundOverlay()
+        {
+            overlay.SetForeground();
+            UiWait.Until(GetForegroundWindow,
+                handle => handle == new IntPtr(overlay.Properties.NativeWindowHandle.Value),
+                new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+                "Recorder window did not become foreground.");
+        }
+        void CaptureState(string state)
+        {
+            ForegroundOverlay();
+            Capture.Element(overlay).ToFile(Path.Combine(artifactDirectory.FullName, $"recorder-step-{state}.png"));
+        }
+        AutomationElement[] Previews() => overlay.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.Text))
+            .Where(element => element.Properties.AutomationId.ValueOrDefault?.StartsWith(
+                "RecorderStepPreview_", StringComparison.Ordinal) == true)
+            .OrderBy(element => element.BoundingRectangle.Top).ToArray();
+        string[] PreviewOrder() => Previews().Select(element => element.AutomationId).ToArray();
+        void WaitForOrder(string[] expected) => UiWait.Until(
+            PreviewOrder, actual => actual.SequenceEqual(expected) && record.IsEnabled,
+            new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
+            "Recorder order or autosave did not settle.");
+
+        app.SetForeground();
+        var numbers = FindElement(app, session, "NumbersInput").AsTextBox();
+        numbers.Focus();
+        numbers.Text = "11 22";
+        var filter = FindElement(app, session, "HistoryFilterInput").AsTextBox();
+        filter.Focus();
+        filter.Text = "drag marker";
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(FindElement(app, session, "ApplyFilterButton"));
+        var previews = UiWait.Until(Previews, values => values.Length == 3 && record.IsEnabled,
+            new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
+            "The three recorded steps were not displayed.");
+        var originalOrder = previews.Select(element => element.AutomationId).ToArray();
+        var sourceId = previews.Single(element => element.Name.Contains("ApplyFilterButton", StringComparison.Ordinal)).AutomationId;
+        var targetId = previews.Single(element => element.Name.Contains("NumbersInput", StringComparison.Ordinal)).AutomationId;
+        var movedOrder = new[] { sourceId }.Concat(originalOrder.Where(id => id != sourceId)).ToArray();
+        var savedCursor = Mouse.Position;
+
+        void BeginDrag()
+        {
+            ForegroundOverlay();
+            var gripId = "RecorderStepDragHandle_" + sourceId["RecorderStepPreview_".Length..];
+            var grip = FindElement(overlay, session, gripId);
+            var target = FindElement(overlay, session, targetId);
+            var gripBounds = grip.BoundingRectangle;
+            var targetBounds = target.BoundingRectangle;
+            Mouse.MoveTo((int)(gripBounds.Left + gripBounds.Width / 2), (int)(gripBounds.Top + gripBounds.Height / 2));
+            Mouse.Down(MouseButton.Left);
+            Mouse.MoveTo((int)(targetBounds.Left + 5), (int)(targetBounds.Top + 1));
+            UiWait.Until(
+                () => overlay.FindFirstDescendant(session.ConditionFactory.ByAutomationId("RecorderStepDropIndicator")),
+                indicator => indicator is not null && !indicator.IsOffscreen,
+                new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+                "Recorder did not show the insertion indicator while dragging.");
+        }
+
+        try
+        {
+            CaptureState("before");
+            BeginDrag();
+            CaptureState("dragging");
+            app.SetForeground();
+            Mouse.Up(MouseButton.Left);
+            WaitForOrder(originalOrder);
+            BeginDrag();
+            Mouse.Up(MouseButton.Left);
+            WaitForOrder(movedOrder);
+            CaptureState("after");
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_Z);
+            WaitForOrder(originalOrder);
+            CaptureState("undo");
+            BeginDrag();
+            Mouse.Up(MouseButton.Left);
+            WaitForOrder(movedOrder);
+            record.Invoke();
+            UiWait.Until(() => save.IsEnabled, enabled => enabled,
+                new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval });
+            save.Invoke();
+            var scenarioPath = await WaitForScenarioFileAsync(outputDirectory.FullPath, scenarioName);
+            var source = await File.ReadAllTextAsync(scenarioPath);
+            await File.WriteAllTextAsync(Path.Combine(artifactDirectory.FullName, "recorder-step-final-source.txt"), source);
+            using (Assert.Multiple())
+            {
+                await Assert.That(PreviewOrder()).IsEquivalentTo(originalOrder);
+                await Assert.That(source).Contains("Page.ClickButton(static page => page.ApplyFilterButton);");
+                await Assert.That(source.IndexOf("Page.ClickButton(static page => page.ApplyFilterButton)", StringComparison.Ordinal))
+                    .IsLessThan(source.IndexOf("Page.EnterText(static page => page.NumbersInput", StringComparison.Ordinal));
+                await Assert.That(source).Contains("11 22");
+                await Assert.That(source).Contains("drag marker");
+            }
+        }
+        finally
+        {
+            Mouse.Up(MouseButton.Left);
+            Mouse.MoveTo(savedCursor);
+        }
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task RecorderSmokeSearchControlSavesHistoryStepAndKeepsPopupAdjacent()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -680,6 +801,9 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         uint message,
         IntPtr wordParameter,
         IntPtr longParameter);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     private static async Task<string> WaitForScenarioFileAsync(
         string outputDirectory,

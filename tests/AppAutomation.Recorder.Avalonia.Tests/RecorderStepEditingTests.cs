@@ -1344,6 +1344,68 @@ public sealed class RecorderStepEditingTests
     }
 
     [Test]
+    public async Task CompositeGridKeyEditorOffersVariablesForEachMatchingColumn()
+    {
+        using var session = CreateSession(new StackPanel());
+        var orderSourceId = Guid.NewGuid();
+        var companySourceId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("OrderNumber", UiControlType.TextBox),
+            StringValue: "ORD-42",
+            StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: orderSourceId,
+            CheckpointVariableName: "orderNumber"));
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("CompanyName", UiControlType.TextBox),
+            StringValue: "North",
+            StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.Text,
+            CheckpointId: companySourceId,
+            CheckpointVariableName: "companyName"));
+        var targetId = Guid.NewGuid();
+        session.AddRecordedStepForTesting(new RecordedStep(
+            RecordedActionKind.CaptureCheckpoint,
+            Descriptor("OrdersGrid", UiControlType.Grid),
+            StringValue: "ORD-42",
+            StepId: targetId,
+            ValueKind: RecorderValueKind.Text,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+            CheckpointId: Guid.NewGuid(),
+            CheckpointVariableName: "gridOrder")
+        {
+            GridRowConditions =
+            [
+                new RecordedGridRowCondition("OrderId", "ORD-42"),
+                new RecordedGridRowCondition("Company", "North")
+            ],
+            GridTargetColumnName = "OrderId"
+        });
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = OpenEditor(overlay, targetId);
+        var variables = editor.GetLogicalDescendants()
+            .OfType<ComboBox>()
+            .Where(control => control.Name?.StartsWith("RecorderStepEditRowVariable", StringComparison.Ordinal) == true)
+            .OrderBy(control => control.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(variables[0].Items.OfType<RecorderGridRowVariableOption>()
+                    .Select(option => option.Reference.ValueId))
+                .IsEquivalentTo([orderSourceId]);
+            await Assert.That(variables[1].Items.OfType<RecorderGridRowVariableOption>()
+                    .Select(option => option.Reference.ValueId))
+                .IsEquivalentTo([companySourceId]);
+        }
+    }
+
+    [Test]
     public async Task FirstGridKeyCheckpointRejectsEmptySourceAndPartlyLiteralCompositeIdentity()
     {
         var sourceId = Guid.NewGuid();

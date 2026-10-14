@@ -74,7 +74,7 @@ internal sealed record RecorderStepEditDraft(
     IReadOnlyList<RecorderGeneratedValueOption> CompatibleGeneratedValues,
     IReadOnlyList<RecordedGridRowCondition>? GridRowConditions,
     string? GridTargetColumnName,
-    IReadOnlyList<RecorderGridRowVariableOption> AvailableGridRowVariables,
+    IReadOnlyList<IReadOnlyList<RecorderGridRowVariableOption>> AvailableGridRowVariablesByCondition,
     bool SupportsCalculatedExpectedValue,
     RecordedStep? RetargetPrototype = null)
 {

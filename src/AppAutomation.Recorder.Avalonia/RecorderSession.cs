@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AppAutomation.Recorder.Avalonia;
 
-internal sealed class RecorderSession :
+internal sealed partial class RecorderSession :
     IAppAutomationRecorderSession,
     IAppAutomationRecorderSessionDetails,
     IRecorderStepReorderSessionDetails,
@@ -448,6 +448,7 @@ internal sealed class RecorderSession :
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
         _steps.Clear();
+        _stepMoveHistory.Clear();
         InvalidateScenarioGraphValidation();
         _activeCopiedValue = null;
         _recordingGeneratedValueSeries = null;
@@ -473,6 +474,7 @@ internal sealed class RecorderSession :
         }
 
         _selectedScenarioDestination = destination;
+        _stepMoveHistory.Clear();
         _lastScenarioFilePath = null;
         _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
         SetStatus(
@@ -490,6 +492,7 @@ internal sealed class RecorderSession :
         }
 
         _scenarioName = scenarioName ?? string.Empty;
+        _stepMoveHistory.Clear();
         _lastScenarioFilePath = null;
         _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
         var validationError = ValidateScenarioName(_scenarioName);
@@ -569,6 +572,7 @@ internal sealed class RecorderSession :
 
             _isDisposed = true;
             _pendingAutosave = false;
+            _stepMoveHistory.Clear();
         }
 
         _lifetimeCancellation.Cancel();
@@ -614,6 +618,7 @@ internal sealed class RecorderSession :
         }
 
         _steps.RemoveAt(index);
+        _stepMoveHistory.Clear();
         var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
         SetStatusAfterGraphValidation(
@@ -671,6 +676,11 @@ internal sealed class RecorderSession :
 
     public bool CanMoveStep(Guid stepId, RecorderStepMoveDirection direction)
     {
+        if (IsBusy || _isDisposed)
+        {
+            return false;
+        }
+
         var index = _steps.FindIndex(step => step.StepId == stepId);
         if (index < 0)
         {
@@ -696,17 +706,13 @@ internal sealed class RecorderSession :
         var targetIndex = direction == RecorderStepMoveDirection.Earlier
             ? index - 1
             : index + 1;
-        (_steps[index], _steps[targetIndex]) = (_steps[targetIndex], _steps[index]);
-        var graphValidation = ApplyScenarioGraphValidation();
-        UpdateLatestPreviewFromSteps();
-        SetStatusAfterGraphValidation(
-            graphValidation,
+        return MoveStepToIndexCore(
+            stepId,
+            targetIndex,
+            rememberMove: false,
             direction == RecorderStepMoveDirection.Earlier
                 ? "Recorded step moved earlier."
-                : "Recorded step moved later.",
-            _steps[targetIndex].ValidationStatus);
-        RequestAutosaveIfRecording();
-        return true;
+                : "Recorded step moved later.");
     }
 
     public async Task<bool> RestoreAutosaveAsync(CancellationToken cancellationToken = default)
@@ -760,6 +766,7 @@ internal sealed class RecorderSession :
         }
 
         _steps.Clear();
+        _stepMoveHistory.Clear();
         _steps.AddRange(result.Steps);
         _recordingGeneratedValueSeries = null;
         _lastGeneratedValueOrdinal = _steps

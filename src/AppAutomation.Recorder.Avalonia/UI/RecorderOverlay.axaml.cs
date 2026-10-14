@@ -1,5 +1,6 @@
 using AppAutomation.Abstractions;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using System.Globalization;
 using Avalonia.Input;
@@ -64,6 +65,7 @@ internal sealed partial class RecorderOverlay : UserControl
     {
         AvaloniaXamlLoader.Load(this);
         InitializeControls();
+        InitializeStepDragDrop();
     }
 
     public event EventHandler? ExportRequested;
@@ -1553,7 +1555,13 @@ internal sealed partial class RecorderOverlay : UserControl
 
         RefreshScenarioSelection();
 
-        if (_activeStepEditDraft is null)
+        if (_dragStepId is not null
+            && (!CanDragJournalStep || !CurrentJournalOrder().SequenceEqual(_dragStartOrder)))
+        {
+            EndStepDrag();
+        }
+
+        if (_activeStepEditDraft is null && _dragStepId is null)
         {
             RenderStepJournal();
         }
@@ -1707,6 +1715,8 @@ internal sealed partial class RecorderOverlay : UserControl
             BorderThickness = new Thickness(1),
             Padding = new Thickness(6)
         };
+        border.Tag = entry.StepId;
+        AutomationProperties.SetAutomationId(border, $"RecorderStep_{entry.StepId:N}");
 
         var container = new StackPanel
         {
@@ -1715,8 +1725,21 @@ internal sealed partial class RecorderOverlay : UserControl
 
         var header = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*")
+            Background = Brushes.Transparent,
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*")
         };
+        var dragHandle = new TextBlock
+        {
+            Text = "⠿",
+            FontSize = 16,
+            Margin = new Thickness(0, 0, 6, 0),
+            Foreground = GetBrush("RecorderMuted"),
+            IsEnabled = CanDragJournalStep
+        };
+        AutomationProperties.SetAutomationId(dragHandle, $"RecorderStepDragHandle_{entry.StepId:N}");
+        ToolTip.SetTip(dragHandle, _activeStepEditDraft is null
+            ? "Drag to move this step. Ctrl+Z undoes a move."
+            : "Apply or cancel the step edit before moving steps.");
         var badge = new TextBlock
         {
             Text = $"#{displayNumber} " + (entry.IsIgnored
@@ -1744,17 +1767,23 @@ internal sealed partial class RecorderOverlay : UserControl
             Foreground = GetBrush("RecorderMuted"),
             TextWrapping = TextWrapping.Wrap
         };
-        Grid.SetColumn(status, 1);
+        Grid.SetColumn(badge, 1);
+        Grid.SetColumn(status, 2);
+        header.Children.Add(dragHandle);
         header.Children.Add(badge);
         header.Children.Add(status);
 
         var preview = new TextBlock
         {
+            Background = Brushes.Transparent,
             Text = entry.Preview,
             FontFamily = "Cascadia Mono, Consolas",
             Foreground = GetBrush("RecorderText"),
             TextWrapping = TextWrapping.Wrap
         };
+        AutomationProperties.SetAutomationId(preview, $"RecorderStepPreview_{entry.StepId:N}");
+        WireStepDragSource(header, border, entry.StepId);
+        WireStepDragSource(preview, border, entry.StepId);
 
         var actions = new StackPanel
         {
@@ -1991,7 +2020,10 @@ internal sealed partial class RecorderOverlay : UserControl
         Dispatcher.Post(
             () =>
             {
-                _stepJournalScrollViewer?.ScrollToEnd();
+                if (_dragStepId is null)
+                {
+                    _stepJournalScrollViewer?.ScrollToEnd();
+                }
             },
             DispatcherPriority.Background);
     }

@@ -40,6 +40,12 @@ internal interface IRecorderStepReorderSessionDetails
     bool CanMoveStep(Guid stepId, RecorderStepMoveDirection direction);
 
     bool MoveStep(Guid stepId, RecorderStepMoveDirection direction);
+
+    bool MoveStepToIndex(Guid stepId, int targetIndex);
+
+    bool CanUndoStepMove { get; }
+
+    bool UndoStepMove();
 }
 
 internal interface IRecorderCheckpointSessionDetails

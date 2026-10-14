@@ -4546,6 +4546,26 @@ public sealed class RecorderTests
 
         public List<(Guid StepId, RecorderStepMoveDirection Direction)> MovedSteps { get; } = new();
 
+        public bool CanUndoStepMove => false;
+
+        public bool UndoStepMove() => false;
+
+        public bool MoveStepToIndex(Guid stepId, int targetIndex)
+        {
+            var index = _stepJournal.FindIndex(entry => entry.StepId == stepId);
+            if (IsBusy || index < 0 || targetIndex < 0 || targetIndex >= _stepJournal.Count
+                || index == targetIndex)
+            {
+                return false;
+            }
+
+            var entry = _stepJournal[index];
+            _stepJournal.RemoveAt(index);
+            _stepJournal.Insert(targetIndex, entry);
+            RaiseChanged();
+            return true;
+        }
+
         public void Start()
         {
             State = RecorderSessionState.Recording;

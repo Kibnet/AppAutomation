@@ -70,6 +70,18 @@ public sealed partial class FlaUiControlResolver
         return -1;
     }
 
+    internal static int? ResolveNativeGridRowIndex(int? rowIndex, int? firstCellIndex)
+    {
+        if (rowIndex >= 0 && firstCellIndex >= 0 && rowIndex != firstCellIndex)
+        {
+            throw new InvalidOperationException(
+                $"Native grid row exposes conflicting UIA GridItem.Row values: "
+                + $"row={rowIndex}; firstCell={firstCellIndex}.");
+        }
+
+        return rowIndex >= 0 ? rowIndex : firstCellIndex >= 0 ? firstCellIndex : null;
+    }
+
     private sealed class FlaUiVisualGridControl :
         IGridUserActionControl,
         IEditableGridControl,
@@ -142,7 +154,8 @@ public sealed partial class FlaUiControlResolver
             ArgumentNullException.ThrowIfNull(identityColumns);
             ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            if (!HasNativeDataRows() && _fallback is IGridRowPositionIdentityControl positionedFallback)
+            if (!HasNativeDataRows(prefetchCells: false)
+                && _fallback is IGridRowPositionIdentityControl positionedFallback)
             {
                 return positionedFallback.ReadRowIdentityAtPosition(
                     position, identityColumns, rowPath, timeoutMs);
@@ -163,7 +176,8 @@ public sealed partial class FlaUiControlResolver
             var visibleSnapshots = new List<NativeGridRowSnapshot>();
             var visibleRows = visibleIndexes.Length == 0
                 ? WaitForNativeDataRows(stopwatch, timeoutMs, includeCells: false)
-                : WaitForNativeDataRows(stopwatch, timeoutMs);
+                : WaitForNativeDataRows(
+                    stopwatch, timeoutMs, requiredCellIndexes: visibleIndexes);
             AppendNativeRows(
                 visibleSnapshots,
                 visibleRows,
@@ -225,7 +239,8 @@ public sealed partial class FlaUiControlResolver
                 stopwatch,
                 timeoutMs,
                 hasDeclaredUniqueIdentity: false,
-                provePositionOrder: true);
+                provePositionOrder: true,
+                requiredCellIndexes: visibleIndexes);
             var indexed = scan.Rows.Where(row => row.RowIndex == position).ToArray();
             if (indexed.Length > 1)
             {
@@ -425,7 +440,7 @@ public sealed partial class FlaUiControlResolver
                 .Where(candidate =>
                     candidate.Bounds.Width > 0
                     && candidate.Bounds.Height > 0
-                    && OverlapWidth(candidate.Bounds, headerBounds) > 0
+                    && NativeGridCellMatcher.OverlapWidth(candidate.Bounds, headerBounds) > 0
                     && System.Drawing.Rectangle.Intersect(candidate.Bounds, rowBounds).Height > 0)
                 .ToArray();
             var geometricId = TryRead(() => geometricCell.AutomationId);
@@ -653,14 +668,17 @@ public sealed partial class FlaUiControlResolver
                 $"Grid '{AutomationId}' did not materialize stable row '{GridRuntimeResolver.DescribeRowSelector(selector)}' within the operation timeout.");
         }
 
-        private bool HasNativeDataRows()
+        private bool HasNativeDataRows(bool prefetchCells = true)
         {
             if (ReadNativeColumnHeaders().Length == 0)
             {
                 return false;
             }
 
-            _prefetchedNativeRows ??= ReadNativeDataRows();
+            if (prefetchCells)
+            {
+                _prefetchedNativeRows ??= ReadNativeDataRows();
+            }
             return true;
         }
 
@@ -1134,10 +1152,15 @@ public sealed partial class FlaUiControlResolver
             Stopwatch stopwatch,
             int timeoutMs,
             bool hasDeclaredUniqueIdentity,
-            bool provePositionOrder = false)
+            bool provePositionOrder = false,
+            IReadOnlyCollection<int>? requiredCellIndexes = null)
         {
             var rows = new List<NativeGridRowSnapshot>();
-            var visibleRows = WaitForNativeDataRows(stopwatch, timeoutMs);
+            var visibleRows = WaitForNativeDataRows(
+                stopwatch,
+                timeoutMs,
+                includeCells: requiredCellIndexes is null || requiredCellIndexes.Count > 0,
+                requiredCellIndexes: requiredCellIndexes);
             _nativeSignatureColumnIndexes = selectorColumnIndexes.Distinct().ToArray();
             _nativeSignatureRowProperties = selectorRowProperties.Distinct().ToArray();
             var scroll = FindGridScrollState();
@@ -1177,10 +1200,15 @@ public sealed partial class FlaUiControlResolver
             var requiredCellCount = provePositionOrder ? ReadNativeColumnHeaders().Length : 0;
             IReadOnlyList<NativeFlaUiRow> CompleteRows(IReadOnlyList<NativeFlaUiRow> observed) =>
                 provePositionOrder
-                    ? observed.Where(row => row.Cells.Count == requiredCellCount).ToArray()
+                    ? observed.Where(row => requiredCellIndexes is null
+                        ? row.Cells.Count == requiredCellCount
+                        : requiredCellIndexes.All(row.HasCell)).ToArray()
                     : observed;
             Func<NativeFlaUiRow[]> readRows = provePositionOrder
-                ? () => ReadNativeDataRows(includeIncompleteRows: true)
+                ? () => ReadNativeDataRows(
+                    includeCells: requiredCellIndexes is null || requiredCellIndexes.Count > 0,
+                    includeIncompleteRows: true,
+                    requiredCellIndexes: requiredCellIndexes)
                 : TakePrefetchedNativeRows;
             visibleRows = NativeGridTraversal.Scan(
                 readRows,
@@ -1245,7 +1273,7 @@ public sealed partial class FlaUiControlResolver
                     throw new InvalidOperationException($"Grid '{AutomationId}' row does not expose the selector's columns.");
                 }
                 var rowIndex = ReadNativeGridRowIndex(row);
-                var snapshotColumnIndexes = rowIndex is null
+                var snapshotColumnIndexes = rowIndex is null && !row.HasSparseCells
                     ? Enumerable.Range(0, row.Cells.Count)
                     : valueColumnIndexes;
                 var cellTexts = Enumerable.Repeat(string.Empty, row.Cells.Count).ToArray();
@@ -1317,21 +1345,14 @@ public sealed partial class FlaUiControlResolver
             var rowIndex = rowPattern is null
                 ? null
                 : TryRead(() => (int?)rowPattern.Row.Value);
-            var firstCellPattern = row.Cells.Count > 0
-                ? TryRead(() => row.Cells[0].Patterns.GridItem.PatternOrDefault)
+            var firstCell = row.Cells.FirstOrDefault(static cell => cell is not null);
+            var firstCellPattern = firstCell is not null
+                ? TryRead(() => firstCell.Patterns.GridItem.PatternOrDefault)
                 : null;
             var firstCellIndex = firstCellPattern is null
                 ? null
                 : TryRead(() => (int?)firstCellPattern.Row.Value);
-            if (rowIndex >= 0 && firstCellIndex >= 0 && rowIndex != firstCellIndex)
-            {
-                throw new InvalidOperationException(
-                    $"Native grid row exposes conflicting UIA GridItem.Row values: "
-                    + $"row={rowIndex}; firstCell={firstCellIndex}.");
-            }
-
-            var index = rowIndex ?? firstCellIndex;
-            return index >= 0 ? index : null;
+            return ResolveNativeGridRowIndex(rowIndex, firstCellIndex);
         }
 
         private bool NativeRowMatches(NativeFlaUiRow row, GridRowSelector selector)
@@ -3564,11 +3585,12 @@ public sealed partial class FlaUiControlResolver
 
         private NativeFlaUiRow[] ReadNativeDataRows(
             bool includeCells = true,
-            bool includeIncompleteRows = false)
+            bool includeIncompleteRows = false,
+            IReadOnlyCollection<int>? requiredCellIndexes = null)
         {
             var root = FindGridRoot();
             var headers = ReadNativeColumnHeaders();
-            if (root is null || headers.Length == 0)
+            if (root is null || includeCells && headers.Length == 0)
             {
                 return Array.Empty<NativeFlaUiRow>();
             }
@@ -3596,14 +3618,22 @@ public sealed partial class FlaUiControlResolver
                 .OrderBy(static candidate => candidate.Bounds.Top)
                 .Select(row => new NativeFlaUiRow(
                     row.Element,
-                    includeCells ? ResolveNativeRowCells(row.Element, headers) : Array.Empty<AutomationElement>()))
-                .Where(row => !includeCells || includeIncompleteRows || row.Cells.Count == headers.Length)
+                    includeCells
+                        ? ResolveNativeRowCells(row.Element, headers, requiredCellIndexes)
+                        : Array.Empty<AutomationElement>(),
+                    hasSparseCells: requiredCellIndexes is not null))
+                .Where(row => !includeCells
+                    || includeIncompleteRows
+                    || (requiredCellIndexes is null
+                        ? row.Cells.Count == headers.Length
+                        : requiredCellIndexes.All(row.HasCell)))
                 .ToArray();
         }
 
         private static IReadOnlyList<AutomationElement> ResolveNativeRowCells(
             AutomationElement row,
-            IReadOnlyList<NativeGridColumnHeader> headers)
+            IReadOnlyList<NativeGridColumnHeader> headers,
+            IReadOnlyCollection<int>? requiredCellIndexes = null)
         {
             var children = TryRead(() => row.FindAllChildren()) ?? Array.Empty<AutomationElement>();
             var rowBounds = TryRead(() => row.BoundingRectangle);
@@ -3619,36 +3649,18 @@ public sealed partial class FlaUiControlResolver
                     && candidate.Bounds.Height > 0
                     && !candidate.IsOffscreen)
                 .ToArray();
-            var cells = new List<AutomationElement>(headers.Count);
-            foreach (var header in headers)
-            {
-                var cell = candidates
-                    .Where(candidate =>
-                        OverlapWidth(candidate.Bounds, header.Bounds) > 0
-                        && System.Drawing.Rectangle.Intersect(candidate.Bounds, rowBounds).Height > 0)
-                    .OrderByDescending(candidate =>
-                        TryRead(() => candidate.Element.ControlType) != ControlType.Text)
-                    .ThenByDescending(candidate => OverlapWidth(candidate.Bounds, header.Bounds))
-                    .ThenBy(candidate => Math.Abs(candidate.Bounds.Width - header.Bounds.Width))
-                    .ThenByDescending(static candidate => candidate.Bounds.Width)
-                    .Select(static candidate => candidate.Element)
-                    .FirstOrDefault();
-                if (cell is null)
-                {
-                    return Array.Empty<AutomationElement>();
-                }
-
-                cells.Add(cell);
-            }
-
-            return cells;
-        }
-
-        private static int OverlapWidth(
-            System.Drawing.Rectangle left,
-            System.Drawing.Rectangle right)
-        {
-            return Math.Max(0, Math.Min(left.Right, right.Right) - Math.Max(left.Left, right.Left));
+            var matches = NativeGridCellMatcher.Match(
+                headers.Select(static header => header.Bounds).ToArray(),
+                candidates.Select(candidate => new NativeGridCellCandidate(
+                    candidate.Bounds,
+                    TryRead(() => candidate.Element.ControlType) == ControlType.Text)).ToArray(),
+                rowBounds,
+                requiredCellIndexes);
+            return matches is null
+                ? Array.Empty<AutomationElement>()
+                : matches.Select(index => index is { } matched
+                    ? candidates[matched].Element
+                    : null!).ToArray();
         }
 
         private static bool HasVisibleBounds(AutomationElement element)
@@ -4453,7 +4465,7 @@ public sealed partial class FlaUiControlResolver
                 rows.Where(static row => row.IsVisible).Select(row =>
                 {
                     var rowIndex = ReadNativeGridRowIndex(row);
-                    var signatureColumnIndexes = rowIndex is null
+                    var signatureColumnIndexes = rowIndex is null && !row.HasSparseCells
                         ? Enumerable.Range(0, row.Cells.Count)
                         : _nativeSignatureColumnIndexes;
                     return string.Join("\u001f",
@@ -4488,7 +4500,8 @@ public sealed partial class FlaUiControlResolver
         private NativeFlaUiRow[] WaitForNativeDataRows(
             Stopwatch stopwatch,
             int timeoutMs,
-            bool includeCells = true)
+            bool includeCells = true,
+            IReadOnlyCollection<int>? requiredCellIndexes = null)
         {
             var firstRead = true;
             return NativeGridTraversal.WaitForRows(
@@ -4497,12 +4510,16 @@ public sealed partial class FlaUiControlResolver
                     if (firstRead)
                     {
                         firstRead = false;
-                        return includeCells
+                        return includeCells && requiredCellIndexes is null
                             ? TakePrefetchedNativeRows()
-                            : ReadNativeDataRows(includeCells: false);
+                            : ReadNativeDataRows(
+                                includeCells: includeCells,
+                                requiredCellIndexes: requiredCellIndexes);
                     }
 
-                    return ReadNativeDataRows(includeCells: includeCells);
+                    return ReadNativeDataRows(
+                        includeCells: includeCells,
+                        requiredCellIndexes: requiredCellIndexes);
                 },
                 () => stopwatch.ElapsedMilliseconds < timeoutMs,
                 () =>
@@ -4885,10 +4902,12 @@ public sealed partial class FlaUiControlResolver
 
             public NativeFlaUiRow(
                 AutomationElement element,
-                IReadOnlyList<AutomationElement> cells)
+                IReadOnlyList<AutomationElement> cells,
+                bool hasSparseCells = false)
             {
                 Element = element;
                 Cells = cells;
+                HasSparseCells = hasSparseCells;
                 _cellTexts = new string?[cells.Count];
                 _readCells = new bool[cells.Count];
             }
@@ -4897,12 +4916,17 @@ public sealed partial class FlaUiControlResolver
 
             public IReadOnlyList<AutomationElement> Cells { get; }
 
+            public bool HasSparseCells { get; }
+
+            public bool HasCell(int columnIndex) =>
+                columnIndex >= 0 && columnIndex < Cells.Count && Cells[columnIndex] is not null;
+
             public bool IsVisible => HasVisibleBounds(Element);
 
             public string GetCellText(int columnIndex)
             {
                 ArgumentOutOfRangeException.ThrowIfNegative(columnIndex);
-                if (columnIndex >= Cells.Count)
+                if (!HasCell(columnIndex))
                 {
                     return string.Empty;
                 }
