@@ -2181,6 +2181,8 @@ public sealed class RecorderCheckpointAssertionTests
     private sealed class ProductGridHost : StackPanel
     {
         public IReadOnlyList<ProductGridRow> ItemsSource { get; init; } = [];
+
+        public IReadOnlyList<ProductGridRow>? CollectionView { get; init; }
     }
 
     private sealed class ProductGridRowPresenter : StackPanel
@@ -2207,6 +2209,7 @@ public sealed class RecorderCheckpointAssertionTests
         var grid = new ProductGridHost
         {
             ItemsSource = [first, second, third],
+            CollectionView = [second, third, first],
             Width = 240,
             Height = 240
         };

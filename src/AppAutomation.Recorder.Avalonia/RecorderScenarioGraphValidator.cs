@@ -340,26 +340,24 @@ internal static class RecorderScenarioGraphValidator
                     + $"'{condition.ColumnName}' still uses a recorded literal.");
             }
 
-            if (!rowValueSources.TryGetValue(reference, out var source)
-                || source.GridRowConditions is { Count: > 0 }
-                || source.RowIndex.HasValue
-                || source.Control.ControlType == AppAutomation.Abstractions.UiControlType.Grid
-                || source.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
-                    or RecorderValueAccessorKind.GridCellValue)
+            var sourceStatus = rowValueSources.TryGetValue(reference, out var source)
+                ? RecorderGridRowValuePolicy.Validate(source, condition)
+                : RecorderGridRowValueSourceStatus.GridDerived;
+            if (sourceStatus == RecorderGridRowValueSourceStatus.GridDerived)
             {
                 return RecorderGraphStepValidationResult.Invalid(
                     $"Grid key checkpoint step {index + 1} needs an independent earlier UI value "
                     + $"for row column '{condition.ColumnName}'; another grid cell is not an independent source.");
             }
 
-            if (string.IsNullOrWhiteSpace(source.StringValue))
+            if (sourceStatus == RecorderGridRowValueSourceStatus.Empty)
             {
                 return RecorderGraphStepValidationResult.Invalid(
                     $"Grid key checkpoint step {index + 1} source for row column '{condition.ColumnName}' "
                     + "has no readable current text. Record its value before this step.");
             }
 
-            if (!string.Equals(source.StringValue, condition.Value, StringComparison.Ordinal))
+            if (sourceStatus == RecorderGridRowValueSourceStatus.Mismatch)
             {
                 return RecorderGraphStepValidationResult.Invalid(
                     $"Grid key checkpoint step {index + 1} source for row column '{condition.ColumnName}' "

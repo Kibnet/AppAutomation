@@ -57,22 +57,15 @@ public sealed partial class HeadlessControlResolver
             var rows = ReadIndexedRows();
             if (rows.Length > 0 && rows[0].Item is not null)
             {
-                var displayedItems = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    ReadDisplayedItemOrder(Inner.Control, rows, rowPath));
-                if (displayedItems is null)
+                var item = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    ReadDisplayedItemAtPosition(Inner.Control, rows, rowPath, position));
+                if (item is null)
                 {
                     throw new InvalidOperationException(
                         $"Grid '{AutomationId}' cannot prove the displayed position {position}: "
                         + "the visible rows do not establish their position in the current view.");
                 }
 
-                if (position >= displayedItems.Length)
-                {
-                    throw new InvalidOperationException(
-                        $"Grid '{AutomationId}' has no logical row at current view position {position}.");
-                }
-
-                var item = displayedItems[position];
                 var selected = rows.Single(row => ReferenceEquals(row.Item, item));
                 return CaptureUniqueIdentity(selected);
             }
@@ -110,10 +103,11 @@ public sealed partial class HeadlessControlResolver
             }
         }
 
-        private static object[]? ReadDisplayedItemOrder(
+        private static object? ReadDisplayedItemAtPosition(
             Control grid,
             IReadOnlyList<IndexedHeadlessRow> rows,
-            string rowPath)
+            string rowPath,
+            int position)
         {
             var itemIndexes = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
             for (var index = 0; index < rows.Count; index++)
@@ -158,20 +152,10 @@ public sealed partial class HeadlessControlResolver
                 }
             }
 
-            var ordered = positions.OrderBy(static entry => entry.Value).ToArray();
-            if (ordered.Zip(ordered.Skip(1), static (left, right) => right.Value - left.Value)
-                .Any(static distance => distance < 1))
-            {
-                return null;
-            }
-
-            if (positions.Count != rows.Count
-                && ordered.Where((entry, index) => !ReferenceEquals(entry.Key, rows[index].Item)).Any())
-            {
-                return null;
-            }
-
-            return ordered.Select(static entry => entry.Key).ToArray();
+            var (viewItems, hasAuthoritativeView) =
+                HeadlessGridRuntimeAccess.ReadCurrentViewItems(grid);
+            return GridCurrentViewPositionResolver.FindItemAtPosition(
+                viewItems, positions, position, hasAuthoritativeView);
         }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)

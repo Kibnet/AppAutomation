@@ -400,16 +400,76 @@ public sealed class FlaUiControlResolverTests
         session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
         var page = MainWindowFlaUiPageFactory.Create(session);
         page.SelectTabItem(static candidate => candidate.DataGridTabItem);
-
         var grid = page.ArmComplexDataGridControl;
         var row = GridRowKeyReader.Capture(grid, 0);
+        var cellKeyCatalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds(
+                    "ArmComplexDataGridControl",
+                    "ArmComplexDataGridControl",
+                    "ArmComplexDataGridControl")
+                .WithColumns(GridColumnDefinition.Auto("Value"))
+                .IdentifyRowsBy("Value"));
+        var cellKeyGrid = MainWindowFlaUiPageFactory.Create(session, cellKeyCatalog)
+            .ArmComplexDataGridControl;
+        var cellKey = GridRowKeyReader.Capture(cellKeyGrid, 0);
         var product = GridValueReader.ReadCellText(grid, row, "Product");
         var value = GridValueReader.ReadCellText(grid, row, "Value");
 
         using (Assert.Multiple())
         {
+            await Assert.That(row.Conditions.Single().Value).IsEqualTo("ARM-01");
             await Assert.That(product).Contains("Product");
             await Assert.That(value).IsEqualTo("Value-1");
+            await Assert.That(cellKey.Conditions.Single().Value).IsEqualTo("Value-1");
+        }
+    }
+
+    [Test]
+    public async Task NativeGridCellMatcherRequiresOnlyIdentityColumns()
+    {
+        var headers = new[]
+        {
+            new System.Drawing.Rectangle(0, 0, 100, 20),
+            new System.Drawing.Rectangle(100, 0, 100, 20),
+            new System.Drawing.Rectangle(200, 0, 100, 20)
+        };
+        var cells = new[]
+        {
+            new NativeGridCellCandidate(new System.Drawing.Rectangle(0, 20, 100, 20), IsText: false),
+            new NativeGridCellCandidate(new System.Drawing.Rectangle(200, 20, 100, 20), IsText: false)
+        };
+        var rowBounds = new System.Drawing.Rectangle(0, 20, 300, 20);
+
+        var selected = NativeGridCellMatcher.Match(headers, cells, rowBounds, [0]);
+        var rowOnly = NativeGridCellMatcher.Match(headers, cells, rowBounds, []);
+        var complete = NativeGridCellMatcher.Match(headers, cells, rowBounds, requiredIndexes: null);
+        var missingIdentity = NativeGridCellMatcher.Match(headers, cells, rowBounds, [1]);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(selected).IsNotNull();
+            await Assert.That(selected![0]).IsEqualTo(0);
+            await Assert.That(selected[1]).IsNull();
+            await Assert.That(selected[2]).IsNull();
+            await Assert.That(rowOnly).IsNotNull();
+            await Assert.That(rowOnly!.All(static index => index is null)).IsTrue();
+            await Assert.That(complete).IsNull();
+            await Assert.That(missingIdentity).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task NativeGridRowIndexPrefersRowMetadataAndRejectsConflict()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiControlResolver.ResolveNativeGridRowIndex(7, null)).IsEqualTo(7);
+            await Assert.That(FlaUiControlResolver.ResolveNativeGridRowIndex(null, 8)).IsEqualTo(8);
+            await Assert.That(FlaUiControlResolver.ResolveNativeGridRowIndex(-1, 9)).IsEqualTo(9);
+            await Assert.That(FlaUiControlResolver.ResolveNativeGridRowIndex(10, 10)).IsEqualTo(10);
+            await Assert.That(Assert.Throws<InvalidOperationException>(() =>
+                    FlaUiControlResolver.ResolveNativeGridRowIndex(3, 4)).Message)
+                .Contains("row=3; firstCell=4");
         }
     }
 

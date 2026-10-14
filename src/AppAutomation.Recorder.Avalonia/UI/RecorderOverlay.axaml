@@ -200,13 +200,21 @@
                                    Grid.Row="1"
                                    Foreground="{DynamicResource RecorderMuted}"
                                    Text="No recorded steps yet." />
-                        <ScrollViewer x:Name="StepJournalScrollViewer"
-                                      Grid.Row="2"
-                                      HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="StepJournalPanel"
-                                        Spacing="6" />
-                        </ScrollViewer>
+                        <Grid x:Name="StepJournalViewport" Grid.Row="2" ClipToBounds="True">
+                            <ScrollViewer x:Name="StepJournalScrollViewer"
+                                          Focusable="True"
+                                          automation:AutomationProperties.AutomationId="RecorderStepJournal"
+                                          HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="StepJournalPanel" Spacing="6" />
+                            </ScrollViewer>
+                            <TextBlock x:Name="StepDropIndicator"
+                                    automation:AutomationProperties.AutomationId="RecorderStepDropIndicator"
+                                    automation:AutomationProperties.Name="Step insertion position"
+                                    Height="3" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                    Background="{DynamicResource RecorderAccent}"
+                                    IsVisible="False" IsHitTestVisible="False" ZIndex="10" />
+                        </Grid>
                     </Grid>
                 </Border>
 

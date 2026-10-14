@@ -59,8 +59,15 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
+    [Arguments("prefix", 2, "ORDER-02")]
+    [Arguments("reordered", 21, null)]
+    [Arguments("sorted-view", 38, "ORDER-21")]
+    [Arguments("sorted-view", 0, null)]
     [NotInParallel("DesktopUi")]
-    public async Task VirtualizedGridCapturesVisibleSourcePrefixByStableKey()
+    public async Task VirtualizedGridUsesOnlyProvenCurrentViewOrder(
+        string scenario,
+        int position,
+        string? expectedKey)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var rows = Enumerable.Range(0, 60)
@@ -68,9 +75,18 @@ public sealed class HeadlessControlResolverTests
             .ToArray();
         HeadlessRuntime.Dispatch(() =>
         {
-            var grid = new VirtualOrdersGrid { ItemsSource = rows, Width = 240, Height = 90 };
+            var grid = new VirtualOrdersGrid
+            {
+                ItemsSource = rows,
+                CollectionView = scenario == "sorted-view" ? rows.Reverse().ToArray() : null,
+                Width = 240,
+                Height = 90
+            };
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "VirtualOrdersGrid");
-            foreach (var row in rows.Take(3))
+            var visibleRows = scenario == "prefix"
+                ? rows.Take(3)
+                : new[] { rows[22], rows[21], rows[20] };
+            foreach (var row in visibleRows)
             {
                 grid.Children.Add(new global::Avalonia.Controls.Border
                 {
@@ -94,51 +110,16 @@ public sealed class HeadlessControlResolverTests
         var gridControl = resolver.Resolve<IGridControl>(new UiControlDefinition(
             "VirtualOrdersGrid", UiControlType.Grid, "VirtualOrdersGrid"));
 
-        var selector = GridRowKeyReader.Capture(gridControl, 2);
-
-        await Assert.That(selector.Conditions.Single().Value).IsEqualTo("ORDER-02");
-    }
-
-    [Test]
-    [NotInParallel("DesktopUi")]
-    public async Task VirtualizedGridRejectsUnprovenSourcePositionAfterViewReorder()
-    {
-        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
-        var rows = Enumerable.Range(0, 60)
-            .Select(index => new VirtualOrderRow($"ORDER-{index:D2}"))
-            .ToArray();
-        HeadlessRuntime.Dispatch(() =>
+        if (expectedKey is null)
         {
-            var grid = new VirtualOrdersGrid { ItemsSource = rows, Width = 240, Height = 90 };
-            global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "VirtualOrdersGrid");
-            foreach (var row in new[] { rows[22], rows[21], rows[20] })
-            {
-                grid.Children.Add(new global::Avalonia.Controls.Border
-                {
-                    DataContext = row,
-                    Width = 240,
-                    Height = 30,
-                    Child = new global::Avalonia.Controls.TextBlock { Text = row.Key }
-                });
-            }
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                GridRowKeyReader.Capture(gridControl, position));
+            await Assert.That(failure.Message).Contains($"cannot prove the displayed position {position}");
+            return;
+        }
 
-            session.MainWindow.Content = grid;
-            grid.Measure(new Size(240, 90));
-            grid.Arrange(new Rect(0, 0, 240, 90));
-        });
-        var catalog = new GridAutomationCatalog().Add(
-            GridAutomationDefinition.ByAutomationIds(
-                    "VirtualOrdersGrid", "VirtualOrdersGrid", "VirtualOrdersGrid")
-                .WithColumns(GridColumnDefinition.Map("Key").FromField("Key"))
-                .IdentifyRowsBy("Key"));
-        var resolver = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog);
-        var gridControl = resolver.Resolve<IGridControl>(new UiControlDefinition(
-            "VirtualOrdersGrid", UiControlType.Grid, "VirtualOrdersGrid"));
-
-        var failure = Assert.Throws<InvalidOperationException>(() =>
-            GridRowKeyReader.Capture(gridControl, 21));
-
-        await Assert.That(failure.Message).Contains("cannot prove the displayed position 21");
+        var selector = GridRowKeyReader.Capture(gridControl, position);
+        await Assert.That(selector.Conditions.Single().Value).IsEqualTo(expectedKey);
     }
 
     private sealed record VirtualOrderRow(string Key);
@@ -148,6 +129,8 @@ public sealed class HeadlessControlResolverTests
     private sealed class VirtualOrdersGrid : global::Avalonia.Controls.StackPanel
     {
         public IReadOnlyList<VirtualOrderRow> ItemsSource { get; init; } = [];
+
+        public IReadOnlyList<VirtualOrderRow>? CollectionView { get; init; }
 
         public IReadOnlyList<VirtualOrderColumn> Columns { get; } =
             [new VirtualOrderColumn("Key")];

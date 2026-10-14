@@ -25,6 +25,28 @@ internal static class HeadlessGridRuntimeAccess
             : Array.Empty<object?>();
     }
 
+    public static (object?[] Items, bool IsAuthoritative) ReadCurrentViewItems(Control grid)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+        if (grid is DataGrid { CollectionView: { } collectionView })
+        {
+            return (collectionView.Cast<object?>().ToArray(), true);
+        }
+
+        if (grid is ItemsControl itemsControl)
+        {
+            return (itemsControl.ItemsView.Cast<object?>().ToArray(), true);
+        }
+
+        if (GridPropertyValueReader.TryReadProperty(grid, "CollectionView", out var currentView)
+            && currentView is IEnumerable values and not string)
+        {
+            return (values.Cast<object?>().ToArray(), true);
+        }
+
+        return (ReadSourceItems(grid), false);
+    }
+
     public static string[] ReadColumnNames(Control grid)
     {
         ArgumentNullException.ThrowIfNull(grid);

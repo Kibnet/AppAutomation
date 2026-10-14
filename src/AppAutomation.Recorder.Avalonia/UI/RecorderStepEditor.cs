@@ -509,13 +509,14 @@ internal sealed class RecorderStepEditor : Border
         for (var index = 0; index < draft.GridRowConditions!.Count; index++)
         {
             var condition = draft.GridRowConditions[index];
+            var availableVariables = draft.AvailableGridRowVariablesByCondition[index];
             var keyCheckpoint = draft.EditKind == RecorderStepEditKind.Checkpoint
                 && draft.GridRowConditions.Any(row => string.Equals(
                     row.ColumnName,
                     draft.GridTargetColumnName,
                     StringComparison.Ordinal));
             var variableSourceLabel = keyCheckpoint ? "Previous UI value" : "Variable";
-            var sourceOptions = draft.AvailableGridRowVariables.Count > 0
+            var sourceOptions = availableVariables.Count > 0
                 || condition.ValueReference is not null
                 ? new[] { "Recorded value", variableSourceLabel }
                 : ["Recorded value"];
@@ -531,17 +532,17 @@ internal sealed class RecorderStepEditor : Border
                 TextWrapping = TextWrapping.Wrap
             };
             recordedKeyFields.Children.Add(recorded);
-            var selected = draft.AvailableGridRowVariables
+            var selected = availableVariables
                 .FirstOrDefault(option => option.Reference == condition.ValueReference);
             var variable = new ComboBox
             {
                 Name = $"RecorderStepEditRowVariable{index}",
-                ItemsSource = draft.AvailableGridRowVariables,
+                ItemsSource = availableVariables,
                 SelectedItem = selected,
                 MinWidth = 220
             };
             recordedKeyFields.Children.Add(CreateField("Variable", variable));
-            if (draft.AvailableGridRowVariables.Count == 0)
+            if (availableVariables.Count == 0)
             {
                 recordedKeyFields.Children.Add(new TextBlock
                 {
@@ -559,7 +560,7 @@ internal sealed class RecorderStepEditor : Border
                     variableSourceLabel,
                     StringComparison.Ordinal);
                 SetFieldVisible(variable, useVariable);
-                variable.IsEnabled = draft.AvailableGridRowVariables.Count > 0;
+                variable.IsEnabled = availableVariables.Count > 0;
                 recorded.IsVisible = !useVariable;
             }
 

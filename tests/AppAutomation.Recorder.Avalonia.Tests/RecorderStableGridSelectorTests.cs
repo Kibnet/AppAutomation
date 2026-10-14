@@ -567,6 +567,43 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
+    [Arguments(2, false, true, 2)]
+    [Arguments(10, true, true, 1)]
+    [Arguments(1, false, false, null)]
+    public async Task GridCatalog_CurrentTableRowUsesProvenVirtualizedViewOrder(
+        int selectedSourceIndex,
+        bool sortedView,
+        bool expectedSuccess,
+        int? expectedPosition)
+    {
+        var visibleSourceIndexes = sortedView
+            ? new[] { 11, 10, 9 }
+            : expectedSuccess
+                ? new[] { 0, 1, 2 }
+                : new[] { 2, 1, 0 };
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedSourceIndex,
+            selectedSourceField: "Key",
+            visibleSourceIndexes: visibleSourceIndexes,
+            collectionViewSourceIndexes: sortedView
+                ? Enumerable.Range(0, 12).Reverse().ToArray()
+                : null);
+
+        var result = fixture.CaptureCheckpoint("rowKey");
+
+        await Assert.That(result.Success).IsEqualTo(expectedSuccess);
+        if (expectedSuccess)
+        {
+            await Assert.That(result.Step!.GridCapturedRowPosition).IsEqualTo(expectedPosition);
+        }
+        else
+        {
+            await Assert.That(result.Message).Contains("cannot prove");
+        }
+    }
+
+    [Test]
     public async Task GridCatalog_NumericCellsSupportCalculatedTargetAndOperands()
     {
         using var fixture = new CalculatedGridAssertionFixture();
@@ -1613,7 +1650,9 @@ public sealed class RecorderStableGridSelectorTests
             bool includeRowIdentity,
             int selectedRowIndex = 0,
             string selectedSourceField = "RequiredQuantity",
-            bool duplicateRowIdentity = false)
+            bool duplicateRowIdentity = false,
+            IReadOnlyList<int>? visibleSourceIndexes = null,
+            IReadOnlyList<int>? collectionViewSourceIndexes = null)
         {
             var rows = Enumerable.Range(1, 12)
                 .Select(index => new CatalogItemRow(
@@ -1638,7 +1677,11 @@ public sealed class RecorderStableGridSelectorTests
             var archiveRow = new CatalogItemRow("ITEM-10", 999m);
             var archiveGrid = new GridHost { ItemsSource = new[] { archiveRow } };
             var archiveRuntimeGrid = new Border();
-            var sourceGrid = new CatalogGridHost { ItemsSource = rows };
+            var sourceGrid = new CatalogGridHost
+            {
+                ItemsSource = rows,
+                CollectionView = collectionViewSourceIndexes?.Select(index => rows[index]).ToArray()
+            };
             _rowPresenter = new Border { DataContext = cellContext };
             _selectedCell = new Border
             {
@@ -1652,8 +1695,9 @@ public sealed class RecorderStableGridSelectorTests
             AutomationProperties.SetAutomationId(sourceGrid, "ItemsGridVisual");
             AutomationProperties.SetAutomationId(runtimeGrid, "ItemsGrid");
             _rowPresenter.Child = _selectedCell;
-            foreach (var currentRow in rows)
+            foreach (var sourceIndex in visibleSourceIndexes ?? Enumerable.Range(0, rows.Length))
             {
+                var currentRow = rows[sourceIndex];
                 sourceGrid.Children.Add(ReferenceEquals(currentRow, row)
                     ? _rowPresenter
                     : new Border { DataContext = currentRow, Height = 20 });
@@ -2031,6 +2075,8 @@ public sealed class RecorderStableGridSelectorTests
     private sealed class CatalogGridHost : StackPanel
     {
         public object? ItemsSource { get; init; }
+
+        public object? CollectionView { get; init; }
     }
 
     private sealed class NativeGridMetadataHost : Panel

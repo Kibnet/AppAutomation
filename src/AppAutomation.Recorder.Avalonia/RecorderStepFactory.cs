@@ -7173,6 +7173,27 @@ internal sealed partial class RecorderStepFactory
         IReadOnlyList<object?> items,
         object selectedRow)
     {
+        IReadOnlyList<object?> viewItems = items;
+        var hasAuthoritativeView = false;
+        try
+        {
+            var collectionView = gridSource.GetType().GetProperty("CollectionView")?.GetValue(gridSource);
+            if (collectionView is IEnumerable currentView and not string)
+            {
+                viewItems = currentView.Cast<object?>().ToArray();
+                hasAuthoritativeView = true;
+            }
+            else if (gridSource is ItemsControl itemsControl)
+            {
+                viewItems = itemsControl.ItemsView.Cast<object?>().ToArray();
+                hasAuthoritativeView = true;
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
         var itemIndexes = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
         for (var index = 0; index < items.Count; index++)
         {
@@ -7221,32 +7242,8 @@ internal sealed partial class RecorderStepFactory
             }
         }
 
-        if (!positions.ContainsKey(selectedRow))
-        {
-            return null;
-        }
-
-        var ordered = positions.OrderBy(static entry => entry.Value).ToArray();
-        if (ordered.Zip(ordered.Skip(1), static (left, right) => right.Value - left.Value)
-            .Any(static distance => distance < 1))
-        {
-            return null;
-        }
-
-        if (positions.Count == items.Count)
-        {
-            for (var position = 0; position < ordered.Length; position++)
-            {
-                if (ReferenceEquals(ordered[position].Key, selectedRow))
-                {
-                    return position;
-                }
-            }
-
-            return null;
-        }
-
-        return null;
+        return GridCurrentViewPositionResolver.FindPosition(
+            viewItems, positions, selectedRow, hasAuthoritativeView);
     }
 
     private static bool TryValidateAutomaticGridIdentityValues(
