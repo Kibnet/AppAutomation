@@ -3021,9 +3021,51 @@ internal sealed partial class RecorderStepFactory
         RecorderSemanticValueSnapshot? valueSnapshot,
         bool expectedEnabled)
     {
+        return TryCreateControlStateAssertionStep(
+            source,
+            valueSnapshot,
+            expectedEnabled,
+            RecorderValueAccessorKind.IsEnabled,
+            "enabled");
+    }
+
+    internal StepCreationResult TryCreateReadOnlyAssertionStep(
+        Control? source,
+        RecorderSemanticValueSnapshot? valueSnapshot)
+    {
+        var controlType = valueSnapshot?.Prototype.Control.ControlType
+            ?? (source is null ? UiControlType.AutomationElement : ClassifyControlType(source));
+        if (controlType is not (UiControlType.TextBox or UiControlType.DateTimePicker))
+        {
+            return StepCreationResult.Unsupported(
+                "Read-only assertions require a text input or date editor with a readable editability state.");
+        }
+
+        if (source is DatePicker)
+        {
+            return StepCreationResult.Unsupported(
+                "Avalonia DatePicker does not expose a readable read-only state. "
+                + "Register a date editor with a readable value part before recording this assertion.");
+        }
+
+        return TryCreateControlStateAssertionStep(
+            source,
+            valueSnapshot,
+            expectedState: true,
+            RecorderValueAccessorKind.IsReadOnly,
+            "read-only");
+    }
+
+    private StepCreationResult TryCreateControlStateAssertionStep(
+        Control? source,
+        RecorderSemanticValueSnapshot? valueSnapshot,
+        bool expectedState,
+        RecorderValueAccessorKind accessorKind,
+        string stateName)
+    {
         if (source is null)
         {
-            return StepCreationResult.Unsupported("No control is available for enabled-state assertion capture.");
+            return StepCreationResult.Unsupported($"No control is available for {stateName}-state assertion capture.");
         }
 
         if (valueSnapshot is not null)
@@ -3031,12 +3073,12 @@ internal sealed partial class RecorderStepFactory
             var step = new RecordedStep(
                 RecordedActionKind.AssertValue,
                 valueSnapshot.Prototype.Control,
-                BoolValue: expectedEnabled,
+                BoolValue: expectedState,
                 ValueKind: RecorderValueKind.Boolean,
-                ValueAccessorKind: RecorderValueAccessorKind.IsEnabled,
+                ValueAccessorKind: accessorKind,
                 ComparisonKind: RecorderComparisonKind.Equal,
                 HasExpectedLiteral: true);
-            return CreateStepFromSnapshot(valueSnapshot, step, "Added enabled-state assertion.");
+            return CreateStepFromSnapshot(valueSnapshot, step, $"Added {stateName}-state assertion.");
         }
 
         var locatorResult = _selectorResolver.Resolve(source, ClassifyControlType(source));
@@ -3050,16 +3092,16 @@ internal sealed partial class RecorderStepFactory
             new RecordedStep(
                 RecordedActionKind.AssertValue,
                 locatorResult.Control,
-                BoolValue: expectedEnabled,
+                BoolValue: expectedState,
                 ValueKind: RecorderValueKind.Boolean,
-                ValueAccessorKind: RecorderValueAccessorKind.IsEnabled,
+                ValueAccessorKind: accessorKind,
                 ComparisonKind: RecorderComparisonKind.Equal,
                 HasExpectedLiteral: true,
                 Warning: locatorResult.Control.Warning,
                 ValidationStatus: locatorResult.ValidationStatus,
                 ValidationMessage: locatorResult.ValidationMessage,
                 CanPersist: locatorResult.CanPersist),
-            "Added enabled-state assertion.");
+            $"Added {stateName}-state assertion.");
     }
 
     private RecordedStep CreateSemanticValueStep(
@@ -3807,6 +3849,7 @@ internal sealed partial class RecorderStepFactory
                 or RecorderValueAccessorKind.IsSelected
                 or RecorderValueAccessorKind.IsExpanded
                 or RecorderValueAccessorKind.IsEnabled
+                or RecorderValueAccessorKind.IsReadOnly
                 or RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Date => accessorKind is RecorderValueAccessorKind.SelectedDate
                 or RecorderValueAccessorKind.GridCellValue,

@@ -8,6 +8,25 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    public async Task CompositeDatePicker_ReadOnlyStateComesFromConfiguredValuePart()
+    {
+        var value = new FakeReadOnlyTextBoxControl("DateValue");
+        var resolver = new FakeResolver(
+                ("DateRoot", new FakeControl("DateRoot")),
+                ("DateValue", value))
+            .WithDateTimePickerProxy("Date", DatePickerParts.ByAutomationIds("DateRoot", "DateValue"));
+        var date = resolver.Resolve<IDateTimePickerControl>(
+            new UiControlDefinition("Date", UiControlType.DateTimePicker, "DateRoot"));
+
+        await Assert.That(date.IsReadOnly).IsFalse();
+        value.ReadOnly = true;
+        await Assert.That(date.IsReadOnly).IsTrue();
+        value.CanRead = false;
+        var unavailable = Assert.Throws<InvalidOperationException>(() => _ = date.IsReadOnly);
+        await Assert.That(unavailable.Message).Contains("DateValue");
+    }
+
+    [Test]
     public async Task DeferredAdapters_OnlySuppressTransientResolutionFailures()
     {
         var inner = new FakeResolver(("Input", new FakeTextBoxControl("Input")))
@@ -1940,6 +1959,24 @@ public sealed class UiControlAdapterTests
         {
             Text = value;
             OnEnter?.Invoke(value);
+        }
+    }
+
+    private sealed class FakeReadOnlyTextBoxControl : FakeControlBase, ITextBoxControl, IReadOnlyStateControl
+    {
+        public FakeReadOnlyTextBoxControl(string automationId) : base(automationId)
+        {
+        }
+
+        public string Text { get; set; } = string.Empty;
+        public bool ReadOnly { get; set; }
+        public bool CanRead { get; set; } = true;
+        public void Enter(string value) => Text = value;
+
+        public bool TryGetIsReadOnly(out bool isReadOnly)
+        {
+            isReadOnly = ReadOnly;
+            return CanRead;
         }
     }
 

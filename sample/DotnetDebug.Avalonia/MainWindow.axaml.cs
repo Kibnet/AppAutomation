@@ -490,6 +490,14 @@ public partial class MainWindow : Window
         MixModeCombo.SelectedIndex = 0;
     }
 
+    private void OnToggleReadOnlyClick(object? sender, RoutedEventArgs e)
+    {
+        var readOnly = !ReadOnlyStateInput.IsReadOnly;
+        ReadOnlyStateInput.IsReadOnly = readOnly;
+        CompositeReadOnlyInput.IsReadOnly = readOnly;
+        ReadOnlyStateToggleButton.Content = readOnly ? "Make editable" : "Make read-only";
+    }
+
     private void OnDateDiffClick(object? sender, RoutedEventArgs e)
     {
         DateErrorText.Text = string.Empty;

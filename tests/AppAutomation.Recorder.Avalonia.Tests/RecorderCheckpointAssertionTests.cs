@@ -1820,6 +1820,113 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
+    public async Task CheckMode_RecordsReadOnlyStateBesideContainsWithoutCapturingText()
+    {
+        var root = new StackPanel();
+        var input = new TextBox { Text = "Visible value", IsReadOnly = true };
+        AutomationProperties.SetAutomationId(input, "ReadOnlyInput");
+        root.Children.Add(new Border { Child = input });
+        using var session = CreateSession(root);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(input);
+
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = overlay.CreateLiteralAssertionEditorForTesting(selection!);
+        var comparison = editor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderExpectedComparison");
+        var expectedValue = editor.GetLogicalDescendants().OfType<TextBox>()
+            .Single(control => control.Name == "RecorderExpectedValue");
+        var choices = comparison.Items.Cast<object>().Select(static item => item.ToString()).ToArray();
+
+        await Assert.That(choices).IsEquivalentTo(
+            ["Equals", "Not equals", "Contains", "Read-only"]);
+        comparison.SelectedIndex = Array.IndexOf(choices, "Read-only");
+        await Assert.That(expectedValue.IsVisible).IsFalse();
+
+        var add = editor.GetLogicalDescendants().OfType<Button>()
+            .Single(control => string.Equals(control.Content?.ToString(), "Add", StringComparison.Ordinal));
+        add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        await Assert.That(session.ExportPreview()).IsEqualTo(
+            "await Assert.That(Page.ReadOnlyInput.IsReadOnly).IsEqualTo(true);");
+    }
+
+    [Test]
+    public async Task CheckMode_RejectsNativeDatePickerReadOnlyWithoutValueSurface()
+    {
+        var root = new StackPanel();
+        var date = new DatePicker { SelectedDate = new DateTimeOffset(2026, 10, 14, 0, 0, 0, TimeSpan.Zero) };
+        AutomationProperties.SetAutomationId(date, "ObservedDate");
+        root.Children.Add(date);
+        using var session = CreateSession(root);
+        session.Start();
+        RecorderCheckTargetSelection? selection = null;
+        session.CheckTargetSelected += (_, eventArgs) => selection = eventArgs.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(date);
+
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = overlay.CreateLiteralAssertionEditorForTesting(selection!);
+        var comparison = editor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderExpectedComparison");
+        var choices = comparison.Items.Cast<object>().Select(static item => item.ToString()).ToArray();
+        await Assert.That(choices).IsEquivalentTo(["Equals", "Not equals", "Read-only"]);
+
+        comparison.SelectedIndex = Array.IndexOf(choices, "Read-only");
+        var dateMode = editor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(control => control.Name == "RecorderLiteralDateMode");
+        await Assert.That(dateMode.GetLogicalAncestors().OfType<StackPanel>().First().IsVisible).IsFalse();
+
+        var add = editor.GetLogicalDescendants().OfType<Button>()
+            .Single(control => string.Equals(control.Content?.ToString(), "Add", StringComparison.Ordinal));
+        add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Assert.That(session.StepCount).IsEqualTo(0);
+        await Assert.That(session.LatestStatus).Contains("read-only");
+    }
+
+    [Test]
+    public async Task Save_ReadOnlyAssertionGeneratesCompilableProviderNeutralCode()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage,
+            RecorderScenarioDestinationSources.CompilableScenario);
+        var context = project.CreateSaveContext("Read-only state", "read-only-draft");
+        var result = await project.SaveAsync(context,
+        [
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedValue", UiControlType.TextBox),
+                BoolValue: true,
+                ValueKind: RecorderValueKind.Boolean,
+                ValueAccessorKind: RecorderValueAccessorKind.IsReadOnly,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true),
+            new RecordedStep(
+                RecordedActionKind.AssertValue,
+                Descriptor("ObservedDate", UiControlType.DateTimePicker),
+                BoolValue: true,
+                ValueKind: RecorderValueKind.Boolean,
+                ValueAccessorKind: RecorderValueAccessorKind.IsReadOnly,
+                ComparisonKind: RecorderComparisonKind.Equal,
+                HasExpectedLiteral: true)
+        ]);
+        var source = await File.ReadAllTextAsync(result.ScenarioFilePath!);
+        var errors = RecorderGeneratedSourceCompiler.Compile(project.RootPath);
+
+        await Assert.That(result.Success).IsTrue();
+        await Assert.That(source).Contains(
+            "Page.ObservedValue.IsReadOnly).IsEqualTo(true);");
+        await Assert.That(source).Contains(
+            "Page.ObservedDate.IsReadOnly).IsEqualTo(true);");
+        await Assert.That(errors).IsEmpty();
+    }
+
+    [Test]
     public async Task CheckMode_UsesReadOnlyTextBlockInsideTabControlForAssertionAndCheckpoint()
     {
         await AssertReadOnlyTextInsideTabControl(

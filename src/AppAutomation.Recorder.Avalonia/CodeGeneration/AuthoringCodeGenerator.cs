@@ -1934,6 +1934,7 @@ internal sealed class AuthoringCodeGenerator
             RecorderValueAccessorKind.IsSelected => $"{control}.IsSelected",
             RecorderValueAccessorKind.IsExpanded => $"{control}.IsExpanded",
             RecorderValueAccessorKind.IsEnabled => $"{control}.IsEnabled",
+            RecorderValueAccessorKind.IsReadOnly => $"{control}.IsReadOnly",
             RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue =>
                 GenerateGridCellExpression(step, control, rowVariables),
             _ => throw new InvalidOperationException(

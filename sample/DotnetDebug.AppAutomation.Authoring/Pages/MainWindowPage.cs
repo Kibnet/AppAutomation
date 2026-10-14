@@ -24,6 +24,10 @@ namespace DotnetDebug.AppAutomation.Authoring.Pages;
 [UiControl("MultiSelectStatusLabel", UiControlType.Label, "MultiSelectStatusLabel")]
 [UiControl("MultiSelectionResetButton", UiControlType.Button, "MultiSelectionResetButton")]
 [UiControl("MixInput", UiControlType.TextBox, "MixInput")]
+[UiControl("ReadOnlyStateInput", UiControlType.TextBox, "ReadOnlyStateInput")]
+[UiControl("CompositeReadOnlyInput", UiControlType.TextBox, "CompositeReadOnlyInput")]
+[UiControl("CompositeReadOnlyDate", UiControlType.DateTimePicker, "CompositeReadOnlyDate")]
+[UiControl("ReadOnlyStateToggleButton", UiControlType.Button, "ReadOnlyStateToggleButton")]
 [UiControl("MixModeCombo", UiControlType.ComboBox, "MixModeCombo")]
 [UiControl("MixShowDetailsCheck", UiControlType.CheckBox, "MixShowDetailsCheck")]
 [UiControl("MixAdvancedToggle", UiControlType.ToggleButton, "MixAdvancedToggle")]
@@ -162,7 +166,10 @@ public sealed partial class MainWindowPage : UiPage
     private static UiControlDefinition ArmShellNavigationDefinition { get; } =
         new("ArmShellNavigation", UiControlType.AutomationElement, "ArmShellNavigation", UiLocatorKind.AutomationId, FallbackToName: false);
 
-    public MainWindowPage(IUiControlResolver resolver) : base(resolver)
+    public MainWindowPage(IUiControlResolver resolver) : base(
+        resolver.WithDateTimePickerProxy(
+            "CompositeReadOnlyDate",
+            DatePickerParts.ByAutomationIds("CompositeReadOnlyDate", "CompositeReadOnlyInput")))
     {
     }
 

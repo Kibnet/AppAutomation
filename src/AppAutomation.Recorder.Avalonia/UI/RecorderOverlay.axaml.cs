@@ -1291,10 +1291,15 @@ internal sealed partial class RecorderOverlay : UserControl
                 },
             _ => new[] { RecorderComparisonKind.Equal, RecorderComparisonKind.NotEqual }
         };
+        var supportsReadOnlyAssertion = selection.ValueSnapshot?.Prototype.Control.ControlType
+            is UiControlType.TextBox or UiControlType.DateTimePicker;
+        var comparisonLabels = comparisons.Select(DescribeComparison)
+            .Concat(supportsReadOnlyAssertion ? ["Read-only"] : [])
+            .ToArray();
         var comparison = new ComboBox
         {
             Name = "RecorderExpectedComparison",
-            ItemsSource = comparisons.Select(DescribeComparison).ToArray(),
+            ItemsSource = comparisonLabels,
             SelectedIndex = 0,
             MinWidth = 120
         };
@@ -1354,6 +1359,21 @@ internal sealed partial class RecorderOverlay : UserControl
 
         void RefreshDateState()
         {
+            var isReadOnlyChoice = supportsReadOnlyAssertion
+                && comparison.SelectedIndex >= comparisons.Length;
+            expected.IsVisible = !isReadOnlyChoice;
+            if (dateEditor is not null)
+            {
+                dateEditor.Content.IsVisible = !isReadOnlyChoice;
+            }
+
+            if (isReadOnlyChoice)
+            {
+                add.IsEnabled = true;
+                validation.IsVisible = false;
+                return;
+            }
+
             expected.IsEnabled = dateEditor?.IsRelative != true;
             if (dateEditor is null)
             {
@@ -1372,9 +1392,18 @@ internal sealed partial class RecorderOverlay : UserControl
             dateEditor.Changed += (_, _) => RefreshDateState();
         }
 
+        comparison.SelectionChanged += (_, _) => RefreshDateState();
+
         add.Click += (_, _) =>
         {
-            var selectedIndex = Math.Clamp(comparison.SelectedIndex, 0, comparisons.Length - 1);
+            var selectedIndex = Math.Clamp(comparison.SelectedIndex, 0, comparisonLabels.Length - 1);
+            if (supportsReadOnlyAssertion && selectedIndex >= comparisons.Length)
+            {
+                _checkpointDetails.CaptureReadOnlyAssertion(selection);
+                close();
+                return;
+            }
+
             RecorderDateExpression? dateExpression = null;
             if (dateEditor is not null
                 && !dateEditor.TryGetExpression(out dateExpression, out var error))
