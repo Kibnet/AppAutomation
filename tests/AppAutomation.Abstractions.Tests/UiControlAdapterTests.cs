@@ -500,9 +500,9 @@ public sealed class UiControlAdapterTests
         var applyButton = new FakeButtonControl("ProductPickerApply")
         {
             IsEnabled = false,
-            OnInvoke = () => EnableAfterDelay(expandButton)
+            OnInvoke = () => EnableAfterAvailabilityChecks(expandButton)
         };
-        searchInput.OnEnter = _ => EnableAfterDelay(applyButton);
+        searchInput.OnEnter = _ => EnableAfterAvailabilityChecks(applyButton);
         var results = new FakeSelectableListBoxControl(
             "ProductPickerResults",
             [new FakeListBoxItem("Item 42", "Item 42")]);
@@ -1913,7 +1913,15 @@ public sealed class UiControlAdapterTests
 
         public string Name { get; protected set; }
 
-        public bool IsEnabled { get; set; } = true;
+        public bool IsEnabled
+        {
+            get => AvailabilityOverride?.Invoke() ?? _isEnabled;
+            set => _isEnabled = value;
+        }
+
+        public Func<bool>? AvailabilityOverride { get; set; }
+
+        private bool _isEnabled = true;
     }
 
     private sealed class FakeTextBoxControl : FakeControlBase, ITextBoxControl
@@ -1977,13 +1985,20 @@ public sealed class UiControlAdapterTests
         }
     }
 
-    private static void EnableAfterDelay(FakeControlBase control)
+    private static void EnableAfterAvailabilityChecks(FakeControlBase control)
     {
-        _ = Task.Run(async () =>
+        var remainingChecks = 2;
+        control.AvailabilityOverride = () =>
         {
-            await Task.Delay(50);
+            if (remainingChecks-- > 0)
+            {
+                return false;
+            }
+
+            control.AvailabilityOverride = null;
             control.IsEnabled = true;
-        });
+            return true;
+        };
     }
 
     private sealed class FakeControl : FakeControlBase
