@@ -513,12 +513,12 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             scenarioName,
             patternOverride: $"MainWindowScenariosBase.{scenarioName}.autosave.*.g.cs.autosave");
         var scenarioSource = UiWait.Until(
-            () => File.ReadAllText(scenarioPath),
-            source => source.Contains(
+            () => TryReadScenarioSource(scenarioPath),
+            source => source?.Contains(
                 "WaitUntilSelectedItemsEqual(static page => page.ArmStatusFilter",
-                StringComparison.Ordinal),
+                StringComparison.Ordinal) == true,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(8), PollInterval = PollInterval },
-            "Recorder did not save the applied-filter assertion.");
+            "Recorder did not save the applied-filter assertion.")!;
         using (Assert.Multiple())
         {
             await Assert.That(page.ArmStatusFilter.SelectedItems).IsEquivalentTo(["Pending"]);
@@ -744,6 +744,18 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             scenarioName,
             patternOverride: pattern);
         return await File.ReadAllTextAsync(scenarioPath);
+    }
+
+    private static string? TryReadScenarioSource(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
     }
 
     private static void ClickElement(DesktopAppSession session, string automationId)

@@ -684,6 +684,7 @@ public static partial class UiControlResolverExtensions
 
     private sealed class AdapterAwareUiControlResolver :
         IUiControlResolver,
+        IUiArtifactCollector,
         IMultiItemControlRuntimeResolver,
         INotificationRuntimeResolver,
         IUiClipboardRuntime,
@@ -700,6 +701,13 @@ public static partial class UiControlResolverExtensions
         }
 
         public UiRuntimeCapabilities Capabilities => _innerResolver.Capabilities;
+
+        public ValueTask<IReadOnlyList<UiFailureArtifact>> CollectAsync(
+            UiFailureContext failureContext,
+            CancellationToken cancellationToken = default) =>
+            _innerResolver is IUiArtifactCollector collector
+                ? collector.CollectAsync(failureContext, cancellationToken)
+                : ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>([]);
 
         public IReadOnlyList<NotificationRuntimeSnapshot>? ReadNotifications(
             UiControlDefinition rootDefinition, NotificationControlParts parts) =>

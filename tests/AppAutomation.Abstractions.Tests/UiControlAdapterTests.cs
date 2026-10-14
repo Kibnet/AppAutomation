@@ -8,6 +8,20 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    public async Task ConfiguredResolver_PreservesFailureArtifactCollection()
+    {
+        var resolver = new ArtifactCollectingResolver().WithAdapters(new TestableAdapter());
+        var context = new UiFailureContext(
+            "Test", "fake", TimeSpan.Zero, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+            resolver.Capabilities, []);
+
+        var collector = resolver as IUiArtifactCollector;
+        await Assert.That(collector).IsNotNull();
+        var artifacts = await collector!.CollectAsync(context);
+        await Assert.That(artifacts.Select(static artifact => artifact.Kind).ToArray()).Contains("logical-tree");
+    }
+
+    [Test]
     public async Task CompositeDatePicker_ReadOnlyStateComesFromConfiguredValuePart()
     {
         var value = new FakeReadOnlyTextBoxControl("DateValue");
@@ -2450,6 +2464,20 @@ public sealed class UiControlAdapterTests
         {
             throw new NotSupportedException("MinimalResolver does not resolve controls directly.");
         }
+    }
+
+    private sealed class ArtifactCollectingResolver : IUiControlResolver, IUiArtifactCollector
+    {
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake");
+
+        public TControl Resolve<TControl>(UiControlDefinition definition)
+            where TControl : class => throw new NotSupportedException();
+
+        public ValueTask<IReadOnlyList<UiFailureArtifact>> CollectAsync(
+            UiFailureContext failureContext,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>(
+                [new UiFailureArtifact("logical-tree", "logical-tree", "tree.txt", "text/plain", true)]);
     }
 
     public sealed class TestableAdapter : IUiControlAdapter
