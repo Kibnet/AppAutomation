@@ -154,6 +154,12 @@ public sealed partial class FlaUiControlResolver
             ArgumentNullException.ThrowIfNull(identityColumns);
             ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            if (FindGridRoot() is { } positionedGrid)
+            {
+                RevealInAncestorScrollViewport(positionedGrid, stopwatch, timeoutMs);
+            }
+
             if (!HasNativeDataRows(prefetchCells: false)
                 && _fallback is IGridRowPositionIdentityControl positionedFallback)
             {
@@ -172,7 +178,6 @@ public sealed partial class FlaUiControlResolver
                 .Select(static property => property!.Value)
                 .Distinct()
                 .ToArray();
-            var stopwatch = Stopwatch.StartNew();
             var visibleSnapshots = new List<NativeGridRowSnapshot>();
             var visibleRows = visibleIndexes.Length == 0
                 ? WaitForNativeDataRows(stopwatch, timeoutMs, includeCells: false)
@@ -557,9 +562,13 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            if (FindGridRoot() is { } gridRoot)
+            {
+                RevealInAncestorScrollViewport(gridRoot, stopwatch, timeoutMs);
+            }
             if (HasNativeDataRows())
             {
-                var stopwatch = Stopwatch.StartNew();
                 var target = ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
                 if (TryDoubleClick(target, out var exception))
                 {
@@ -1724,6 +1733,10 @@ public sealed partial class FlaUiControlResolver
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
         {
             var stopwatch = Stopwatch.StartNew();
+            if (FindGridRoot() is { } gridRoot)
+            {
+                RevealInAncestorScrollViewport(gridRoot, stopwatch, timeoutMs);
+            }
             if (HasNativeDataRows())
             {
                 var nativeTarget = ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
@@ -3734,29 +3747,8 @@ public sealed partial class FlaUiControlResolver
             {
                 return direct;
             }
-
-            var rootBounds = TryRead(() => root.BoundingRectangle);
-            for (var ancestor = TryRead(() => root.Parent);
-                 ancestor is not null && TryRead(() => ancestor.ControlType) != ControlType.Window;
-                 ancestor = TryRead(() => ancestor.Parent))
-            {
-                var ancestorBounds = TryRead(() => ancestor.BoundingRectangle);
-                if (rootBounds.Width <= 0
-                    || rootBounds.Height <= 0
-                    || ancestorBounds.Width <= 0
-                    || ancestorBounds.Height <= 0
-                    || System.Drawing.Rectangle.Intersect(rootBounds, ancestorBounds) is not { Width: > 0, Height: > 0 })
-                {
-                    break;
-                }
-
-                var pattern = TryRead(() => ancestor.Patterns.Scroll.PatternOrDefault);
-                if (pattern?.VerticallyScrollable.ValueOrDefault == true)
-                {
-                    return pattern;
-                }
-            }
-
+            // Ancestor scrolling only reveals the whole grid in a page viewport. It does not
+            // establish the first or last logical row inside the grid.
             return null;
         }
 
@@ -4592,13 +4584,36 @@ public sealed partial class FlaUiControlResolver
 
             return TryRead(() =>
             {
-                var bounds = TryRead(() => root.BoundingRectangle);
-                DesktopPointer.Scroll(root, new System.Drawing.Point(
-                    bounds.Left + bounds.Width / 2,
-                    bounds.Top + bounds.Height * 3 / 4), lines,
+                DesktopPointer.Scroll(root, GetVisibleGridScrollPoint, lines,
                     prepare: () => PrepareForPhysicalGridInput(root));
                 return true;
             });
+        }
+
+        private static System.Drawing.Point GetVisibleGridScrollPoint(AutomationElement root)
+        {
+            var visible = root.BoundingRectangle;
+            for (var ancestor = TryRead(() => root.Parent);
+                 ancestor is not null;
+                 ancestor = TryRead(() => ancestor.Parent))
+            {
+                if (TryRead(() => ancestor.Patterns.Scroll.PatternOrDefault)?.VerticallyScrollable.ValueOrDefault
+                    != true)
+                {
+                    continue;
+                }
+
+                visible = System.Drawing.Rectangle.Intersect(visible, TryRead(() => ancestor.BoundingRectangle));
+                if (visible.Width <= 0 || visible.Height <= 0)
+                {
+                    throw new InvalidOperationException(
+                        "The grid has no visible area inside its ancestor scroll viewport.");
+                }
+            }
+
+            return new System.Drawing.Point(
+                visible.Left + visible.Width / 2,
+                visible.Top + visible.Height / 2);
         }
 
         private static bool TrySendGridMouseWheel(AutomationElement root, int wheelNotches)
@@ -5534,6 +5549,95 @@ public sealed partial class FlaUiControlResolver
         {
             // Some visual bridge elements expose no scroll pattern; double-click can still work.
         }
+    }
+
+    private static bool RevealInAncestorScrollViewport(
+        AutomationElement element,
+        Stopwatch stopwatch,
+        int timeoutMs)
+    {
+        var bounds = TryRead(() => element.BoundingRectangle);
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return false;
+        }
+
+        var moved = false;
+        for (var ancestor = TryRead(() => element.Parent);
+             ancestor is not null && TryRead(() => ancestor.ControlType) != ControlType.Window;
+             ancestor = TryRead(() => ancestor.Parent))
+        {
+            var scroll = TryRead(() => ancestor.Patterns.Scroll.PatternOrDefault);
+            if (scroll?.VerticallyScrollable.ValueOrDefault != true)
+            {
+                continue;
+            }
+
+            var viewport = TryRead(() => ancestor.BoundingRectangle);
+            if (viewport.Width <= 0 || viewport.Height <= 0
+                || bounds.Top >= viewport.Top && bounds.Top < viewport.Bottom)
+            {
+                continue;
+            }
+
+            TryScrollIntoView(element);
+            bounds = TryRead(() => element.BoundingRectangle);
+            if (bounds.Top >= viewport.Top && bounds.Top < viewport.Bottom)
+            {
+                moved = true;
+                continue;
+            }
+
+            var previous = TryRead(() => scroll.VerticalScrollPercent.ValueOrDefault);
+            var viewSize = TryRead(() => scroll.VerticalViewSize.ValueOrDefault);
+            var scrollableHeight = viewSize is > 0 and < 100
+                ? viewport.Height * (100 / viewSize - 1)
+                : 0;
+            var requested = scrollableHeight > 0 && previous >= 0
+                ? Math.Clamp(previous + (bounds.Top - viewport.Top) * 100 / scrollableHeight, 0, 100)
+                : double.NaN;
+            var issued = !double.IsNaN(requested) && Math.Abs(requested - previous) > 0.01
+                ? TryRead(() =>
+                {
+                    scroll.SetScrollPercent(-1, requested);
+                    return true;
+                })
+                : TryRead(() =>
+                {
+                    scroll.Scroll(
+                        ScrollAmount.NoAmount,
+                        bounds.Top >= viewport.Bottom
+                            ? ScrollAmount.LargeIncrement
+                            : ScrollAmount.LargeDecrement);
+                    return true;
+                });
+            if (!issued)
+            {
+                continue;
+            }
+
+            var deadline = Math.Min(timeoutMs, stopwatch.ElapsedMilliseconds + 300);
+            do
+            {
+                bounds = TryRead(() => element.BoundingRectangle);
+                if (bounds.Top >= viewport.Top && bounds.Top < viewport.Bottom)
+                {
+                    moved = true;
+                    break;
+                }
+
+                var remaining = (int)(deadline - stopwatch.ElapsedMilliseconds);
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                Thread.Sleep(Math.Min(20, remaining));
+            }
+            while (true);
+        }
+
+        return moved;
     }
 
     private static void TryFocus(AutomationElement element)

@@ -124,15 +124,18 @@ public static class DesktopPointer
         ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason).GetAwaiter().GetResult();
     }
 
-    internal static void Scroll(AutomationElement target, Point point, double amount, bool horizontal = false, Action? prepare = null)
+    internal static void Scroll(AutomationElement target, Func<AutomationElement, Point> pointFactory,
+        double amount, bool horizontal = false, Action? prepare = null)
     {
+        ArgumentNullException.ThrowIfNull(pointFactory);
         var (session, remaining, processId) = PrepareCall(() => target, TimeSpan.FromSeconds(5), default);
         Controller.RunAsync("wheel-fallback", remaining, operation =>
         {
             operation.Log("physical-fallback", detail: "grid wheel fallback");
-            var resolved = DesktopPointerTargetResolver.Resolve(() => target, true, prepare == null ? null : _ => prepare(), _ => point, processId);
+            var resolved = DesktopPointerTargetResolver.Resolve(() => target, true,
+                prepare == null ? null : _ => prepare(), pointFactory, processId);
             operation.Check();
-            operation.Scroll(point, amount, horizontal, resolved.ValidateExact);
+            operation.Scroll(resolved.Point, amount, horizontal, resolved.ValidateExact);
             return Task.CompletedTask;
         }, session: session).GetAwaiter().GetResult();
     }

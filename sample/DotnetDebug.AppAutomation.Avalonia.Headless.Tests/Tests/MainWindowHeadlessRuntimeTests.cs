@@ -92,7 +92,7 @@ public sealed class MainWindowHeadlessRuntimeTests : MainWindowScenariosBase<Mai
             recorder.Start();
             details.BeginCheckTargetSelection();
 
-            recorder.SelectCheckTargetAtForTesting(window, window, center.Value);
+            recorder.SelectCheckTargetAtForTesting(productEditor, window, center.Value);
             if (selection is null)
             {
                 throw new InvalidOperationException("Check mode did not select the read-only Product cell.");

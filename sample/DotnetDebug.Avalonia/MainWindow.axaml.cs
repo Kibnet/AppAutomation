@@ -78,6 +78,60 @@ public partial class MainWindow : Window
             column.CellTemplate = column.CellEditingTemplate;
             column.IsReadOnly = true;
         }
+        InitializeNestedGridFixture();
+    }
+
+    private void InitializeNestedGridFixture()
+    {
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_NESTED_GRID_OUTSIDE_VIEWPORT") != "1"
+            || ArmComplexDataGridControl.Parent is not Grid parent)
+        {
+            return;
+        }
+
+        parent.Children.Remove(ArmComplexDataGridControl);
+        var content = new StackPanel();
+        content.Children.Add(new Border { Height = 550 });
+        content.Children.Add(ArmComplexDataGridControl);
+        var outerScroll = new ScrollViewer
+        {
+            Height = 190,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = content
+        };
+        AutomationProperties.SetAutomationId(outerScroll, "NestedGridOuterScroll");
+        Grid.SetRow(outerScroll, 3);
+        parent.Children.Add(outerScroll);
+
+        string? lastPressedKey = null;
+        var presses = 0;
+        ArmComplexDataGridControl.AddHandler(
+            global::Avalonia.Input.InputElement.PointerPressedEvent,
+            (_, args) =>
+            {
+                if (args.Properties.PointerUpdateKind != global::Avalonia.Input.PointerUpdateKind.LeftButtonPressed)
+                {
+                    return;
+                }
+
+                var row = (args.Source as Control)?.GetVisualAncestors()
+                    .OfType<DataGridRow>()
+                    .FirstOrDefault();
+                var key = (row?.DataContext as ArmDesktopGridRowViewModel)?.Key;
+                if (key is null)
+                {
+                    return;
+                }
+
+                presses = string.Equals(lastPressedKey, key, StringComparison.Ordinal) ? presses + 1 : 1;
+                lastPressedKey = key;
+                if (presses == 2)
+                {
+                    _viewModel.GridOpenMarker = $"Opened row: {key}";
+                }
+            },
+            RoutingStrategies.Bubble,
+            handledEventsToo: true);
     }
 
     private Control CreateGridComboFixture(ArmDesktopGridRowViewModel row)
@@ -86,16 +140,33 @@ public partial class MainWindow : Window
         AutomationProperties.SetAutomationId(input, "GridCombo_Input");
         var open = new Button { Content = "▼" };
         AutomationProperties.SetAutomationId(open, "GridCombo_Open");
-        var list = new ListBox { ItemsSource = _viewModel.ArmGridStateOptions, SelectedItem = row.State };
+        var delayedResults = Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_COMBO_DELAY_RESULTS") == "1";
+        var list = new ListBox
+        {
+            ItemsSource = delayedResults ? Array.Empty<string>() : _viewModel.ArmGridStateOptions,
+            SelectedItem = delayedResults ? null : row.State
+        };
         AutomationProperties.SetAutomationId(list, "GridCombo_Results");
         var popup = new Popup { Child = list, PlacementTarget = input, Placement = PlacementMode.Bottom };
         var pendingState = row.State;
-        open.Click += (_, _) => popup.IsOpen = !popup.IsOpen;
+        open.Click += (_, _) =>
+        {
+            popup.IsOpen = !popup.IsOpen;
+            if (popup.IsOpen && delayedResults)
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(150).ConfigureAwait(false);
+                    Dispatcher.UIThread.Post(() => list.ItemsSource = _viewModel.ArmGridStateOptions);
+                });
+            }
+        };
         list.SelectionChanged += (_, _) =>
         {
             if (list.SelectedItem is string selected)
             {
                 pendingState = selected;
+                row.State = selected;
                 input.Text = selected;
                 popup.IsOpen = false;
                 input.Focus();

@@ -425,6 +425,65 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NestedGridOutsideViewport_CapturesAndOpensStableRow()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
+        var environment = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            ["APPAUTOMATION_NESTED_GRID_OUTSIDE_VIEWPORT"] = "1"
+        };
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            EnvironmentVariables = environment,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement
+        });
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+
+        var diagnosticGrid = session.MainWindow.FindFirstDescendant(
+            session.ConditionFactory.ByAutomationId("ArmComplexDataGridControl"));
+        for (var candidate = diagnosticGrid; candidate is not null; candidate = candidate.Parent)
+        {
+            Console.WriteLine($"NESTED GRID UIA {candidate.ControlType} "
+                + $"bounds={candidate.BoundingRectangle} offscreen={candidate.IsOffscreen} "
+                + $"scrollItem={candidate.Patterns.ScrollItem.IsSupported} "
+                + $"scroll={candidate.Patterns.Scroll.IsSupported} "
+                + $"vertical={candidate.Patterns.Scroll.PatternOrDefault?.VerticallyScrollable.ValueOrDefault} "
+                + $"percent={candidate.Patterns.Scroll.PatternOrDefault?.VerticalScrollPercent.ValueOrDefault} "
+                + $"view={candidate.Patterns.Scroll.PatternOrDefault?.VerticalViewSize.ValueOrDefault}");
+        }
+
+        GridRowSelector row;
+        try
+        {
+            row = GridRowKeyReader.Capture(page.ArmComplexDataGridControl, 0);
+        }
+        catch
+        {
+            Console.WriteLine($"NESTED GRID AFTER bounds={diagnosticGrid?.BoundingRectangle} "
+                + $"outer percent={diagnosticGrid?.Parent?.Parent?.Parent?.Parent?.Patterns.Scroll.PatternOrDefault?.VerticalScrollPercent.ValueOrDefault}");
+            throw;
+        }
+        page.OpenGridRow(static candidate => candidate.ArmComplexDataGridControl, row);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(row.Conditions.Single().Value).IsEqualTo("ARM-01");
+            await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("Opened row: ARM-01");
+        }
+    }
+
+    [Test]
     public async Task NativeGridCellMatcherRequiresOnlyIdentityColumns()
     {
         var headers = new[]
