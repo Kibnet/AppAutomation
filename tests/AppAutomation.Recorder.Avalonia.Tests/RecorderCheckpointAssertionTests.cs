@@ -674,6 +674,7 @@ public sealed class RecorderCheckpointAssertionTests
             [UiControlType.Calendar] = (RecorderValueKind.Date, RecorderValueAccessorKind.SelectedDate),
             [UiControlType.DateTimePicker] = (RecorderValueKind.Date, RecorderValueAccessorKind.SelectedDate),
             [UiControlType.Spinner] = (RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue),
+            [UiControlType.MultiItemControlCollection] = (RecorderValueKind.Number, RecorderValueAccessorKind.NumericValue),
             [UiControlType.TreeItem] = (RecorderValueKind.Boolean, RecorderValueAccessorKind.IsSelected),
             [UiControlType.DataGridView] = (RecorderValueKind.GridCellText, RecorderValueAccessorKind.GridCellText),
             [UiControlType.DataGridViewCell] = (RecorderValueKind.GridCellText, RecorderValueAccessorKind.GridCellText),

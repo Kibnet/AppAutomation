@@ -289,6 +289,14 @@ internal sealed class RecorderCommandRuntimeValidator
                 $"UiControlType.{step.Control.ControlType} does not expose {step.ValueAccessorKind} as {step.ValueKind}.");
         }
 
+        if (step.Control.ControlType == UiControlType.MultiItemControlCollection)
+        {
+            foreach (var finding in ValidateMultiItemSpinnerTarget(step, target))
+            {
+                yield return finding;
+            }
+        }
+
         if (step.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
             or RecorderValueAccessorKind.GridCellValue)
         {
@@ -319,6 +327,9 @@ internal sealed class RecorderCommandRuntimeValidator
             (UiControlType.TextBox or UiControlType.Label or UiControlType.Button or UiControlType.Search,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text) => true,
+            (UiControlType.TextBox,
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericText) => true,
             (UiControlType.SearchPicker or UiControlType.ComboBox or UiControlType.ListBox,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.SelectedItemText) => true,
@@ -326,6 +337,9 @@ internal sealed class RecorderCommandRuntimeValidator
                 RecorderValueKind.StringSet,
                 RecorderValueAccessorKind.SelectedItems) => true,
             (UiControlType.Spinner or UiControlType.Slider or UiControlType.ProgressBar,
+                RecorderValueKind.Number,
+                RecorderValueAccessorKind.NumericValue) => true,
+            (UiControlType.MultiItemControlCollection,
                 RecorderValueKind.Number,
                 RecorderValueAccessorKind.NumericValue) => true,
             (UiControlType.DateTimePicker,
@@ -934,6 +948,21 @@ internal sealed class RecorderCommandRuntimeValidator
         RecordedStep step,
         RecorderRuntimeValidationTarget target)
     {
+        foreach (var finding in ValidateMultiItemSpinnerTarget(step, target))
+        {
+            yield return finding;
+        }
+
+        foreach (var finding in RequireDouble(step, target))
+        {
+            yield return finding;
+        }
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> ValidateMultiItemSpinnerTarget(
+        RecordedStep step,
+        RecorderRuntimeValidationTarget target)
+    {
         foreach (var finding in ValidateControlType(
                      step,
                      target,
@@ -963,11 +992,6 @@ internal sealed class RecorderCommandRuntimeValidator
                 target,
                 "payload-missing-item-key",
                 $"Recorded action '{step.ActionKind}' requires a stable item key.");
-        }
-
-        foreach (var finding in RequireDouble(step, target))
-        {
-            yield return finding;
         }
     }
 

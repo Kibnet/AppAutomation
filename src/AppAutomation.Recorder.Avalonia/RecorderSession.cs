@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
@@ -28,6 +29,8 @@ internal sealed partial class RecorderSession :
 {
     private static readonly TimeSpan RecentInputWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ObservationRefreshInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly object HandledButtonClickMarker = new();
+    private static readonly object HandledHotkeyMarker = new();
 
     private readonly Window _window;
     private readonly ILogger _logger;
@@ -44,6 +47,9 @@ internal sealed partial class RecorderSession :
     private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<FlyoutBase, Action> _observedFlyoutDetachers = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Control> _additionalInputRoots = new(ReferenceEqualityComparer.Instance);
+    private readonly ConditionalWeakTable<RoutedEventArgs, object> _handledButtonClickEvents = new();
+    private readonly ConditionalWeakTable<KeyEventArgs, object> _handledHotkeyEvents = new();
+    private readonly HashSet<Key> _pressedHotkeyKeys = new();
     private readonly DispatcherTimer _textDebounceTimer;
     private readonly DispatcherTimer _sliderDebounceTimer;
     private readonly DispatcherTimer _spinnerDebounceTimer;
@@ -57,8 +63,11 @@ internal sealed partial class RecorderSession :
     private Control? _inputRoot;
 
     private RecorderSessionState _state;
+    private bool _handlingHotkeyCommand;
     private TextBox? _pendingTextBox;
     private string? _pendingTextValue;
+    private TextBox? _textEditInputTarget;
+    private int _textEditInputSequence;
     private Slider? _pendingSlider;
     private NumericUpDown? _pendingSpinner;
     private TimePicker? _pendingTimePicker;
@@ -89,6 +98,8 @@ internal sealed partial class RecorderSession :
     private int _pointerGestureSequence;
     private int? _activePointerGestureSequence;
     private PendingGridRowSelectionGesture? _pendingGridRowSelectionGesture;
+    private int? _recordedButtonGestureSequence;
+    private Control? _recordedButtonGestureTarget;
     private Control? _recentKeyboardControl;
     private DateTimeOffset _recentKeyboardAt;
     private PendingCatalogGridEdit? _pendingCatalogGridEdit;
@@ -390,9 +401,14 @@ internal sealed partial class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         ResetPointerGesture();
+        if (!_handlingHotkeyCommand)
+        {
+            _pressedHotkeyKeys.Clear();
+        }
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
@@ -411,9 +427,14 @@ internal sealed partial class RecorderSession :
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
         FlushPendingState();
+        _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         ResetPointerGesture();
+        if (!_handlingHotkeyCommand)
+        {
+            _pressedHotkeyKeys.Clear();
+        }
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
@@ -441,6 +462,7 @@ internal sealed partial class RecorderSession :
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
         FlushPendingState();
+        _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
         ResetPointerGesture();
@@ -583,6 +605,7 @@ internal sealed partial class RecorderSession :
         _completedGeneratedValueText = null;
         _observationTimer?.Stop();
         _textDebounceTimer.Stop();
+        _textEditInputTarget = null;
         _sliderDebounceTimer.Stop();
         _spinnerDebounceTimer.Stop();
         DiscardPendingTimePicker();
@@ -1253,6 +1276,10 @@ internal sealed partial class RecorderSession :
     internal void RegisterKeyboardInputForTesting(Control control)
     {
         RegisterKeyboardInput(control);
+        if (control is TextBox textBox)
+        {
+            MarkTextEditInput(textBox);
+        }
     }
 
     internal void RegisterPointerInputForTesting(Control? control)
@@ -1395,7 +1422,11 @@ internal sealed partial class RecorderSession :
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
-        AddStep(_stepFactory.TryCreateButtonStep(control), control ?? source, "ButtonClick");
+        AddStep(
+            _stepFactory.TryCreateButtonStep(control),
+            control ?? source,
+            "ButtonClick",
+            suppressRecentDuplicate: false);
     }
 
     internal void CaptureAssertionForTesting(Control source, RecorderAssertionMode mode)
@@ -1507,10 +1538,14 @@ internal sealed partial class RecorderSession :
     {
         RebindInputHandlers();
         _window.PropertyChanged += OnWindowPropertyChanged;
+        _window.Deactivated += OnWindowDeactivated;
 
         _detachActions.Add(DetachInputHandlers);
         _detachActions.Add(() => _window.PropertyChanged -= OnWindowPropertyChanged);
+        _detachActions.Add(() => _window.Deactivated -= OnWindowDeactivated);
     }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e) => _pressedHotkeyKeys.Clear();
 
     private void AttachSearchPickerSelectionSources()
     {
@@ -1584,6 +1619,11 @@ internal sealed partial class RecorderSession :
             OnKeyDown,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        root.AddHandler(
+            InputElement.KeyUpEvent,
+            OnKeyUp,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         root.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
     }
 
@@ -1602,6 +1642,7 @@ internal sealed partial class RecorderSession :
 
         _inputRoot = null;
         _lastSpatialCaptureTarget = null;
+        _pressedHotkeyKeys.Clear();
     }
 
     private void DetachInputHandlers(Control root)
@@ -1613,6 +1654,7 @@ internal sealed partial class RecorderSession :
         root.RemoveHandler(InputElement.PointerExitedEvent, OnPointerExited);
         root.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
         root.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
+        root.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
         root.RemoveHandler(Button.ClickEvent, OnButtonClick);
     }
 
@@ -1634,6 +1676,11 @@ internal sealed partial class RecorderSession :
         if (_pendingTextBox is not null && !currentControls.Contains(_pendingTextBox))
         {
             FlushPendingText();
+        }
+
+        if (_textEditInputTarget is not null && !currentControls.Contains(_textEditInputTarget))
+        {
+            _textEditInputTarget = null;
         }
 
         if (_pendingSlider is not null && !currentControls.Contains(_pendingSlider))
@@ -2081,7 +2128,7 @@ internal sealed partial class RecorderSession :
         }
 
         var textBox = FindAncestorOrSelf<TextBox>(e.Source as Control);
-        if (textBox is null)
+        if (textBox is null || !CanRecordTextInput(textBox))
         {
             return;
         }
@@ -2102,10 +2149,8 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        _pendingTextBox = textBox;
-        _pendingTextValue = textBox.Text;
+        MarkTextEditInput(textBox);
         RegisterKeyboardInput(textBox);
-        RestartTextDebounceUnlessCompositeSelection(textBox);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -2120,7 +2165,23 @@ internal sealed partial class RecorderSession :
 
         if (_hotkeyMap.TryGetCommand(e.Key, e.PhysicalKey, e.KeyModifiers, out var command))
         {
-            HandleRecorderCommand(command);
+            if (!_handledHotkeyEvents.TryGetValue(e, out _))
+            {
+                _handledHotkeyEvents.Add(e, HandledHotkeyMarker);
+                if (_pressedHotkeyKeys.Add(e.Key))
+                {
+                    _handlingHotkeyCommand = true;
+                    try
+                    {
+                        HandleRecorderCommand(command);
+                    }
+                    finally
+                    {
+                        _handlingHotkeyCommand = false;
+                    }
+                }
+            }
+
             e.Handled = true;
             return;
         }
@@ -2133,6 +2194,15 @@ internal sealed partial class RecorderSession :
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
+            if (focused is TextBox textBox
+                && CanRecordTextInput(textBox)
+                && (e.Key is Key.Back or Key.Delete
+                    || (e.KeyModifiers.HasFlag(KeyModifiers.Control)
+                        && e.Key is Key.X or Key.V or Key.Z or Key.Y)))
+            {
+                MarkTextEditInput(textBox);
+            }
+
             if (e.Key == Key.Escape)
             {
                 _pendingContextMenuOwner = null;
@@ -2174,6 +2244,8 @@ internal sealed partial class RecorderSession :
         }
     }
 
+    private void OnKeyUp(object? sender, KeyEventArgs e) => _pressedHotkeyKeys.Remove(e.Key);
+
     private void HandleRecorderCommand(RecorderCommandKind command)
     {
         var focused = GetFocusedWindowControl();
@@ -2207,16 +2279,16 @@ internal sealed partial class RecorderSession :
                 Clear();
                 break;
             case RecorderCommandKind.CaptureAssertAuto:
-                CaptureAssertion(RecorderAssertionMode.Auto);
+                CaptureAssertion(RecorderAssertionMode.Auto, suppressRecentDuplicate: false);
                 break;
             case RecorderCommandKind.CaptureAssertText:
-                CaptureAssertion(RecorderAssertionMode.Text);
+                CaptureAssertion(RecorderAssertionMode.Text, suppressRecentDuplicate: false);
                 break;
             case RecorderCommandKind.CaptureAssertEnabled:
-                CaptureAssertion(RecorderAssertionMode.Enabled);
+                CaptureAssertion(RecorderAssertionMode.Enabled, suppressRecentDuplicate: false);
                 break;
             case RecorderCommandKind.CaptureAssertExists:
-                CaptureAssertion(RecorderAssertionMode.Exists);
+                CaptureAssertion(RecorderAssertionMode.Exists, suppressRecentDuplicate: false);
                 break;
             case RecorderCommandKind.BeginCheckTargetSelection:
                 BeginCheckTargetSelection();
@@ -2266,12 +2338,20 @@ internal sealed partial class RecorderSession :
 
     private void OnButtonClick(object? sender, RoutedEventArgs e)
     {
+        if (_state == RecorderSessionState.Recording
+            && _handledButtonClickEvents.TryGetValue(e, out _))
+        {
+            return;
+        }
+
         var clickSnapshot = _comboBoxFilterClickSnapshot;
         _comboBoxFilterClickSnapshot = null;
         if (_state != RecorderSessionState.Recording)
         {
             return;
         }
+
+        _handledButtonClickEvents.Add(e, HandledButtonClickMarker);
 
         var eventSource = e.Source as Control;
         DiscardPendingTimePickerIfSwitchingTo(eventSource);
@@ -2351,7 +2431,25 @@ internal sealed partial class RecorderSession :
         FlushPendingTextIfSwitchingTo(control);
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
-        AddStep(_stepFactory.TryCreateButtonStep(control), control ?? eventSource, "ButtonClick");
+        var buttonTarget = control ?? eventSource;
+        if (_activePointerGestureSequence is { } activeGesture
+            && _recordedButtonGestureSequence == activeGesture
+            && ReferenceEquals(_recordedButtonGestureTarget, buttonTarget))
+        {
+            return;
+        }
+
+        if (_activePointerGestureSequence is { } currentGesture)
+        {
+            _recordedButtonGestureSequence = currentGesture;
+            _recordedButtonGestureTarget = buttonTarget;
+        }
+
+        AddStep(
+            _stepFactory.TryCreateButtonStep(control),
+            buttonTarget,
+            "ButtonClick",
+            suppressRecentDuplicate: false);
     }
 
     private void OnMenuItemClick(object? sender, RoutedEventArgs e)
@@ -3088,7 +3186,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        if (!ShouldTrackTextChange(textBox))
+        if (!CanRecordTextInput(textBox) || !ShouldTrackTextChange(textBox))
         {
             return;
         }
@@ -3123,8 +3221,14 @@ internal sealed partial class RecorderSession :
     {
         if (_state != RecorderSessionState.Recording
             || sender is not TextBox textBox
-            || _activeCopiedValue is null
+            || !CanRecordTextInput(textBox)
             || ShouldSuppressTemplateTextEntry(textBox))
+        {
+            return;
+        }
+
+        MarkTextEditInput(textBox);
+        if (_activeCopiedValue is null)
         {
             return;
         }
@@ -3196,20 +3300,34 @@ internal sealed partial class RecorderSession :
 
     private bool ShouldTrackTextChange(TextBox textBox)
     {
-        if (WasRecentlyTriggeredByUser(textBox))
-        {
-            return true;
-        }
-
-        var focused = TopLevel.GetTopLevel(textBox)?.FocusManager?.GetFocusedElement() as Control;
-        if (focused is null || !AreRelated(textBox, focused))
+        if (!ReferenceEquals(_textEditInputTarget, textBox))
         {
             return false;
         }
 
-        var now = DateTimeOffset.UtcNow;
-        return now - _recentKeyboardAt <= RecentInputWindow
-            || now - _recentPointerAt <= RecentInputWindow;
+        _textEditInputTarget = null;
+        return true;
+    }
+
+    private static bool CanRecordTextInput(TextBox textBox) =>
+        textBox.IsEffectivelyEnabled && !textBox.IsReadOnly;
+
+    private void MarkTextEditInput(TextBox textBox)
+    {
+        if (!_observedControlDetachers.ContainsKey(textBox))
+        {
+            _observedControlDetachers[textBox] = AttachObservedControl(textBox);
+        }
+
+        _textEditInputTarget = textBox;
+        var sequence = ++_textEditInputSequence;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_textEditInputSequence == sequence)
+            {
+                _textEditInputTarget = null;
+            }
+        }, DispatcherPriority.Background);
     }
 
     private bool ShouldSuppressTemplateTextEntry(TextBox textBox)
@@ -3370,14 +3488,15 @@ internal sealed partial class RecorderSession :
         return TopLevel.GetTopLevel(_window)?.FocusManager?.GetFocusedElement() as Control;
     }
 
-    private void CaptureAssertion(RecorderAssertionMode mode)
+    private void CaptureAssertion(RecorderAssertionMode mode, bool suppressRecentDuplicate = true)
     {
-        CaptureAssertion(PrepareSemanticCaptureSelection(), mode);
+        CaptureAssertion(PrepareSemanticCaptureSelection(), mode, suppressRecentDuplicate);
     }
 
     private void CaptureAssertion(
         RecorderCheckTargetSelection? selection,
-        RecorderAssertionMode mode)
+        RecorderAssertionMode mode,
+        bool suppressRecentDuplicate = true)
     {
         if (selection is null)
         {
@@ -3393,14 +3512,16 @@ internal sealed partial class RecorderSession :
         }
 
         var result = mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Text
-            ? _stepFactory.TryCreateAssertionStep(selection.ValueSnapshot, mode)
+            ? selection.ValueSnapshot is null && !string.IsNullOrWhiteSpace(selection.ValueDescriptionError)
+                ? StepCreationResult.Unsupported(selection.ValueDescriptionError)
+                : _stepFactory.TryCreateAssertionStep(selection.ValueSnapshot, mode)
             : mode == RecorderAssertionMode.Enabled
                 ? _stepFactory.TryCreateEnabledAssertionStep(
                     selection.Target,
                     selection.ValueSnapshot,
                     selection.IsEnabled)
                 : _stepFactory.TryCreateAssertionStep(selection.Target, mode);
-        AddStep(result, selection.Target, $"Assertion:{mode}");
+        AddStep(result, selection.Target, $"Assertion:{mode}", suppressRecentDuplicate);
     }
 
     private bool TryDescribeCurrentValue(
@@ -4293,7 +4414,12 @@ internal sealed partial class RecorderSession :
         }
         else if (string.IsNullOrWhiteSpace(error))
         {
-            _stepFactory.TryCaptureSemanticValueSnapshot(target, out snapshot, out error);
+            _stepFactory.TryCaptureSemanticValueSnapshot(
+                target,
+                out snapshot,
+                out error,
+                out definitiveFailure);
+            canCaptureAssertions = !definitiveFailure;
         }
         else
         {
@@ -4625,14 +4751,20 @@ internal sealed partial class RecorderSession :
     {
         Control? control;
         IReadOnlyList<Control>? candidates = null;
-        if (TryResolveLastSpatialCaptureTarget(out var spatialTarget, out var spatialCandidates))
+        var focused = GetFocusedWindowControl();
+        if (focused is not null && _stepFactory.IsConfiguredNotificationText(focused))
+        {
+            control = focused;
+            candidates = [focused];
+        }
+        else if (TryResolveLastSpatialCaptureTarget(out var spatialTarget, out var spatialCandidates))
         {
             control = spatialTarget;
             candidates = spatialCandidates;
         }
         else
         {
-            control = _lastHoveredControl ?? GetFocusedWindowControl();
+            control = _lastHoveredControl ?? focused;
         }
 
         FlushPendingTextIfSwitchingTo(control);
@@ -4673,7 +4805,11 @@ internal sealed partial class RecorderSession :
         return true;
     }
 
-    private bool AddStep(StepCreationResult result, Control? source = null, string captureAction = "Unknown")
+    private bool AddStep(
+        StepCreationResult result,
+        Control? source = null,
+        string captureAction = "Unknown",
+        bool suppressRecentDuplicate = true)
     {
         if (!result.Success || result.Step is null)
         {
@@ -4706,8 +4842,11 @@ internal sealed partial class RecorderSession :
 
         var fingerprint = CreateFingerprint(recordedStep);
         var now = DateTimeOffset.UtcNow;
-        if (string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal)
-            && now - _lastRecordedAt < TimeSpan.FromMilliseconds(250))
+        if (IsRedundantAdjacentGridRowAction(recordedStep)
+            || (suppressRecentDuplicate
+                && recordedStep.ActionKind is not (RecordedActionKind.SelectGridRow or RecordedActionKind.OpenGridRow)
+            && string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal)
+                && now - _lastRecordedAt < TimeSpan.FromMilliseconds(250)))
         {
             return false;
         }
@@ -4871,6 +5010,25 @@ internal sealed partial class RecorderSession :
 
         _steps.RemoveAt(_steps.Count - 1);
         _lastFingerprint = null;
+    }
+
+    private bool IsRedundantAdjacentGridRowAction(RecordedStep step)
+    {
+        if (step.ActionKind is not (RecordedActionKind.SelectGridRow or RecordedActionKind.OpenGridRow)
+            || _steps.Count == 0)
+        {
+            return false;
+        }
+
+        var previous = _steps[^1];
+        return previous.ActionKind == step.ActionKind
+            && string.Equals(
+                previous.Control.ProposedPropertyName,
+                step.Control.ProposedPropertyName,
+                StringComparison.Ordinal)
+            && previous.GridRowSourceMode == step.GridRowSourceMode
+            && previous.GridCapturedRowPosition == step.GridCapturedRowPosition
+            && GridRowConditionsEqual(previous.GridRowConditions, step.GridRowConditions);
     }
 
     private static bool GridRowConditionsEqual(
@@ -5204,6 +5362,15 @@ internal sealed partial class RecorderSession :
             step.SecondDateExpression?.DayOffset.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.RowIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.ColumnIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.RepeatedItemKey ?? string.Empty,
+            step.GridTargetColumnName ?? string.Empty,
+            step.GridRowSourceMode.ToString(),
+            step.GridCapturedRowPosition?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.GridRowAnchorCheckpointId?.ToString("N") ?? string.Empty,
+            step.GridRowConditions is null
+                ? string.Empty
+                : string.Join("\u001F", step.GridRowConditions.Select(static condition =>
+                    $"{condition.ColumnName}={condition.Value}:{condition.ValueReference?.Kind}:{condition.ValueReference?.ValueId:N}")),
             step.IntValue?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.FilterCommitMode?.ToString() ?? string.Empty,
             step.FolderExportCommitMode?.ToString() ?? string.Empty,
@@ -5230,13 +5397,26 @@ internal sealed partial class RecorderSession :
 
     private static string CreateNumericExpressionFingerprint(RecorderNumericExpectedExpression? expression)
     {
-        return expression is null
-            ? string.Empty
-            : string.Join(
-                ":",
-                expression.Operation,
-                CreateNumericOperandFingerprint(expression.Left),
-                CreateNumericOperandFingerprint(expression.Right));
+        if (expression is null)
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string>
+        {
+            expression.Operation.ToString(),
+            CreateNumericOperandFingerprint(expression.Left),
+            CreateNumericOperandFingerprint(expression.Right)
+        };
+        foreach (var step in expression.AdditionalOperations ?? [])
+        {
+            parts.Add(step?.Operation.ToString() ?? "<missing operation>");
+            parts.Add(step?.Operand is { } operand
+                ? CreateNumericOperandFingerprint(operand)
+                : "<missing operand>");
+        }
+
+        return string.Join(":", parts);
     }
 
     private static string CreateNumericOperandFingerprint(RecorderNumericOperand operand)
@@ -5249,6 +5429,7 @@ internal sealed partial class RecorderSession :
             operand.Control?.LocatorKind.ToString() ?? string.Empty,
             operand.Control?.LocatorValue ?? string.Empty,
             operand.ValueAccessorKind?.ToString() ?? string.Empty,
+            operand.RepeatedItemKey ?? string.Empty,
             operand.GridValueReference?.TargetColumnName ?? string.Empty,
             operand.GridValueReference is null
                 ? string.Empty
@@ -5476,7 +5657,7 @@ internal sealed partial class RecorderSession :
         ClearPendingCopiedValuePaste();
         _pendingTextBox = null;
         _pendingTextValue = null;
-        if (ShouldSuppressTemplateTextEntry(textBox))
+        if (!CanRecordTextInput(textBox) || ShouldSuppressTemplateTextEntry(textBox))
         {
             return;
         }
@@ -6364,6 +6545,7 @@ internal sealed partial class RecorderSession :
             RecorderValueAccessorKind.SelectedItemText => "SelectedItemText",
             RecorderValueAccessorKind.SelectedItems => "SelectedItems",
             RecorderValueAccessorKind.NumericValue => "Value",
+            RecorderValueAccessorKind.NumericText => "Number",
             RecorderValueAccessorKind.SelectedDate => "SelectedDate",
             RecorderValueAccessorKind.SelectedTime => "SelectedTime",
             RecorderValueAccessorKind.Color => "Color",

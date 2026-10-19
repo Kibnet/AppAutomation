@@ -206,8 +206,7 @@ internal sealed class RecorderStepValidator
                 MatchesLocator);
         }
 
-        if (source is not (TextBox or NumericUpDown)
-            || definition.SpinnerParts is null)
+        if (definition.SpinnerParts is null)
         {
             return false;
         }

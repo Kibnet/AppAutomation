@@ -81,6 +81,10 @@ internal sealed record RecorderStepEditDraft(
     public RecorderGridRowSourceMode GridRowSourceMode { get; init; }
 
     public int? GridCapturedRowPosition { get; init; }
+
+    public bool CanConvertTextCheckpointToNumber { get; init; }
+
+    public RecorderNumericType? NumericType { get; init; }
 }
 
 internal sealed record RecorderStepEditResult(

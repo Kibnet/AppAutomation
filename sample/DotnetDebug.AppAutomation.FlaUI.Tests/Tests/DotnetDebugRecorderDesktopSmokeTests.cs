@@ -165,7 +165,13 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
         recordButton.Invoke();
         var numbersInput = FindElement(appWindow, session, "NumbersInput");
         numbersInput.Focus();
-        numbersInput.AsTextBox().Text = "4 2";
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+        Keyboard.Type("4 2");
+        UiWait.Until(
+            () => numbersInput.AsTextBox().Text,
+            text => string.Equals(text, "4 2", StringComparison.Ordinal),
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "User-entered numbers were not displayed.");
         recordButton.Invoke();
         saveButton.Invoke();
 
@@ -245,20 +251,15 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
             "Recorder order or autosave did not settle.");
 
-        app.SetForeground();
-        var numbers = FindElement(app, session, "NumbersInput").AsTextBox();
-        numbers.Focus();
-        numbers.Text = "11 22";
-        var filter = FindElement(app, session, "HistoryFilterInput").AsTextBox();
-        filter.Focus();
-        filter.Text = "drag marker";
-        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(FindElement(app, session, "ApplyFilterButton"));
+        FindElement(app, session, "ApplyFilterButton").AsButton().Invoke();
+        FindElement(app, session, "CalculateButton").AsButton().Invoke();
+        FindElement(app, session, "ShowDelayedStatusButton").AsButton().Invoke();
         var previews = UiWait.Until(Previews, values => values.Length == 3 && record.IsEnabled,
             new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
             "The three recorded steps were not displayed.");
         var originalOrder = previews.Select(element => element.AutomationId).ToArray();
-        var sourceId = previews.Single(element => element.Name.Contains("ApplyFilterButton", StringComparison.Ordinal)).AutomationId;
-        var targetId = previews.Single(element => element.Name.Contains("NumbersInput", StringComparison.Ordinal)).AutomationId;
+        var sourceId = previews.Single(element => element.Name.Contains("ShowDelayedStatusButton", StringComparison.Ordinal)).AutomationId;
+        var targetId = previews.Single(element => element.Name.Contains("ApplyFilterButton", StringComparison.Ordinal)).AutomationId;
         var movedOrder = new[] { sourceId }.Concat(originalOrder.Where(id => id != sourceId)).ToArray();
         var savedCursor = Mouse.Position;
 
@@ -308,11 +309,11 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             using (Assert.Multiple())
             {
                 await Assert.That(PreviewOrder()).IsEquivalentTo(originalOrder);
+                await Assert.That(source).Contains("Page.ClickButton(static page => page.ShowDelayedStatusButton);");
                 await Assert.That(source).Contains("Page.ClickButton(static page => page.ApplyFilterButton);");
-                await Assert.That(source.IndexOf("Page.ClickButton(static page => page.ApplyFilterButton)", StringComparison.Ordinal))
-                    .IsLessThan(source.IndexOf("Page.EnterText(static page => page.NumbersInput", StringComparison.Ordinal));
-                await Assert.That(source).Contains("11 22");
-                await Assert.That(source).Contains("drag marker");
+                await Assert.That(source).Contains("Page.ClickButton(static page => page.CalculateButton);");
+                await Assert.That(source.IndexOf("Page.ClickButton(static page => page.ShowDelayedStatusButton)", StringComparison.Ordinal))
+                    .IsLessThan(source.IndexOf("Page.ClickButton(static page => page.ApplyFilterButton)", StringComparison.Ordinal));
             }
         }
         finally

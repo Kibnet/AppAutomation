@@ -14,6 +14,32 @@ public sealed class MultiItemControlRuntimeTests
 {
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessMultiItemSpinner_ConfirmsLocalizedFormattedValue()
+    {
+        using var headless = StartHeadlessRuntime();
+        var context = HeadlessRuntime.Dispatch(() => CreateMultiItemSpinnerWindow());
+        var page = new MultiItemSpinnerPage(
+            new HeadlessControlResolver(context.Window)
+                .WithMultiItemControls(CreateMultiItemSpinnerCatalog()));
+        HeadlessRuntime.Dispatch(() =>
+        {
+            context.Inputs[1].TextChanged += (_, _) =>
+            {
+                if (context.Inputs[1].Text == "1000")
+                {
+                    context.Inputs[1].Text = "1\u00A0000";
+                }
+            };
+        });
+
+        page.SetMultiItemSpinnerValue(static candidate => candidate.UnitQuantityEditors, "unit-b", 1000);
+
+        await Assert.That(HeadlessRuntime.Dispatch(() => context.Inputs[1].Text)).IsEqualTo("1\u00A0000");
+        await Assert.That(page.UnitQuantityEditors.ResolveSpinner("unit-b", timeoutMs: 5000).Value).IsEqualTo(1000);
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessMultiItemSpinner_UsesStableKeyAfterItemsAreReordered()
     {
         using var headless = StartHeadlessRuntime();
@@ -90,14 +116,65 @@ public sealed class MultiItemControlRuntimeTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
-    public async Task HeadlessMultiItemSpinner_RejectsDuplicateAndMissingStableKeys()
+    public async Task HeadlessMultiItemSpinner_UsesNameWhenIdsChangeAndItemsMove()
     {
         using var headless = StartHeadlessRuntime();
-        var duplicateContext = HeadlessRuntime.Dispatch(() =>
-            CreateMultiItemSpinnerWindow("unit-a", "unit-b", "unit-b"));
+        var context = HeadlessRuntime.Dispatch(() => CreateMultiItemSpinnerWindow());
+        HeadlessRuntime.Dispatch(() =>
+        {
+            for (var index = 0; index < context.Items.Count; index++)
+            {
+                AutomationProperties.SetName(context.Items[index], $"unit-{(char)('a' + index)}");
+                AutomationProperties.SetItemStatus(context.Items[index], $"first-id-{index}");
+            }
+        });
+        var page = new MultiItemSpinnerPage(
+            new HeadlessControlResolver(context.Window)
+                .WithMultiItemControls(CreateMultiItemSpinnerCatalog(
+                    keyProperty: UiAutomationValueProperty.Name)));
+
+        page.SetMultiItemSpinnerValue(static candidate => candidate.UnitQuantityEditors, "unit-b", 12);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            AutomationProperties.SetItemStatus(context.Items[1], "second-id-b");
+            context.Collection.Children.Remove(context.Items[1]);
+            context.Collection.Children.Insert(0, context.Items[1]);
+        });
+        page.SetMultiItemSpinnerValue(static candidate => candidate.UnitQuantityEditors, "unit-b", 18);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.UnitQuantityEditors.ResolveSpinner("unit-b", 5000).Value).IsEqualTo(18);
+            await Assert.That(HeadlessRuntime.Dispatch(() => context.Inputs[0].Text)).IsEqualTo("0");
+            await Assert.That(HeadlessRuntime.Dispatch(() => context.Inputs[1].Text)).IsEqualTo("18");
+            await Assert.That(HeadlessRuntime.Dispatch(() => context.Inputs[2].Text)).IsEqualTo("0");
+        }
+    }
+
+    [Test]
+    [Arguments(UiAutomationValueProperty.ItemStatus)]
+    [Arguments(UiAutomationValueProperty.Name)]
+    [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessMultiItemSpinner_RejectsDuplicateAndMissingStableKeys(
+        UiAutomationValueProperty keyProperty)
+    {
+        using var headless = StartHeadlessRuntime();
+        var useNameKey = keyProperty == UiAutomationValueProperty.Name;
+        var duplicateContext = HeadlessRuntime.Dispatch(() => useNameKey
+            ? CreateMultiItemSpinnerWindow("id-a", "id-b", "id-c")
+            : CreateMultiItemSpinnerWindow("unit-a", "unit-b", "unit-b"));
+        if (useNameKey)
+        {
+            HeadlessRuntime.Dispatch(() =>
+            {
+                AutomationProperties.SetName(duplicateContext.Items[0], "unit-a");
+                AutomationProperties.SetName(duplicateContext.Items[1], "unit-b");
+                AutomationProperties.SetName(duplicateContext.Items[2], "unit-b");
+            });
+        }
         var duplicatePage = new MultiItemSpinnerPage(
             new HeadlessControlResolver(duplicateContext.Window)
-                .WithMultiItemControls(CreateMultiItemSpinnerCatalog()));
+                .WithMultiItemControls(CreateMultiItemSpinnerCatalog(keyProperty: keyProperty)));
 
         var duplicateError = Assert.Throws<InvalidOperationException>(() =>
             duplicatePage.SetMultiItemSpinnerValue(
@@ -106,11 +183,20 @@ public sealed class MultiItemControlRuntimeTests
                 12));
         HeadlessRuntime.Dispatch(duplicateContext.Window.Close);
 
-        var missingContext = HeadlessRuntime.Dispatch(() =>
-            CreateMultiItemSpinnerWindow("unit-a", null, "unit-c"));
+        var missingContext = HeadlessRuntime.Dispatch(() => useNameKey
+            ? CreateMultiItemSpinnerWindow("id-a", "id-b", "id-c")
+            : CreateMultiItemSpinnerWindow("unit-a", null, "unit-c"));
+        if (useNameKey)
+        {
+            HeadlessRuntime.Dispatch(() =>
+            {
+                AutomationProperties.SetName(missingContext.Items[0], "unit-a");
+                AutomationProperties.SetName(missingContext.Items[2], "unit-c");
+            });
+        }
         var missingPage = new MultiItemSpinnerPage(
             new HeadlessControlResolver(missingContext.Window)
-                .WithMultiItemControls(CreateMultiItemSpinnerCatalog()));
+                .WithMultiItemControls(CreateMultiItemSpinnerCatalog(keyProperty: keyProperty)));
         var missingError = Assert.Throws<InvalidOperationException>(() =>
             missingPage.SetMultiItemSpinnerValue(
                 static candidate => candidate.UnitQuantityEditors,
@@ -256,7 +342,8 @@ public sealed class MultiItemControlRuntimeTests
     }
 
     private static MultiItemControlCatalog CreateMultiItemSpinnerCatalog(
-        MultiItemRelativeLocator? commitTarget = null) =>
+        MultiItemRelativeLocator? commitTarget = null,
+        UiAutomationValueProperty keyProperty = UiAutomationValueProperty.ItemStatus) =>
         new MultiItemControlCatalog().Add(
             MultiItemControlDefinition.ByAutomationIds(
                     "UnitQuantityEditors",
@@ -266,7 +353,7 @@ public sealed class MultiItemControlRuntimeTests
                     MultiItemRelativeLocator.ByAutomationId(
                         "UnitQuantityItem",
                         MultiItemRelativeLocatorScope.CollectionRoot),
-                    RepeatedItemKeyDefinition.FromItem(UiAutomationValueProperty.ItemStatus))
+                    RepeatedItemKeyDefinition.FromItem(keyProperty))
                 .WithSpinner(new MultiItemSpinnerParts(
                     MultiItemRelativeLocator.ByAutomationId(
                         "QuantityEditor",

@@ -125,27 +125,22 @@ internal sealed class SpinnerTextControl : ISpinnerControl, IUiControlAvailabili
 
     public double Value
     {
-        get => SpinnerValueCodec.ParseInvariant(_readText(), AutomationId);
+        get => SpinnerValueCodec.ParseText(_readText(), AutomationId);
         set => _enterText(SpinnerValueCodec.FormatInvariant(value));
     }
 }
 
 internal static class SpinnerValueCodec
 {
-    public static double ParseInvariant(string? text, string automationId)
+    public static double ParseText(string? text, string automationId)
     {
-        if (double.TryParse(
-                text?.Trim(),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out var value)
-            && double.IsFinite(value))
+        if (GridNumericText.TryParse(text, cultureName: null, out var value, out _))
         {
             return value;
         }
 
         throw new InvalidOperationException(
-            $"Spinner text part '{automationId}' does not contain a finite invariant numeric value.");
+            $"Spinner text part '{automationId}' does not contain an unambiguous finite numeric value.");
     }
 
     public static string FormatInvariant(double value)

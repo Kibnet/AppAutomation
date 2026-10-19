@@ -70,6 +70,13 @@ public sealed class RecorderPopupObservationTests
             var popupOpenAfterHotkey = flyout.IsOpen;
             window.RaiseEvent(new KeyEventArgs
             {
+                RoutedEvent = InputElement.KeyUpEvent,
+                Key = Key.Q,
+                KeyModifiers = KeyModifiers.Control | KeyModifiers.Shift,
+                Source = window
+            });
+            window.RaiseEvent(new KeyEventArgs
+            {
                 RoutedEvent = InputElement.KeyDownEvent,
                 Key = Key.Escape,
                 Source = window
