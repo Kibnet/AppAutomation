@@ -10,7 +10,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel("RecorderGridCapture")]
+[NotInParallel]
 public sealed class RecorderStableGridSelectorTests
 {
     [Test]

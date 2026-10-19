@@ -8,6 +8,8 @@ using Avalonia.Themes.Fluent;
 using TUnit.Assertions;
 using TUnit.Core;
 
+[assembly: AvaloniaTestApplication(typeof(AppAutomation.Recorder.Avalonia.Tests.RecorderTextInputTestApplication))]
+
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
 public sealed class RecorderTextInputProvenanceTests
@@ -137,8 +139,8 @@ public sealed class RecorderTextInputProvenanceTests
     [Test]
     public async Task TextInputInNewlyMaterializedTextBox_RecordsEnterText()
     {
-        using var headless = HeadlessUnitTestSession.StartNew(
-            typeof(TestApplication), AvaloniaTestIsolationLevel.PerTest);
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(
+            typeof(RecorderTextInputProvenanceTests).Assembly);
         var previews = headless.Dispatch(() =>
         {
             var root = new StackPanel();
@@ -171,8 +173,8 @@ public sealed class RecorderTextInputProvenanceTests
 
     private static string[] Capture(Func<TextBox> createTextBox, Action<RecorderSession, TextBox> interaction)
     {
-        using var headless = HeadlessUnitTestSession.StartNew(
-            typeof(TestApplication), AvaloniaTestIsolationLevel.PerTest);
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(
+            typeof(RecorderTextInputProvenanceTests).Assembly);
         return headless.Dispatch(() =>
         {
             var textBox = createTextBox();
@@ -190,9 +192,9 @@ public sealed class RecorderTextInputProvenanceTests
             return result;
         }, CancellationToken.None).GetAwaiter().GetResult();
     }
+}
 
-    private sealed class TestApplication : Application
-    {
-        public override void Initialize() => Styles.Add(new FluentTheme());
-    }
+public sealed class RecorderTextInputTestApplication : Application
+{
+    public override void Initialize() => Styles.Add(new FluentTheme());
 }

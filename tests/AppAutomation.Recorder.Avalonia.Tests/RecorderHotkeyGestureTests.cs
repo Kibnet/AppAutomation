@@ -5,7 +5,6 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Themes.Fluent;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -14,7 +13,7 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderHotkeyGestureTests
 {
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task RepeatedDeliveryOfSameHotkeyEvent_HandlesCommandOnce()
     {
         var commandCount = RunGesture(window =>
@@ -28,7 +27,7 @@ public sealed class RecorderHotkeyGestureTests
     }
 
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task RepeatedKeyDownWithoutKeyUp_HandlesCommandOnce()
     {
         var commandCount = RunGesture(window =>
@@ -41,7 +40,7 @@ public sealed class RecorderHotkeyGestureTests
     }
 
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task KeyUpBetweenQuickPresses_HandlesCommandTwice()
     {
         var commandCount = RunGesture(window =>
@@ -55,7 +54,7 @@ public sealed class RecorderHotkeyGestureTests
     }
 
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task HoldingStartStopHotkey_DoesNotStopRecordingAgain()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -88,7 +87,7 @@ public sealed class RecorderHotkeyGestureTests
     }
 
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task TwoTextAssertionHotkeyGestures_RecordTwoNotificationChecks()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -128,7 +127,7 @@ public sealed class RecorderHotkeyGestureTests
     }
 
     [Test]
-    [NotInParallel("RecorderHotkeyHeadless")]
+    [NotInParallel]
     public async Task FocusedNotificationText_TakesPrecedenceOverStaleSpatialTarget()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -203,6 +202,6 @@ public sealed class RecorderHotkeyGestureTests
 
     private sealed class TestApplication : Application
     {
-        public override void Initialize() => Styles.Add(new FluentTheme());
+        // Hotkey behavior does not require FluentTheme's deferred control templates.
     }
 }

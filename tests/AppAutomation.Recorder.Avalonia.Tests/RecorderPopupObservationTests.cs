@@ -20,7 +20,7 @@ public sealed class RecorderPopupObservationTests
     private static readonly string[] FilterItems = ["First", "Second"];
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task CheckHotkeyWithOpenFlyoutResolvesLogicalFilterWithoutChangingItsValue()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -133,7 +133,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task FilterResultsCreatedAfterFlyoutOpensAreRecorded()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -186,7 +186,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task SingleSelectInFlyoutSelectionChangeRecordsFilterSelection()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -250,7 +250,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task SingleSelectInWindowOverlayOutsideContentRecordsFilterSelection()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -284,7 +284,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task ClosingAndReopeningOverlayDetachesOldSelectionAndRecordsOnce()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -335,7 +335,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task PopupRecordsSelectionAndStopsObservingAfterClose()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -400,7 +400,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task MultiSelectInWindowOverlayRecordsApplyAndCancel()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -537,7 +537,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task MultiSelectRecordsRenderedCaptionInsteadOfItemTypeName()
     {
         using var headless = HeadlessUnitTestSession.StartNew(
@@ -584,7 +584,7 @@ public sealed class RecorderPopupObservationTests
     }
 
     [Test]
-    [NotInParallel("RecorderPopupHeadless")]
+    [NotInParallel]
     public async Task ListBoxFilterRecordsRenderedCaptionInsteadOfItemTypeName()
     {
         using var headless = HeadlessUnitTestSession.StartNew(

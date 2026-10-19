@@ -4,7 +4,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel("AvaloniaMenuCapture")]
+[NotInParallel]
 public sealed class RecorderMenuCaptureTests
 {
     [Test]

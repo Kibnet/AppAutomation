@@ -274,19 +274,21 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             Log("up", _expected, button.ToString());
         }
 
-        internal async Task ClickAsync(Point point, PointerClickOptions options, Action? validateOwner = null)
+        internal Task ClickAsync(Point point, PointerClickOptions options, Action? validateOwner = null)
         {
             Move(point);
             long? firstDown = null;
             for (var index = 0; index < options.ClickCount; index++)
             {
-                if (index != 0) await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(60, backend.DoubleClickTime.TotalMilliseconds / 3)), token).ConfigureAwait(false);
+                // Keep both presses on the same continuation. A delayed reschedule can consume
+                // the native double-click interval before the second exact-target check runs.
                 validateOwner?.Invoke();
                 Down(options.Button, firstDown);
                 firstDown ??= _lastDownTimestamp;
                 Up(options.Button);
                 _lastButtonUptimeMilliseconds = Environment.TickCount64;
             }
+            return Task.CompletedTask;
         }
 
         internal async Task HoverAsync(Point point, Func<CancellationToken, Task> verify, Action? validateOwner = null,

@@ -16,7 +16,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel("RecorderOverlay")]
+[NotInParallel]
 public sealed class RecorderCheckpointAssertionTests
 {
     [Test]
@@ -1649,7 +1649,7 @@ public sealed class RecorderCheckpointAssertionTests
         session.SelectCheckTargetForTesting(observedValue);
 
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var checkMenu = overlay.CreateCheckMenuForTesting(selection!);
         var textPresence = checkMenu.Items
             .OfType<MenuItem>()
@@ -1683,7 +1683,7 @@ public sealed class RecorderCheckpointAssertionTests
         dateSession.BeginCheckTargetSelection();
         dateSession.SelectCheckTargetForTesting(optionalDate);
         var dateOverlay = new RecorderOverlay();
-        dateOverlay.Attach(dateSession, new AppAutomationRecorderOptions());
+        dateOverlay.Attach(dateSession, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var dateMenu = dateOverlay.CreateCheckMenuForTesting(dateSelection!);
         var datePresence = dateMenu.Items
             .OfType<MenuItem>()
@@ -1700,7 +1700,7 @@ public sealed class RecorderCheckpointAssertionTests
         numericSession.BeginCheckTargetSelection();
         numericSession.SelectCheckTargetForTesting(amount);
         var numericOverlay = new RecorderOverlay();
-        numericOverlay.Attach(numericSession, new AppAutomationRecorderOptions());
+        numericOverlay.Attach(numericSession, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var numericMenu = numericOverlay.CreateCheckMenuForTesting(numericSelection!);
         var calculated = numericMenu.Items
             .OfType<MenuItem>()
@@ -1780,7 +1780,7 @@ public sealed class RecorderCheckpointAssertionTests
         }
 
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var checkMenu = overlay.CreateCheckMenuForTesting(selection);
         var rememberItem = checkMenu.Items
             .OfType<MenuItem>()
@@ -1835,7 +1835,7 @@ public sealed class RecorderCheckpointAssertionTests
         session.SelectCheckTargetForTesting(input);
 
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var editor = overlay.CreateLiteralAssertionEditorForTesting(selection!);
         var comparison = editor.GetLogicalDescendants().OfType<ComboBox>()
             .Single(control => control.Name == "RecorderExpectedComparison");
@@ -1871,7 +1871,7 @@ public sealed class RecorderCheckpointAssertionTests
         session.SelectCheckTargetForTesting(date);
 
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         var editor = overlay.CreateLiteralAssertionEditorForTesting(selection!);
         var comparison = editor.GetLogicalDescendants().OfType<ComboBox>()
             .Single(control => control.Name == "RecorderExpectedComparison");
@@ -2210,7 +2210,7 @@ public sealed class RecorderCheckpointAssertionTests
         using var session = CreateSession(root);
         session.Start();
         var overlay = new RecorderOverlay();
-        overlay.Attach(session, new AppAutomationRecorderOptions());
+        overlay.Attach(session, new AppAutomationRecorderOptions { OverlayTheme = RecorderOverlayTheme.Light });
         overlay.RefreshForTesting();
 
         var checkButton = overlay.FindControl<Button>("CheckButton");
