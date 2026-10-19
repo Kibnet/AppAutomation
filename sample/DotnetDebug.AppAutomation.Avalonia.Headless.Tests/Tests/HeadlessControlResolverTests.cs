@@ -641,6 +641,180 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task CompositeGridCombo_ChangesSelectedValueInsteadOfOnlyInputText(bool delayedResults)
+    {
+        const string fixtureVariable = "APPAUTOMATION_FLAUI_GRID_COMPOSITE_COMBO";
+        var previous = Environment.GetEnvironmentVariable(fixtureVariable);
+        const string delayVariable = "APPAUTOMATION_GRID_COMBO_DELAY_RESULTS";
+        var previousDelay = Environment.GetEnvironmentVariable(delayVariable);
+        Environment.SetEnvironmentVariable(fixtureVariable, "1");
+        Environment.SetEnvironmentVariable(delayVariable, delayedResults ? "1" : null);
+        try
+        {
+            using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+            HeadlessRuntime.Dispatch(() =>
+            {
+                session.MainWindow.Show();
+                session.MainWindow.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            });
+            var catalog = new GridAutomationCatalog().Add(
+                GridAutomationDefinition.ByAutomationIds(
+                        "ArmComplexDataGridControl",
+                        "ArmComplexDataGridControl",
+                        "ArmComplexDataGridControl")
+                    .WithColumns(
+                        GridColumnDefinition.Auto("Key")
+                            .ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
+                        GridColumnDefinition.Auto("State")
+                            .AsValue(GridCellValueKind.Selection)
+                            .EditWith(GridCellEditorKind.ComboBox, new GridCellEditorParts(
+                                Input: new GridRelativeLocator("GridCombo_Input"),
+                                Results: new GridRelativeLocator(
+                                    "GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
+                                OpenButton: new GridRelativeLocator(
+                                    "GridCombo_Open", GridRelativeLocatorScope.GridRoot))))
+                    .IdentifyRowsBy("Key"));
+            var page = new MainWindowPage(
+                new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog));
+            page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+
+            page.SelectGridCellComboItem(
+                static candidate => candidate.ArmComplexDataGridControl,
+                GridRowSelector.ByCell("Key", "ARM-02"),
+                "State",
+                "Closed");
+
+            await Assert.That(GridValueReader.ReadCellText(
+                page.ArmComplexDataGridControl,
+                GridRowSelector.ByCell("Key", "ARM-02"),
+                "State")).IsEqualTo("Closed");
+            await Assert.That(GridValueReader.ReadCellText(
+                page.ArmComplexDataGridControl,
+                GridRowSelector.ByCell("Key", "ARM-01"),
+                "State")).IsEqualTo("Open");
+            var committedState = HeadlessRuntime.Dispatch(() =>
+                ((global::DotnetDebug.Avalonia.MainWindowViewModel)session.MainWindow.DataContext!)
+                    .ArmGridRows.Single(static row => row.Key == "ARM-02").State);
+            await Assert.That(committedState).IsEqualTo("Closed");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(fixtureVariable, previous);
+            Environment.SetEnvironmentVariable(delayVariable, previousDelay);
+        }
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NestedGridOpenRow_IgnoresContainersWithoutRowContext()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var first = new VisualGridTestRow("ROW-A");
+        var second = new VisualGridTestRow("ROW-B");
+        var targetPresses = 0;
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new VisualGridTestHost { ItemsSource = [first, second] };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "NestedGrid");
+            grid.Children.Add(new global::Avalonia.Controls.Border
+            {
+                Width = 300,
+                Height = 30,
+                Background = global::Avalonia.Media.Brushes.Transparent,
+                DataContext = null
+            });
+            grid.Children.Add(new global::Avalonia.Controls.Border
+            {
+                Width = 300,
+                Height = 30,
+                Background = global::Avalonia.Media.Brushes.Transparent,
+                DataContext = new VisualGridRowContext(first)
+            });
+            var target = new global::Avalonia.Controls.Border
+            {
+                Width = 300,
+                Height = 30,
+                Background = global::Avalonia.Media.Brushes.Transparent,
+                DataContext = new VisualGridRowContext(second)
+            };
+            target.AddHandler(
+                global::Avalonia.Input.InputElement.PointerPressedEvent,
+                (_, _) => targetPresses++,
+                global::Avalonia.Interactivity.RoutingStrategies.Bubble);
+            grid.Children.Add(target);
+            session.MainWindow.Content = grid;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+        });
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("NestedGrid", "NestedGrid", "NestedGrid")
+                .WithColumns(GridColumnDefinition.Auto("Key"))
+                .IdentifyRowsBy("Key"));
+        var gridControl = new HeadlessControlResolver(session.MainWindow)
+            .WithGridAutomation(catalog)
+            .Resolve<IGridControl>(new UiControlDefinition(
+                "NestedGrid", UiControlType.Grid, "NestedGrid"));
+
+        ((IAddressableGridControl)gridControl).OpenRow(
+            GridRowSelector.ByCell("Key", "ROW-B"), 5000);
+
+        await Assert.That(targetPresses).IsEqualTo(2);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NestedGridOutsideViewport_CapturesAndOpensStableRow()
+    {
+        const string fixtureVariable = "APPAUTOMATION_NESTED_GRID_OUTSIDE_VIEWPORT";
+        var previous = Environment.GetEnvironmentVariable(fixtureVariable);
+        Environment.SetEnvironmentVariable(fixtureVariable, "1");
+        try
+        {
+            using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+            HeadlessRuntime.Dispatch(() =>
+            {
+                session.MainWindow.Show();
+                session.MainWindow.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            });
+            var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow)
+                .WithGridAutomation(DotnetDebug.AppAutomation.Configuration.SampleGridAutomation.CreateHeadlessCatalog()));
+            page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+
+            var row = GridRowKeyReader.Capture(page.ArmComplexDataGridControl, 0);
+            page.OpenGridRow(static candidate => candidate.ArmComplexDataGridControl, row);
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(row.Conditions.Single().Value).IsEqualTo("ARM-01");
+                await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("Opened row: ARM-01");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(fixtureVariable, previous);
+        }
+    }
+
+    private sealed record VisualGridTestRow(string Key);
+
+    private sealed record VisualGridRowContext(VisualGridTestRow Row);
+
+    private sealed record VisualGridTestColumn(string FieldName);
+
+    private sealed class VisualGridTestHost : global::Avalonia.Controls.StackPanel
+    {
+        public object[] ItemsSource { get; set; } = [];
+
+        public VisualGridTestColumn[] Columns { get; } = [new("Key")];
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task OpenGridRow_RejectsAnOccludedRowInsteadOfReportingGestureSuccess()
     {

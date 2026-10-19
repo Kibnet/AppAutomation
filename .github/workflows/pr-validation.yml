@@ -31,7 +31,9 @@ jobs:
         run: dotnet build AppAutomation.sln -c Release --no-restore
 
       - name: Test
-        run: dotnet test --solution AppAutomation.sln -c Release --no-build
+        # FlaUI drives the shared Windows desktop; other test modules must not
+        # contend with its UI Automation and physical pointer operations.
+        run: dotnet test --solution AppAutomation.sln -c Release --no-build --max-parallel-test-modules 1
         env:
           APPAUTOMATION_SYSTEM_CLIPBOARD_E2E: "1"
 

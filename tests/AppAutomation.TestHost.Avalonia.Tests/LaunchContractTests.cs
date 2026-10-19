@@ -401,6 +401,28 @@ public sealed class LaunchContractTests
 
     [Test]
     [NotInParallel(HeadlessRuntimeConstraint)]
+    public async Task HeadlessCatalogGrid_SelectsComboWhenActiveEditorHasNoDataGridCellAncestor()
+    {
+        using var headless = StartHeadlessRuntime();
+        var row = new RuntimeGridRow(
+            20, new RuntimeReference("Item 20"), 20m, RuntimeGridState.Pending);
+        var window = HeadlessRuntime.Dispatch(() => CreateRuntimeGridWindow([row]));
+        var page = new RuntimeGridPage(new HeadlessControlResolver(window)
+            .WithGridAutomation(CreateRuntimeGridCatalog()));
+
+        await Task.Run(() => page.SelectGridCellComboItem(
+                static candidate => candidate.RuntimeGrid,
+                GridRowSelector.ByCell("PositionNumber", "20"),
+                "State",
+                "Ready for processing",
+                timeoutMs: 1000))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(row.State).IsEqualTo(RuntimeGridState.Ready);
+    }
+
+    [Test]
+    [NotInParallel(HeadlessRuntimeConstraint)]
     public async Task HeadlessCatalogGrid_FormattedNumberInputsPreserveGroupingAndNumericValue()
     {
         using var headless = StartHeadlessRuntime();
@@ -1772,6 +1794,20 @@ Console.WriteLine("Fake desktop");
                 return;
             }
 
+            if (FocusedColumn.FieldName == "State")
+            {
+                var combo = new ComboBox
+                {
+                    ItemsSource = new[] { "Pending", "Ready for processing" },
+                    SelectedItem = row.State == RuntimeGridState.Pending
+                        ? "Pending"
+                        : "Ready for processing"
+                };
+                cell.Child = combo;
+                ActiveEditor = combo;
+                return;
+            }
+
             var editor = new TextBox
             {
                 Text = Convert.ToString(cell.Context.Value, System.Globalization.CultureInfo.InvariantCulture)
@@ -1806,6 +1842,18 @@ Console.WriteLine("Fake desktop");
         public void CommitEditing()
         {
             CommitEditingCalls++;
+            if (FocusedItem is RuntimeGridRow comboRow
+                && FocusedColumn?.FieldName == "State"
+                && ActiveEditor is ComboBox { SelectedItem: string state })
+            {
+                comboRow.State = state == "Ready for processing"
+                    ? RuntimeGridState.Ready
+                    : RuntimeGridState.Pending;
+                ActiveEditor = null;
+                Materialize(comboRow);
+                return;
+            }
+
             if (FocusedItem is not RuntimeGridRow row
                 || _postedRequiredVolume is not { } value)
             {
@@ -1882,7 +1930,7 @@ Console.WriteLine("Fake desktop");
 
         public decimal RequiredVolume { get; set; }
 
-        public RuntimeGridState State { get; }
+        public RuntimeGridState State { get; set; }
 
         public int BeginEditCount { get; private set; }
 
