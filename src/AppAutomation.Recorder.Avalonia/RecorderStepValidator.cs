@@ -336,40 +336,5 @@ internal static class RecorderDatePickerHintMatcher
     }
 
     private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
-    {
-        if (control is null)
-        {
-            yield break;
-        }
-
-        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var queue = new Queue<Control>();
-        queue.Enqueue(control);
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            if (!seen.Add(current))
-            {
-                continue;
-            }
-
-            yield return current;
-
-            if (current.GetVisualParent() is Control visualParent)
-            {
-                queue.Enqueue(visualParent);
-            }
-
-            if (current is ILogical { LogicalParent: Control logicalParent })
-            {
-                queue.Enqueue(logicalParent);
-            }
-
-            if (current is StyledElement { TemplatedParent: Control templatedParent })
-            {
-                queue.Enqueue(templatedParent);
-            }
-        }
-    }
+        => RecorderControlTree.EnumerateRelatedControls(control);
 }

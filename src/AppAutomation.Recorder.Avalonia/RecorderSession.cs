@@ -44,9 +44,8 @@ internal sealed partial class RecorderSession :
     private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _autosaveOperation;
     private readonly List<RecordedStep> _steps = new();
     private readonly List<Action> _detachActions = new();
-    private readonly Dictionary<Control, Action> _observedControlDetachers = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<FlyoutBase, Action> _observedFlyoutDetachers = new(ReferenceEqualityComparer.Instance);
-    private readonly HashSet<Control> _additionalInputRoots = new(ReferenceEqualityComparer.Instance);
+    private readonly RecorderObservationSubscriptions _observations;
+    private readonly RecorderPointerGestureTracker _pointerGestures = new();
     private readonly ConditionalWeakTable<RoutedEventArgs, object> _handledButtonClickEvents = new();
     private readonly ConditionalWeakTable<KeyEventArgs, object> _handledHotkeyEvents = new();
     private readonly HashSet<Key> _pressedHotkeyKeys = new();
@@ -60,7 +59,6 @@ internal sealed partial class RecorderSession :
     private readonly Func<Control?> _validationRootProvider;
     private readonly object _operationSync = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private Control? _inputRoot;
 
     private RecorderSessionState _state;
     private bool _handlingHotkeyCommand;
@@ -93,15 +91,6 @@ internal sealed partial class RecorderSession :
     private RecorderCopiedValueOption? _activeCopiedValue;
     private TextBox? _pendingCopiedValuePasteTarget;
     private Guid? _pendingCopiedValuePasteId;
-    private Control? _recentPointerControl;
-    private DateTimeOffset _recentPointerAt;
-    private int _pointerGestureSequence;
-    private int? _activePointerGestureSequence;
-    private PendingGridRowSelectionGesture? _pendingGridRowSelectionGesture;
-    private int? _recordedButtonGestureSequence;
-    private Control? _recordedButtonGestureTarget;
-    private Control? _recentKeyboardControl;
-    private DateTimeOffset _recentKeyboardAt;
     private PendingCatalogGridEdit? _pendingCatalogGridEdit;
     private GridComboSelectionContextResolution? _pendingGridComboSelectionContext;
     private CompletedCompositeSelection? _completedCompositeSelection;
@@ -154,6 +143,13 @@ internal sealed partial class RecorderSession :
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _ = _options.FreezeGridHints();
         _validationRootProvider = validationRootProvider ?? (() => window.Content as Control);
+        _observations = new RecorderObservationSubscriptions(
+            AttachObservedControl,
+            OnFlyoutOpened,
+            OnFlyoutClosed,
+            AttachInputHandlers,
+            DetachInputHandlers,
+            ResetInputGestureState);
         _logger = options.Logger ?? NullLogger.Instance;
         _hasConfiguredLogger = options.Logger is not null;
         string? hotkeySettingsLoadError = null;
@@ -610,19 +606,7 @@ internal sealed partial class RecorderSession :
         _spinnerDebounceTimer.Stop();
         DiscardPendingTimePicker();
 
-        foreach (var detachAction in _observedControlDetachers.Values)
-        {
-            detachAction();
-        }
-
-        _observedControlDetachers.Clear();
-
-        foreach (var detachAction in _observedFlyoutDetachers.Values)
-        {
-            detachAction();
-        }
-
-        _observedFlyoutDetachers.Clear();
+        _observations.Dispose();
 
         foreach (var detachAction in _detachActions)
         {
@@ -1540,7 +1524,6 @@ internal sealed partial class RecorderSession :
         _window.PropertyChanged += OnWindowPropertyChanged;
         _window.Deactivated += OnWindowDeactivated;
 
-        _detachActions.Add(DetachInputHandlers);
         _detachActions.Add(() => _window.PropertyChanged -= OnWindowPropertyChanged);
         _detachActions.Add(() => _window.Deactivated -= OnWindowDeactivated);
     }
@@ -1588,14 +1571,7 @@ internal sealed partial class RecorderSession :
         var inputRoot = validationRoot is null
             ? _window
             : TopLevel.GetTopLevel(validationRoot) ?? validationRoot;
-        if (ReferenceEquals(inputRoot, _inputRoot))
-        {
-            return;
-        }
-
-        DetachInputHandlers();
-        _inputRoot = inputRoot;
-        AttachInputHandlers(inputRoot);
+        _observations.RebindInputRoot(inputRoot);
     }
 
     private void AttachInputHandlers(Control root)
@@ -1627,20 +1603,8 @@ internal sealed partial class RecorderSession :
         root.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
     }
 
-    private void DetachInputHandlers()
+    private void ResetInputGestureState()
     {
-        foreach (var root in _additionalInputRoots)
-        {
-            DetachInputHandlers(root);
-        }
-
-        _additionalInputRoots.Clear();
-        if (_inputRoot is not null)
-        {
-            DetachInputHandlers(_inputRoot);
-        }
-
-        _inputRoot = null;
         _lastSpatialCaptureTarget = null;
         _pressedHotkeyKeys.Clear();
     }
@@ -1670,7 +1634,6 @@ internal sealed partial class RecorderSession :
     private void RefreshObservedControls()
     {
         var currentControls = CollectObservableControls();
-        RebindFlyoutHandlers(currentControls);
         RebindPopupInputRoots(currentControls);
 
         if (_pendingTextBox is not null && !currentControls.Contains(_pendingTextBox))
@@ -1693,55 +1656,7 @@ internal sealed partial class RecorderSession :
             FlushPendingSpinner();
         }
 
-        foreach (var observedControl in _observedControlDetachers.Keys.ToArray())
-        {
-            if (currentControls.Contains(observedControl))
-            {
-                continue;
-            }
-
-            _observedControlDetachers[observedControl]();
-            _observedControlDetachers.Remove(observedControl);
-        }
-
-        foreach (var control in currentControls)
-        {
-            if (_observedControlDetachers.ContainsKey(control))
-            {
-                continue;
-            }
-
-            _observedControlDetachers[control] = AttachObservedControl(control);
-        }
-    }
-
-    private void RebindFlyoutHandlers(IReadOnlyCollection<Control> controls)
-    {
-        var currentFlyouts = new HashSet<FlyoutBase>(ReferenceEqualityComparer.Instance);
-        foreach (var control in controls)
-        {
-            foreach (var flyout in RecorderControlTree.EnumerateAssociatedFlyouts(control))
-            {
-                currentFlyouts.Add(flyout);
-            }
-        }
-
-        foreach (var flyout in _observedFlyoutDetachers.Keys.Except(currentFlyouts).ToArray())
-        {
-            _observedFlyoutDetachers[flyout]();
-            _observedFlyoutDetachers.Remove(flyout);
-        }
-
-        foreach (var flyout in currentFlyouts.Except(_observedFlyoutDetachers.Keys))
-        {
-            flyout.Opened += OnFlyoutOpened;
-            flyout.Closed += OnFlyoutClosed;
-            _observedFlyoutDetachers.Add(flyout, () =>
-            {
-                flyout.Opened -= OnFlyoutOpened;
-                flyout.Closed -= OnFlyoutClosed;
-            });
-        }
+        _observations.Reconcile(currentControls);
     }
 
     private void OnFlyoutOpened(object? sender, EventArgs e)
@@ -1754,27 +1669,7 @@ internal sealed partial class RecorderSession :
 
     private void RebindPopupInputRoots(IReadOnlyCollection<Control> controls)
     {
-        var currentRoots = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        foreach (var control in controls)
-        {
-            if (TopLevel.GetTopLevel(control) is { } root
-                && !ReferenceEquals(root, _inputRoot))
-            {
-                currentRoots.Add(root);
-            }
-        }
-
-        foreach (var root in _additionalInputRoots.Except(currentRoots).ToArray())
-        {
-            DetachInputHandlers(root);
-            _additionalInputRoots.Remove(root);
-        }
-
-        foreach (var root in currentRoots.Except(_additionalInputRoots))
-        {
-            AttachInputHandlers(root);
-            _additionalInputRoots.Add(root);
-        }
+        _observations.ReconcileAdditionalInputRoots(controls);
     }
 
     private void OnPopupOpened(object? sender, EventArgs e)
@@ -1795,87 +1690,14 @@ internal sealed partial class RecorderSession :
 
     private HashSet<Control> CollectObservableControls()
     {
-        var controls = new HashSet<Control>(ReferenceEqualityComparer.Instance);
         var validationRoot = _validationRootProvider();
         if (validationRoot is null)
         {
-            return controls;
+            return new HashSet<Control>(ReferenceEqualityComparer.Instance);
         }
 
         var root = TopLevel.GetTopLevel(validationRoot) ?? validationRoot;
-        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        CollectObservableControls(root, controls, visited);
-
-        return controls;
-    }
-
-    private static void CollectObservableControls(
-        Control root,
-        ISet<Control> controls,
-        ISet<Control> visited)
-    {
-        foreach (var control in root.GetVisualDescendants().OfType<Control>().Prepend(root))
-        {
-            if (!visited.Add(control))
-            {
-                continue;
-            }
-
-            if (IsObservableControl(control))
-            {
-                controls.Add(control);
-            }
-
-            foreach (var detachedRoot in RecorderControlTree.EnumerateDetachedContentRoots(control))
-            {
-                CollectObservableControls(detachedRoot, controls, visited);
-            }
-
-            if (control.ContextMenu is { } contextMenu)
-            {
-                CollectMenuItems(contextMenu.Items.OfType<MenuItem>(), controls, visited);
-            }
-
-            if (control.ContextFlyout is MenuFlyout menuFlyout)
-            {
-                CollectMenuItems(menuFlyout.Items.OfType<MenuItem>(), controls, visited);
-            }
-        }
-
-        foreach (var menuItem in root.GetLogicalDescendants().OfType<MenuItem>())
-        {
-            if (visited.Add(menuItem))
-            {
-                controls.Add(menuItem);
-            }
-        }
-
-        var menus = root.GetVisualDescendants().OfType<Menu>();
-        if (root is Menu rootMenu)
-        {
-            menus = menus.Prepend(rootMenu);
-        }
-
-        foreach (var menu in menus)
-        {
-            CollectMenuItems(menu.Items.OfType<MenuItem>(), controls, visited);
-        }
-    }
-
-    private static void CollectMenuItems(
-        IEnumerable<MenuItem> items,
-        ISet<Control> controls,
-        ISet<Control> visited)
-    {
-        foreach (var item in items)
-        {
-            if (visited.Add(item))
-            {
-                controls.Add(item);
-            }
-
-            CollectMenuItems(item.Items.OfType<MenuItem>(), controls, visited);
-        }
+        return RecorderControlTree.CollectObservableControls(root, IsObservableControl);
     }
 
     private Action AttachObservedControl(Control control)
@@ -1996,7 +1818,7 @@ internal sealed partial class RecorderSession :
         BeginPointerGesture();
         var source = e.Source as Control;
         if (FindAncestorOrSelf<ListBox>(source) is { } listBox
-            && !_observedControlDetachers.ContainsKey(listBox))
+            && !_observations.IsObserved(listBox))
         {
             RefreshObservedControls();
         }
@@ -2117,8 +1939,8 @@ internal sealed partial class RecorderSession :
 
     private Control GetPointerPositionRoot(Control? source) =>
         source is not null
-            ? TopLevel.GetTopLevel(source) ?? _inputRoot ?? _window
-            : _inputRoot ?? _window;
+            ? TopLevel.GetTopLevel(source) ?? _observations.InputRoot ?? _window
+            : _observations.InputRoot ?? _window;
 
     private void OnTextInput(object? sender, TextInputEventArgs e)
     {
@@ -2432,17 +2254,9 @@ internal sealed partial class RecorderSession :
         FlushPendingSliderIfSwitchingTo(control);
         FlushPendingSpinnerIfSwitchingTo(control);
         var buttonTarget = control ?? eventSource;
-        if (_activePointerGestureSequence is { } activeGesture
-            && _recordedButtonGestureSequence == activeGesture
-            && ReferenceEquals(_recordedButtonGestureTarget, buttonTarget))
+        if (!_pointerGestures.TryMarkButton(buttonTarget))
         {
             return;
-        }
-
-        if (_activePointerGestureSequence is { } currentGesture)
-        {
-            _recordedButtonGestureSequence = currentGesture;
-            _recordedButtonGestureTarget = buttonTarget;
         }
 
         AddStep(
@@ -3314,10 +3128,7 @@ internal sealed partial class RecorderSession :
 
     private void MarkTextEditInput(TextBox textBox)
     {
-        if (!_observedControlDetachers.ContainsKey(textBox))
-        {
-            _observedControlDetachers[textBox] = AttachObservedControl(textBox);
-        }
+        _observations.EnsureObserved(textBox);
 
         _textEditInputTarget = textBox;
         var sequence = ++_textEditInputSequence;
@@ -4781,7 +4592,7 @@ internal sealed partial class RecorderSession :
         candidates = null;
         var spatial = _lastSpatialCaptureTarget;
         if (spatial is null
-            || (_inputRoot is not null && !ReferenceEquals(_inputRoot, spatial.PositionRoot))
+            || (_observations.InputRoot is not null && !ReferenceEquals(_observations.InputRoot, spatial.PositionRoot))
             || !spatial.PositionRoot.IsVisible
             || spatial.Position.X < 0
             || spatial.Position.Y < 0
@@ -4959,13 +4770,10 @@ internal sealed partial class RecorderSession :
         var stepCount = _steps.Count;
         AddStep(capture.StepResult, source, clickCount >= 2 ? "GridRowOpen" : "GridRowSelect");
         if (clickCount < 2
-            && _activePointerGestureSequence is { } pointerGestureSequence
             && _steps.Count > stepCount
             && _steps[^1] is { ActionKind: RecordedActionKind.SelectGridRow } selectionStep)
         {
-            _pendingGridRowSelectionGesture = new PendingGridRowSelectionGesture(
-                pointerGestureSequence,
-                selectionStep.StepId);
+            _pointerGestures.RememberGridRowSelection(selectionStep.StepId);
         }
 
         return true;
@@ -4974,15 +4782,12 @@ internal sealed partial class RecorderSession :
     private void RemovePointerLinkedGridSelection(RecordedStep recordedStep)
     {
         if (string.IsNullOrWhiteSpace(recordedStep.GridTargetColumnName)
-            || _activePointerGestureSequence is not { } activeSequence
-            || _pendingGridRowSelectionGesture is not { } pending
-            || pending.PointerGestureSequence != activeSequence)
+            || !_pointerGestures.TryConsumeLinkedGridRowSelection(out var selectionStepId))
         {
             return;
         }
 
-        _pendingGridRowSelectionGesture = null;
-        if (_steps.Count == 0 || _steps[^1].StepId != pending.SelectionStepId)
+        if (_steps.Count == 0 || _steps[^1].StepId != selectionStepId)
         {
             return;
         }
@@ -5048,17 +4853,12 @@ internal sealed partial class RecorderSession :
 
     private void BeginPointerGesture()
     {
-        _pointerGestureSequence = _pointerGestureSequence == int.MaxValue
-            ? 1
-            : _pointerGestureSequence + 1;
-        _activePointerGestureSequence = _pointerGestureSequence;
-        _pendingGridRowSelectionGesture = null;
+        _pointerGestures.Begin();
     }
 
     private void ResetPointerGesture()
     {
-        _activePointerGestureSequence = null;
-        _pendingGridRowSelectionGesture = null;
+        _pointerGestures.Reset();
     }
 
     private bool TryRecordCatalogGridCellEdit(
@@ -5840,7 +5640,7 @@ internal sealed partial class RecorderSession :
 
     private bool IsCompositeSelectedValue(TextBox searchInput, string text)
     {
-        return _observedControlDetachers.Keys.Any(results =>
+        return _observations.ObservedControls.Any(results =>
             (results is ComboBox or ListBox)
             && _stepFactory.IsCompositeSelectedValue(searchInput, results, text));
     }
@@ -5850,8 +5650,7 @@ internal sealed partial class RecorderSession :
         CommitPendingCatalogGridEditIfSwitchingTo(control);
         BeginNewCompositeInteraction(control);
         UpdatePendingGridCellContext(control);
-        _recentPointerControl = control;
-        _recentPointerAt = DateTimeOffset.UtcNow;
+        _pointerGestures.RememberPointer(control);
     }
 
     private void RegisterKeyboardInput(Control control)
@@ -5859,8 +5658,7 @@ internal sealed partial class RecorderSession :
         CommitPendingCatalogGridEditIfSwitchingTo(control);
         BeginNewCompositeInteraction(control);
         UpdatePendingGridCellContext(control);
-        _recentKeyboardControl = control;
-        _recentKeyboardAt = DateTimeOffset.UtcNow;
+        _pointerGestures.RememberKeyboard(control);
     }
 
     private void UpdatePendingGridCellContext(Control? control)
@@ -5900,9 +5698,7 @@ internal sealed partial class RecorderSession :
 
     private bool WasRecentlyTriggeredByUser(Control control)
     {
-        var now = DateTimeOffset.UtcNow;
-        if ((now - _recentPointerAt <= RecentInputWindow && AreRelated(control, _recentPointerControl))
-            || (now - _recentKeyboardAt <= RecentInputWindow && AreRelated(control, _recentKeyboardControl)))
+        if (_pointerGestures.WasRecentlyTriggeredByUser(control, RecentInputWindow, AreRelated))
         {
             return true;
         }
@@ -6037,10 +5833,6 @@ internal sealed partial class RecorderSession :
         StepCreationResult StepResult,
         string DiagnosticContext);
 
-    private sealed record PendingGridRowSelectionGesture(
-        int PointerGestureSequence,
-        Guid SelectionStepId);
-
     private static bool IsPickerTemplateButton(Control? control)
     {
         var button = FindAncestorOrSelf<Button>(control);
@@ -6103,42 +5895,7 @@ internal sealed partial class RecorderSession :
     }
 
     private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
-    {
-        if (control is null)
-        {
-            yield break;
-        }
-
-        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var queue = new Queue<Control>();
-        queue.Enqueue(control);
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            if (!seen.Add(current))
-            {
-                continue;
-            }
-
-            yield return current;
-
-            if (current.GetVisualParent() is Control visualParent)
-            {
-                queue.Enqueue(visualParent);
-            }
-
-            if (current is ILogical { LogicalParent: Control logicalParent })
-            {
-                queue.Enqueue(logicalParent);
-            }
-
-            if (current is StyledElement { TemplatedParent: Control templatedParent })
-            {
-                queue.Enqueue(templatedParent);
-            }
-        }
-    }
+        => RecorderControlTree.EnumerateRelatedControls(control);
 
     private Task<RecorderSaveResult> RunManagedOperationAsync(
         string operationName,
