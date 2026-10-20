@@ -4,6 +4,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
+using SemanticValueCandidate = AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel.SemanticValueCandidate;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -265,7 +266,7 @@ internal sealed partial class RecorderStepFactory
             NumericUpDown { Value: { } numericValue } => numericValue.ToString(CultureInfo.InvariantCulture),
             _ => null
         };
-        return TryReadNumericValue(source, out value);
+        return RecorderNumericValueReader.TryReadNumericValue(source, out value);
     }
 
 }

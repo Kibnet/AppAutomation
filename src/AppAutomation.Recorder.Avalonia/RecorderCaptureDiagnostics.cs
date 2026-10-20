@@ -354,42 +354,7 @@ internal static class RecorderCaptureDiagnostics
     }
 
     private static IEnumerable<Control> EnumerateRelatedControls(Control? source)
-    {
-        if (source is null)
-        {
-            yield break;
-        }
-
-        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var queue = new Queue<Control>();
-        queue.Enqueue(source);
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            if (!seen.Add(current))
-            {
-                continue;
-            }
-
-            yield return current;
-
-            if (current.GetVisualParent() is Control visualParent)
-            {
-                queue.Enqueue(visualParent);
-            }
-
-            if (current is ILogical { LogicalParent: Control logicalParent })
-            {
-                queue.Enqueue(logicalParent);
-            }
-
-            if (current is StyledElement { TemplatedParent: Control templatedParent })
-            {
-                queue.Enqueue(templatedParent);
-            }
-        }
-    }
+        => RecorderControlTree.EnumerateRelatedControls(source);
 
     private static string? NullIfWhiteSpace(string? value)
     {

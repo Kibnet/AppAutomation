@@ -2,6 +2,18 @@ namespace AppAutomation.FlaUI.Automation.GridAutomation;
 
 internal static class NativeGridRowNormalizer
 {
+    public static int? ResolveRowIndex(int? rowIndex, int? firstCellIndex)
+    {
+        if (rowIndex >= 0 && firstCellIndex >= 0 && rowIndex != firstCellIndex)
+        {
+            throw new InvalidOperationException(
+                $"Native grid row exposes conflicting UIA GridItem.Row values: "
+                + $"row={rowIndex}; firstCell={firstCellIndex}.");
+        }
+
+        return rowIndex >= 0 ? rowIndex : firstCellIndex >= 0 ? firstCellIndex : null;
+    }
+
     public static bool HasContinuousObservation(
         IReadOnlyList<NativeGridRowSnapshot>? previous,
         IReadOnlyList<NativeGridRowSnapshot> current,

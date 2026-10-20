@@ -1,4 +1,6 @@
 using System.Drawing;
+using System.Globalization;
+using FlaUI.Core.Definitions;
 
 namespace AppAutomation.FlaUI.Automation.GridAutomation;
 
@@ -6,6 +8,56 @@ internal readonly record struct NativeGridCellCandidate(Rectangle Bounds, bool I
 
 internal static class NativeGridCellMatcher
 {
+    public static bool IsEmptyDateProjection(
+        string? name,
+        string? value,
+        ControlType controlType,
+        bool hasTextPattern,
+        int descendantCount)
+    {
+        // Some grid providers publish a row ordinal as the Name of an otherwise empty date cell.
+        return controlType == ControlType.Group
+            && name is { Length: > 0 }
+            && int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+            && string.IsNullOrWhiteSpace(value)
+            && !hasTextPattern
+            && descendantCount == 0;
+    }
+
+    public static int SelectBySourceField(
+        string sourceFieldName,
+        string? geometricallySelectedAutomationId,
+        IReadOnlyList<string?> candidateAutomationIds,
+        bool selectedIdBelongsToDifferentSourceField)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceFieldName);
+        ArgumentNullException.ThrowIfNull(candidateAutomationIds);
+        var matches = candidateAutomationIds
+            .Select(static (id, index) => (Id: id, Index: index))
+            .Where(candidate => string.Equals(candidate.Id, sourceFieldName, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matches.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Source field '{sourceFieldName}' has multiple UIA cell projections in the same row.");
+        }
+
+        if (matches.Length == 1)
+        {
+            return matches[0].Index;
+        }
+
+        if (selectedIdBelongsToDifferentSourceField)
+        {
+            throw new InvalidOperationException(
+                $"Source field '{sourceFieldName}' has no matching UIA cell; geometry selected "
+                + $"'{geometricallySelectedAutomationId}' instead.");
+        }
+
+        return -1;
+    }
+
     public static int?[]? Match(
         IReadOnlyList<Rectangle> headers,
         IReadOnlyList<NativeGridCellCandidate> candidates,

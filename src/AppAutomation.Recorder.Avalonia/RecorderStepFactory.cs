@@ -6,6 +6,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
+using static AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel;
+using SemanticValueCandidate = AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel.SemanticValueCandidate;
+using GridValueContext = AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel.GridValueContext;
 
 namespace AppAutomation.Recorder.Avalonia;
 
@@ -27,6 +30,29 @@ internal sealed partial class RecorderStepFactory
     private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
     private readonly Dictionary<Control, (RecorderGridHint Hint, GridAutomationDefinition Definition)> _nativeGridDefinitions =
         new(ReferenceEqualityComparer.Instance);
+
+    private static StepCreationResult CreateStepFromSnapshot(
+        RecorderSemanticValueSnapshot snapshot,
+        RecordedStep step,
+        string message) =>
+        RecorderSemanticValueModel.CreateStepFromSnapshot(
+            snapshot,
+            step,
+            message,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow);
+
+    private static bool TryNormalizeLiteralDateExpression(
+        SemanticValueCandidate candidate,
+        RecorderDateExpression? requested,
+        out RecorderDateExpression? normalized,
+        out string error) =>
+        RecorderSemanticValueModel.TryNormalizeLiteralDateExpression(
+            candidate,
+            requested,
+            DateTime.Today,
+            out normalized,
+            out error);
 
     public RecorderStepFactory(AppAutomationRecorderOptions options, Window? validationWindow = null)
         : this(
@@ -2570,75 +2596,6 @@ internal sealed partial class RecorderStepFactory
         return true;
     }
 
-    private static bool RefersToSameSemanticTarget(
-        RecorderSemanticValueSnapshot left,
-        RecorderSemanticValueSnapshot right)
-    {
-        var leftStep = left.Prototype;
-        var rightStep = right.Prototype;
-        return leftStep.Control.ControlType == rightStep.Control.ControlType
-            && leftStep.Control.LocatorKind == rightStep.Control.LocatorKind
-            && string.Equals(
-                leftStep.Control.LocatorValue,
-                rightStep.Control.LocatorValue,
-                StringComparison.Ordinal)
-            && leftStep.RowIndex == rightStep.RowIndex
-            && leftStep.ColumnIndex == rightStep.ColumnIndex
-            && string.Equals(leftStep.RepeatedItemKey, rightStep.RepeatedItemKey, StringComparison.Ordinal)
-            && string.Equals(
-                leftStep.GridTargetColumnName,
-                rightStep.GridTargetColumnName,
-                StringComparison.Ordinal)
-            && GridRowConditionsEqual(leftStep.GridRowConditions, rightStep.GridRowConditions);
-    }
-
-    private static bool GridRowConditionsEqual(
-        IReadOnlyList<RecordedGridRowCondition>? left,
-        IReadOnlyList<RecordedGridRowCondition>? right)
-    {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        if (left is null || right is null || left.Count != right.Count)
-        {
-            return false;
-        }
-
-        for (var index = 0; index < left.Count; index++)
-        {
-            if (!string.Equals(left[index].ColumnName, right[index].ColumnName, StringComparison.Ordinal)
-                || !string.Equals(left[index].Value, right[index].Value, StringComparison.Ordinal)
-                || left[index].ValueReference != right[index].ValueReference)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static string DescribeSemanticTarget(RecorderSemanticValueSnapshot snapshot)
-    {
-        var step = snapshot.Prototype;
-        var target = $"{step.Control.LocatorKind}:{step.Control.LocatorValue}";
-        if (step.RepeatedItemKey is { } itemKey)
-        {
-            return $"{target}[{itemKey}]";
-        }
-        if (step.GridRowConditions is { Count: > 0 })
-        {
-            var row = string.Join(
-                ", ",
-                step.GridRowConditions.Select(condition => $"{condition.ColumnName}={condition.Value}"));
-            return $"{target}[{row}; {step.GridTargetColumnName}]";
-        }
-
-        return step.RowIndex is { } rowIndex && step.ColumnIndex is { } columnIndex
-            ? $"{target}[{rowIndex}, {columnIndex}]"
-            : target;
-    }
 
     private bool TryCreateSemanticValueSnapshot(
         Control source,
@@ -3162,90 +3119,6 @@ internal sealed partial class RecorderStepFactory
             $"Added {stateName}-state assertion.");
     }
 
-    private RecordedStep CreateSemanticValueStep(
-        RecordedActionKind actionKind,
-        SemanticValueCandidate candidate,
-        Guid? checkpointId = null,
-        string? checkpointVariableName = null,
-        RecorderComparisonKind? comparisonKind = null,
-        Guid? expectedCheckpointId = null,
-        Guid? expectedGeneratedValueId = null,
-        bool hasExpectedLiteral = false,
-        RecorderDateExpression? dateExpression = null,
-        RecorderNumericExpectedExpression? numericExpectedExpression = null)
-    {
-        return new RecordedStep(
-            actionKind,
-            candidate.Control,
-            StringValue: candidate.StringValue,
-            BoolValue: candidate.BoolValue,
-            DoubleValue: candidate.DoubleValue,
-            DateValue: candidate.DateValue,
-            RowIndex: candidate.GridContext?.RowIndex,
-            ColumnIndex: candidate.GridContext?.ColumnIndex,
-            StringValues: candidate.StringValues,
-            TimeValue: candidate.TimeValue,
-            ValueKind: candidate.ValueKind,
-            ValueAccessorKind: candidate.ValueAccessorKind,
-            ComparisonKind: comparisonKind,
-            CheckpointId: checkpointId,
-            CheckpointVariableName: checkpointVariableName,
-            ExpectedCheckpointId: expectedCheckpointId,
-            ExpectedGeneratedValueId: expectedGeneratedValueId,
-            HasExpectedLiteral: hasExpectedLiteral,
-            DateExpression: dateExpression,
-            NumericExpectedExpression: numericExpectedExpression)
-        {
-            GridRowConditions = candidate.GridContext?.RowConditions,
-            GridTargetColumnName = candidate.GridContext?.TargetColumnName,
-            RepeatedItemKey = candidate.RepeatedItemKey
-        };
-    }
-
-    private static bool TryNormalizeLiteralDateExpression(
-        SemanticValueCandidate candidate,
-        RecorderDateExpression? requested,
-        out RecorderDateExpression? normalized,
-        out string error)
-    {
-        normalized = requested?.ReferenceKind == RecorderDateReferenceKind.Exact
-            ? null
-            : requested;
-        error = string.Empty;
-        if (normalized is null)
-        {
-            return true;
-        }
-
-        if (candidate.ValueKind != RecorderValueKind.Date)
-        {
-            error = "A relative date can only be used with a date assertion.";
-            return false;
-        }
-
-        if (!candidate.DateValue.HasValue)
-        {
-            error = "A relative date cannot be used when the expected date is null.";
-            return false;
-        }
-
-        if (normalized.ReferenceKind != RecorderDateReferenceKind.RelativeToToday)
-        {
-            error = "The requested date reference is not supported.";
-            return false;
-        }
-
-        try
-        {
-            _ = DateTime.Today.AddDays(normalized.DayOffset);
-            return true;
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            error = "The relative date is outside the supported range.";
-            return false;
-        }
-    }
 
     private StepCreationResult TryCreateSemanticSnapshotPrototype(
         Control source,
@@ -3325,57 +3198,6 @@ internal sealed partial class RecorderStepFactory
             result.Message);
     }
 
-    private static SemanticValueCandidate CreateCandidate(RecorderSemanticValueSnapshot snapshot)
-    {
-        var prototype = snapshot.Prototype;
-        GridValueContext? gridContext = null;
-        if (prototype.GridRowConditions is not null
-            || prototype.RowIndex.HasValue
-            || prototype.ColumnIndex.HasValue)
-        {
-            gridContext = new GridValueContext(
-                prototype.RowIndex ?? -1,
-                prototype.ColumnIndex ?? -1,
-                prototype.GridRowConditions,
-                prototype.GridTargetColumnName);
-        }
-
-        return new SemanticValueCandidate(
-            prototype.Control,
-            prototype.ValueKind ?? throw new InvalidOperationException("Semantic value snapshot does not contain a value kind."),
-            prototype.ValueAccessorKind ?? throw new InvalidOperationException("Semantic value snapshot does not contain an accessor kind."),
-            prototype.StringValue,
-            prototype.BoolValue,
-            prototype.DoubleValue,
-            prototype.DateValue,
-            prototype.TimeValue,
-            prototype.StringValues,
-            gridContext,
-            prototype.RepeatedItemKey);
-    }
-
-    private static StepCreationResult CreateStepFromSnapshot(
-        RecorderSemanticValueSnapshot snapshot,
-        RecordedStep step,
-        string message)
-    {
-        var prototype = snapshot.Prototype;
-        return StepCreationResult.Created(
-            step with
-            {
-                Warning = prototype.Warning,
-                ValidationStatus = prototype.ValidationStatus,
-                ValidationMessage = prototype.ValidationMessage,
-                CanPersist = prototype.CanPersist,
-                StepId = Guid.NewGuid(),
-                LastValidationAt = DateTimeOffset.UtcNow,
-                GridRowConditions = prototype.GridRowConditions,
-                GridTargetColumnName = prototype.GridTargetColumnName,
-                GridCapturedRowPosition = prototype.GridCapturedRowPosition,
-                RepeatedItemKey = prototype.RepeatedItemKey
-            },
-            message);
-    }
 
     private bool TryResolveSemanticValue(
         Control? source,
@@ -4049,7 +3871,7 @@ internal sealed partial class RecorderStepFactory
             displayedValue = ExtractTextValue(valueControl)?.Trim();
             if (displayedValue is null
                 && hint.EditorKind == GridCellEditorKind.Number
-                && TryReadNumericValue(valueControl, out var numericValue))
+                && RecorderNumericValueReader.TryReadNumericValue(valueControl, out var numericValue))
             {
                 displayedValue = numericValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
@@ -4135,7 +3957,7 @@ internal sealed partial class RecorderStepFactory
                 locator.Control,
                 valueKind,
                 accessorKind,
-                DoubleValue: TryReadNumericValue(source, out var numericValue) ? numericValue : null),
+                DoubleValue: RecorderNumericValueReader.TryReadNumericValue(source, out var numericValue) ? numericValue : null),
             RecorderValueAccessorKind.SelectedDate => new SemanticValueCandidate(
                 locator.Control,
                 valueKind,
@@ -4295,7 +4117,7 @@ internal sealed partial class RecorderStepFactory
         out SemanticValueCandidate candidate,
         out string error)
     {
-        var valueKind = column?.ValueKind ?? InferGridCellValueKind(rawValue, column?.EditorKind);
+        var valueKind = column?.ValueKind ?? RecorderGridValueConversion.InferGridCellValueKind(rawValue, column?.EditorKind);
         var recorderKind = valueKind switch
         {
             GridCellValueKind.Number => RecorderValueKind.Number,
@@ -4308,28 +4130,28 @@ internal sealed partial class RecorderStepFactory
         var gridContext = new GridValueContext(rowIndex, columnIndex, null, logicalColumnName);
         candidate = recorderKind switch
         {
-            RecorderValueKind.Number when TryConvertGridNumber(rawValue, displayText, column, out var number) =>
+            RecorderValueKind.Number when RecorderGridValueConversion.TryConvertGridNumber(rawValue, displayText, column, out var number) =>
                 new SemanticValueCandidate(
                     control,
                     recorderKind,
                     RecorderValueAccessorKind.GridCellValue,
                     DoubleValue: number,
                     GridContext: gridContext),
-            RecorderValueKind.Date when TryConvertGridDate(rawValue, displayText, column, out var date) =>
+            RecorderValueKind.Date when RecorderGridValueConversion.TryConvertGridDate(rawValue, displayText, column, out var date) =>
                 new SemanticValueCandidate(
                     control,
                     recorderKind,
                     RecorderValueAccessorKind.GridCellValue,
                     DateValue: date,
                     GridContext: gridContext),
-            RecorderValueKind.Time when TryConvertGridTime(rawValue, displayText, column, out var time) =>
+            RecorderValueKind.Time when RecorderGridValueConversion.TryConvertGridTime(rawValue, displayText, column, out var time) =>
                 new SemanticValueCandidate(
                     control,
                     recorderKind,
                     RecorderValueAccessorKind.GridCellValue,
                     TimeValue: time,
                     GridContext: gridContext),
-            RecorderValueKind.Boolean when TryConvertGridBoolean(rawValue, displayText, out var boolean) =>
+            RecorderValueKind.Boolean when RecorderGridValueConversion.TryConvertGridBoolean(rawValue, displayText, out var boolean) =>
                 new SemanticValueCandidate(
                     control,
                     recorderKind,
@@ -4362,167 +4184,6 @@ internal sealed partial class RecorderStepFactory
         return false;
     }
 
-    private static GridCellValueKind InferGridCellValueKind(
-        object? rawValue,
-        GridCellEditorKind? editorKind)
-    {
-        if (rawValue is bool)
-        {
-            return GridCellValueKind.Boolean;
-        }
-
-        if (rawValue is byte or sbyte or short or ushort or int or uint or long or ulong
-            or float or double or decimal)
-        {
-            return GridCellValueKind.Number;
-        }
-
-        if (rawValue is DateOnly or DateTime or DateTimeOffset)
-        {
-            return GridCellValueKind.Date;
-        }
-
-        if (rawValue is TimeOnly or TimeSpan)
-        {
-            return GridCellValueKind.Time;
-        }
-
-        return editorKind switch
-        {
-            GridCellEditorKind.Number => GridCellValueKind.Number,
-            GridCellEditorKind.Date => GridCellValueKind.Date,
-            GridCellEditorKind.Time => GridCellValueKind.Time,
-            GridCellEditorKind.CheckBox => GridCellValueKind.Boolean,
-            GridCellEditorKind.ComboBox => GridCellValueKind.Selection,
-            GridCellEditorKind.SearchPicker => GridCellValueKind.Reference,
-            GridCellEditorKind.Color => GridCellValueKind.Color,
-            _ => GridCellValueKind.Text
-        };
-    }
-
-    private static bool TryConvertGridNumber(
-        object? rawValue,
-        string displayText,
-        GridColumnDefinition? column,
-        out double? number)
-    {
-        if (rawValue is null && string.IsNullOrWhiteSpace(displayText))
-        {
-            number = null;
-            return true;
-        }
-
-        try
-        {
-            if (rawValue is IConvertible convertible && rawValue is not string)
-            {
-                number = convertible.ToDouble(System.Globalization.CultureInfo.InvariantCulture);
-                return true;
-            }
-        }
-        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
-        {
-        }
-
-        var culture = GetGridCulture(column);
-        var success = double.TryParse(
-            displayText,
-            System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowThousands,
-            culture,
-            out var parsed);
-        number = success ? parsed : null;
-        return success;
-    }
-
-    private static bool TryConvertGridDate(
-        object? rawValue,
-        string displayText,
-        GridColumnDefinition? column,
-        out DateTime? date)
-    {
-        switch (rawValue)
-        {
-            case null when string.IsNullOrWhiteSpace(displayText):
-                date = null;
-                return true;
-            case DateTime value:
-                date = value.Date;
-                return true;
-            case DateTimeOffset value:
-                date = value.Date;
-                return true;
-            case DateOnly value:
-                date = value.ToDateTime(TimeOnly.MinValue);
-                return true;
-        }
-
-        var success = DateTime.TryParse(
-            displayText,
-            GetGridCulture(column),
-            System.Globalization.DateTimeStyles.AllowWhiteSpaces,
-            out var parsed);
-        date = success ? parsed.Date : null;
-        return success;
-    }
-
-    private static bool TryConvertGridTime(
-        object? rawValue,
-        string displayText,
-        GridColumnDefinition? column,
-        out TimeSpan? time)
-    {
-        switch (rawValue)
-        {
-            case null when string.IsNullOrWhiteSpace(displayText):
-                time = null;
-                return true;
-            case TimeSpan value:
-                time = value;
-                return true;
-            case TimeOnly value:
-                time = value.ToTimeSpan();
-                return true;
-            case DateTime value:
-                time = value.TimeOfDay;
-                return true;
-            case DateTimeOffset value:
-                time = value.TimeOfDay;
-                return true;
-        }
-
-        var success = TimeSpan.TryParse(displayText, GetGridCulture(column), out var parsed);
-        time = success ? parsed : null;
-        return success;
-    }
-
-    private static bool TryConvertGridBoolean(
-        object? rawValue,
-        string displayText,
-        out bool? boolean)
-    {
-        if (rawValue is null && string.IsNullOrWhiteSpace(displayText))
-        {
-            boolean = null;
-            return true;
-        }
-
-        if (rawValue is bool value)
-        {
-            boolean = value;
-            return true;
-        }
-
-        var success = bool.TryParse(displayText, out var parsed);
-        boolean = success ? parsed : null;
-        return success;
-    }
-
-    private static System.Globalization.CultureInfo GetGridCulture(GridColumnDefinition? column)
-    {
-        return string.IsNullOrWhiteSpace(column?.CultureName)
-            ? System.Globalization.CultureInfo.InvariantCulture
-            : System.Globalization.CultureInfo.GetCultureInfo(column.CultureName);
-    }
 
     private bool TryCreateMultiSelectSemanticValue(
         Control source,
@@ -4909,135 +4570,6 @@ internal sealed partial class RecorderStepFactory
         return null;
     }
 
-    private static bool HasLiteral(SemanticValueCandidate candidate)
-    {
-        return candidate.ValueKind switch
-        {
-            RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText => candidate.StringValue is not null,
-            RecorderValueKind.Number => candidate.DoubleValue.HasValue,
-            RecorderValueKind.Boolean => candidate.BoolValue.HasValue,
-            RecorderValueKind.Date => true,
-            RecorderValueKind.Time => true,
-            RecorderValueKind.StringSet => candidate.StringValues is not null,
-            _ => false
-        };
-    }
-
-    private static string FormatLiteralText(SemanticValueCandidate candidate)
-    {
-        return candidate.ValueKind switch
-        {
-            RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText => candidate.StringValue ?? string.Empty,
-            RecorderValueKind.Number => candidate.DoubleValue?.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-            RecorderValueKind.Boolean => candidate.BoolValue == true ? "true" : "false",
-            RecorderValueKind.Date => candidate.DateValue?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            RecorderValueKind.Time => candidate.TimeValue?.ToString("c", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
-            RecorderValueKind.StringSet => string.Join(", ", candidate.StringValues ?? []),
-            _ => string.Empty
-        };
-    }
-
-    private static bool TryApplyLiteralText(
-        SemanticValueCandidate candidate,
-        string text,
-        out SemanticValueCandidate updated,
-        out string error)
-    {
-        updated = candidate;
-        error = string.Empty;
-        switch (candidate.ValueKind)
-        {
-            case RecorderValueKind.Text:
-            case RecorderValueKind.GridCellText:
-                updated = candidate with { StringValue = text };
-                return true;
-            case RecorderValueKind.Color:
-                if (ColorValue.TryNormalize(text, out var color))
-                {
-                    updated = candidate with { StringValue = color };
-                    return true;
-                }
-
-                error = "Expected color must use #RRGGBB or #AARRGGBB.";
-                return false;
-            case RecorderValueKind.Number:
-                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number))
-                {
-                    updated = candidate with { DoubleValue = number };
-                    return true;
-                }
-
-                error = "Expected number must use invariant numeric format.";
-                return false;
-            case RecorderValueKind.Boolean:
-                if (bool.TryParse(text, out var boolean))
-                {
-                    updated = candidate with { BoolValue = boolean };
-                    return true;
-                }
-
-                error = "Expected boolean must be true or false.";
-                return false;
-            case RecorderValueKind.Date:
-                if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
-                {
-                    updated = candidate with { DateValue = null };
-                    return true;
-                }
-
-                if (DateTime.TryParseExact(text.Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date))
-                {
-                    updated = candidate with { DateValue = date.Date };
-                    return true;
-                }
-
-                error = "Expected date must use yyyy-MM-dd or null.";
-                return false;
-            case RecorderValueKind.Time:
-                if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
-                {
-                    updated = candidate with { TimeValue = null };
-                    return true;
-                }
-
-                if (TimeSpan.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var time))
-                {
-                    updated = candidate with { TimeValue = time };
-                    return true;
-                }
-
-                error = "Expected time must use a TimeSpan format or null.";
-                return false;
-            case RecorderValueKind.StringSet:
-                updated = candidate with
-                {
-                    StringValues = text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                };
-                return true;
-            default:
-                error = $"Literal kind '{candidate.ValueKind}' is not supported.";
-                return false;
-        }
-    }
-
-    private sealed record SemanticValueCandidate(
-        RecordedControlDescriptor Control,
-        RecorderValueKind ValueKind,
-        RecorderValueAccessorKind ValueAccessorKind,
-        string? StringValue = null,
-        bool? BoolValue = null,
-        double? DoubleValue = null,
-        DateTime? DateValue = null,
-        TimeSpan? TimeValue = null,
-        IReadOnlyList<string>? StringValues = null,
-        GridValueContext? GridContext = null,
-        string? RepeatedItemKey = null);
-
-    private sealed record GridValueContext(
-        int RowIndex,
-        int ColumnIndex,
-        IReadOnlyList<RecordedGridRowCondition>? RowConditions,
-        string? TargetColumnName);
 
     private bool TryCreateColorPickerAssertionStep(
         Control source,
@@ -7721,7 +7253,7 @@ internal sealed partial class RecorderStepFactory
                 var numberValueSource = FindRelatedControl<NumericUpDown>(source) as Control
                     ?? FindRelatedControl<TextBox>(source);
                 if (numberValueSource is null
-                    || !TryReadNumericValue(
+                    || !RecorderNumericValueReader.TryReadNumericValue(
                         numberValueSource,
                         source,
                         cultureName,
@@ -7901,7 +7433,7 @@ internal sealed partial class RecorderStepFactory
         RecorderGridEditHint hint)
     {
         if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
-            || !TryReadNumericValue(
+            || !RecorderNumericValueReader.TryReadNumericValue(
                 valueControl,
                 valueControl,
                 hint.NumericInputCultureName,
@@ -8262,8 +7794,8 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        var hasFrom = TryReadNumericValue(fromControl, out var fromValue);
-        var hasTo = TryReadNumericValue(toControl, out var toValue);
+        var hasFrom = RecorderNumericValueReader.TryReadNumericValue(fromControl, out var fromValue);
+        var hasTo = RecorderNumericValueReader.TryReadNumericValue(toControl, out var toValue);
         from = hasFrom ? fromValue : null;
         to = hasTo ? toValue : null;
         if (from.HasValue || to.HasValue)
@@ -8299,112 +7831,6 @@ internal sealed partial class RecorderStepFactory
         }
     }
 
-    private static bool TryReadNumericValue(Control control, out double value)
-    {
-        return TryReadNumericValue(control, out value, out _);
-    }
-
-    private static bool TryReadNumericValue(
-        Control control,
-        out double value,
-        out string? numericInputText)
-    {
-        return TryReadNumericValue(
-            control,
-            control,
-            cultureName: null,
-            out value,
-            out numericInputText);
-    }
-
-    private static bool TryReadNumericValue(
-        Control valueSource,
-        Control physicalTextSource,
-        string? cultureName,
-        out double value,
-        out string? numericInputText)
-    {
-        var visibleText = TryReadPhysicalNumericText(physicalTextSource, valueSource);
-        foreach (var candidate in EnumerateRelatedControls(valueSource))
-        {
-            if (!TryReadNumericControlValue(candidate, out value))
-            {
-                continue;
-            }
-
-            numericInputText = GridNumericText.PreserveNonCanonicalInput(
-                visibleText,
-                value,
-                cultureName);
-            return true;
-        }
-
-        if (GridNumericText.TryParse(visibleText, cultureName, out value, out _))
-        {
-            numericInputText = GridNumericText.PreserveNonCanonicalInput(
-                visibleText,
-                value,
-                cultureName);
-            return true;
-        }
-
-        value = default;
-        numericInputText = null;
-        return false;
-    }
-
-    private static string? TryReadPhysicalNumericText(Control source, Control valueSource)
-    {
-        if (source is TextBox sourceTextBox)
-        {
-            return sourceTextBox.Text;
-        }
-
-        if (FindRelatedControl<TextBox>(source) is { } relatedTextBox)
-        {
-            return relatedTextBox.Text;
-        }
-
-        return EnumerateDescendantControls(valueSource)
-            .OfType<TextBox>()
-            .Select(static textBox => textBox.Text)
-            .FirstOrDefault(static text => !string.IsNullOrWhiteSpace(text));
-    }
-
-    private static bool TryReadNumericControlValue(Control control, out double value)
-    {
-        for (var type = control.GetType(); type is not null; type = type.BaseType)
-        {
-            var valueProperty = type
-                .GetProperties(
-                    System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.DeclaredOnly)
-                .FirstOrDefault(static property =>
-                    string.Equals(property.Name, "Value", StringComparison.Ordinal)
-                    && property.CanRead
-                    && property.GetIndexParameters().Length == 0);
-            if (valueProperty is null)
-            {
-                continue;
-            }
-
-            try
-            {
-                if (GridNumericText.TryConvertFiniteDouble(valueProperty.GetValue(control), out value))
-                {
-                    return true;
-                }
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
-            {
-                // A broken editor getter must not block the text fallback.
-            }
-        }
-
-        value = default;
-        return false;
-    }
 
     private bool MatchesDateRangeTextPart(TextBox textBox)
     {
@@ -8899,47 +8325,7 @@ internal sealed partial class RecorderStepFactory
     }
 
     private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
-    {
-        if (control is null)
-        {
-            yield break;
-        }
-
-        var seen = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        var queue = new Queue<Control>();
-        queue.Enqueue(control);
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            if (!seen.Add(current))
-            {
-                continue;
-            }
-
-            yield return current;
-
-            if (current.GetVisualParent() is Control visualParent)
-            {
-                queue.Enqueue(visualParent);
-            }
-
-            if (current is ILogical { LogicalParent: Control logicalParent })
-            {
-                queue.Enqueue(logicalParent);
-            }
-
-            if (current is StyledElement { TemplatedParent: Control templatedParent })
-            {
-                queue.Enqueue(templatedParent);
-            }
-
-            if (current is Popup { PlacementTarget: Control placementTarget })
-            {
-                queue.Enqueue(placementTarget);
-            }
-        }
-    }
+        => RecorderControlTree.EnumerateRelatedControls(control, includePopupPlacementTarget: true);
 
     private static bool TryBuildMenuPath(
         MenuItem leaf,
