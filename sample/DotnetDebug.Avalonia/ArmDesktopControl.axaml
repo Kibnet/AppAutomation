@@ -25,7 +25,8 @@
                    automation:AutomationProperties.AutomationId="UnitQuantityCollection">
             <ListBoxItem Padding="4"
                          automation:AutomationProperties.AutomationId="UnitQuantityItem"
-                         automation:AutomationProperties.ItemStatus="unit-a">
+                         automation:AutomationProperties.Name="unit-a"
+                         automation:AutomationProperties.ItemStatus="id-a">
               <GroupBox automation:AutomationProperties.AutomationId="QuantityEditor"
                         automation:AutomationProperties.AccessibilityView="Control">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -43,7 +44,8 @@
             </ListBoxItem>
             <ListBoxItem Padding="4"
                          automation:AutomationProperties.AutomationId="UnitQuantityItem"
-                         automation:AutomationProperties.ItemStatus="unit-b">
+                         automation:AutomationProperties.Name="unit-b"
+                         automation:AutomationProperties.ItemStatus="id-b">
               <GroupBox automation:AutomationProperties.AutomationId="QuantityEditor"
                         automation:AutomationProperties.AccessibilityView="Control">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -61,7 +63,8 @@
             </ListBoxItem>
             <ListBoxItem Padding="4"
                          automation:AutomationProperties.AutomationId="UnitQuantityItem"
-                         automation:AutomationProperties.ItemStatus="unit-c">
+                         automation:AutomationProperties.Name="unit-c"
+                         automation:AutomationProperties.ItemStatus="id-c">
               <GroupBox automation:AutomationProperties.AutomationId="QuantityEditor"
                         automation:AutomationProperties.AccessibilityView="Control">
                 <StackPanel Orientation="Horizontal" Spacing="8">

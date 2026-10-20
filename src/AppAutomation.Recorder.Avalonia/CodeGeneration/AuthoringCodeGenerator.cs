@@ -382,6 +382,8 @@ internal sealed class AuthoringCodeGenerator
             static pair => pair.Value.PropertyName,
             StringComparer.Ordinal);
         var gridRowAnchorNames = CreateGridRowAnchorNames(persistableSteps, graphValidation);
+        var spinnerKeyVariables = CreateSpinnerKeyVariables(graphValidation, gridRowAnchorNames);
+        var numericTypes = CreateNumericTypes(persistableSteps);
         foreach (var step in persistableSteps)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -398,7 +400,9 @@ internal sealed class AuthoringCodeGenerator
                 graphValidation.CopiedValueVariables,
                 graphValidation.GeneratedValueSeriesVariable,
                 gridRowAnchorNames,
-                propertyNamesByControlKey));
+                propertyNamesByControlKey,
+                spinnerKeyVariables,
+                numericTypes));
         }
 
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
@@ -541,7 +545,7 @@ internal sealed class AuthoringCodeGenerator
             yield break;
         }
 
-        foreach (var operand in new[] { expression.Left, expression.Right })
+        foreach (var operand in expression.Operands())
         {
             if (operand.Kind == RecorderNumericOperandKind.Control
                 && operand.Control is { } control)
@@ -615,6 +619,8 @@ internal sealed class AuthoringCodeGenerator
 
         var builder = new StringBuilder();
         var gridRowAnchorNames = CreateGridRowAnchorNames(steps, graphValidation);
+        var spinnerKeyVariables = CreateSpinnerKeyVariables(graphValidation, gridRowAnchorNames);
+        var numericTypes = CreateNumericTypes(steps);
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
         {
             builder.Append("var ")
@@ -631,7 +637,9 @@ internal sealed class AuthoringCodeGenerator
                 graphValidation.GeneratedValueVariables,
                 graphValidation.CopiedValueVariables,
                 graphValidation.GeneratedValueSeriesVariable,
-                gridRowAnchorNames));
+                gridRowAnchorNames,
+                spinnerKeyVariables: spinnerKeyVariables,
+                numericTypes: numericTypes));
         }
 
         return builder.ToString().TrimEnd();
@@ -669,6 +677,13 @@ internal sealed class AuthoringCodeGenerator
             checkpointVariables = variables;
         }
 
+        var gridRowAnchorNames = CreateGridRowAnchorNames(
+            scenarioSteps,
+            graphValidation with { CheckpointVariables = checkpointVariables });
+        var spinnerKeyVariables = CreateSpinnerKeyVariables(
+            graphValidation with { CheckpointVariables = checkpointVariables },
+            gridRowAnchorNames);
+        PrimeSpinnerKeyVariables(spinnerKeyVariables, scenarioSteps, step.StepId);
         var statement = GenerateStepStatement(
             step,
             step.Control.ProposedPropertyName,
@@ -676,9 +691,9 @@ internal sealed class AuthoringCodeGenerator
             graphValidation.GeneratedValueVariables,
             graphValidation.CopiedValueVariables,
             graphValidation.GeneratedValueSeriesVariable,
-            CreateGridRowAnchorNames(
-                scenarioSteps,
-                graphValidation with { CheckpointVariables = checkpointVariables }));
+            gridRowAnchorNames,
+            spinnerKeyVariables: spinnerKeyVariables,
+            numericTypes: CreateNumericTypes(scenarioSteps));
         return step.DefinesGeneratedValue && graphValidation.GeneratedValueSeriesVariable is { } seriesVariable
             ? $"var {seriesVariable} = RecordedValueGenerator.Start();{Environment.NewLine}{statement}"
             : statement;
@@ -1455,8 +1470,16 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyDictionary<Guid, string> copiedValueVariables,
         string? generatedValueSeriesVariable,
         IReadOnlyDictionary<Guid, string> gridRowAnchorNames,
-        IReadOnlyDictionary<string, string>? controlPropertyNames = null)
+        IReadOnlyDictionary<string, string>? controlPropertyNames = null,
+        SpinnerKeyVariables? spinnerKeyVariables = null,
+        IReadOnlyDictionary<Guid, RecorderNumericType>? numericTypes = null)
     {
+        spinnerKeyVariables ??= CreateSpinnerKeyVariables(
+            checkpointVariables,
+            generatedValueVariables,
+            copiedValueVariables,
+            generatedValueSeriesVariable,
+            gridRowAnchorNames);
         var rowVariables = new GridRowVariableNames(
             checkpointVariables,
             generatedValueVariables,
@@ -1471,19 +1494,26 @@ internal sealed class AuthoringCodeGenerator
                 step,
                 propertyName,
                 checkpointVariables,
-                rowVariables),
+                generatedValueVariables,
+                copiedValueVariables,
+                gridRowAnchorNames,
+                rowVariables,
+                spinnerKeyVariables),
             RecordedActionKind.CaptureCopiedValue => GenerateCopiedValueStatement(
                 step,
                 propertyName,
                 copiedValueVariables,
-                rowVariables),
+                rowVariables,
+                spinnerKeyVariables),
             RecordedActionKind.AssertValue => GenerateAssertionStatement(
                 step,
                 propertyName,
                 checkpointVariables,
                 generatedValueVariables,
                 controlPropertyNames,
-                rowVariables),
+                rowVariables,
+                spinnerKeyVariables,
+                numericTypes),
             RecordedActionKind.EnterText => GenerateEnterTextStatement(
                 step,
                 propertyName,
@@ -1497,7 +1527,10 @@ internal sealed class AuthoringCodeGenerator
             RecordedActionKind.SelectListBoxItem => $"Page.SelectListBoxItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetSliderValue => $"Page.SetSliderValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SetSpinnerValue => $"Page.SetSpinnerValue(static page => page.{propertyName}, {FormatDouble(step.DoubleValue)});",
-            RecordedActionKind.SetMultiItemSpinnerValue => $"Page.SetMultiItemSpinnerValue(static page => page.{propertyName}, \"{EscapeString(step.RepeatedItemKey ?? string.Empty)}\", {FormatDouble(step.DoubleValue)});",
+            RecordedActionKind.SetMultiItemSpinnerValue when !step.CanPersist =>
+                $"Page.SetMultiItemSpinnerValue(static page => page.{propertyName}, \"{EscapeString(step.RepeatedItemKey ?? string.Empty)}\", {FormatDouble(step.DoubleValue)});",
+            RecordedActionKind.SetMultiItemSpinnerValue =>
+                $"Page.SetMultiItemSpinnerValue(static page => page.{propertyName}, {spinnerKeyVariables.FormatKey($"Page.{propertyName}", step.RepeatedItemKey)}, {FormatDouble(step.DoubleValue)});",
             RecordedActionKind.SelectTabItem => $"Page.SelectTabItem(static page => page.{propertyName});",
             RecordedActionKind.SelectTreeItem => $"Page.SelectTreeItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetDate => $"Page.SetDate(static page => page.{propertyName}, {FormatDate(step.DateValue, step.DateExpression)});",
@@ -1601,14 +1634,21 @@ internal sealed class AuthoringCodeGenerator
             statement = $"{statement} // {string.Join(" | ", commentParts.Select(SanitizeCommentText))}";
         }
 
-        return statement;
+        var declarations = spinnerKeyVariables.TakePendingDeclarations();
+        return declarations.Count == 0
+            ? statement
+            : string.Join(Environment.NewLine, declarations) + Environment.NewLine + statement;
     }
 
     private static string GenerateCheckpointStatement(
         RecordedStep step,
         string propertyName,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
-        GridRowVariableNames rowVariables)
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
+        IReadOnlyDictionary<Guid, string> gridRowAnchorNames,
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables)
     {
         var checkpointId = step.CheckpointId
             ?? throw new InvalidOperationException("Checkpoint step does not contain an id.");
@@ -1623,13 +1663,37 @@ internal sealed class AuthoringCodeGenerator
                 ?? throw new InvalidOperationException("Current table row checkpoint has no captured position.");
             var rowVariable = FormatGridRowAnchorName(checkpointId, rowVariables);
             var keyedStep = step with { GridRowAnchorCheckpointId = checkpointId };
-            var keyedExpression = GenerateValueExpression(keyedStep, propertyName, rowVariables);
+            var keyedExpression = GenerateValueExpression(keyedStep, propertyName, rowVariables, spinnerKeyVariables);
             return $"var {rowVariable} = GridRowKeyReader.Capture(Page.{propertyName}, {position});"
                 + Environment.NewLine
                 + $"var {variableName} = {keyedExpression};";
         }
 
-        var expression = GenerateValueExpression(step, propertyName, rowVariables);
+        var expression = GenerateValueExpression(step, propertyName, rowVariables, spinnerKeyVariables);
+        if (step.ValueAccessorKind == RecorderValueAccessorKind.NumericText
+            && step.NumericType is { } numericType)
+        {
+            var textVariable = variableName + "Text";
+            var usedNames = checkpointVariables.Values
+                .Concat(generatedValueVariables.Values)
+                .Concat(copiedValueVariables.Values)
+                .Concat(gridRowAnchorNames.Values)
+                .ToHashSet(StringComparer.Ordinal);
+            for (var suffix = 2; usedNames.Contains(textVariable); suffix++)
+            {
+                textVariable = variableName + "Text" + suffix.ToString(CultureInfo.InvariantCulture);
+            }
+
+            var parser = numericType switch
+            {
+                RecorderNumericType.Decimal => "ParseDecimal",
+                RecorderNumericType.Integer => "ParseInteger",
+                _ => "ParseDouble"
+            };
+            return $"var {textVariable} = Page.{propertyName}.Text;"
+                + Environment.NewLine
+                + $"var {variableName} = NumericText.{parser}({textVariable});";
+        }
         if (step.ValueKind == RecorderValueKind.StringSet)
         {
             expression = $"global::System.Linq.Enumerable.ToArray({expression})";
@@ -1667,7 +1731,9 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<Guid, string> generatedValueVariables,
         IReadOnlyDictionary<string, string>? controlPropertyNames,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables,
+        IReadOnlyDictionary<Guid, RecorderNumericType>? numericTypes)
     {
         if (step.Control.ControlType == UiControlType.ComboBoxFilter
             && step.ValueKind == RecorderValueKind.StringSet
@@ -1681,7 +1747,28 @@ internal sealed class AuthoringCodeGenerator
                 + $"Page.WaitUntilTextEquals(static page => page.{propertyName}, \"{EscapeString(step.StringValue)}\");";
         }
 
-        var actual = GenerateValueExpression(step, propertyName, rowVariables);
+        var actual = GenerateValueExpression(step, propertyName, rowVariables, spinnerKeyVariables);
+        var decimalCalculation = step.NumericExpectedExpression is { } calculation
+            && numericTypes is not null
+            && calculation.RequiresDecimal(numericTypes);
+        decimalCalculation |= step.ExpectedCheckpointId is { } expectedId
+            && numericTypes is not null
+            && numericTypes.TryGetValue(expectedId, out var expectedType)
+            && expectedType == RecorderNumericType.Decimal;
+        if (decimalCalculation)
+        {
+            actual = step.ValueAccessorKind == RecorderValueAccessorKind.NumericText
+                ? $"NumericDisplayValueReader.ReadDecimal(Page.{propertyName})"
+                : $"NumericValue.ToDecimal({actual})";
+        }
+        else if (step.ExpectedCheckpointId is { } integerId
+            && numericTypes is not null
+            && numericTypes.TryGetValue(integerId, out var integerType)
+            && integerType == RecorderNumericType.Integer
+            && step.ValueAccessorKind == RecorderValueAccessorKind.NumericText)
+        {
+            actual = $"NumericDisplayValueReader.ReadInteger(Page.{propertyName})";
+        }
         if (step.ComparisonKind is RecorderComparisonKind.HasValue or RecorderComparisonKind.IsEmpty)
         {
             if (step.ValueKind is not { } valueKind
@@ -1713,7 +1800,10 @@ internal sealed class AuthoringCodeGenerator
                 numericExpression,
                 checkpointVariables,
                 controlPropertyNames,
-                rowVariables);
+                rowVariables,
+                spinnerKeyVariables,
+                decimalCalculation,
+                numericTypes);
         }
         else if (step.ExpectedCheckpointId is { } checkpointId)
         {
@@ -1755,27 +1845,101 @@ internal sealed class AuthoringCodeGenerator
         RecorderNumericExpectedExpression expression,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<string, string>? controlPropertyNames,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables,
+        bool decimalCalculation,
+        IReadOnlyDictionary<Guid, RecorderNumericType>? numericTypes)
     {
-        var left = GenerateNumericOperand(expression.Left, checkpointVariables, controlPropertyNames, rowVariables);
-        var right = GenerateNumericOperand(expression.Right, checkpointVariables, controlPropertyNames, rowVariables);
-        var operation = expression.Operation switch
+        var left = FormatOperand(expression.Left);
+        var right = FormatOperand(expression.Right);
+        var result = $"{left} {FormatOperation(expression.Operation)} {right}";
+        if (expression.AdditionalOperations is null or { Count: 0 })
+        {
+            return result;
+        }
+
+        foreach (var step in expression.AdditionalOperations)
+        {
+            result = $"({result}) {FormatOperation(step.Operation)} {FormatOperand(step.Operand)}";
+        }
+
+        return result;
+
+        static string FormatOperation(RecorderArithmeticOperation operation) => operation switch
         {
             RecorderArithmeticOperation.Add => "+",
             RecorderArithmeticOperation.Subtract => "-",
             RecorderArithmeticOperation.Multiply => "*",
             RecorderArithmeticOperation.Divide => "/",
             _ => throw new InvalidOperationException(
-                $"Arithmetic operation '{expression.Operation}' is not supported.")
+                $"Arithmetic operation '{operation}' is not supported.")
         };
-        return $"{left} {operation} {right}";
+
+        string FormatOperand(RecorderNumericOperand operand)
+        {
+            var value = GenerateNumericOperand(
+                operand, checkpointVariables, controlPropertyNames, rowVariables, spinnerKeyVariables, decimalCalculation);
+            if (!decimalCalculation)
+            {
+                return value;
+            }
+
+            if (operand.Kind == RecorderNumericOperandKind.Literal)
+            {
+                return FormatDecimalLiteral(operand.LiteralValue);
+            }
+
+            return (numericTypes is not null && IsDecimalCheckpoint(operand, numericTypes))
+                || IsDecimalTextControl(operand)
+                ? value
+                : $"NumericValue.ToDecimal({value})";
+        }
+    }
+
+    private static bool IsDecimalCheckpoint(
+        RecorderNumericOperand operand,
+        IReadOnlyDictionary<Guid, RecorderNumericType> numericTypes) =>
+        operand.Kind == RecorderNumericOperandKind.Checkpoint
+        && operand.CheckpointId is { } id
+        && numericTypes.TryGetValue(id, out var type)
+        && type == RecorderNumericType.Decimal;
+
+    private static bool IsDecimalTextControl(RecorderNumericOperand operand) =>
+        operand.Kind == RecorderNumericOperandKind.Control
+        && operand.ValueAccessorKind == RecorderValueAccessorKind.NumericText
+        && operand.Control?.ControlType == UiControlType.TextBox;
+
+    private static IReadOnlyDictionary<Guid, RecorderNumericType> CreateNumericTypes(
+        IReadOnlyList<RecordedStep> steps) => steps
+        .Where(static step => step.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && step.CheckpointId.HasValue
+            && step.NumericType.HasValue)
+        .ToDictionary(static step => step.CheckpointId!.Value, static step => step.NumericType!.Value);
+
+    private static string FormatDecimalLiteral(double? value)
+    {
+        if (value is not { } finite || !double.IsFinite(finite))
+        {
+            throw new InvalidOperationException("Calculated decimal expression has an invalid literal.");
+        }
+
+        try
+        {
+            return NumericValue.ToDecimal(finite).ToString(CultureInfo.InvariantCulture) + "m";
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidOperationException("Calculated decimal literal cannot be represented without loss.", exception);
+        }
     }
 
     private static string GenerateNumericOperand(
         RecorderNumericOperand operand,
         IReadOnlyDictionary<Guid, string> checkpointVariables,
         IReadOnlyDictionary<string, string>? controlPropertyNames,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables,
+        bool decimalCalculation)
     {
         return operand.Kind switch
         {
@@ -1789,8 +1953,11 @@ internal sealed class AuthoringCodeGenerator
                     control,
                     operand.ValueAccessorKind,
                     operand.GridValueReference,
+                    operand.RepeatedItemKey,
                     controlPropertyNames,
-                    rowVariables),
+                    rowVariables,
+                    spinnerKeyVariables,
+                    decimalCalculation),
             _ => throw new InvalidOperationException(
                 $"Calculated assertion contains an invalid numeric operand '{operand.Kind}'.")
         };
@@ -1800,8 +1967,11 @@ internal sealed class AuthoringCodeGenerator
         RecordedControlDescriptor control,
         RecorderValueAccessorKind? accessorKind,
         RecorderGridValueReference? gridValueReference,
+        string? repeatedItemKey,
         IReadOnlyDictionary<string, string>? controlPropertyNames,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables,
+        bool decimalCalculation)
     {
         var propertyName = control.ProposedPropertyName;
         if (controlPropertyNames is not null)
@@ -1816,8 +1986,16 @@ internal sealed class AuthoringCodeGenerator
 
         return accessorKind switch
         {
+            RecorderValueAccessorKind.NumericValue when control.ControlType == UiControlType.MultiItemControlCollection
+                && gridValueReference is null =>
+                $"{GenerateKeyedSpinnerExpression(repeatedItemKey, $"Page.{propertyName}", spinnerKeyVariables)}.Value",
             RecorderValueAccessorKind.NumericValue when gridValueReference is null =>
                 $"Page.{propertyName}.Value",
+            RecorderValueAccessorKind.NumericText when gridValueReference is null
+                && control.ControlType == UiControlType.TextBox =>
+                decimalCalculation
+                    ? $"NumericDisplayValueReader.ReadDecimal(Page.{propertyName})"
+                    : $"NumericDisplayValueReader.Read(Page.{propertyName})",
             RecorderValueAccessorKind.GridCellValue when gridValueReference is not null =>
                 $"GridValueReader.ReadCellNumber(Page.{propertyName}, "
                 + $"{FormatGridRowSelector(gridValueReference.RowConditions, rowVariables)}, "
@@ -1894,7 +2072,8 @@ internal sealed class AuthoringCodeGenerator
         RecordedStep step,
         string propertyName,
         IReadOnlyDictionary<Guid, string> copiedValueVariables,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables)
     {
         if (step.CopiedValueId is not { } copiedValueId
             || !copiedValueVariables.TryGetValue(copiedValueId, out var variableName))
@@ -1902,21 +2081,28 @@ internal sealed class AuthoringCodeGenerator
             throw new InvalidOperationException("Copied value definition was not validated.");
         }
 
-        var valueExpression = GenerateValueExpression(step, propertyName, rowVariables);
+        var valueExpression = GenerateValueExpression(step, propertyName, rowVariables, spinnerKeyVariables);
         return $"var {variableName} = {valueExpression} ?? string.Empty;{Environment.NewLine}await Page.CopyTextToClipboardAsync({variableName});";
     }
 
     private static string GenerateValueExpression(
         RecordedStep step,
         string propertyName,
-        GridRowVariableNames rowVariables)
+        GridRowVariableNames rowVariables,
+        SpinnerKeyVariables spinnerKeyVariables)
     {
         var control = $"Page.{propertyName}";
         return step.ValueAccessorKind switch
         {
+            RecorderValueAccessorKind.NumericValue when step.Control.ControlType == UiControlType.MultiItemControlCollection =>
+                $"{GenerateKeyedSpinnerExpression(step.RepeatedItemKey, control, spinnerKeyVariables)}.Value",
+            RecorderValueAccessorKind.IsEnabled when step.Control.ControlType == UiControlType.MultiItemControlCollection =>
+                $"{GenerateKeyedSpinnerExpression(step.RepeatedItemKey, control, spinnerKeyVariables)}.IsEnabled",
             RecorderValueAccessorKind.Text when step.Control.ControlType == UiControlType.Button =>
                 $"global::AppAutomation.Abstractions.UiControlText.Read({control})",
             RecorderValueAccessorKind.Text => $"{control}.Text",
+            RecorderValueAccessorKind.NumericText when step.Control.ControlType == UiControlType.TextBox =>
+                $"NumericDisplayValueReader.Read({control})",
             RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.SearchPicker =>
                 $"{control}.SelectedItemText",
             RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.ListBox =>
@@ -1940,6 +2126,19 @@ internal sealed class AuthoringCodeGenerator
             _ => throw new InvalidOperationException(
                 $"Value accessor '{step.ValueAccessorKind}' is not supported for {step.Control.ControlType}.")
         };
+    }
+
+    private static string GenerateKeyedSpinnerExpression(
+        string? itemKey,
+        string control,
+        SpinnerKeyVariables spinnerKeyVariables)
+    {
+        if (string.IsNullOrWhiteSpace(itemKey))
+        {
+            throw new InvalidOperationException("A multi-item Spinner check requires a stable item key.");
+        }
+
+        return $"{control}.ResolveSpinner({spinnerKeyVariables.FormatKey(control, itemKey)}, 5000)";
     }
 
     private static string GenerateGridCellExpression(
@@ -2106,6 +2305,121 @@ internal sealed class AuthoringCodeGenerator
         }
 
         return names;
+    }
+
+    private static SpinnerKeyVariables CreateSpinnerKeyVariables(
+        RecorderScenarioGraphValidationResult graphValidation,
+        IReadOnlyDictionary<Guid, string> gridRowAnchorNames) =>
+        CreateSpinnerKeyVariables(
+            graphValidation.CheckpointVariables,
+            graphValidation.GeneratedValueVariables,
+            graphValidation.CopiedValueVariables,
+            graphValidation.GeneratedValueSeriesVariable,
+            gridRowAnchorNames);
+
+    private static void PrimeSpinnerKeyVariables(
+        SpinnerKeyVariables variables,
+        IReadOnlyList<RecordedStep> steps,
+        Guid targetStepId)
+    {
+        foreach (var step in steps)
+        {
+            if (step.StepId == targetStepId)
+            {
+                break;
+            }
+
+            if (step.CanPersist
+                && step.Control.ControlType == UiControlType.MultiItemControlCollection
+                && !string.IsNullOrWhiteSpace(step.RepeatedItemKey))
+            {
+                variables.FormatKey($"Page.{step.Control.ProposedPropertyName}", step.RepeatedItemKey);
+            }
+
+            if (step.NumericExpectedExpression is { } expression)
+            {
+                foreach (var operand in expression.Operands())
+                {
+                    if (operand.Control?.ControlType == UiControlType.MultiItemControlCollection
+                        && !string.IsNullOrWhiteSpace(operand.RepeatedItemKey))
+                    {
+                        variables.FormatKey(
+                            $"Page.{operand.Control.ProposedPropertyName}",
+                            operand.RepeatedItemKey);
+                    }
+                }
+            }
+
+            variables.TakePendingDeclarations();
+        }
+
+        variables.ResetDeclarations();
+    }
+
+    private static SpinnerKeyVariables CreateSpinnerKeyVariables(
+        IReadOnlyDictionary<Guid, string> checkpointVariables,
+        IReadOnlyDictionary<Guid, string> generatedValueVariables,
+        IReadOnlyDictionary<Guid, string> copiedValueVariables,
+        string? generatedValueSeriesVariable,
+        IReadOnlyDictionary<Guid, string> gridRowAnchorNames)
+    {
+        var reservedNames = checkpointVariables.Values
+            .Concat(generatedValueVariables.Values)
+            .Concat(copiedValueVariables.Values)
+            .Concat(gridRowAnchorNames.Values)
+            .ToHashSet(StringComparer.Ordinal);
+        if (generatedValueSeriesVariable is not null)
+        {
+            reservedNames.Add(generatedValueSeriesVariable);
+        }
+
+        return new SpinnerKeyVariables(reservedNames);
+    }
+
+    private sealed class SpinnerKeyVariables
+    {
+        private readonly ISet<string> _reservedNames;
+        private readonly Dictionary<(string Control, string ItemKey), string> _names = new();
+        private readonly HashSet<(string Control, string ItemKey)> _declared = [];
+        private readonly List<string> _pendingDeclarations = [];
+
+        public SpinnerKeyVariables(ISet<string> reservedNames) => _reservedNames = reservedNames;
+
+        public string FormatKey(string control, string? itemKey)
+        {
+            if (string.IsNullOrWhiteSpace(itemKey))
+            {
+                throw new InvalidOperationException("A multi-item Spinner step requires a stable item key.");
+            }
+
+            var key = (Control: control, ItemKey: itemKey.Trim());
+            if (!_names.TryGetValue(key, out var variableName))
+            {
+                var controlName = control.StartsWith("Page.", StringComparison.Ordinal)
+                    ? control["Page.".Length..]
+                    : control;
+                var identifier = RecorderNaming.SanitizeIdentifier(controlName, "MultiItemSpinner");
+                var proposedName = char.ToLowerInvariant(identifier[0]) + identifier[1..] + "ItemKey";
+                variableName = RecorderNaming.EnsureUniqueName(proposedName, _reservedNames);
+                _names.Add(key, variableName);
+            }
+
+            if (_declared.Add(key))
+            {
+                _pendingDeclarations.Add($"var {variableName} = \"{EscapeString(key.ItemKey)}\";");
+            }
+
+            return variableName;
+        }
+
+        public IReadOnlyList<string> TakePendingDeclarations()
+        {
+            var declarations = _pendingDeclarations.ToArray();
+            _pendingDeclarations.Clear();
+            return declarations;
+        }
+
+        public void ResetDeclarations() => _declared.Clear();
     }
 
     private static string FormatGridRowSelector(

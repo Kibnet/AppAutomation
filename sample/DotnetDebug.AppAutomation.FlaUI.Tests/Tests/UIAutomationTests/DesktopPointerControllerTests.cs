@@ -34,6 +34,22 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
+    public async Task DoubleClick_DoesNotYieldBetweenNativePresses()
+    {
+        var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(200) };
+        var completedBeforeReturn = false;
+        await Controller(fake).RunAsync("double", TimeSpan.FromSeconds(1), op =>
+        {
+            var click = op.ClickAsync(Target, new PointerClickOptions { ClickCount = 2 });
+            completedBeforeReturn = click.IsCompletedSuccessfully;
+            return click;
+        });
+
+        await Assert.That(completedBeforeReturn).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task SlowSecondTargetValidation_DoesNotTurnDoubleClickIntoTwoSingleClicks()
     {
         var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(50) };

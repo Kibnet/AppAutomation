@@ -68,6 +68,58 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
+    public async Task DisplayedNumericText_ReadsCurrentValueAfterUserChangesIt()
+    {
+        Page.SelectTabItem(static page => page.MathTabItem);
+        Page.EnterText(static page => page.NumbersInput, "1 200 руб.");
+        await Assert.That(NumericDisplayValueReader.Read(Page.NumbersInput)).IsEqualTo(1200d);
+
+        Page.EnterText(static page => page.NumbersInput, "500 руб.");
+        await Assert.That(NumericDisplayValueReader.Read(Page.NumbersInput)).IsEqualTo(500d);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task TypedNumericCheckpoint_MultipliesSpinnerQuantityByDecimalPrice()
+    {
+        Page.SelectTabItem(static page => page.ControlMixTabItem);
+        Page.SetSpinnerValue(static page => page.MixCountSpinner, 2);
+        var quantity = Page.MixCountSpinner.Value;
+
+        Page.SelectTabItem(static page => page.MathTabItem);
+        Page.EnterText(static page => page.NumbersInput, "182,50 руб.");
+        var priceText = Page.NumbersInput.Text;
+        var price = NumericText.ParseDecimal(priceText);
+        Page.EnterText(static page => page.NumbersInput, "365,00 руб.");
+
+        await Assert.That(NumericDisplayValueReader.ReadDecimal(Page.NumbersInput))
+            .IsEqualTo(NumericValue.ToDecimal(quantity) * price);
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
+    public async Task TypedNumericCheckpoints_SumTwoPositionProducts()
+    {
+        Page.SelectTabItem(static page => page.ControlMixTabItem);
+        Page.SetSpinnerValue(static page => page.MixCountSpinner, 2);
+        var quantity1 = Page.MixCountSpinner.Value;
+        Page.SetSpinnerValue(static page => page.MixCountSpinner, 3);
+        var quantity2 = Page.MixCountSpinner.Value;
+
+        Page.SelectTabItem(static page => page.MathTabItem);
+        Page.EnterText(static page => page.NumbersInput, "182,50 руб.");
+        var price1 = NumericText.ParseDecimal(Page.NumbersInput.Text);
+        Page.EnterText(static page => page.NumbersInput, "45,25 руб.");
+        var price2 = NumericText.ParseDecimal(Page.NumbersInput.Text);
+        Page.EnterText(static page => page.NumbersInput, "500,75 руб.");
+
+        await Assert.That(NumericDisplayValueReader.ReadDecimal(Page.NumbersInput))
+            .IsEqualTo((NumericValue.ToDecimal(quantity1) * price1)
+                + (NumericValue.ToDecimal(quantity2) * price2));
+    }
+
+    [Test]
+    [NotInParallel(DesktopUiConstraint)]
     public async Task ClipboardCopyAndPaste_ReplaysThroughTheCurrentRuntime()
     {
         if (string.Equals(Page.Capabilities.AdapterId, "flaui", StringComparison.Ordinal)
@@ -109,14 +161,17 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
     [Test]
     [NotInParallel(DesktopUiConstraint)]
-    public async Task MultiItemSpinner_UsesStableKeyAfterReorder()
+    public async Task MultiItemSpinner_UsesNameKeyAfterReorder()
     {
         Page
             .SelectTabItem(static page => page.ArmDesktopTabItem)
             .SetMultiItemSpinnerValue(
                 static page => page.UnitQuantityEditors,
                 "unit-b",
-                12)
+                12);
+        await Assert.That(Page.UnitQuantityEditors.ResolveSpinner("unit-b", 5000).Value).IsEqualTo(12);
+
+        Page
             .ClickButton(static page => page.UnitQuantityReorderButton)
             .SetMultiItemSpinnerValue(
                 static page => page.UnitQuantityEditors,
@@ -124,7 +179,12 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
                 18)
             .WaitUntilNameEquals(static page => page.UnitQuantityBCommittedValue, "18");
 
-        await Assert.That(Page.UnitQuantityBCommittedValue.Name).IsEqualTo("18");
+        using (Assert.Multiple())
+        {
+            await Assert.That(Page.UnitQuantityBCommittedValue.Name).IsEqualTo("18");
+            await Assert.That(Page.UnitQuantityEditors.ResolveSpinner("unit-b", 5000).Value).IsEqualTo(18);
+            await Assert.That(Page.UnitQuantityEditors.ResolveSpinner("unit-b", 5000).IsEnabled).IsTrue();
+        }
     }
 
     private const int DelayedStatusTimeoutMs = 10000;

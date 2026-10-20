@@ -48,6 +48,7 @@ internal static class RecorderScenarioGraphValidator
 
         var checkpointVariables = new Dictionary<Guid, string>();
         var checkpointValueKinds = new Dictionary<Guid, RecorderValueKind>();
+        var checkpointNumericTypes = new Dictionary<Guid, RecorderNumericType>();
         var generatedValueVariables = new Dictionary<Guid, string>();
         var copiedValueVariables = new Dictionary<Guid, string>();
         var generatedValueOrdinals = new HashSet<int>();
@@ -157,6 +158,10 @@ internal static class RecorderScenarioGraphValidator
                 }
                 else
                 {
+                    if (step.NumericType is { } numericType)
+                    {
+                        checkpointNumericTypes.Add(step.CheckpointId!.Value, numericType);
+                    }
                     rowValueSources.Add(
                         new RecorderGridRowValueReference(
                             RecorderGridRowValueSourceKind.Checkpoint,
@@ -173,6 +178,14 @@ internal static class RecorderScenarioGraphValidator
 
             if (step.ActionKind != RecordedActionKind.AssertValue)
             {
+                continue;
+            }
+
+            var decimalLiteralValidation = ValidateDecimalLiteralOperands(
+                step, index, checkpointNumericTypes);
+            if (!decimalLiteralValidation.IsValid)
+            {
+                stepErrors[step.StepId] = decimalLiteralValidation.Error;
                 continue;
             }
 
@@ -213,12 +226,10 @@ internal static class RecorderScenarioGraphValidator
         IReadOnlyDictionary<Guid, string> copiedValueVariables,
         IReadOnlyDictionary<RecorderGridRowValueReference, RecordedStep> rowValueSources)
     {
-        var rowConditions = new[]
-        {
-            step.GridRowConditions,
-            step.NumericExpectedExpression?.Left.GridValueReference?.RowConditions,
-            step.NumericExpectedExpression?.Right.GridValueReference?.RowConditions
-        };
+        var rowConditions = new[] { step.GridRowConditions }.Concat(
+            step.NumericExpectedExpression?.Operands()
+                .Select(static operand => operand.GridValueReference?.RowConditions)
+            ?? []);
         foreach (var conditions in rowConditions)
         {
             if (conditions is null)
@@ -510,12 +521,64 @@ internal static class RecorderScenarioGraphValidator
                 $"Checkpoint step {index + 1} does not define a readable semantic value.");
         }
 
+        if (step.NumericType is { } numericType
+            && (!Enum.IsDefined(numericType)
+                || valueKind != RecorderValueKind.Number
+                || step.ValueAccessorKind != RecorderValueAccessorKind.NumericText
+                || step.Control.ControlType != AppAutomation.Abstractions.UiControlType.TextBox))
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Checkpoint step {index + 1} has an unsupported numeric text type.");
+        }
+
         var variableName = RecorderNaming.CreateCheckpointVariableName(
             step.CheckpointVariableName,
             reservedNames,
             step.PreserveVariableName);
         variables.Add(checkpointId, variableName);
         valueKinds.Add(checkpointId, valueKind);
+        return RecorderGraphStepValidationResult.Valid;
+    }
+
+    private static RecorderGraphStepValidationResult ValidateDecimalLiteralOperands(
+        RecordedStep step,
+        int index,
+        IReadOnlyDictionary<Guid, RecorderNumericType> checkpointNumericTypes)
+    {
+        if (step.NumericExpectedExpression is not { } expression)
+        {
+            return RecorderGraphStepValidationResult.Valid;
+        }
+
+        if (!expression.RequiresDecimal(checkpointNumericTypes))
+        {
+            return RecorderGraphStepValidationResult.Valid;
+        }
+
+        foreach (var operand in expression.Operands())
+        {
+            if (operand.Kind != RecorderNumericOperandKind.Literal
+                || operand.LiteralValue is not { } value)
+            {
+                continue;
+            }
+
+            try
+            {
+                var decimalValue = Convert.ToDecimal(value);
+                if (value != 0d && decimalValue == 0m)
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Assertion step {index + 1} has a decimal literal that would round to zero.");
+                }
+            }
+            catch (OverflowException)
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Assertion step {index + 1} has a literal outside the decimal range.");
+            }
+        }
+
         return RecorderGraphStepValidationResult.Valid;
     }
 
@@ -617,7 +680,8 @@ internal static class RecorderScenarioGraphValidator
                 step.GridRowConditions,
                 step.GridTargetColumnName,
                 out _,
-                out _))
+                out _,
+                step.RepeatedItemKey))
         {
             return RecorderGraphStepValidationResult.Invalid(
                 $"Assertion step {index + 1} can use a calculated expected value only with an equal numeric assertion.");
@@ -643,12 +707,47 @@ internal static class RecorderScenarioGraphValidator
             return rightValidation;
         }
 
-        return expression.Operation == RecorderArithmeticOperation.Divide
-               && expression.Right.Kind == RecorderNumericOperandKind.Literal
-               && expression.Right.LiteralValue == 0
-            ? RecorderGraphStepValidationResult.Invalid(
-                $"Assertion step {index + 1} cannot divide by a literal zero.")
-            : RecorderGraphStepValidationResult.Valid;
+        if (expression.Operation == RecorderArithmeticOperation.Divide
+            && expression.Right.Kind == RecorderNumericOperandKind.Literal
+            && expression.Right.LiteralValue == 0)
+        {
+            return RecorderGraphStepValidationResult.Invalid(
+                $"Assertion step {index + 1} cannot divide by a literal zero.");
+        }
+
+        if (expression.AdditionalOperations is not null)
+        {
+            for (var termIndex = 0; termIndex < expression.AdditionalOperations.Count; termIndex++)
+            {
+                var term = expression.AdditionalOperations[termIndex];
+                if (term?.Operand is not { } operand)
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Assertion step {index + 1} has an empty additional operand {termIndex + 1}.");
+                }
+
+                if (!Enum.IsDefined(term.Operation))
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Assertion step {index + 1} has an unsupported arithmetic operation '{term.Operation}' at additional operand {termIndex + 1}.");
+                }
+
+                if (operand.Kind != RecorderNumericOperandKind.Checkpoint)
+                {
+                    return RecorderGraphStepValidationResult.Invalid(
+                        $"Assertion step {index + 1} additional operand {termIndex + 1} must use a numeric checkpoint.");
+                }
+
+                var termValidation = ValidateNumericOperand(
+                    operand, $"additional operand {termIndex + 1}", index, checkpointValueKinds);
+                if (!termValidation.IsValid)
+                {
+                    return termValidation;
+                }
+            }
+        }
+
+        return RecorderGraphStepValidationResult.Valid;
     }
 
     private static RecorderGraphStepValidationResult ValidateNumericOperand(
@@ -686,7 +785,8 @@ internal static class RecorderScenarioGraphValidator
             + (operand.CheckpointId.HasValue ? 1 : 0)
             + (operand.Control is not null ? 1 : 0)
             + (operand.ValueAccessorKind.HasValue ? 1 : 0)
-            + (operand.GridValueReference is not null ? 1 : 0);
+            + (operand.GridValueReference is not null ? 1 : 0)
+            + (operand.RepeatedItemKey is not null ? 1 : 0);
         return sourceCount == 1
                && operand.LiteralValue is { } value
                && double.IsFinite(value)
@@ -705,7 +805,8 @@ internal static class RecorderScenarioGraphValidator
             + (operand.CheckpointId.HasValue ? 1 : 0)
             + (operand.Control is not null ? 1 : 0)
             + (operand.ValueAccessorKind.HasValue ? 1 : 0)
-            + (operand.GridValueReference is not null ? 1 : 0);
+            + (operand.GridValueReference is not null ? 1 : 0)
+            + (operand.RepeatedItemKey is not null ? 1 : 0);
         if (sourceCount != 1 || operand.CheckpointId is not { } checkpointId || checkpointId == Guid.Empty)
         {
             return RecorderGraphStepValidationResult.Invalid(
@@ -742,7 +843,8 @@ internal static class RecorderScenarioGraphValidator
                 operand.GridValueReference?.RowConditions,
                 operand.GridValueReference?.TargetColumnName,
                 out _,
-                out _))
+                out _,
+                operand.RepeatedItemKey))
         {
             return RecorderGraphStepValidationResult.Invalid(
                 $"Assertion step {index + 1} {operandName} control does not expose a numeric value.");

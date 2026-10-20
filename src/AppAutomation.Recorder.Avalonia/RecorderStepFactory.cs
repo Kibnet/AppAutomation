@@ -2318,6 +2318,22 @@ internal sealed partial class RecorderStepFactory
                 $"{candidate.Control.ControlType} does not expose a committed value for a literal assertion.");
         }
 
+        if (candidate.Control.ControlType == UiControlType.Notification)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.StringValue))
+            {
+                return StepCreationResult.Unsupported("Notification text part does not expose text.");
+            }
+
+            return CreateStepFromSnapshot(
+                snapshot,
+                new RecordedStep(
+                    RecordedActionKind.WaitUntilNotificationContains,
+                    candidate.Control,
+                    StringValue: candidate.StringValue.Trim()),
+                "Added current notification text assertion.");
+        }
+
         var step = CreateSemanticValueStep(
             RecordedActionKind.AssertValue,
             candidate,
@@ -2415,13 +2431,33 @@ internal sealed partial class RecorderStepFactory
         out RecorderSemanticValueSnapshot? snapshot,
         out string? error)
     {
+        return TryCaptureSemanticValueSnapshot(source, out snapshot, out error, out _);
+    }
+
+    internal bool TryCaptureSemanticValueSnapshot(
+        Control? source,
+        out RecorderSemanticValueSnapshot? snapshot,
+        out string? error,
+        out bool isDefinitiveFailure)
+    {
         snapshot = null;
-        if (!TryResolveSemanticValue(source, requireLiteral: false, out var candidate, out error))
+        if (!TryResolveSemanticValue(
+                source,
+                requireLiteral: false,
+                out var candidate,
+                out error,
+                out isDefinitiveFailure))
         {
             return false;
         }
 
-        return TryCreateSemanticValueSnapshot(source!, candidate, out snapshot, out error);
+        var captured = TryCreateSemanticValueSnapshot(source!, candidate, out snapshot, out error);
+        if (!captured && candidate.RepeatedItemKey is not null)
+        {
+            isDefinitiveFailure = true;
+        }
+
+        return captured;
     }
 
     internal bool TryCaptureConfiguredSemanticValueSnapshot(
@@ -2478,6 +2514,11 @@ internal sealed partial class RecorderStepFactory
 
                 firstFailedSource ??= source;
                 firstError ??= snapshotError;
+                if (candidate.RepeatedItemKey is not null)
+                {
+                    definitiveFailedSource ??= source;
+                    definitiveError ??= snapshotError;
+                }
                 continue;
             }
 
@@ -2543,6 +2584,7 @@ internal sealed partial class RecorderStepFactory
                 StringComparison.Ordinal)
             && leftStep.RowIndex == rightStep.RowIndex
             && leftStep.ColumnIndex == rightStep.ColumnIndex
+            && string.Equals(leftStep.RepeatedItemKey, rightStep.RepeatedItemKey, StringComparison.Ordinal)
             && string.Equals(
                 leftStep.GridTargetColumnName,
                 rightStep.GridTargetColumnName,
@@ -2581,6 +2623,10 @@ internal sealed partial class RecorderStepFactory
     {
         var step = snapshot.Prototype;
         var target = $"{step.Control.LocatorKind}:{step.Control.LocatorValue}";
+        if (step.RepeatedItemKey is { } itemKey)
+        {
+            return $"{target}[{itemKey}]";
+        }
         if (step.GridRowConditions is { Count: > 0 })
         {
             var row = string.Join(
@@ -2826,6 +2872,11 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
+        if (RecorderNumericValueContract.TryCreateNumericTextSnapshot(snapshot, out var numericSnapshot))
+        {
+            snapshot = numericSnapshot;
+        }
+
         var candidate = CreateCandidate(snapshot);
         if (!TryCreateNumericValueReference(candidate, out var gridValueReference, out error))
         {
@@ -2835,7 +2886,8 @@ internal sealed partial class RecorderStepFactory
         operand = RecorderNumericOperand.FromControl(
             candidate.Control,
             candidate.ValueAccessorKind,
-            gridValueReference);
+            gridValueReference,
+            candidate.RepeatedItemKey);
         error = string.Empty;
         return true;
     }
@@ -2849,6 +2901,11 @@ internal sealed partial class RecorderStepFactory
         {
             return StepCreationResult.Unsupported(
                 "The selected control does not expose a semantic value snapshot.");
+        }
+
+        if (RecorderNumericValueContract.TryCreateNumericTextSnapshot(snapshot, out var numericSnapshot))
+        {
+            snapshot = numericSnapshot;
         }
 
         var candidate = CreateCandidate(snapshot);
@@ -2877,7 +2934,8 @@ internal sealed partial class RecorderStepFactory
             candidate.GridContext?.RowConditions,
             candidate.GridContext?.TargetColumnName,
             out gridValueReference,
-            out error);
+            out error,
+            candidate.RepeatedItemKey);
     }
 
     private static bool TryNormalizeCheckpointComparison(
@@ -3139,7 +3197,8 @@ internal sealed partial class RecorderStepFactory
             NumericExpectedExpression: numericExpectedExpression)
         {
             GridRowConditions = candidate.GridContext?.RowConditions,
-            GridTargetColumnName = candidate.GridContext?.TargetColumnName
+            GridTargetColumnName = candidate.GridContext?.TargetColumnName,
+            RepeatedItemKey = candidate.RepeatedItemKey
         };
     }
 
@@ -3242,7 +3301,13 @@ internal sealed partial class RecorderStepFactory
                 "Configure RowIdentityColumnPropertyNames before using Check for a grid value that must survive sorting, insertion, or editor replacement.");
         }
 
-        var selectorValidation = _selectorResolver.ResolveExisting(result.Step);
+        // A notification can share its root locator with other visible messages.
+        // Validate the selected text within a matching notification instead of
+        // validating the temporary checkpoint as a globally unique root.
+        var validationStep = candidate.Control.ControlType == UiControlType.Notification
+            ? result.Step with { ActionKind = RecordedActionKind.WaitUntilNotificationContains }
+            : result.Step;
+        var selectorValidation = _selectorResolver.ResolveExisting(validationStep);
         if (!selectorValidation.CanPersist)
         {
             return StepCreationResult.Unsupported(
@@ -3285,7 +3350,8 @@ internal sealed partial class RecorderStepFactory
             prototype.DateValue,
             prototype.TimeValue,
             prototype.StringValues,
-            gridContext);
+            gridContext,
+            prototype.RepeatedItemKey);
     }
 
     private static StepCreationResult CreateStepFromSnapshot(
@@ -3305,7 +3371,8 @@ internal sealed partial class RecorderStepFactory
                 LastValidationAt = DateTimeOffset.UtcNow,
                 GridRowConditions = prototype.GridRowConditions,
                 GridTargetColumnName = prototype.GridTargetColumnName,
-                GridCapturedRowPosition = prototype.GridCapturedRowPosition
+                GridCapturedRowPosition = prototype.GridCapturedRowPosition,
+                RepeatedItemKey = prototype.RepeatedItemKey
             },
             message);
     }
@@ -3336,6 +3403,21 @@ internal sealed partial class RecorderStepFactory
         if (source is null)
         {
             error = "No control is available for value capture.";
+            return false;
+        }
+
+        if (TryResolveMultiItemSpinnerSemanticValue(
+                source,
+                out candidate,
+                out error,
+                out var multiItemSpinnerConfigured))
+        {
+            return true;
+        }
+
+        if (multiItemSpinnerConfigured)
+        {
+            isDefinitiveFailure = true;
             return false;
         }
 
@@ -3392,6 +3474,7 @@ internal sealed partial class RecorderStepFactory
 
         if (!string.IsNullOrEmpty(error))
         {
+            isDefinitiveFailure = true;
             return false;
         }
 
@@ -3604,9 +3687,9 @@ internal sealed partial class RecorderStepFactory
         }
 
         var text = ExtractTextValue(resolution.TextControl!);
-        if (requireLiteral && text is null)
+        if (string.IsNullOrWhiteSpace(text))
         {
-            error = "Notification does not expose its current text.";
+            error = "Notification text part does not expose readable text.";
             return false;
         }
 
@@ -3843,6 +3926,7 @@ internal sealed partial class RecorderStepFactory
                 or RecorderValueAccessorKind.SelectedItemText
                 or RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Number => accessorKind is RecorderValueAccessorKind.NumericValue
+                or RecorderValueAccessorKind.NumericText
                 or RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Boolean => accessorKind is RecorderValueAccessorKind.IsChecked
                 or RecorderValueAccessorKind.IsToggled
@@ -4946,7 +5030,8 @@ internal sealed partial class RecorderStepFactory
         DateTime? DateValue = null,
         TimeSpan? TimeValue = null,
         IReadOnlyList<string>? StringValues = null,
-        GridValueContext? GridContext = null);
+        GridValueContext? GridContext = null,
+        string? RepeatedItemKey = null);
 
     private sealed record GridValueContext(
         int RowIndex,
@@ -5829,6 +5914,9 @@ internal sealed partial class RecorderStepFactory
 
         return NotificationTextHintResolution.NotConfigured();
     }
+
+    internal bool IsConfiguredNotificationText(Control source) =>
+        ResolveNotificationTextHint(source) is { IsConfigured: true, TextControl: not null };
 
     private bool TryResolveDateRangeFilterHint(
         Control source,

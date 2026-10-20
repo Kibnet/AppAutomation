@@ -25,6 +25,17 @@ public sealed class SpinnerControlTests
         }
     }
 
+    [Test]
+    public async Task SpinnerTextBoxProxy_ReadsLocalizedCommittedValue()
+    {
+        var textBox = new FakeTextBoxControl("QuantitySpinnerInput", "-1\u00A0234,5");
+        var resolver = new FakeResolver(textBox)
+            .WithSpinnerTextBoxProxy("QuantitySpinner", "QuantitySpinnerInput");
+        var page = new SpinnerPage(resolver);
+
+        await Assert.That(page.QuantitySpinner.Value).IsEqualTo(-1234.5);
+    }
+
     private static class SpinnerPageDefinitions
     {
         public static readonly UiControlDefinition QuantitySpinner = new(

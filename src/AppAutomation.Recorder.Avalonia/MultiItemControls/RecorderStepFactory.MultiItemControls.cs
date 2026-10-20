@@ -141,13 +141,16 @@ internal sealed partial class RecorderStepFactory
                 selected.Error!);
         }
 
-        if (!TryReadFiniteValue(source, out var value, out var displayedValue))
+        var valueSource = source is TextBox or NumericUpDown
+            ? source
+            : context.SpinnerInput ?? source;
+        if (!TryReadFiniteValue(valueSource, out var value, out var displayedValue))
         {
             return InvalidCapture(
                 definition,
                 source,
                 selected.Key,
-                $"Spinner input value '{displayedValue}' is not a finite invariant number.");
+                $"Spinner input value '{displayedValue}' is not a finite number.");
         }
 
         var descriptor = new RecordedControlDescriptor(
@@ -166,6 +169,41 @@ internal sealed partial class RecorderStepFactory
         return new MultiItemSpinnerCaptureResult(
             IsConfigured: true,
             CreateStep(source, step));
+    }
+
+    private bool TryResolveMultiItemSpinnerSemanticValue(
+        Control source,
+        out SemanticValueCandidate candidate,
+        out string error,
+        out bool isConfigured)
+    {
+        candidate = null!;
+        var capture = TryCreateMultiItemSpinnerStep(source);
+        isConfigured = capture.IsConfigured;
+        if (!isConfigured)
+        {
+            error = string.Empty;
+            return false;
+        }
+
+        var step = capture.StepResult.Step;
+        if (step is null || !step.CanPersist || step.RepeatedItemKey is null
+            || step.DoubleValue is not { } value || !double.IsFinite(value))
+        {
+            error = step?.ValidationMessage
+                ?? capture.StepResult.Message
+                ?? "The configured multi-item Spinner does not expose a readable keyed value.";
+            return false;
+        }
+
+        candidate = new SemanticValueCandidate(
+            step.Control,
+            RecorderValueKind.Number,
+            RecorderValueAccessorKind.NumericValue,
+            DoubleValue: value,
+            RepeatedItemKey: step.RepeatedItemKey);
+        error = string.Empty;
+        return true;
     }
 
     private MultiItemCaptureContext TryResolveCaptureContext(
@@ -227,18 +265,7 @@ internal sealed partial class RecorderStepFactory
             NumericUpDown { Value: { } numericValue } => numericValue.ToString(CultureInfo.InvariantCulture),
             _ => null
         };
-        var parsed = source switch
-        {
-            NumericUpDown { Value: { } numericValue } => decimal.ToDouble(numericValue),
-            _ when double.TryParse(
-                displayedValue,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out var textValue) => textValue,
-            _ => double.NaN
-        };
-        value = parsed;
-        return double.IsFinite(parsed);
+        return TryReadNumericValue(source, out value);
     }
 
 }
@@ -391,8 +418,7 @@ internal static class RecorderMultiItemSpinnerGraphResolver
         var matchesConfiguredSource = source switch
         {
             TextBox => matchesPart(source, parts.Input),
-            NumericUpDown => matchesPart(source, parts.Root),
-            _ => false
+            _ => matchesPart(source, parts.Root)
         };
         if (!matchesConfiguredSource)
         {
@@ -473,8 +499,7 @@ internal static class RecorderMultiItemSpinnerGraphResolver
         var sourceMatchesResolvedControl = source switch
         {
             TextBox => ReferenceEquals(source, input),
-            NumericUpDown => ReferenceEquals(source, root),
-            _ => false
+            _ => ReferenceEquals(source, root)
         };
         return sourceMatchesResolvedControl
             ? Result(

@@ -105,6 +105,21 @@ public enum RecorderValueKind
     GridCellText = 7
 }
 
+internal enum RecorderNumericType
+{
+    Double = 0,
+    Decimal = 1,
+    Integer = 2
+}
+
+internal enum RecorderCheckpointValueType
+{
+    Text = 0,
+    Integer = 1,
+    Decimal = 2,
+    Double = 3
+}
+
 public enum RecorderValueAccessorKind
 {
     Text = 0,
@@ -121,7 +136,8 @@ public enum RecorderValueAccessorKind
     IsEnabled = 11,
     GridCellText = 12,
     GridCellValue = 13,
-    IsReadOnly = 14
+    IsReadOnly = 14,
+    NumericText = 15
 }
 
 internal enum RecorderComparisonKind
@@ -275,7 +291,8 @@ internal static class RecorderAssertionCapabilities
                 controlType,
                 RecorderValueKind.Boolean,
                 RecorderValueAccessorKind.IsToggled),
-            UiControlType.Slider or UiControlType.ProgressBar or UiControlType.Spinner => Value(
+            UiControlType.Slider or UiControlType.ProgressBar or UiControlType.Spinner
+                or UiControlType.MultiItemControlCollection => Value(
                 controlType,
                 RecorderValueKind.Number,
                 RecorderValueAccessorKind.NumericValue),
@@ -335,8 +352,7 @@ internal static class RecorderAssertionCapabilities
                 or UiControlType.FolderExport
                 or UiControlType.ShellNavigation
                 or UiControlType.Menu
-                or UiControlType.MenuItem
-                or UiControlType.MultiItemControlCollection => StateOnly(controlType),
+                or UiControlType.MenuItem => StateOnly(controlType),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(controlType),
                 controlType,
@@ -418,7 +434,8 @@ internal sealed record RecorderNumericOperand(
     Guid? CheckpointId = null,
     RecordedControlDescriptor? Control = null,
     RecorderValueAccessorKind? ValueAccessorKind = null,
-    RecorderGridValueReference? GridValueReference = null)
+    RecorderGridValueReference? GridValueReference = null,
+    string? RepeatedItemKey = null)
 {
     public static RecorderNumericOperand FromLiteral(double value) =>
         new(RecorderNumericOperandKind.Literal, LiteralValue: value);
@@ -429,12 +446,14 @@ internal sealed record RecorderNumericOperand(
     public static RecorderNumericOperand FromControl(
         RecordedControlDescriptor control,
         RecorderValueAccessorKind valueAccessorKind,
-        RecorderGridValueReference? gridValueReference = null) =>
+        RecorderGridValueReference? gridValueReference = null,
+        string? repeatedItemKey = null) =>
         new(
             RecorderNumericOperandKind.Control,
             Control: control ?? throw new ArgumentNullException(nameof(control)),
             ValueAccessorKind: valueAccessorKind,
-            GridValueReference: gridValueReference);
+            GridValueReference: gridValueReference,
+            RepeatedItemKey: repeatedItemKey);
 }
 
 internal sealed record RecorderGridValueReference(
@@ -444,7 +463,52 @@ internal sealed record RecorderGridValueReference(
 internal sealed record RecorderNumericExpectedExpression(
     RecorderArithmeticOperation Operation,
     RecorderNumericOperand Left,
-    RecorderNumericOperand Right);
+    RecorderNumericOperand Right,
+    IReadOnlyList<RecorderNumericOperationStep>? AdditionalOperations = null)
+{
+    public bool RequiresDecimal(IReadOnlyDictionary<Guid, RecorderNumericType> checkpointTypes)
+    {
+        ArgumentNullException.ThrowIfNull(checkpointTypes);
+        var operands = Operands().ToArray();
+        return operands.Any(operand => HasType(operand, RecorderNumericType.Decimal))
+            || operands.Any(operand => HasType(operand, RecorderNumericType.Integer));
+
+        bool HasType(RecorderNumericOperand operand, RecorderNumericType type) =>
+            operand.CheckpointId is { } id
+            && checkpointTypes.TryGetValue(id, out var actualType)
+            && actualType == type;
+    }
+
+    public IEnumerable<RecorderNumericOperand> Operands()
+    {
+        if (Left is not null)
+        {
+            yield return Left;
+        }
+
+        if (Right is not null)
+        {
+            yield return Right;
+        }
+
+        if (AdditionalOperations is null)
+        {
+            yield break;
+        }
+
+        foreach (var step in AdditionalOperations)
+        {
+            if (step?.Operand is { } operand)
+            {
+                yield return operand;
+            }
+        }
+    }
+}
+
+internal sealed record RecorderNumericOperationStep(
+    RecorderArithmeticOperation Operation,
+    RecorderNumericOperand Operand);
 
 internal sealed record RecorderDateInput(
     DateTime? ExactDate,
@@ -513,6 +577,8 @@ internal sealed record RecordedStep(
     public string? NumericInputText { get; init; }
 
     public string? NumericInputCultureName { get; init; }
+
+    public RecorderNumericType? NumericType { get; init; }
 
     public RecorderStepValidationState? ValidationBeforeGraphError { get; init; }
 }

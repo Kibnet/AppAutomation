@@ -26,8 +26,48 @@ internal static class GridNumericText
         string? text,
         string? cultureName,
         out double value,
+        out string? diagnostic) =>
+        TryParseCore(text, cultureName, rejectAmbiguousComma: false, out value, out diagnostic);
+
+    public static bool TryParseUnambiguous(
+        string? text,
+        out double value,
+        out string? diagnostic) =>
+        TryParseCore(text, cultureName: null, rejectAmbiguousComma: true, out value, out diagnostic);
+
+    private static bool TryParseCore(
+        string? text,
+        string? cultureName,
+        bool rejectAmbiguousComma,
+        out double value,
         out string? diagnostic)
     {
+        if (cultureName is null && TryNormalizeCommaDecimal(text, out var commaDecimal, out var ambiguous))
+        {
+            if (!ambiguous || rejectAmbiguousComma)
+            {
+                value = default;
+                var parsed = !ambiguous
+                    && double.TryParse(commaDecimal, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                    && double.IsFinite(value);
+
+                diagnostic = parsed
+                    ? null
+                    : ambiguous
+                        ? $"Numeric text '{text}' is culture-ambiguous; configure its culture explicitly."
+                        : $"Numeric text '{text}' is not a finite number.";
+                return parsed;
+            }
+        }
+
+        if (cultureName is null && TryNormalizeWhitespaceGroupedNumber(text, out var normalized))
+        {
+            var parsed = double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                && double.IsFinite(value);
+            diagnostic = parsed ? null : $"Numeric text '{text}' is not a finite number.";
+            return parsed;
+        }
+
         return TryParseConfigured(
             text,
             cultureName,
@@ -50,8 +90,46 @@ internal static class GridNumericText
         string? text,
         string? cultureName,
         out decimal value,
+        out string? diagnostic) =>
+        TryParseDecimalCore(text, cultureName, rejectAmbiguousComma: false, out value, out diagnostic);
+
+    public static bool TryParseDecimalUnambiguous(
+        string? text,
+        out decimal value,
+        out string? diagnostic) =>
+        TryParseDecimalCore(text, cultureName: null, rejectAmbiguousComma: true, out value, out diagnostic);
+
+    private static bool TryParseDecimalCore(
+        string? text,
+        string? cultureName,
+        bool rejectAmbiguousComma,
+        out decimal value,
         out string? diagnostic)
     {
+        if (cultureName is null && TryNormalizeCommaDecimal(text, out var commaDecimal, out var ambiguous))
+        {
+            if (!ambiguous || rejectAmbiguousComma)
+            {
+                value = default;
+                var parsed = !ambiguous
+                    && decimal.TryParse(commaDecimal, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+
+                diagnostic = parsed
+                    ? null
+                    : ambiguous
+                        ? $"Numeric text '{text}' is culture-ambiguous; configure its culture explicitly."
+                        : $"Numeric text '{text}' is outside the decimal range.";
+                return parsed;
+            }
+        }
+
+        if (cultureName is null && TryNormalizeWhitespaceGroupedNumber(text, out var normalized))
+        {
+            var parsed = decimal.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+            diagnostic = parsed ? null : $"Numeric text '{text}' is outside the decimal range.";
+            return parsed;
+        }
+
         return TryParseConfigured(
             text,
             cultureName,
@@ -224,6 +302,49 @@ internal static class GridNumericText
             value = default;
             return false;
         }
+    }
+
+    private static bool TryNormalizeWhitespaceGroupedNumber(string? text, out string normalized)
+    {
+        normalized = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var trimmed = text.Trim();
+        if (!Regex.IsMatch(trimmed, @"^[+-]?\d{1,3}(?:[ \u00A0\u202F]\d{3})+(?:[.,]\d+)?(?:[eE][+-]?\d+)?$"))
+        {
+            return false;
+        }
+
+        normalized = new string(trimmed.Where(static character => !IsGroupingWhitespace(character)).ToArray())
+            .Replace(',', '.');
+        return true;
+    }
+
+    private static bool TryNormalizeCommaDecimal(string? text, out string normalized, out bool ambiguous)
+    {
+        normalized = string.Empty;
+        ambiguous = false;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var match = Regex.Match(text.Trim(), @"^(?<integer>[+-]?\d+),(?<fraction>\d+)(?<exponent>[eE][+-]?\d+)?$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var integer = match.Groups["integer"].Value.TrimStart('+', '-');
+        ambiguous = integer.Length <= 3 && match.Groups["fraction"].Length == 3;
+        normalized = match.Groups["integer"].Value
+            + "."
+            + match.Groups["fraction"].Value
+            + match.Groups["exponent"].Value;
+        return true;
     }
 
     private static bool TryParseDecimalCore(string? text, CultureInfo culture, out decimal value)

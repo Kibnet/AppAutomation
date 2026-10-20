@@ -18,6 +18,7 @@ internal sealed class RecorderStepEditor : Border
     private readonly TextBlock _codePreview;
     private readonly Button _applyButton;
     private TextBox? _variableName;
+    private ComboBox? _checkpointValueKind;
     private TextBox? _stringValue;
     private TextBox? _itemValue;
     private TextBox? _integerValue;
@@ -37,6 +38,9 @@ internal sealed class RecorderStepEditor : Border
     private ComboBox? _calculatedOperation;
     private NumericOperandFields? _leftOperand;
     private NumericOperandFields? _rightOperand;
+    private readonly List<AdditionalTermFields> _additionalTermFields = [];
+    private Action? _refreshLivePreview;
+    private int _nextAdditionalTermOrdinal;
     private ComboBox? _gridRowMode;
     private readonly List<TextBox> _additionalTextInputs = [];
     private readonly List<ComboBox> _additionalComboInputs = [];
@@ -82,10 +86,38 @@ internal sealed class RecorderStepEditor : Border
         if (draft.EditKind == RecorderStepEditKind.Checkpoint)
         {
             AddTargetField(fields, "Value source", draft.ControlName, "Change source", () => retarget(RecorderStepRetargetRole.ValueSource));
+            if (draft.CanConvertTextCheckpointToNumber)
+            {
+                _checkpointValueKind = AddComboField(
+                    fields,
+                    "Value type",
+                    "RecorderStepEditCheckpointValueKind",
+                    new[]
+                    {
+                        RecorderCheckpointValueType.Text,
+                        RecorderCheckpointValueType.Integer,
+                        RecorderCheckpointValueType.Decimal,
+                        RecorderCheckpointValueType.Double
+                    },
+                    draft.ValueKind == RecorderValueKind.Text
+                        ? RecorderCheckpointValueType.Text
+                        : draft.NumericType switch
+                        {
+                            RecorderNumericType.Integer => RecorderCheckpointValueType.Integer,
+                            RecorderNumericType.Decimal => RecorderCheckpointValueType.Decimal,
+                            _ => RecorderCheckpointValueType.Double
+                        });
+            }
             fields.Children.Add(new TextBlock
             {
                 Name = "RecorderStepEditCurrentPreview",
                 Text = $"Current preview: {draft.CurrentPreview}",
+                Foreground = mutedBrush,
+                TextWrapping = TextWrapping.Wrap
+            });
+            fields.Children.Add(new TextBlock
+            {
+                Text = "At replay, the checkpoint reads the current UI value; this preview is for recording and type validation.",
                 Foreground = mutedBrush,
                 TextWrapping = TextWrapping.Wrap
             });
@@ -151,7 +183,7 @@ internal sealed class RecorderStepEditor : Border
         fields.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            HorizontalAlignment = HorizontalAlignment.Left,
             Spacing = 6,
             Children = { _applyButton, cancelButton }
         });
@@ -202,6 +234,8 @@ internal sealed class RecorderStepEditor : Border
             _applyButton.IsEnabled = true;
         }
 
+        _refreshLivePreview = RefreshPreview;
+
         void SchedulePreview()
         {
             deferredPreview.Stop();
@@ -246,6 +280,7 @@ internal sealed class RecorderStepEditor : Border
         foreach (var input in new[]
                  {
                      _booleanValue,
+                     _checkpointValueKind,
                      _comparison,
                      _expectedSource,
                      _expectedCheckpoint,
@@ -353,16 +388,97 @@ internal sealed class RecorderStepEditor : Border
             expression.Right,
             draft.CompatibleCheckpoints,
             () => retarget(RecorderStepRetargetRole.CalculatedRightOperand));
+        var additionalTerms = new StackPanel { Spacing = 5 };
+        foreach (var term in expression.AdditionalOperations ?? [])
+        {
+            AddAdditionalTermFields(term);
+        }
+
+        var addTerm = new Button
+        {
+            Name = "RecorderStepEditCalculatedAddTerm",
+            Content = "+ Add variable",
+            Padding = new Thickness(8, 3),
+            IsEnabled = draft.CompatibleCheckpoints.Any(static checkpoint =>
+                checkpoint.ValueKind == RecorderValueKind.Number)
+        };
+        addTerm.Click += (_, _) =>
+        {
+            AddAdditionalTermFields(null);
+            _refreshLivePreview?.Invoke();
+        };
         return new StackPanel
         {
             Spacing = 5,
             Children =
             {
+                new TextBlock
+                {
+                    Text = "Operations are applied in order, from top to bottom.",
+                    TextWrapping = TextWrapping.Wrap
+                },
                 _leftOperand.Content,
                 CreateField("Operation", _calculatedOperation),
-                _rightOperand.Content
+                _rightOperand.Content,
+                new ScrollViewer
+                {
+                    MaxHeight = 240,
+                    Content = additionalTerms
+                },
+                addTerm
             }
         };
+
+        void AddAdditionalTermFields(RecorderNumericOperationStep? term)
+        {
+            var choices = draft.CompatibleCheckpoints
+                .Where(static checkpoint => checkpoint.ValueKind == RecorderValueKind.Number)
+                .Select(static checkpoint => new RecorderStepEditOption(checkpoint.VariableName, checkpoint.CheckpointId))
+                .ToArray();
+            var ordinal = ++_nextAdditionalTermOrdinal;
+            var checkpoint = new ComboBox
+            {
+                Name = $"RecorderStepEditAdditionalTerm{ordinal}Checkpoint",
+                ItemsSource = choices,
+                SelectedItem = choices.FirstOrDefault(option => option.Id == term?.Operand?.CheckpointId),
+                MinWidth = 220
+            };
+            var termOperation = new ComboBox
+            {
+                Name = $"RecorderStepEditAdditionalTerm{ordinal}Operation",
+                ItemsSource = Enum.GetValues<RecorderArithmeticOperation>(),
+                SelectedItem = term?.Operation ?? RecorderArithmeticOperation.Add,
+                MinWidth = 180
+            };
+            var remove = new Button
+            {
+                Name = $"RecorderStepEditAdditionalTerm{ordinal}Remove",
+                Content = "Remove",
+                Padding = new Thickness(8, 3)
+            };
+            var panel = new StackPanel
+            {
+                Spacing = 3,
+                Children =
+                {
+                    new TextBlock { Text = "Next operation and variable" },
+                    termOperation,
+                    checkpoint,
+                    remove
+                }
+            };
+            var fields = new AdditionalTermFields(panel, termOperation, checkpoint);
+            _additionalTermFields.Add(fields);
+            additionalTerms.Children.Add(panel);
+            checkpoint.SelectionChanged += (_, _) => _refreshLivePreview?.Invoke();
+            termOperation.SelectionChanged += (_, _) => _refreshLivePreview?.Invoke();
+            remove.Click += (_, _) =>
+            {
+                _additionalTermFields.Remove(fields);
+                additionalTerms.Children.Remove(panel);
+                _refreshLivePreview?.Invoke();
+            };
+        }
     }
 
     private NumericOperandFields BuildNumericOperandFields(
@@ -590,7 +706,11 @@ internal sealed class RecorderStepEditor : Border
     {
         if (draft.StringValue is not null)
         {
-            _stringValue = AddTextField(fields, "Value", "RecorderStepEditStringValue", draft.StringValue);
+            _stringValue = AddTextField(
+                fields,
+                draft.EditKind == RecorderStepEditKind.Checkpoint ? "Recorded preview" : "Value",
+                "RecorderStepEditStringValue",
+                draft.StringValue);
         }
 
         if (draft.ItemValue is not null)
@@ -702,6 +822,50 @@ internal sealed class RecorderStepEditor : Border
                     .ToArray()
         };
 
+        if (_checkpointValueKind?.SelectedItem is RecorderCheckpointValueType valueType)
+        {
+            if (valueType != RecorderCheckpointValueType.Text)
+            {
+                RecorderNumericType? numericType = valueType switch
+                {
+                    RecorderCheckpointValueType.Integer => RecorderNumericType.Integer,
+                    RecorderCheckpointValueType.Decimal => RecorderNumericType.Decimal,
+                    _ when _sourceDraft.ValueKind == RecorderValueKind.Number
+                        && _sourceDraft.NumericType is null => null,
+                    _ => RecorderNumericType.Double
+                };
+                var previewText = _stringValue?.Text ?? _sourceDraft.CurrentPreview;
+                if (!RecorderStepEditService.TryParseNumericPreview(
+                    previewText, numericType, out var numericValue, out var diagnostic))
+                {
+                    error = diagnostic ?? "The checkpoint does not display a readable number.";
+                    return false;
+                }
+
+                draft = draft with
+                {
+                    ValueKind = RecorderValueKind.Number,
+                    ValueAccessorKind = RecorderValueAccessorKind.NumericText,
+                    NumericType = numericType,
+                    CurrentPreview = previewText,
+                    DoubleValue = numericValue,
+                    StringValue = null
+                };
+            }
+            else
+            {
+                draft = draft with
+                {
+                    ValueKind = RecorderValueKind.Text,
+                    ValueAccessorKind = RecorderValueAccessorKind.Text,
+                    NumericType = null,
+                    CurrentPreview = draft.StringValue ?? _sourceDraft.CurrentPreview,
+                    StringValue = draft.StringValue ?? _sourceDraft.CurrentPreview,
+                    DoubleValue = null
+                };
+            }
+        }
+
         var currentTableRowSelected = _gridRowMode is not null
             && string.Equals(
                 _gridRowMode.SelectedItem as string,
@@ -773,7 +937,7 @@ internal sealed class RecorderStepEditor : Border
             draft = draft with { IntValue = integerValue };
         }
 
-        if (!TryParseOptionalNumber(_numberValue, _sourceDraft.DoubleValue, out var number, out error)
+        if (!TryParseOptionalNumber(_numberValue, draft.DoubleValue, out var number, out error)
             || !TryParseOptionalNumber(_secondNumberValue, _sourceDraft.SecondDoubleValue, out var secondNumber, out error))
         {
             return false;
@@ -898,7 +1062,27 @@ internal sealed class RecorderStepEditor : Border
             return false;
         }
 
-        expression = new RecorderNumericExpectedExpression(operation, left!, right!);
+        var additionalTerms = new List<RecorderNumericOperationStep>(_additionalTermFields.Count);
+        foreach (var term in _additionalTermFields)
+        {
+            if (term.Checkpoint.SelectedItem is not RecorderStepEditOption selectedCheckpoint)
+            {
+                error = "Choose a numeric checkpoint for every additional term.";
+                return false;
+            }
+
+            if (term.Operation.SelectedItem is not RecorderArithmeticOperation selectedOperation)
+            {
+                error = "Choose an arithmetic operation for every additional variable.";
+                return false;
+            }
+
+            additionalTerms.Add(new RecorderNumericOperationStep(
+                selectedOperation,
+                RecorderNumericOperand.FromCheckpoint(selectedCheckpoint.Id)));
+        }
+
+        expression = new RecorderNumericExpectedExpression(operation, left!, right!, additionalTerms);
         error = string.Empty;
         return true;
     }
@@ -1300,6 +1484,11 @@ internal sealed class RecorderStepEditor : Border
         ComboBox Checkpoint,
         TextBlock SelectedControl,
         RecorderNumericOperand? ControlOperand);
+
+    private sealed record AdditionalTermFields(
+        StackPanel Content,
+        ComboBox Operation,
+        ComboBox Checkpoint);
 
     private sealed record GridRowConditionFields(
         RecordedGridRowCondition Condition,

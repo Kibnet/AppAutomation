@@ -4,6 +4,32 @@ namespace AppAutomation.Recorder.Avalonia;
 
 internal static class RecorderNumericValueContract
 {
+    public static bool TryCreateNumericTextSnapshot(
+        RecorderSemanticValueSnapshot snapshot,
+        out RecorderSemanticValueSnapshot numericSnapshot)
+    {
+        var prototype = snapshot.Prototype;
+        if (prototype.Control.ControlType == UiControlType.TextBox
+            && prototype.ValueKind == RecorderValueKind.Text
+            && prototype.ValueAccessorKind == RecorderValueAccessorKind.Text
+            && NumericDisplayValueReader.TryParse(prototype.StringValue, out var value, out _))
+        {
+            numericSnapshot = new RecorderSemanticValueSnapshot(
+                prototype with
+                {
+                    ValueKind = RecorderValueKind.Number,
+                    ValueAccessorKind = RecorderValueAccessorKind.NumericText,
+                    DoubleValue = value,
+                    StringValue = null
+                },
+                snapshot.Description with { ValueKind = RecorderValueKind.Number });
+            return true;
+        }
+
+        numericSnapshot = snapshot;
+        return false;
+    }
+
     public static bool TryCreateGridReference(
         RecordedControlDescriptor control,
         RecorderValueKind valueKind,
@@ -11,7 +37,8 @@ internal static class RecorderNumericValueContract
         IReadOnlyList<RecordedGridRowCondition>? gridRowConditions,
         string? gridTargetColumnName,
         out RecorderGridValueReference? gridValueReference,
-        out string error)
+        out string error,
+        string? repeatedItemKey = null)
     {
         ArgumentNullException.ThrowIfNull(control);
 
@@ -22,8 +49,37 @@ internal static class RecorderNumericValueContract
             return false;
         }
 
+        if (accessorKind == RecorderValueAccessorKind.NumericText)
+        {
+            if (control.ControlType != UiControlType.TextBox
+                || repeatedItemKey is not null
+                || gridRowConditions is { Count: > 0 }
+                || !string.IsNullOrWhiteSpace(gridTargetColumnName))
+            {
+                error = "A displayed numeric text value requires a standalone TextBox control.";
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
         if (accessorKind == RecorderValueAccessorKind.NumericValue)
         {
+            if (control.ControlType == UiControlType.MultiItemControlCollection
+                && string.IsNullOrWhiteSpace(repeatedItemKey))
+            {
+                error = "A multi-item Spinner numeric value requires a stable item key.";
+                return false;
+            }
+
+            if (control.ControlType != UiControlType.MultiItemControlCollection
+                && repeatedItemKey is not null)
+            {
+                error = "A standalone numeric value cannot define a multi-item key.";
+                return false;
+            }
+
             if (gridRowConditions is { Count: > 0 }
                 || !string.IsNullOrWhiteSpace(gridTargetColumnName))
             {
@@ -52,6 +108,12 @@ internal static class RecorderNumericValueContract
         if (accessorKind != RecorderValueAccessorKind.GridCellValue)
         {
             error = "Selected value does not expose a numeric accessor.";
+            return false;
+        }
+
+        if (repeatedItemKey is not null)
+        {
+            error = "A numeric grid-cell value cannot define a multi-item key.";
             return false;
         }
 

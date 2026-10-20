@@ -1,3 +1,5 @@
+using AppAutomation.Abstractions;
+
 namespace AppAutomation.Recorder.Avalonia;
 
 internal static class RecorderStepEditService
@@ -107,7 +109,8 @@ internal static class RecorderStepEditService
                 step.GridRowConditions,
                 step.GridTargetColumnName,
                 out _,
-                out _);
+                out _,
+                step.RepeatedItemKey);
 
         draft = new RecorderStepEditDraft(
             step.StepId,
@@ -148,7 +151,10 @@ internal static class RecorderStepEditService
         {
             GridRowSourceMode = step.GridRowSourceMode,
             GridCapturedRowPosition = step.GridCapturedRowPosition
-                ?? (step.RowIndex is >= 0 ? step.RowIndex : null)
+                ?? (step.RowIndex is >= 0 ? step.RowIndex : null),
+            CanConvertTextCheckpointToNumber = step.ActionKind == RecordedActionKind.CaptureCheckpoint
+                && CanConvertTextCheckpointToNumber(step),
+            NumericType = step.NumericType
         };
         return true;
     }
@@ -206,8 +212,47 @@ internal static class RecorderStepEditService
         }
 
         var target = ApplyRetarget(source, draft.RetargetPrototype);
+        double? numericPreview = null;
+        if (source.ActionKind == RecordedActionKind.CaptureCheckpoint
+            && (draft.ValueKind != target.ValueKind || draft.NumericType != target.NumericType))
+        {
+            if (!CanConvertTextCheckpointToNumber(target)
+                || draft.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.Number)
+                || draft.ValueAccessorKind != (draft.ValueKind == RecorderValueKind.Number
+                    ? RecorderValueAccessorKind.NumericText
+                    : RecorderValueAccessorKind.Text))
+            {
+                candidate = null;
+                error = "This checkpoint source cannot be converted between text and number.";
+                return false;
+            }
+
+            var parsed = default(double);
+            if (draft.ValueKind == RecorderValueKind.Number
+                && !TryParseNumericPreview(draft.CurrentPreview, draft.NumericType, out parsed, out var diagnostic))
+            {
+                candidate = null;
+                error = diagnostic ?? "The checkpoint does not display a readable number.";
+                return false;
+            }
+
+            if (draft.ValueKind == RecorderValueKind.Number)
+            {
+                numericPreview = parsed;
+            }
+        }
+
         candidate = target with
         {
+            ValueKind = source.ActionKind == RecordedActionKind.CaptureCheckpoint
+                ? draft.ValueKind
+                : target.ValueKind,
+            ValueAccessorKind = source.ActionKind == RecordedActionKind.CaptureCheckpoint
+                ? draft.ValueAccessorKind
+                : target.ValueAccessorKind,
+            NumericType = source.ActionKind == RecordedActionKind.CaptureCheckpoint
+                ? draft.NumericType
+                : target.NumericType,
             CheckpointVariableName = source.ActionKind == RecordedActionKind.CaptureCheckpoint
                 ? draft.VariableName?.Trim()
                 : target.CheckpointVariableName,
@@ -221,7 +266,7 @@ internal static class RecorderStepEditService
             ItemValue = draft.ItemValue,
             BoolValue = draft.BoolValue,
             IntValue = draft.IntValue,
-            DoubleValue = draft.DoubleValue,
+            DoubleValue = numericPreview ?? draft.DoubleValue,
             NumericInputText = draft.NumericInputText,
             NumericInputCultureName = draft.NumericInputCultureName,
             SecondDoubleValue = draft.SecondDoubleValue,
@@ -333,6 +378,7 @@ internal static class RecorderStepEditService
             ControlName = prototype.Control.ProposedPropertyName,
             ValueKind = prototype.ValueKind,
             ValueAccessorKind = prototype.ValueAccessorKind,
+            NumericType = prototype.NumericType,
             CurrentPreview = snapshot.Description.CurrentValueText,
             GridRowConditions = prototype.GridRowConditions,
             GridTargetColumnName = prototype.GridTargetColumnName,
@@ -341,8 +387,46 @@ internal static class RecorderStepEditService
                 && draft.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
                     ? RecorderGridRowSourceMode.CurrentTableRow
                     : prototype.GridRowSourceMode,
-            RetargetPrototype = prototype
+            RetargetPrototype = prototype,
+            CanConvertTextCheckpointToNumber = draft.EditKind == RecorderStepEditKind.Checkpoint
+                && CanConvertTextCheckpointToNumber(prototype)
         };
+    }
+
+    private static bool CanConvertTextCheckpointToNumber(RecordedStep step) =>
+        step.Control.ControlType == UiControlType.TextBox
+        && (step.ValueKind, step.ValueAccessorKind) is
+            (RecorderValueKind.Text, RecorderValueAccessorKind.Text)
+            or (RecorderValueKind.Number, RecorderValueAccessorKind.NumericText);
+
+    internal static bool TryParseNumericPreview(
+        string? text,
+        RecorderNumericType? numericType,
+        out double value,
+        out string? diagnostic)
+    {
+        try
+        {
+            if (numericType is { } specifiedType && !Enum.IsDefined(specifiedType))
+            {
+                throw new InvalidOperationException($"Unsupported numeric checkpoint type '{specifiedType}'.");
+            }
+
+            value = numericType switch
+            {
+                RecorderNumericType.Decimal => (double)NumericText.ParseDecimal(text),
+                RecorderNumericType.Integer => NumericText.ParseInteger(text),
+                _ => NumericText.ParseDouble(text)
+            };
+            diagnostic = null;
+            return true;
+        }
+        catch (InvalidOperationException exception)
+        {
+            value = default;
+            diagnostic = exception.Message;
+            return false;
+        }
     }
 
     private static RecordedStep ApplyRetarget(RecordedStep source, RecordedStep? prototype)

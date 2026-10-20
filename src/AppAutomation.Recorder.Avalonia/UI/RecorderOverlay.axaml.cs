@@ -713,6 +713,8 @@ internal sealed partial class RecorderOverlay : UserControl
         {
             Header = "Compare with calculated value…",
             IsEnabled = currentValue?.ValueKind == RecorderValueKind.Number
+                || selection.ValueSnapshot is { } textSnapshot
+                    && RecorderNumericValueContract.TryCreateNumericTextSnapshot(textSnapshot, out _)
         };
         compareWithCalculated.Click += (_, _) => ShowCalculatedAssertionEditor(selection);
         menu.Items.Add(compareWithCalculated);
@@ -843,6 +845,12 @@ internal sealed partial class RecorderOverlay : UserControl
             return;
         }
 
+        if (selection.ValueSnapshot is { } snapshot
+            && RecorderNumericValueContract.TryCreateNumericTextSnapshot(snapshot, out var numericSnapshot))
+        {
+            selection = selection with { ValueSnapshot = numericSnapshot };
+        }
+
         if (selection.ValueDescription?.ValueKind != RecorderValueKind.Number)
         {
             ShowSettingsError("A calculated expected value can only be used with a numeric control.");
@@ -898,10 +906,20 @@ internal sealed partial class RecorderOverlay : UserControl
         var add = new Button
         {
             Name = "RecorderCalculatedAdd",
-            Content = "Add",
+            Content = "Save check",
             Padding = new Thickness(10, 4)
         };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(10, 4) };
+        var addTerm = new Button
+        {
+            Name = "RecorderCalculatedAddTerm",
+            Content = "+ Add variable",
+            Padding = new Thickness(10, 4),
+            IsEnabled = _checkpointDetails.Checkpoints.Any(static checkpoint =>
+                checkpoint.ValueKind == RecorderValueKind.Number)
+        };
+        var additionalTerms = new StackPanel { Spacing = 7 };
+        var nextTermOrdinal = 1;
         Action refresh = static () => { };
         var leftEditor = CreateNumericOperandEditor(draft.Left, operandIndex: 0, () =>
         {
@@ -922,14 +940,29 @@ internal sealed partial class RecorderOverlay : UserControl
             var dividesByLiteralZero = RecorderValueCodec.DividesByLiteralZero(
                 draft.Operation,
                 rightOperand);
+            var invalidTerm = draft.AdditionalTerms.FirstOrDefault(term =>
+                term.CheckpointId is null || !Enum.IsDefined(term.Operation));
             var error = draft.Error
                 ?? (!leftValid ? leftError : null)
                 ?? (!rightValid ? rightError : null)
-                ?? (dividesByLiteralZero ? "Cannot divide by a literal zero." : null);
-            add.IsEnabled = leftValid && rightValid && !dividesByLiteralZero;
+                ?? (dividesByLiteralZero ? "Cannot divide by a literal zero." : null)
+                ?? (invalidTerm is not null ? "Select a numeric checkpoint for every additional variable." : null);
+            add.IsEnabled = leftValid && rightValid && !dividesByLiteralZero && invalidTerm is null;
             validation.Text = error;
             validation.IsVisible = !string.IsNullOrWhiteSpace(error);
         };
+
+        addTerm.Click += (_, _) =>
+        {
+            var term = new RecorderCalculatedAddendDraft();
+            draft.AdditionalTerms.Add(term);
+            additionalTerms.Children.Add(CreateAdditionalTermEditor(term, nextTermOrdinal++));
+            refresh();
+        };
+        foreach (var term in draft.AdditionalTerms)
+        {
+            additionalTerms.Children.Add(CreateAdditionalTermEditor(term, nextTermOrdinal++));
+        }
 
         operation.SelectionChanged += (_, _) =>
         {
@@ -956,7 +989,13 @@ internal sealed partial class RecorderOverlay : UserControl
 
             _checkpointDetails.CaptureCalculatedAssertion(
                 draft.Selection,
-                new RecorderNumericExpectedExpression(draft.Operation, left!, right!));
+                new RecorderNumericExpectedExpression(
+                    draft.Operation,
+                    left!,
+                    right!,
+                    draft.AdditionalTerms.Select(static term => new RecorderNumericOperationStep(
+                        term.Operation,
+                        RecorderNumericOperand.FromCheckpoint(term.CheckpointId!.Value))).ToArray()));
             close(false);
         };
         cancel.Click += (_, _) =>
@@ -976,10 +1015,21 @@ internal sealed partial class RecorderOverlay : UserControl
                     Text = "Calculated expected value",
                     FontWeight = FontWeight.SemiBold
                 },
+                new TextBlock
+                {
+                    Text = "Operations are applied in order, from top to bottom.",
+                    TextWrapping = TextWrapping.Wrap
+                },
                 leftEditor,
                 new TextBlock { Text = "Operation" },
                 operation,
                 rightEditor,
+                new ScrollViewer
+                {
+                    MaxHeight = 240,
+                    Content = additionalTerms
+                },
+                addTerm,
                 validation,
                 new StackPanel
                 {
@@ -991,6 +1041,66 @@ internal sealed partial class RecorderOverlay : UserControl
         };
         refresh();
         return content;
+
+        Control CreateAdditionalTermEditor(RecorderCalculatedAddendDraft term, int ordinal)
+        {
+            var checkpoints = _checkpointDetails.Checkpoints
+                .Where(static checkpoint => checkpoint.ValueKind == RecorderValueKind.Number)
+                .ToArray();
+            var labels = checkpoints.Select(static checkpoint =>
+                $"{checkpoint.VariableName} ({checkpoint.ControlName})").ToArray();
+            var checkpoint = new ComboBox
+            {
+                Name = $"RecorderCalculatedAdditionalTerm{ordinal}Checkpoint",
+                ItemsSource = labels,
+                SelectedIndex = Array.FindIndex(checkpoints, candidate =>
+                    candidate.CheckpointId == term.CheckpointId),
+                MinWidth = 210
+            };
+            var termOperation = new ComboBox
+            {
+                Name = $"RecorderCalculatedAdditionalTerm{ordinal}Operation",
+                ItemsSource = new[] { "+", "−", "×", "÷" },
+                SelectedIndex = (int)term.Operation,
+                MinWidth = 90
+            };
+            var remove = new Button
+            {
+                Name = $"RecorderCalculatedAdditionalTerm{ordinal}Remove",
+                Content = "Remove",
+                Padding = new Thickness(10, 4)
+            };
+            var panel = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    new TextBlock { Text = "Next operation and variable" },
+                    termOperation,
+                    checkpoint,
+                    remove
+                }
+            };
+            checkpoint.SelectionChanged += (_, _) =>
+            {
+                term.CheckpointId = checkpoint.SelectedIndex >= 0
+                    ? checkpoints[checkpoint.SelectedIndex].CheckpointId
+                    : null;
+                refresh();
+            };
+            termOperation.SelectionChanged += (_, _) =>
+            {
+                term.Operation = (RecorderArithmeticOperation)termOperation.SelectedIndex;
+                refresh();
+            };
+            remove.Click += (_, _) =>
+            {
+                draft.AdditionalTerms.Remove(term);
+                additionalTerms.Children.Remove(panel);
+                refresh();
+            };
+            return panel;
+        }
 
         Control CreateNumericOperandEditor(
             RecorderNumericOperandDraft operandDraft,
@@ -2337,6 +2447,8 @@ internal sealed partial class RecorderOverlay : UserControl
 
         public RecorderNumericOperandDraft Right { get; } = new();
 
+        public List<RecorderCalculatedAddendDraft> AdditionalTerms { get; } = [];
+
         public RecorderArithmeticOperation Operation { get; set; }
 
         public int PendingOperandIndex { get; set; }
@@ -2350,6 +2462,13 @@ internal sealed partial class RecorderOverlay : UserControl
             target.ControlOperand = operand;
             target.ControlName = controlName;
         }
+    }
+
+    private sealed class RecorderCalculatedAddendDraft
+    {
+        public RecorderArithmeticOperation Operation { get; set; } = RecorderArithmeticOperation.Add;
+
+        public Guid? CheckpointId { get; set; }
     }
 
     private sealed class RecorderNumericOperandDraft

@@ -48,6 +48,101 @@ public sealed class RecorderNotificationCaptureTests
     }
 
     [Test]
+    [Arguments(RecorderAssertionMode.Auto)]
+    [Arguments(RecorderAssertionMode.Text)]
+    public async Task SelectedNotificationSnapshot_CreatesPersistableNotificationTextAssertion(
+        RecorderAssertionMode mode)
+    {
+        var root = new StackPanel();
+        var notification = new Border();
+        var text = new Label { Content = "Заказ сохранён" };
+        AutomationProperties.SetAutomationId(notification, RepeatedNotificationsFixture.NotificationId);
+        AutomationProperties.SetAutomationId(text, RepeatedNotificationsFixture.NotificationTextId);
+        notification.Child = text;
+        root.Children.Add(notification);
+        var factory = new RecorderStepFactory(CreateOptions(), () => root);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(text, out var snapshot, out var error);
+        await Assert.That(captured).IsTrue().Because(error ?? "Snapshot was unavailable.");
+        var result = factory.TryCreateAssertionStep(snapshot, mode);
+
+        await Assert.That(result.Success).IsTrue().Because(result.Message);
+        await AssertCapturedNotification(result, "Заказ сохранён");
+        var preview = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null)
+            .GeneratePreview(result.Step!);
+        await Assert.That(preview).Contains(
+            "Page.WaitUntilNotificationContains(static page => page.ToastNotification, \"Заказ сохранён\");");
+    }
+
+    [Test]
+    public async Task SelectableNotificationText_CreatesPersistableAssertionFromSnapshot()
+    {
+        var root = new StackPanel();
+        var notification = new Border();
+        var text = new SelectableTextBlock { Text = "Позиция заказа успешно создана" };
+        AutomationProperties.SetAutomationId(notification, RepeatedNotificationsFixture.NotificationId);
+        AutomationProperties.SetAutomationId(text, RepeatedNotificationsFixture.NotificationTextId);
+        notification.Child = text;
+        root.Children.Add(notification);
+        var factory = new RecorderStepFactory(CreateOptions(), () => root);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(text, out var snapshot, out var error);
+        await Assert.That(captured).IsTrue().Because(error ?? "Notification snapshot was unavailable.");
+        var result = factory.TryCreateAssertionStep(snapshot, RecorderAssertionMode.Text);
+
+        await AssertCapturedNotification(result, "Позиция заказа успешно создана");
+        var preview = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null)
+            .GeneratePreview(result.Step!);
+        await Assert.That(preview).Contains(
+            "Page.WaitUntilNotificationContains(static page => page.ToastNotification, \"Позиция заказа успешно создана\");");
+    }
+
+    [Test]
+    public async Task EmptySelectableNotificationText_ReportsUnreadableNotificationText()
+    {
+        var root = new StackPanel();
+        var notification = new Border();
+        var text = new SelectableTextBlock { Text = string.Empty };
+        AutomationProperties.SetAutomationId(notification, RepeatedNotificationsFixture.NotificationId);
+        AutomationProperties.SetAutomationId(text, RepeatedNotificationsFixture.NotificationTextId);
+        notification.Child = text;
+        root.Children.Add(notification);
+        var factory = new RecorderStepFactory(CreateOptions(), () => root);
+
+        var captured = factory.TryCaptureSemanticValueSnapshot(text, out var snapshot, out var error);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(captured).IsFalse();
+            await Assert.That(snapshot).IsNull();
+            await Assert.That(error).Contains("Notification text");
+        }
+    }
+
+    [Test]
+    public async Task SelectedNotificationSnapshot_RemainsAddressableWithAnotherVisibleNotification()
+    {
+        var root = new StackPanel();
+        foreach (var message in new[] { "Первое уведомление", "Позиция заказа успешно создана" })
+        {
+            var notification = new Border();
+            var text = new SelectableTextBlock { Text = message };
+            AutomationProperties.SetAutomationId(notification, RepeatedNotificationsFixture.NotificationId);
+            AutomationProperties.SetAutomationId(text, RepeatedNotificationsFixture.NotificationTextId);
+            notification.Child = text;
+            root.Children.Add(notification);
+        }
+
+        var selected = (SelectableTextBlock)((Border)root.Children[1]).Child!;
+        var factory = new RecorderStepFactory(CreateOptions(), () => root);
+        var captured = factory.TryCaptureSemanticValueSnapshot(selected, out var snapshot, out var error);
+
+        await Assert.That(captured).IsTrue().Because(error ?? "Notification snapshot was unavailable.");
+        var result = factory.TryCreateAssertionStep(snapshot, RecorderAssertionMode.Text);
+        await AssertCapturedNotification(result, "Позиция заказа успешно создана");
+    }
+
+    [Test]
     public async Task LabelOutsideNotificationRoot_PreservesPrimitiveAssertion()
     {
         var root = new StackPanel();

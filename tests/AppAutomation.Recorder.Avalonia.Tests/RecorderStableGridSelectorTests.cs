@@ -10,7 +10,7 @@ using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
-[NotInParallel("RecorderGridCapture")]
+[NotInParallel]
 public sealed class RecorderStableGridSelectorTests
 {
     [Test]
@@ -729,6 +729,45 @@ public sealed class RecorderStableGridSelectorTests
             await Assert.That(step.Preview).DoesNotContain("Page.SelectGridRow(");
             await Assert.That(session.ExportPreview()).Contains("Page.OpenGridRow(");
         }
+    }
+
+    [Test]
+    public async Task GridCatalog_RepeatedRowGesturesDoNotDuplicateAdjacentActions()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: 2,
+            selectedSourceField: "Key");
+        using var session = fixture.CreateSession();
+        session.Start();
+
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell);
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell);
+        Thread.Sleep(300);
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell, clickCount: 2);
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell, clickCount: 2);
+
+        var entry = session.StepJournal.Single();
+        await Assert.That(entry.Preview).Contains("Page.OpenGridRow(");
+        await Assert.That(session.ExportPreview()).DoesNotContain("Page.SelectGridRow(");
+    }
+
+    [Test]
+    public async Task GridCatalog_DifferentRowsKeepSeparateSelections()
+    {
+        var fixture = new CatalogGridCaptureFixture(
+            includeRowIdentity: true,
+            selectedRowIndex: 2,
+            selectedSourceField: "Key");
+        using var session = fixture.CreateSession();
+        session.Start();
+
+        session.CaptureCatalogGridRowGestureForTesting(fixture.OtherRowCell);
+        session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell);
+
+        await Assert.That(session.StepJournal).Count().IsEqualTo(2);
+        await Assert.That(session.StepJournal[0].Preview).Contains("ITEM-10");
+        await Assert.That(session.StepJournal[1].Preview).Contains("ITEM-30");
     }
 
     [Test]
@@ -1642,6 +1681,7 @@ public sealed class RecorderStableGridSelectorTests
     {
         private readonly RecorderStepFactory _factory;
         private readonly Border _selectedCell;
+        private readonly Border? _otherRowCell;
         private readonly Border _rowPresenter;
         private readonly StackPanel _root;
         private readonly AppAutomationRecorderOptions _options;
@@ -1702,6 +1742,8 @@ public sealed class RecorderStableGridSelectorTests
                     ? _rowPresenter
                     : new Border { DataContext = currentRow, Height = 20 });
             }
+            _otherRowCell = sourceGrid.Children.OfType<Border>()
+                .FirstOrDefault(child => !ReferenceEquals(child, _rowPresenter));
             _root.Children.Add(archiveGrid);
             _root.Children.Add(archiveRuntimeGrid);
             _root.Children.Add(sourceGrid);
@@ -1732,6 +1774,9 @@ public sealed class RecorderStableGridSelectorTests
         }
 
         public Control SelectedCell => _selectedCell;
+
+        public Control OtherRowCell => _otherRowCell
+            ?? throw new InvalidOperationException("The fixture has no other visible row.");
 
         public StepCreationResult CaptureCheckpoint(string variableName = "requiredAmount")
         {

@@ -15,7 +15,7 @@ public static class SampleMultiItemAutomation
                     MultiItemRelativeLocator.ByAutomationId(
                         "UnitQuantityItem",
                         MultiItemRelativeLocatorScope.CollectionRoot),
-                    RepeatedItemKeyDefinition.FromItem(UiAutomationValueProperty.ItemStatus))
+                    RepeatedItemKeyDefinition.FromItem(UiAutomationValueProperty.Name))
                 .WithSpinner(new MultiItemSpinnerParts(
                     MultiItemRelativeLocator.ByAutomationId(
                         "QuantityEditor",
