@@ -247,7 +247,25 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
             return (TControl)(object)new FlaUiSearchHistoryItemsControl(
                 () => FindSearchHistoryButtons(definition),
-                definition.LocatorValue);
+                definition.LocatorValue,
+                () =>
+                {
+                    if (definition.Scope?.AnchorLocatorValue is not { Length: > 0 } anchor)
+                    {
+                        return false;
+                    }
+
+                    var input = definition with
+                    {
+                        LocatorValue = anchor,
+                        LocatorKind = definition.Scope.LocatorKind,
+                        FallbackToName = definition.Scope.FallbackToName,
+                        Scope = null,
+                        ControlType = UiControlType.TextBox
+                    };
+                    DesktopPointer.ClickFallback(() => FindElement(input), "open search history from its input");
+                    return true;
+                });
         }
 
         object resolved = definition.ControlType switch
@@ -1113,7 +1131,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             SelectItem(itemText, timeout, exact: false);
         }
 
-        private void SelectItem(string itemText, TimeSpan timeout, bool exact)
+        internal void ActivateItem(string itemText, TimeSpan timeout) =>
+            SelectItem(itemText, timeout, exact: false, activate: true);
+
+        private void SelectItem(string itemText, TimeSpan timeout, bool exact, bool activate = false)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
@@ -1164,7 +1185,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             // Select may commit the value and close its popup before UIA returns. Never replay
             // a delivered semantic action against that old projection; the picker/grid caller
             // confirms the committed value outside the results list.
-            if (TrySelect(candidate))
+            if (!activate && TrySelect(candidate))
             {
                 return;
             }
@@ -1174,8 +1195,19 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 throw new TimeoutException($"ListBox item '{itemText}' lookup exhausted the selection timeout.");
             }
-            TryClick(() => ResolveCandidate()
-                ?? throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection."), remaining);
+            AutomationElement ResolveCurrentCandidate() => ResolveCandidate()
+                ?? throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection.");
+            if (activate)
+            {
+                // A composite editor needs the item's real activation/release lifecycle,
+                // not just its selected bit. The caller verifies the committed grid value.
+                DesktopPointer.ClickFallback(ResolveCurrentCandidate, "activate single-select grid result",
+                    new PointerClickOptions { Timeout = remaining });
+            }
+            else
+            {
+                TryClick(ResolveCurrentCandidate, remaining);
+            }
             if (SelectionStateUnavailable() || SelectionMatchesTarget())
             {
                 return;
@@ -2148,18 +2180,23 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             bool IsSelected);
     }
 
-    private sealed class FlaUiSearchHistoryItemsControl : ISearchHistoryItemsControl
+    private sealed class FlaUiSearchHistoryItemsControl : ISearchHistoryItemsControl, ISearchHistoryPopupControl
     {
         private readonly Func<AutomationElement[]> _resolveButtons;
         private readonly string _locator;
+        private readonly Func<bool> _openPopup;
 
         public FlaUiSearchHistoryItemsControl(
             Func<AutomationElement[]> resolveButtons,
-            string locator)
+            string locator,
+            Func<bool> openPopup)
         {
             _resolveButtons = resolveButtons;
             _locator = locator;
+            _openPopup = openPopup;
         }
+
+        public bool TryOpen() => _openPopup();
 
         public string AutomationId => _locator;
 
@@ -3654,18 +3691,27 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         AutomationElement cell,
         AutomationElement? gridRoot,
         GridRelativeLocator? locator,
-        Func<GridRelativeLocator, InvalidOperationException> ambiguityFactory)
+        Func<GridRelativeLocator, InvalidOperationException> ambiguityFactory,
+        bool includeOffscreen = false)
     {
         if (locator is null)
         {
             return null;
         }
 
+        AutomationElement[] FindMatchingDescendants(AutomationElement root)
+        {
+            var condition = locator.LocatorKind switch
+            {
+                UiLocatorKind.AutomationId => root.Automation.ConditionFactory.ByAutomationId(locator.LocatorValue),
+                UiLocatorKind.Name => root.Automation.ConditionFactory.ByName(locator.LocatorValue),
+                _ => throw new InvalidOperationException($"Unsupported grid part locator '{locator.LocatorKind}'.")
+            };
+            return TryRead(() => root.FindAllDescendants(condition)) ?? [];
+        }
+
         bool Matches(AutomationElement candidate) =>
-            TryRead(() => candidate.IsAvailable)
-            && (locator.Scope == GridRelativeLocatorScope.DetachedPopup
-                || !TryRead(() => candidate.IsOffscreen))
-            && (locator.LocatorKind switch
+            (locator.LocatorKind switch
             {
                 UiLocatorKind.AutomationId => string.Equals(
                     TryRead(() => candidate.AutomationId),
@@ -3676,19 +3722,22 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     locator.LocatorValue,
                     StringComparison.Ordinal),
                 _ => false
-            });
+            })
+            && TryRead(() => candidate.IsAvailable)
+            && (includeOffscreen || locator.Scope == GridRelativeLocatorScope.DetachedPopup
+                || !TryRead(() => candidate.IsOffscreen));
 
         if (locator.Scope == GridRelativeLocatorScope.EditorRoot)
         {
             var editorMatches = new[] { cell }
-                .Concat(FindAutomationDescendants(cell))
+                .Concat(FindMatchingDescendants(cell))
                 .Where(Matches)
                 .Take(2)
                 .ToArray();
             if (editorMatches.Length == 0 && gridRoot is not null)
             {
                 var cellBounds = TryRead(() => cell.BoundingRectangle);
-                editorMatches = FindAutomationDescendants(gridRoot)
+                editorMatches = FindMatchingDescendants(gridRoot)
                     .Where(Matches)
                     .Where(candidate =>
                     {
@@ -3727,7 +3776,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             var rowMatches = new[] { rowRoot }
-                .Concat(FindAutomationDescendants(rowRoot))
+                .Concat(FindMatchingDescendants(rowRoot))
                 .Where(Matches)
                 .Take(2)
                 .ToArray();

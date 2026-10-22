@@ -1,5 +1,6 @@
 using System.Drawing;
 using AppAutomation.Abstractions;
+using AppAutomation.FlaUI.Automation.GridAutomation;
 using AppAutomation.FlaUI.Input;
 
 namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
@@ -20,6 +21,27 @@ public sealed class DesktopPointerControllerTests
         await Assert.That(fake.Events.SequenceEqual(["move:140,160", "down:Left", "up:Left", "move:77,88"])).IsTrue();
         await Assert.That(fake.MovedWhilePressed).IsFalse();
         await Assert.That(coordinator.Releases).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Click_HoldsTheButtonDownWithoutAddingAnotherPress()
+    {
+        var fake = new FakeBackend { ClickPressDuration = TimeSpan.FromMilliseconds(40) };
+        await Controller(fake).RunAsync("click", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
+        await Assert.That(fake.UpTimes[0] - fake.DownTimes[0] >= fake.ClickPressDuration).IsTrue();
+        await Assert.That(fake.Events.SequenceEqual(["move:140,160", "down:Left", "up:Left", "move:77,88"])).IsTrue();
+        await Assert.That(fake.MovedWhilePressed).IsFalse();
+    }
+
+    [Test]
+    public async Task Click_RejectsAnInsufficientPressBudgetBeforeSendingDown()
+    {
+        var fake = new FakeBackend { ClickPressDuration = TimeSpan.FromMilliseconds(100) };
+        var error = await Capture(() => Controller(fake).RunAsync("double", TimeSpan.FromMilliseconds(150),
+            op => op.ClickAsync(Target, new PointerClickOptions { ClickCount = 2 })));
+        await Assert.That(error is TimeoutException or OperationCanceledException).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(0);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
     }
 
     [Test]
@@ -490,6 +512,30 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
+    public async Task GridCellGeometry_UsesVisibleIntersectionAfterHorizontalClipping()
+    {
+        var window = new Rectangle(0, 23, 2560, 1369);
+        var viewport = new Rectangle(200, 200, 2360, 1000);
+        var rightCell = new Rectangle(2506, 380, 120, 44);
+        var leftCell = new Rectangle(150, 380, 120, 44);
+
+        var rightPoint = GridCellClickGeometry.CenterOfVisibleIntersection(rightCell, [viewport, window]);
+        var leftPoint = GridCellClickGeometry.CenterOfVisibleIntersection(leftCell, [viewport, window]);
+
+        await Assert.That(rightPoint).IsEqualTo(new Point(2533, 402));
+        await Assert.That(leftPoint).IsEqualTo(new Point(235, 402));
+        await Assert.That(DesktopPointerTargetResolver.ChoosePoint(
+            rightCell, false, true, true, explicitPoint: rightPoint)).IsEqualTo(rightPoint);
+
+        var refreshedCell = new Rectangle(2200, 380, 120, 44);
+        await Assert.That(GridCellClickGeometry.CenterOfVisibleIntersection(
+            refreshedCell, [viewport, window])).IsEqualTo(new Point(2260, 402));
+        await Assert.That(Assert.Throws<InvalidOperationException>(() =>
+            GridCellClickGeometry.CenterOfVisibleIntersection(
+                new Rectangle(2600, 380, 120, 44), [viewport, window]))).IsNotNull();
+    }
+
+    [Test]
     public async Task AbsoluteMotionCoordinates_RoundTripPhysicalPixelsAcrossNegativeVirtualDesktop()
     {
         var desktop = new Rectangle(-3840, -1080, 8960, 3240);
@@ -618,6 +664,7 @@ public sealed class DesktopPointerControllerTests
         internal List<Point> DownPositions { get; } = [];
         internal List<Point> UpPositions { get; } = [];
         internal List<TimeSpan> DownTimes { get; } = [];
+        internal List<TimeSpan> UpTimes { get; } = [];
         private readonly System.Diagnostics.Stopwatch _time = System.Diagnostics.Stopwatch.StartNew();
         internal Rectangle[] Monitors { get; set; } = [new Rectangle(-1000, -1000, 3000, 3000)];
         internal bool FailDownAfterDelivery { get; init; }
@@ -636,6 +683,7 @@ public sealed class DesktopPointerControllerTests
         internal int MotionPackets { get; private set; }
         public string DesktopKey => "fake";
         public TimeSpan DoubleClickTime { get; init; } = TimeSpan.FromMilliseconds(1);
+        public TimeSpan ClickPressDuration { get; init; }
         public Size DragThreshold => new(4, 4);
         public void EnsureDesktopAvailable() { if (DesktopUnavailable) throw new InvalidOperationException("desktop unavailable"); }
         public PointerState ReadState()
@@ -663,6 +711,7 @@ public sealed class DesktopPointerControllerTests
         }
         public void Up(PointerButton button)
         {
+            UpTimes.Add(_time.Elapsed);
             Events.Add($"up:{button}"); UpPositions.Add(State.Position);
             _ups++;
             if (FailFirstUp && _ups == 1)

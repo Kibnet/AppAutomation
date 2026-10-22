@@ -71,6 +71,113 @@ public partial class MainWindow : Window
             ArmComplexDataGridControl.Width = 420;
             ArmComplexDataGridControl.HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left;
         }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_FLAUI_GRID_PARTIAL_CELL") == "1")
+        {
+            var columns = ArmComplexDataGridControl.Columns;
+            columns.Single(static column => column.SortMemberPath == "Value").DisplayIndex = columns.Count - 1;
+            Width = 850;
+            Height = 720;
+        }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_COLUMNS_CHANGE_ON_SELECTION") == "1")
+        {
+            var columns = ArmComplexDataGridControl.Columns;
+            var valueColumn = columns.Single(static column => column.SortMemberPath == "Value");
+            valueColumn.DisplayIndex = columns.Count - 1;
+            var changed = false;
+            ArmComplexDataGridControl.SelectionChanged += (_, _) =>
+            {
+                if (changed)
+                {
+                    return;
+                }
+
+                changed = true;
+                foreach (var column in columns.Where(static column =>
+                             column.SortMemberPath is "RequiredAmount" or "IsApproved"))
+                {
+                    column.IsVisible = false;
+                }
+                ArmComplexDataGridControl.UpdateLayout();
+            };
+        }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_MULTILINE_TEXT") == "1")
+        {
+            var columns = ArmComplexDataGridControl.Columns;
+            var value = columns.Single(static column => column.SortMemberPath == "Value");
+            var index = columns.IndexOf(value);
+            columns[index] = new DataGridTemplateColumn
+            {
+                Header = "Value", SortMemberPath = "Value", Width = new DataGridLength(180),
+                CellTemplate = new FuncDataTemplate<ArmDesktopGridRowViewModel>((row, _) =>
+                {
+                    var display = new TextBlock();
+                    display.Bind(TextBlock.TextProperty, new global::Avalonia.Data.Binding("Value"));
+                    return display;
+                }),
+                CellEditingTemplate = new FuncDataTemplate<ArmDesktopGridRowViewModel>((row, _) =>
+                {
+                    var rejectUiaFocus = Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_TEXT_UIA_FOCUS_FAILURE") == "1";
+                    TextBox input = rejectUiaFocus
+                        ? new CommitFocusTextBox(() => _viewModel.GridOpenMarker = "UIA text focus was refused")
+                        : new TextBox();
+                    input.AcceptsReturn = true;
+                    input.Bind(TextBox.TextProperty, new global::Avalonia.Data.Binding("Value")
+                        { Mode = global::Avalonia.Data.BindingMode.TwoWay });
+                    AutomationProperties.SetAutomationId(input, "ArmGridMultilineEditor_Input");
+                    if (rejectUiaFocus)
+                    {
+                        var trap = new Button { Content = "Focus retained within editor" };
+                        trap.KeyDown += (_, key) =>
+                        {
+                            if (key.Key == global::Avalonia.Input.Key.Tab)
+                            {
+                                _viewModel.GridOpenMarker = "Tab was sent outside the text input";
+                                key.Handled = true;
+                            }
+                        };
+                        input.TextChanged += (_, _) =>
+                        {
+                            if (input.IsAttachedToVisualTree()) trap.Focus();
+                        };
+                        var panel = new StackPanel();
+                        panel.Children.Add(input);
+                        panel.Children.Add(trap);
+                        return panel;
+                    }
+                    return input;
+                })
+            };
+            if (Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_REMOTE_COMMIT_TARGET") == "1")
+            {
+                columns.Single(static column => column.SortMemberPath == "IsApproved").DisplayIndex = columns.Count - 1;
+                Width = 800;
+                Height = 720;
+            }
+            if (Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_COMMIT_TARGET_LEFT") == "1")
+            {
+                columns.Single(static column => column.SortMemberPath == "IsApproved").DisplayIndex = 0;
+                columns.Single(static column => column.SortMemberPath == "Value").DisplayIndex = columns.Count - 1;
+            }
+            if (Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_REORDER_ON_TEXT_COMMIT") == "1")
+            {
+                var moved = false;
+                ArmComplexDataGridControl.CellEditEnded += (_, args) =>
+                {
+                    if (moved || args.Column.SortMemberPath != "Value" || args.EditAction != DataGridEditAction.Commit)
+                        return;
+                    moved = true;
+                    Dispatcher.UIThread.Post(() => ArmComplexDataGridControl.ItemsSource = _viewModel.ArmGridRows
+                        .OrderBy(static row => row.Key == "ARM-02" ? 0 : 1).ToArray());
+                };
+                ArmComplexDataGridControl.AddHandler(global::Avalonia.Input.InputElement.GotFocusEvent, (_, args) =>
+                {
+                    if (args.Source is Control target
+                        && AutomationProperties.GetAutomationId(target) == "ArmGridRowCommitTarget"
+                        && target.DataContext is ArmDesktopGridRowViewModel item)
+                        _viewModel.GridOpenMarker = $"Commit focused row: {item.Key}";
+                }, RoutingStrategies.Bubble);
+            }
+        }
         if (UsesOneClickGridComboFixture())
         {
             var column = ArmComplexDataGridControl.Columns.OfType<DataGridTemplateColumn>()
@@ -136,6 +243,7 @@ public partial class MainWindow : Window
 
     private Control CreateGridComboFixture(ArmDesktopGridRowViewModel row)
     {
+        IReadOnlyList<string> options = _viewModel.ArmGridStateOptions;
         var input = new TextBox { Text = row.State, IsReadOnly = true };
         AutomationProperties.SetAutomationId(input, "GridCombo_Input");
         var open = new Button { Content = "▼" };
@@ -143,12 +251,14 @@ public partial class MainWindow : Window
         var delayedResults = Environment.GetEnvironmentVariable("APPAUTOMATION_GRID_COMBO_DELAY_RESULTS") == "1";
         var list = new ListBox
         {
-            ItemsSource = delayedResults ? Array.Empty<string>() : _viewModel.ArmGridStateOptions,
+            ItemsSource = delayedResults ? Array.Empty<string>() : options,
             SelectedItem = delayedResults ? null : row.State
         };
         AutomationProperties.SetAutomationId(list, "GridCombo_Results");
         var popup = new Popup { Child = list, PlacementTarget = input, Placement = PlacementMode.Bottom };
         var pendingState = row.State;
+        var requiresPointerCommit = Environment.GetEnvironmentVariable(
+            "APPAUTOMATION_GRID_COMBO_REQUIRE_POINTER_COMMIT") == "1";
         open.Click += (_, _) =>
         {
             popup.IsOpen = !popup.IsOpen;
@@ -157,12 +267,17 @@ public partial class MainWindow : Window
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(150).ConfigureAwait(false);
-                    Dispatcher.UIThread.Post(() => list.ItemsSource = _viewModel.ArmGridStateOptions);
+                    Dispatcher.UIThread.Post(() => list.ItemsSource = options);
                 });
             }
         };
         list.SelectionChanged += (_, _) =>
         {
+            if (requiresPointerCommit)
+            {
+                return;
+            }
+
             if (list.SelectedItem is string selected)
             {
                 pendingState = selected;
@@ -172,6 +287,24 @@ public partial class MainWindow : Window
                 input.Focus();
             }
         };
+        if (requiresPointerCommit)
+        {
+            list.AddHandler(
+                global::Avalonia.Input.InputElement.PointerReleasedEvent,
+                (_, _) =>
+                {
+                    if (popup.IsOpen && list.SelectedItem is string selected)
+                    {
+                        pendingState = selected;
+                        row.State = selected;
+                        input.Text = selected;
+                        popup.IsOpen = false;
+                        input.Focus();
+                    }
+                },
+                RoutingStrategies.Bubble,
+                handledEventsToo: true);
+        }
         input.KeyDown += (_, args) =>
         {
             if (args.Key is global::Avalonia.Input.Key.Enter or global::Avalonia.Input.Key.Tab)
@@ -1047,6 +1180,19 @@ public partial class MainWindow : Window
         }
 
         return lines;
+    }
+
+    private sealed class CommitFocusTextBox(Action onFocusRefused) : TextBox
+    {
+        protected override Type StyleKeyOverride => typeof(TextBox);
+
+        protected override global::Avalonia.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new Peer(this);
+        private void RefuseUiaFocus() => onFocusRefused();
+
+        private sealed class Peer(CommitFocusTextBox owner) : global::Avalonia.Automation.Peers.TextBoxAutomationPeer(owner)
+        {
+            protected override void SetFocusCore() => owner.RefuseUiaFocus();
+        }
     }
 
 }

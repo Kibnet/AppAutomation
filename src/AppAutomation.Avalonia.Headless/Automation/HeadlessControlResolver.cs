@@ -181,7 +181,33 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         {
             return (TControl)(object)new HeadlessSearchHistoryItemsControl(
                 () => FindSearchHistoryButtons(definition),
-                definition.LocatorValue);
+                definition.LocatorValue,
+                () =>
+                {
+                    if (definition.Scope?.AnchorLocatorValue is not { Length: > 0 } anchor)
+                    {
+                        return false;
+                    }
+
+                    var input = FindElement(definition with
+                    {
+                        LocatorValue = anchor,
+                        LocatorKind = definition.Scope.LocatorKind,
+                        FallbackToName = definition.Scope.FallbackToName,
+                        Scope = null,
+                        ControlType = UiControlType.TextBox
+                    });
+                    AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    {
+                        input.Control.Focus();
+                        input.Control.Dispatcher.RunJobs();
+                    });
+                    if (FindSearchHistoryButtons(definition).Length == 0)
+                    {
+                        input.AsTextBox().Click();
+                    }
+                    return true;
+                });
         }
 
         object resolved = definition.ControlType switch
@@ -371,6 +397,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             return roots
                 .SelectMany(ControlTree.EnumerateDescendants)
                 .OfType<global::Avalonia.Controls.Button>()
+                .Where(static candidate => candidate.IsAttachedToVisualTree() && candidate.IsEffectivelyVisible)
                 .Where(candidate => MatchesSearchHistoryLocator(candidate, definition))
                 .Select(static candidate => AutomationElement.WrapControl(candidate).AsButton())
                 .ToArray();
@@ -773,7 +800,9 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         }
 
         public string Text => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(
-            () => ReadControlVisibleText(Inner.Control) ?? string.Empty);
+            () => ReadControlVisibleText(Inner.Control)
+                ?? global::Avalonia.Automation.AutomationProperties.GetName(Inner.Control)
+                ?? string.Empty);
     }
 
     private sealed class HeadlessShellNavigationControl : HeadlessControlBase<AutomationElement>, IShellNavigationControl, IReadableTextControl
@@ -1339,23 +1368,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private static void ClickListBoxItem(global::Avalonia.Controls.ListBox listBox, int index)
         {
-            listBox.ScrollIntoView(index);
-            listBox.UpdateLayout();
-            listBox.Dispatcher.RunJobs();
-            var container = listBox.ContainerFromIndex(index)
-                ?? throw new InvalidOperationException(
-                    $"ListBox item at index {index} did not materialize a clickable container.");
-            var topLevel = global::Avalonia.Controls.TopLevel.GetTopLevel(container)
-                ?? throw new InvalidOperationException(
-                    $"ListBox item at index {index} has no owning top-level window.");
-            var center = new global::Avalonia.Point(container.Bounds.Width / 2, container.Bounds.Height / 2);
-            var point = container.TranslatePoint(center, topLevel)
-                ?? throw new InvalidOperationException(
-                    $"ListBox item at index {index} has no position in its top-level window.");
-            topLevel.MouseMove(point);
-            topLevel.MouseDown(point, MouseButton.Left);
-            topLevel.MouseUp(point, MouseButton.Left);
-            listBox.Dispatcher.RunJobs();
+            HeadlessPointerInput.ClickItem(listBox, index);
         }
 
         private static void SetComboBoxSelectedItem(
@@ -1450,18 +1463,23 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         private sealed record MultiSelectCheckBox(string Text, global::Avalonia.Controls.CheckBox Control);
     }
 
-    private sealed class HeadlessSearchHistoryItemsControl : ISearchHistoryItemsControl
+    private sealed class HeadlessSearchHistoryItemsControl : ISearchHistoryItemsControl, ISearchHistoryPopupControl
     {
         private readonly Func<IReadOnlyList<Button>> _resolveButtons;
         private readonly string _locator;
+        private readonly Func<bool> _openPopup;
 
         public HeadlessSearchHistoryItemsControl(
             Func<IReadOnlyList<Button>> resolveButtons,
-            string locator)
+            string locator,
+            Func<bool> openPopup)
         {
             _resolveButtons = resolveButtons;
             _locator = locator;
+            _openPopup = openPopup;
         }
+
+        public bool TryOpen() => _openPopup();
 
         public string AutomationId => _locator;
 
@@ -1479,12 +1497,15 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public void Apply(string itemText)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
-            var matches = _resolveButtons()
+            var buttons = _resolveButtons();
+            var matches = buttons
                 .Where(candidate => string.Equals(ReadText(candidate), itemText, StringComparison.Ordinal))
                 .ToArray();
             if (matches.Length == 0)
             {
-                throw new InvalidOperationException($"Search history item '{itemText}' was not found.");
+                throw new InvalidOperationException(buttons.Count == 0
+                    ? $"Search history item '{itemText}' is not available for selection."
+                    : $"Search history item '{itemText}' was not found.");
             }
 
             if (matches.Length > 1)

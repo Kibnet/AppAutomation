@@ -276,6 +276,9 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
 
         internal Task ClickAsync(Point point, PointerClickOptions options, Action? validateOwner = null)
         {
+            var pressDuration = backend.ClickPressDuration;
+            if (pressDuration > Remaining / options.ClickCount)
+                throw new TimeoutException("The click's button-down phases do not fit within the remaining operation deadline.");
             Move(point);
             long? firstDown = null;
             for (var index = 0; index < options.ClickCount; index++)
@@ -283,12 +286,30 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 // Keep both presses on the same continuation. A delayed reschedule can consume
                 // the native double-click interval before the second exact-target check runs.
                 validateOwner?.Invoke();
+                if (pressDuration > Remaining)
+                    throw new TimeoutException("The click's button-down phase does not fit within the remaining operation deadline.");
                 Down(options.Button, firstDown);
                 firstDown ??= _lastDownTimestamp;
+                HoldClickPress(pressDuration);
                 Up(options.Button);
                 _lastButtonUptimeMilliseconds = Environment.TickCount64;
             }
             return Task.CompletedTask;
+        }
+
+        private void HoldClickPress(TimeSpan duration)
+        {
+            if (duration <= TimeSpan.Zero) return;
+            var started = Stopwatch.GetTimestamp();
+            while (true)
+            {
+                var remaining = duration - Stopwatch.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) break;
+                Check();
+                if (token.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(Math.Min(10, remaining.TotalMilliseconds))))
+                    token.ThrowIfCancellationRequested();
+            }
+            Check();
         }
 
         internal async Task HoverAsync(Point point, Func<CancellationToken, Task> verify, Action? validateOwner = null,

@@ -420,8 +420,12 @@ public sealed partial class HeadlessControlResolver
                 .ToArray();
             var rowMoved = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
+                var hadFocus = Inner.Control.IsKeyboardFocusWithin;
+                if (!hadFocus) Inner.Control.Focus();
+                Inner.Control.Dispatcher.RunJobs();
+                TopLevel.GetTopLevel(Inner.Control)?.UpdateLayout();
                 var target = FindOpenRowTarget(match, rowPaths);
-                return target is not null && BringIntoOuterViewport(target);
+                return target is not null && (BringIntoOuterViewport(target) || !hadFocus);
             });
             if (rowMoved)
             {
@@ -733,7 +737,9 @@ public sealed partial class HeadlessControlResolver
             {
                 var results = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                     ResolveEditorPart(cell, request.EditorParts.Results, activeEditor));
-                if (results is global::Avalonia.Controls.ListBox listBox)
+                if (results is global::Avalonia.Controls.ListBox listBox
+                    && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                        TopLevel.GetTopLevel(listBox) is not null && listBox.IsEffectivelyVisible))
                 {
                     resultsObserved = true;
                     var list = AutomationElement.WrapControl(listBox).AsListBox();
@@ -753,7 +759,14 @@ public sealed partial class HeadlessControlResolver
 
                     if (matches.Length == 1)
                     {
-                        list.SelectItemExact(matches[0]);
+                        if (AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                            TrySelectComboBoxWithKeyboard(cell, activeEditor, listBox, request,
+                                Array.IndexOf(availableItems, matches[0]), stopwatch)))
+                        {
+                            return true;
+                        }
+                        CheckComboBoxBudget(stopwatch, request.TimeoutMs);
+                        list.ClickItemExact(matches[0]);
                         return true;
                     }
                 }
@@ -789,6 +802,67 @@ public sealed partial class HeadlessControlResolver
                 Thread.Sleep(Math.Min(20, remaining));
             }
             while (true);
+        }
+
+        private bool TrySelectComboBoxWithKeyboard(
+            Control cell,
+            Control? activeEditor,
+            global::Avalonia.Controls.ListBox results,
+            GridCellEditRequest request,
+            int targetIndex,
+            System.Diagnostics.Stopwatch stopwatch)
+        {
+            var input = ResolveEditorPart(cell, request.EditorParts?.Input, activeEditor);
+            if (input is null || !input.IsEnabled || !input.IsEffectivelyVisible
+                || TopLevel.GetTopLevel(input) is not { } owner
+                || !input.IsKeyboardFocusWithin)
+            {
+                return false;
+            }
+
+            // Keep focus inside the editor: focusing a detached list may commit the old value.
+            // Only use keys accepted by the real control; never write its text or selection.
+            var currentIndex = results.SelectedIndex;
+            for (var step = 0; currentIndex != targetIndex && step < results.ItemCount; step++)
+            {
+                var nextIndex = currentIndex < targetIndex ? currentIndex + 1 : currentIndex - 1;
+                Press(currentIndex < targetIndex ? Key.Down : Key.Up);
+                if (results.SelectedIndex != nextIndex || !input.IsKeyboardFocusWithin)
+                {
+                    return false;
+                }
+                currentIndex = nextIndex;
+            }
+            if (currentIndex != targetIndex)
+            {
+                return false;
+            }
+            CheckComboBoxBudget(stopwatch, request.TimeoutMs);
+            if (request.CommitMode == GridCellEditCommitMode.Commit && input.IsAttachedToVisualTree())
+            {
+                Press(Key.Enter);
+            }
+            return true;
+
+            void Press(Key key)
+            {
+                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
+                try
+                {
+                    owner.KeyPress(key, RawInputModifiers.None, PhysicalKey.None, keySymbol: null);
+                }
+                finally
+                {
+                    owner.KeyRelease(key, RawInputModifiers.None, PhysicalKey.None, keySymbol: null);
+                }
+                input.Dispatcher.RunJobs();
+            }
+        }
+
+        private static void CheckComboBoxBudget(System.Diagnostics.Stopwatch stopwatch, int timeoutMs)
+        {
+            if (stopwatch.ElapsedMilliseconds >= timeoutMs)
+                throw new TimeoutException("The Headless grid ComboBox selection exceeded its timeout.");
         }
 
         private static List<global::Avalonia.Controls.Control> MaterializeSearchPickerControls(

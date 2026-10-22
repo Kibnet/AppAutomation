@@ -4,11 +4,14 @@ using System.Reflection;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data;
+using Avalonia.Headless;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
+using Avalonia.VisualTree;
 
 namespace AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 
@@ -351,6 +354,12 @@ internal class TextBox : AutomationElement
 
     private global::Avalonia.Controls.TextBox Native => (global::Avalonia.Controls.TextBox)Control;
 
+    public override void Click() => Ui(() =>
+    {
+        HeadlessPointerInput.ClickControl(Native);
+        return true;
+    });
+
     public string Text
     {
         get => Ui(() => Native.Text ?? string.Empty);
@@ -473,33 +482,46 @@ internal class ListBox : AutomationElement
         SelectMatchingItem(itemText, exact: true);
     }
 
+    public void ClickItemExact(string itemText)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
+
+        Ui(() =>
+        {
+            Control.Dispatcher.RunJobs();
+            HeadlessPointerInput.ClickItem(Native, FindMatchingItemIndex(itemText, exact: true));
+            return true;
+        });
+    }
+
     private void SelectMatchingItem(string itemText, bool exact)
     {
         Ui(() =>
         {
             Control.Dispatcher.RunJobs();
-            var target = exact ? itemText : NormalizeLookupText(itemText);
-            var matches = Enumerable.Range(0, Native.Items.Count)
-                .Where(index =>
-                {
-                    var caption = ListItemCaptionReader.Read(Native, index);
-                    return string.Equals(exact ? caption : NormalizeLookupText(caption), target, StringComparison.Ordinal);
-                })
-                .ToArray();
-            if (matches.Length == 0)
-            {
-                throw new InvalidOperationException($"ListBox item '{itemText}' was not found.");
-            }
-
-            if (matches.Length > 1)
-            {
-                throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous.");
-            }
-
-            Native.SelectedIndex = matches[0];
+            Native.SelectedIndex = FindMatchingItemIndex(itemText, exact);
             Control.Dispatcher.RunJobs();
             return true;
         });
+    }
+
+    private int FindMatchingItemIndex(string itemText, bool exact)
+    {
+        var target = exact ? itemText : NormalizeLookupText(itemText);
+        var matches = Enumerable.Range(0, Native.Items.Count)
+            .Where(index =>
+            {
+                var caption = ListItemCaptionReader.Read(Native, index);
+                return string.Equals(exact ? caption : NormalizeLookupText(caption), target, StringComparison.Ordinal);
+            })
+            .Take(2)
+            .ToArray();
+        return matches.Length switch
+        {
+            0 => throw new InvalidOperationException($"ListBox item '{itemText}' was not found."),
+            > 1 => throw new InvalidOperationException($"ListBox item '{itemText}' is ambiguous."),
+            _ => matches[0]
+        };
     }
 
     private static string NormalizeLookupText(string? value)
@@ -510,6 +532,37 @@ internal class ListBox : AutomationElement
         }
 
         return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+    }
+}
+
+internal static class HeadlessPointerInput
+{
+    public static void ClickItem(global::Avalonia.Controls.ListBox listBox, int index)
+    {
+        listBox.ScrollIntoView(index);
+        listBox.UpdateLayout();
+        listBox.Dispatcher.RunJobs();
+        var container = listBox.ContainerFromIndex(index)
+            ?? throw new InvalidOperationException(
+                $"ListBox item at index {index} did not materialize a clickable container.");
+        ClickControl(container);
+    }
+
+    public static void ClickControl(Control control)
+    {
+        control.BringIntoView();
+        control.UpdateLayout();
+        var topLevel = global::Avalonia.Controls.TopLevel.GetTopLevel(control)
+            ?? throw new InvalidOperationException(
+                "The pointer target has no owning top-level window.");
+        var center = new global::Avalonia.Point(control.Bounds.Width / 2, control.Bounds.Height / 2);
+        var point = control.TranslatePoint(center, topLevel)
+            ?? throw new InvalidOperationException(
+                "The pointer target has no position in its top-level window.");
+        topLevel.MouseMove(point);
+        topLevel.MouseDown(point, global::Avalonia.Input.MouseButton.Left);
+        topLevel.MouseUp(point, global::Avalonia.Input.MouseButton.Left);
+        control.Dispatcher.RunJobs();
     }
 }
 

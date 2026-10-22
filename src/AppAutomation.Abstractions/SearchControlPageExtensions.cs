@@ -86,11 +86,12 @@ public static partial class UiPageExtensions
         WaitUntil(
             page,
             selector,
-            () => search.HistoryItems.Contains(value, StringComparer.Ordinal),
+            () => search.IsHistoryOpen && search.HistoryItems.Contains(value, StringComparer.Ordinal),
             timeoutMs,
             $"Search control '{search.AutomationId}' did not expose the requested history item.",
             expectedValue: value,
-            lastObservedValueFactory: () => $"History: [{string.Join(", ", search.HistoryItems)}]");
+            lastObservedValueFactory: () =>
+                $"IsHistoryOpen={search.IsHistoryOpen}; History: [{string.Join(", ", search.HistoryItems)}]");
         search.ApplySearchFromHistory(value);
         WaitUntil(
             page,
