@@ -18,6 +18,7 @@ internal interface IPointerBackend
 {
     string DesktopKey { get; }
     TimeSpan DoubleClickTime { get; }
+    TimeSpan ClickPressDuration => TimeSpan.Zero;
     Size DragThreshold { get; }
     void EnsureDesktopAvailable();
     PointerState ReadState();
@@ -38,6 +39,10 @@ internal sealed class WindowsPointerBackend : IPointerBackend
     private static readonly int CurrentSessionId = Process.GetCurrentProcess().SessionId;
     public string DesktopKey => $"{CurrentSessionId}:{ObjectName(GetProcessWindowStation())}:{ObjectName(GetThreadDesktop(GetCurrentThreadId()))}";
     public TimeSpan DoubleClickTime => TimeSpan.FromMilliseconds(GetDoubleClickTime());
+    // A click includes a real button-down phase, rather than two adjacent input packets.
+    // Keep it below the native double-click interval, including on faster user settings.
+    public TimeSpan ClickPressDuration => TimeSpan.FromMilliseconds(
+        Math.Min(100, DoubleClickTime.TotalMilliseconds / 4));
     public Size DragThreshold
     {
         get { using var dpi = PhysicalDpiScope.Enter(); return new Size(GetSystemMetrics(68), GetSystemMetrics(69)); }

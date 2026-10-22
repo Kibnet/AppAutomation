@@ -18,6 +18,50 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 public sealed class FlaUiControlResolverTests
 {
     [Test]
+    public async Task GridCommitTarget_DeterminesRevealDirectionFromTheRealTargetBounds()
+    {
+        var viewport = new System.Drawing.Rectangle(100, 100, 300, 200);
+        await Assert.That(GridCellClickGeometry.HorizontalRevealDirection(
+            new System.Drawing.Rectangle(-100, 120, 100, 20), viewport)).IsEqualTo(false);
+        await Assert.That(GridCellClickGeometry.HorizontalRevealDirection(
+            new System.Drawing.Rectangle(450, 120, 100, 20), viewport)).IsEqualTo(true);
+        await Assert.That(GridCellClickGeometry.HorizontalRevealDirection(
+            new System.Drawing.Rectangle(200, 120, 100, 20), viewport)).IsNull();
+        await Assert.That(GridCellClickGeometry.HorizontalRevealDirection(
+            System.Drawing.Rectangle.Empty, viewport)).IsNull();
+    }
+
+    [Test]
+    public async Task GridCommitTarget_RevealsAndReacquiresTheCurrentPartWithoutUsingTheOldProjection()
+    {
+        var oldTarget = new object();
+        var currentTarget = new object();
+        object? observed = oldTarget;
+        var visible = false;
+        var scrolls = 0;
+        var result = FlaUiControlResolver.ResolveVisibleGridEditorPart(
+            () => observed, _ => visible,
+            isVisible =>
+            {
+                scrolls++;
+                observed = currentTarget;
+                visible = true;
+                if (!isVisible()) throw new InvalidOperationException("Rebound target was not observed.");
+            }, "Missing target");
+        await Assert.That(ReferenceEquals(result, currentTarget)).IsTrue();
+        await Assert.That(scrolls).IsEqualTo(1);
+        FlaUiControlResolver.ResolveVisibleGridEditorPart(
+            () => observed, _ => visible, _ => scrolls++, "Missing target");
+        await Assert.That(scrolls).IsEqualTo(1);
+        await Assert.That(() => FlaUiControlResolver.ResolveVisibleGridEditorPart<object>(
+            () => null, _ => true, _ => { }, "Missing target"))
+            .Throws<InvalidOperationException>();
+        await Assert.That(() => FlaUiControlResolver.ResolveVisibleGridEditorPart<object>(
+            () => throw new InvalidOperationException("Ambiguous row part"), _ => true, _ => { }, "Missing target"))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task UiaLookup_RetriesOnlyKnownTransientComFailureBeforeInvokingAnAction()
     {
         var reads = 0;
@@ -426,6 +470,93 @@ public sealed class FlaUiControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task PartiallyVisibleGridCell_EditsByStableRowWithinTheViewport()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
+        var environment = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+        {
+            ["APPAUTOMATION_FLAUI_GRID_PARTIAL_CELL"] = "1"
+        };
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            EnvironmentVariables = environment,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement
+        });
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+
+        var gridElement = session.MainWindow.FindFirstDescendant(
+            session.ConditionFactory.ByAutomationId("ArmComplexDataGridControl"))
+            ?? throw new InvalidOperationException("The sample grid was not found.");
+        var gridBounds = gridElement.BoundingRectangle;
+        var clippedCell = gridElement.FindAllDescendants()
+            .FirstOrDefault(candidate => candidate.ControlType == ControlType.Custom
+                && candidate.BoundingRectangle.Left < gridBounds.Right
+                && candidate.BoundingRectangle.Right > gridBounds.Right);
+        await Assert.That(clippedCell).IsNotNull();
+        await Assert.That(clippedCell!.BoundingRectangle.Left + clippedCell.BoundingRectangle.Width / 2)
+            .IsGreaterThan(gridBounds.Right);
+
+        page.EditGridCellText(
+            static candidate => candidate.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"),
+            "Value",
+            "Visible portion edit");
+
+        await Assert.That(GridValueReader.ReadCellText(
+            page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"),
+            "Value")).IsEqualTo("Visible portion edit");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeGridCell_RebindsColumnAfterSelectionChangesMaterializedCells()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+            {
+                ["APPAUTOMATION_GRID_COLUMNS_CHANGE_ON_SELECTION"] = "1"
+            },
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement
+        });
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var grid = session.MainWindow.FindFirstDescendant(
+            session.ConditionFactory.ByAutomationId("ArmComplexDataGridControl"))!;
+        var before = grid.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.HeaderItem)).Length;
+
+        page.EditGridCellText(static candidate => candidate.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"), "Value", "Rebound value");
+
+        var after = grid.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.HeaderItem)).Length;
+        await Assert.That(after).IsLessThan(before);
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"), "Value")).IsEqualTo("Rebound value");
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-01"), "Value")).IsEqualTo("Value-1");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task NestedGridOutsideViewport_CapturesAndOpensStableRow()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -607,6 +738,7 @@ public sealed class FlaUiControlResolverTests
         await Assert.That(rows).IsEquivalentTo(["row-1"]);
         await Assert.That(waits).IsEqualTo(2);
     }
+
 
     [Test]
     public async Task NativeRowSnapshots_DistinguishRepeatedAndRecycledRows()

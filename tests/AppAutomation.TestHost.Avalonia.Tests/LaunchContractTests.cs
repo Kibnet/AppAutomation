@@ -1344,7 +1344,10 @@ Console.WriteLine("Fake desktop");
         AddHistoryButton(unrelatedRoot, "orders", () => clickCounts[2]++);
         root.Children.Add(searchRoot);
         root.Children.Add(unrelatedRoot);
-        return new SearchHistoryWindowContext(new Window { Content = root }, clickCounts);
+        var window = new Window { Width = 400, Height = 200, Content = root };
+        window.Show();
+        window.Dispatcher.RunJobs();
+        return new SearchHistoryWindowContext(window, clickCounts);
     }
 
     private static SearchHistoryWindowContext CreateClosedPopupSearchHistoryWindow()

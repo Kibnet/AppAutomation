@@ -2,6 +2,8 @@ using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
 using Avalonia;
+using Avalonia.Controls;
+using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
 using TUnit.Assertions;
@@ -11,6 +13,149 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task MultilineGridText_CommitsExactValueBeforeTheNextNumericEdit(bool remoteCommitTarget)
+    {
+        const string multilineVariable = "APPAUTOMATION_GRID_MULTILINE_TEXT";
+        const string targetVariable = "APPAUTOMATION_GRID_REMOTE_COMMIT_TARGET";
+        var previousMultiline = Environment.GetEnvironmentVariable(multilineVariable);
+        var previousTarget = Environment.GetEnvironmentVariable(targetVariable);
+        Environment.SetEnvironmentVariable(multilineVariable, "1");
+        Environment.SetEnvironmentVariable(targetVariable, remoteCommitTarget ? "1" : null);
+        try
+        {
+            using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+            HeadlessRuntime.Dispatch(() => session.MainWindow.Show());
+            var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow)
+                .WithGridAutomation(global::DotnetDebug.AppAutomation.Configuration.SampleGridAutomation
+                    .CreateMultilineFixtureCatalog(remoteCommitTarget)));
+            page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+            var row = GridRowSelector.ByCell("Key", "ARM-02");
+            const string text = "Box with a label";
+            page.EditGridCellText(static candidate => candidate.ArmComplexDataGridControl, row, "Value", text);
+            await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, "Value"))
+                .IsEqualTo(text);
+            page.EditGridCellNumber(static candidate => candidate.ArmComplexDataGridControl, row, "RequiredAmount", 1500);
+            await Assert.That(GridValueReader.ReadCellNumber(page.ArmComplexDataGridControl, row, "RequiredAmount"))
+                .IsEqualTo(1500d);
+            await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, "Value"))
+                .IsEqualTo(text);
+            await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+                GridRowSelector.ByCell("Key", "ARM-01"), "Value")).IsEqualTo("Value-1");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(multilineVariable, previousMultiline);
+            Environment.SetEnvironmentVariable(targetVariable, previousTarget);
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task SearchHistory_ReopensAfterClearWithOrWithoutInputFocus(bool inputAlreadyFocused)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var applied = 0;
+        var history = new List<string>();
+        var controls = HeadlessRuntime.Dispatch(() =>
+        {
+            var input = new TextBox { Width = 240 };
+            var search = new Button { Content = "Search" };
+            var items = new StackPanel();
+            var root = new Border { Child = items, Width = 240 };
+            var popup = new global::Avalonia.Controls.Primitives.Popup { Child = root, PlacementTarget = input };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(input, "HistoryInput");
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(search, "RunSearch");
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(root, "HistoryRoot");
+            input.GotFocus += (_, _) => popup.IsOpen = history.Count > 0;
+            input.PointerReleased += (_, _) => popup.IsOpen = history.Count > 0;
+            search.Click += (_, _) =>
+            {
+                if (!string.IsNullOrEmpty(input.Text) && !history.Contains(input.Text))
+                {
+                    var value = input.Text;
+                    history.Add(value);
+                    var item = new Button { Content = value };
+                    global::Avalonia.Automation.AutomationProperties.SetAutomationId(item, "HistoryItem");
+                    item.Click += (_, _) => { applied++; input.Text = value; popup.IsOpen = false; };
+                    items.Children.Add(item);
+                }
+                popup.IsOpen = false;
+            };
+            var panel = new StackPanel();
+            panel.Children.Add(input);
+            panel.Children.Add(search);
+            panel.Children.Add(popup);
+            session.MainWindow.Content = panel;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            return (Input: input, Search: search, Popup: popup);
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow).WithSearchControl(
+            "ArmTableSearch", SearchControlParts.ByAutomationIds(
+                "HistoryInput", "HistoryItem", searchButtonAutomationId: "RunSearch",
+                historyRootAutomationId: "HistoryRoot"));
+        var page = new MainWindowPage(resolver);
+        page.EnterSearch(static candidate => candidate.ArmTableSearch, "saved-order");
+        page.ClearSearch(static candidate => candidate.ArmTableSearch);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            if (!inputAlreadyFocused) controls.Search.Focus();
+        });
+        await Assert.That(HeadlessRuntime.Dispatch(() => controls.Popup.IsOpen)).IsFalse();
+        page.ApplySearchFromHistory(static candidate => candidate.ArmTableSearch, "saved-order");
+        await Assert.That(page.ArmTableSearch.Text).IsEqualTo("saved-order");
+        await Assert.That(page.ArmTableSearch.IsHistoryOpen).IsFalse();
+        await Assert.That(applied).IsEqualTo(1);
+        page.ClearSearch(static candidate => candidate.ArmTableSearch);
+        page.ApplySearchFromHistory(static candidate => candidate.ArmTableSearch, "saved-order");
+        await Assert.That(applied).IsEqualTo(2);
+        await Assert.That(history).IsEquivalentTo(["saved-order"]);
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task DisabledCustomSingleSelect_ReadsCurrentPublishedValue()
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var editor = HeadlessRuntime.Dispatch(() =>
+        {
+            var control = new global::Avalonia.Controls.Border { IsEnabled = false };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "ReadOnlySelection");
+            global::Avalonia.Automation.AutomationProperties.SetName(control, "Ready for production");
+            session.MainWindow.Content = control;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            return control;
+        });
+        var resolver = new HeadlessControlResolver(session.MainWindow).WithSingleSelect(
+            "ReadOnlySelection",
+            SingleSelectParts.ByAutomationIds(
+                "ReadOnlySelection",
+                "UnavailableResults",
+                selectedValueAutomationId: "ReadOnlySelection",
+                resultsKind: SingleSelectResultsKind.ListBox) with { FallbackToName = false });
+        var selection = resolver.Resolve<IComboBoxControl>(new UiControlDefinition(
+            "ReadOnlySelection", UiControlType.ComboBox, "ReadOnlySelection"));
+
+        await Assert.That(selection.IsEnabled).IsEqualTo(false);
+        await Assert.That(selection.SelectedItem?.Text).IsEqualTo("Ready for production");
+
+        HeadlessRuntime.Dispatch(() =>
+            global::Avalonia.Automation.AutomationProperties.SetName(editor, "Released"));
+        await Assert.That(selection.SelectedItem?.Text).IsEqualTo("Released");
+
+        HeadlessRuntime.Dispatch(() =>
+            global::Avalonia.Automation.AutomationProperties.SetName(editor, string.Empty));
+        await Assert.That(selection.SelectedItem).IsNull();
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
@@ -641,17 +786,24 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
     [NotInParallel("DesktopUi")]
-    public async Task CompositeGridCombo_ChangesSelectedValueInsteadOfOnlyInputText(bool delayedResults)
+    public async Task CompositeGridCombo_ChangesSelectedValueInsteadOfOnlyInputText(
+        bool delayedResults,
+        bool requiresPointerCommit)
     {
         const string fixtureVariable = "APPAUTOMATION_FLAUI_GRID_COMPOSITE_COMBO";
         var previous = Environment.GetEnvironmentVariable(fixtureVariable);
         const string delayVariable = "APPAUTOMATION_GRID_COMBO_DELAY_RESULTS";
         var previousDelay = Environment.GetEnvironmentVariable(delayVariable);
+        const string confirmationVariable = "APPAUTOMATION_GRID_COMBO_REQUIRE_POINTER_COMMIT";
+        var previousConfirmation = Environment.GetEnvironmentVariable(confirmationVariable);
         Environment.SetEnvironmentVariable(fixtureVariable, "1");
         Environment.SetEnvironmentVariable(delayVariable, delayedResults ? "1" : null);
+        Environment.SetEnvironmentVariable(confirmationVariable, requiresPointerCommit ? "1" : null);
         try
         {
             using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
@@ -661,23 +813,7 @@ public sealed class HeadlessControlResolverTests
                 session.MainWindow.Dispatcher.RunJobs();
                 session.MainWindow.UpdateLayout();
             });
-            var catalog = new GridAutomationCatalog().Add(
-                GridAutomationDefinition.ByAutomationIds(
-                        "ArmComplexDataGridControl",
-                        "ArmComplexDataGridControl",
-                        "ArmComplexDataGridControl")
-                    .WithColumns(
-                        GridColumnDefinition.Auto("Key")
-                            .ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
-                        GridColumnDefinition.Auto("State")
-                            .AsValue(GridCellValueKind.Selection)
-                            .EditWith(GridCellEditorKind.ComboBox, new GridCellEditorParts(
-                                Input: new GridRelativeLocator("GridCombo_Input"),
-                                Results: new GridRelativeLocator(
-                                    "GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
-                                OpenButton: new GridRelativeLocator(
-                                    "GridCombo_Open", GridRelativeLocatorScope.GridRoot))))
-                    .IdentifyRowsBy("Key"));
+            var catalog = CreateCompositeGridComboCatalog();
             var page = new MainWindowPage(
                 new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog));
             page.SelectTabItem(static candidate => candidate.DataGridTabItem);
@@ -705,8 +841,212 @@ public sealed class HeadlessControlResolverTests
         {
             Environment.SetEnvironmentVariable(fixtureVariable, previous);
             Environment.SetEnvironmentVariable(delayVariable, previousDelay);
+            Environment.SetEnvironmentVariable(confirmationVariable, previousConfirmation);
         }
     }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task CompositeGridCombo_RejectsMissingOptionWithoutWritingReadOnlyInput()
+    {
+        const string fixtureVariable = "APPAUTOMATION_FLAUI_GRID_COMPOSITE_COMBO";
+        var previous = Environment.GetEnvironmentVariable(fixtureVariable);
+        Environment.SetEnvironmentVariable(fixtureVariable, "1");
+        try
+        {
+            using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+            var textChanges = 0;
+            HeadlessRuntime.Dispatch(() =>
+            {
+                session.MainWindow.Show();
+                var grid = session.MainWindow.FindControl<DataGrid>("ArmComplexDataGridControl")!;
+                grid.PreparingCellForEdit += (_, args) =>
+                {
+                    var input = args.EditingElement.GetVisualDescendants().OfType<TextBox>().Single();
+                    input.TextChanged += (_, _) =>
+                    {
+                        if (input.Text != "Pending") textChanges++;
+                    };
+                };
+            });
+            var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow)
+                .WithGridAutomation(CreateCompositeGridComboCatalog()));
+            page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+            Exception? failure = null;
+            try
+            {
+                page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
+                    GridRowSelector.ByCell("Key", "ARM-02"), "State", "Missing option", timeoutMs: 1000);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            await Assert.That(failure).IsNotNull();
+            await Assert.That(textChanges).IsEqualTo(0);
+            await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+                GridRowSelector.ByCell("Key", "ARM-02"), "State")).IsEqualTo("Pending");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(fixtureVariable, previous);
+        }
+    }
+
+    [Test]
+    [Arguments("ARM-01", "Новый", "Запланирован", false, false, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, false, false)]
+    [Arguments("ARM-03", "Новый", "Запланирован", true, false, false)]
+    [Arguments("ARM-02", "Готов", "Новый", false, false, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, true, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, false, true)]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeCompositeGridCombo_CommitsEditorAndRowWithoutWritingInput(
+        string rowKey, string initial, string expected, bool afterNavigation, bool cancel, bool expireDuringSelection)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = Enumerable.Range(0, 3).Select(index =>
+            new global::DotnetDebug.Avalonia.ArmDesktopGridRowViewModel(index, "Value", initial, "Red")).ToArray();
+        Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor? selectedEditor = null;
+        Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl? nativeGrid = null;
+        var keyboardSelections = 0;
+        var navigationKeys = 0;
+        var popupOpens = 0;
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl
+                { ItemsSource = rows, AllowEditing = true, Height = 300 };
+            nativeGrid = grid;
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "ArmComplexDataGridControl");
+            grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+                { Header = "Key", FieldName = "Key", ReadOnly = true });
+            grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+            {
+                Header = "State", FieldName = "State",
+                EditorProperties = new Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditorProperties
+                    { ItemsSource = new[] { "Новый", "Запланирован", "Готов" } }
+            });
+            grid.ShownEditor += (_, args) =>
+            {
+                if (args.Editor is not Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor editor) return;
+                selectedEditor = editor;
+                editor.PropertyChanged += (_, change) =>
+                {
+                    if (change.Property == Eremex.AvaloniaUI.Controls.Editors.PopupEditor.IsPopupOpenProperty
+                        && editor.IsPopupOpen) popupOpens++;
+                };
+                editor.AddHandler(global::Avalonia.Input.InputElement.KeyDownEvent, (_, key) =>
+                {
+                    if (key.Key == global::Avalonia.Input.Key.Enter) keyboardSelections++;
+                    if (key.Key is global::Avalonia.Input.Key.Down or global::Avalonia.Input.Key.Up)
+                    {
+                        navigationKeys++;
+                        if (expireDuringSelection && navigationKeys == 1) Thread.Sleep(1100);
+                    }
+                }, global::Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+                editor.TemplateApplied += (_, _) => ConfigureParts();
+                editor.LayoutUpdated += (_, _) => ConfigureParts();
+                ConfigureParts();
+
+                void ConfigureParts()
+                {
+                    if (editor.RealEditor is Control input)
+                        global::Avalonia.Automation.AutomationProperties.SetAutomationId(input, "GridCombo_Input");
+                    var open = editor.GetVisualDescendants().OfType<Control>()
+                        .FirstOrDefault(static part => part.Name == "PART_PopupOpenButton");
+                    if (open is not null)
+                        global::Avalonia.Automation.AutomationProperties.SetAutomationId(open, "GridCombo_Open");
+                    if (editor.PopupContent is Control popup)
+                    {
+                        var results = popup.GetVisualDescendants().OfType<ListBox>()
+                            .Prepend(popup as ListBox).FirstOrDefault(static part => part?.Name == "PART_ItemsSelector");
+                        if (results is not null)
+                            global::Avalonia.Automation.AutomationProperties.SetAutomationId(results, "GridCombo_Results");
+                    }
+                }
+            };
+            var gridTab = new TabItem { Header = "Grid", Content = grid };
+            var otherTab = new TabItem { Header = "Other", Content = new TextBlock { Text = "Other view" } };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(gridTab, "DataGridTabItem");
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(otherTab, "ArmDesktopTabItem");
+            session.MainWindow.Content = new TabControl { ItemsSource = new[] { gridTab, otherTab }, SelectedIndex = 0 };
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+        });
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key"),
+                GridColumnDefinition.Auto("State").AsValue(GridCellValueKind.Selection)
+                    .EditWith(GridCellEditorKind.ComboBox, new GridCellEditorParts(
+                        Input: new GridRelativeLocator("GridCombo_Input"),
+                        Results: new GridRelativeLocator("GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
+                        OpenButton: new GridRelativeLocator("GridCombo_Open"))))
+            .IdentifyRowsBy("Key"));
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog));
+        if (afterNavigation)
+            page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
+                .SelectTabItem(static candidate => candidate.DataGridTabItem);
+        if (expireDuringSelection)
+        {
+            Exception? failure = null;
+            try
+            {
+                page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
+                    GridRowSelector.ByCell("Key", rowKey), "State", expected, timeoutMs: 1000);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            await Assert.That(failure).IsNotNull();
+            await Assert.That(navigationKeys).IsEqualTo(1);
+            await Assert.That(keyboardSelections).IsEqualTo(0);
+            await Assert.That(HeadlessRuntime.Dispatch(() => rows.All(row => row.State == initial))).IsTrue();
+            await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
+            return;
+        }
+        page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", rowKey), "State", expected,
+            commitMode: cancel ? GridCellEditCommitMode.Cancel : GridCellEditCommitMode.Commit);
+        if (!cancel)
+        {
+            await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.EditorValue?.ToString())).IsEqualTo(expected);
+            await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.SelectedItem?.ToString())).IsEqualTo(expected);
+        }
+        await Assert.That(keyboardSelections).IsEqualTo(cancel ? 0 : 1);
+        await Assert.That(popupOpens).IsEqualTo(1);
+        await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
+            .SelectTabItem(static candidate => candidate.DataGridTabItem);
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", rowKey), "State")).IsEqualTo(cancel ? initial : expected);
+        await Assert.That(HeadlessRuntime.Dispatch(() => rows.Single(row => row.Key == rowKey).State))
+            .IsEqualTo(cancel ? initial : expected);
+        await Assert.That(HeadlessRuntime.Dispatch(() => rows.Where(row => row.Key != rowKey).All(row => row.State == initial)))
+            .IsTrue();
+
+        var secondRow = rows.First(row => row.Key != rowKey).Key;
+        var nextState = expected == "Готов" ? "Запланирован" : "Готов";
+        page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", secondRow), "State", nextState);
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", secondRow), "State")).IsEqualTo(nextState);
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", rowKey), "State")).IsEqualTo(cancel ? initial : expected);
+        await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
+    }
+
+    private static GridAutomationCatalog CreateCompositeGridComboCatalog() => new GridAutomationCatalog().Add(
+        GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(
+                GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
+                GridColumnDefinition.Auto("State").AsValue(GridCellValueKind.Selection)
+                    .EditWith(GridCellEditorKind.ComboBox, new GridCellEditorParts(
+                        Input: new GridRelativeLocator("GridCombo_Input"),
+                        Results: new GridRelativeLocator("GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
+                        OpenButton: new GridRelativeLocator("GridCombo_Open", GridRelativeLocatorScope.GridRoot))))
+            .IdentifyRowsBy("Key"));
 
     [Test]
     [NotInParallel("DesktopUi")]
@@ -716,6 +1056,7 @@ public sealed class HeadlessControlResolverTests
         var first = new VisualGridTestRow("ROW-A");
         var second = new VisualGridTestRow("ROW-B");
         var targetPresses = 0;
+        var opened = new List<string>();
         HeadlessRuntime.Dispatch(() =>
         {
             var grid = new VisualGridTestHost { ItemsSource = [first, second] };
@@ -745,6 +1086,7 @@ public sealed class HeadlessControlResolverTests
                 global::Avalonia.Input.InputElement.PointerPressedEvent,
                 (_, _) => targetPresses++,
                 global::Avalonia.Interactivity.RoutingStrategies.Bubble);
+            target.DoubleTapped += (_, _) => opened.Add(second.Key);
             grid.Children.Add(target);
             session.MainWindow.Content = grid;
             session.MainWindow.Show();
@@ -764,6 +1106,7 @@ public sealed class HeadlessControlResolverTests
             GridRowSelector.ByCell("Key", "ROW-B"), 5000);
 
         await Assert.That(targetPresses).IsEqualTo(2);
+        await Assert.That(opened).IsEquivalentTo(new[] { "ROW-B" });
     }
 
     [Test]

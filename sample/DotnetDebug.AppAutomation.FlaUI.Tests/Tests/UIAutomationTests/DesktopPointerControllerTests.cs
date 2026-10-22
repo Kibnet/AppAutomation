@@ -1,5 +1,6 @@
 using System.Drawing;
 using AppAutomation.Abstractions;
+using AppAutomation.FlaUI.Automation.GridAutomation;
 using AppAutomation.FlaUI.Input;
 
 namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
@@ -20,6 +21,27 @@ public sealed class DesktopPointerControllerTests
         await Assert.That(fake.Events.SequenceEqual(["move:140,160", "down:Left", "up:Left", "move:77,88"])).IsTrue();
         await Assert.That(fake.MovedWhilePressed).IsFalse();
         await Assert.That(coordinator.Releases).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Click_HoldsTheButtonDownWithoutAddingAnotherPress()
+    {
+        var fake = new FakeBackend { ClickPressDuration = TimeSpan.FromMilliseconds(40) };
+        await Controller(fake).RunAsync("click", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
+        await Assert.That(fake.UpTimes[0] - fake.DownTimes[0] >= fake.ClickPressDuration).IsTrue();
+        await Assert.That(fake.Events.SequenceEqual(["move:140,160", "down:Left", "up:Left", "move:77,88"])).IsTrue();
+        await Assert.That(fake.MovedWhilePressed).IsFalse();
+    }
+
+    [Test]
+    public async Task Click_RejectsAnInsufficientPressBudgetBeforeSendingDown()
+    {
+        var fake = new FakeBackend { ClickPressDuration = TimeSpan.FromMilliseconds(100) };
+        var error = await Capture(() => Controller(fake).RunAsync("double", TimeSpan.FromMilliseconds(150),
+            op => op.ClickAsync(Target, new PointerClickOptions { ClickCount = 2 })));
+        await Assert.That(error is TimeoutException or OperationCanceledException).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(0);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
     }
 
     [Test]
@@ -70,9 +92,10 @@ public sealed class DesktopPointerControllerTests
     {
         var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(45) };
         var controller = Controller(fake);
-        await controller.RunAsync("first", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
-        await controller.RunAsync("second", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
-        await Assert.That(fake.DownTimes[1] - fake.DownTimes[0] >= TimeSpan.FromMilliseconds(40)).IsTrue();
+        for (var index = 0; index < 8; index++)
+            await controller.RunAsync("single", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
+        for (var index = 1; index < fake.DownTimes.Count; index++)
+            await Assert.That(fake.DownTimes[index] - fake.DownTimes[index - 1] >= fake.DoubleClickTime).IsTrue();
     }
 
     [Test]
@@ -97,15 +120,17 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
-    public async Task MonotonicCooldown_UsesUptimeAndTreatsRebootOrCorruptFutureStateConservatively()
+    public async Task MonotonicCooldown_UsesPreciseTimestampsAndTreatsCorruptFutureStateConservatively()
     {
         var interval = TimeSpan.FromMilliseconds(500);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_100, 10_000, interval)).IsEqualTo(TimeSpan.FromMilliseconds(400));
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(11_000, 10_000, interval)).IsEqualTo(TimeSpan.Zero);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(100, 10_000, interval)).IsEqualTo(interval);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_000, -1, interval)).IsEqualTo(interval);
+        var second = System.Diagnostics.Stopwatch.Frequency;
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second + second / 10, second, interval)).IsEqualTo(TimeSpan.FromMilliseconds(400));
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second + second / 2000, second, interval)).IsEqualTo(TimeSpan.FromMilliseconds(499.5));
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(2 * second, second, interval)).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second / 10, second, interval)).IsEqualTo(interval);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second, -1, interval)).IsEqualTo(interval);
         // A wall clock correction is intentionally absent from the computation's inputs.
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_100, DateTime.MaxValue.Ticks, interval)).IsEqualTo(interval);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second, long.MaxValue, interval)).IsEqualTo(interval);
     }
 
     [Test]
@@ -490,6 +515,30 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
+    public async Task GridCellGeometry_UsesVisibleIntersectionAfterHorizontalClipping()
+    {
+        var window = new Rectangle(0, 23, 2560, 1369);
+        var viewport = new Rectangle(200, 200, 2360, 1000);
+        var rightCell = new Rectangle(2506, 380, 120, 44);
+        var leftCell = new Rectangle(150, 380, 120, 44);
+
+        var rightPoint = GridCellClickGeometry.CenterOfVisibleIntersection(rightCell, [viewport, window]);
+        var leftPoint = GridCellClickGeometry.CenterOfVisibleIntersection(leftCell, [viewport, window]);
+
+        await Assert.That(rightPoint).IsEqualTo(new Point(2533, 402));
+        await Assert.That(leftPoint).IsEqualTo(new Point(235, 402));
+        await Assert.That(DesktopPointerTargetResolver.ChoosePoint(
+            rightCell, false, true, true, explicitPoint: rightPoint)).IsEqualTo(rightPoint);
+
+        var refreshedCell = new Rectangle(2200, 380, 120, 44);
+        await Assert.That(GridCellClickGeometry.CenterOfVisibleIntersection(
+            refreshedCell, [viewport, window])).IsEqualTo(new Point(2260, 402));
+        await Assert.That(Assert.Throws<InvalidOperationException>(() =>
+            GridCellClickGeometry.CenterOfVisibleIntersection(
+                new Rectangle(2600, 380, 120, 44), [viewport, window]))).IsNotNull();
+    }
+
+    [Test]
     public async Task AbsoluteMotionCoordinates_RoundTripPhysicalPixelsAcrossNegativeVirtualDesktop()
     {
         var desktop = new Rectangle(-3840, -1080, 8960, 3240);
@@ -618,6 +667,7 @@ public sealed class DesktopPointerControllerTests
         internal List<Point> DownPositions { get; } = [];
         internal List<Point> UpPositions { get; } = [];
         internal List<TimeSpan> DownTimes { get; } = [];
+        internal List<TimeSpan> UpTimes { get; } = [];
         private readonly System.Diagnostics.Stopwatch _time = System.Diagnostics.Stopwatch.StartNew();
         internal Rectangle[] Monitors { get; set; } = [new Rectangle(-1000, -1000, 3000, 3000)];
         internal bool FailDownAfterDelivery { get; init; }
@@ -636,6 +686,7 @@ public sealed class DesktopPointerControllerTests
         internal int MotionPackets { get; private set; }
         public string DesktopKey => "fake";
         public TimeSpan DoubleClickTime { get; init; } = TimeSpan.FromMilliseconds(1);
+        public TimeSpan ClickPressDuration { get; init; }
         public Size DragThreshold => new(4, 4);
         public void EnsureDesktopAvailable() { if (DesktopUnavailable) throw new InvalidOperationException("desktop unavailable"); }
         public PointerState ReadState()
@@ -663,6 +714,7 @@ public sealed class DesktopPointerControllerTests
         }
         public void Up(PointerButton button)
         {
+            UpTimes.Add(_time.Elapsed);
             Events.Add($"up:{button}"); UpPositions.Add(State.Position);
             _ups++;
             if (FailFirstUp && _ups == 1)
@@ -680,7 +732,7 @@ public sealed class DesktopPointerControllerTests
         private readonly SemaphoreSlim _gate = new(1, 1);
         internal int Acquisitions;
         internal int Releases;
-        private long? _lastButtonUptimeMilliseconds;
+        private long? _lastButtonTimestamp;
         public IDisposable Acquire(string desktopKey, CancellationToken cancellationToken)
         {
             _gate.Wait(cancellationToken);
@@ -692,10 +744,10 @@ public sealed class DesktopPointerControllerTests
             public void Dispose() { Interlocked.Increment(ref owner.Releases); owner._gate.Release(); }
             public TimeSpan RemainingCooldown(TimeSpan interval)
             {
-                return owner._lastButtonUptimeMilliseconds is { } last
-                    ? DesktopInputCoordinator.ComputeCooldown(Environment.TickCount64, last, interval) : TimeSpan.Zero;
+                return owner._lastButtonTimestamp is { } last
+                    ? DesktopInputCoordinator.ComputeCooldown(System.Diagnostics.Stopwatch.GetTimestamp(), last, interval) : TimeSpan.Zero;
             }
-            public void RecordButtonEvent(long uptimeMilliseconds) => owner._lastButtonUptimeMilliseconds = uptimeMilliseconds;
+            public void RecordButtonEvent(long timestamp) => owner._lastButtonTimestamp = timestamp;
         }
     }
 }

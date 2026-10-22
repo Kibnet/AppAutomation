@@ -7,6 +7,22 @@ namespace DotnetDebug.AppAutomation.Configuration;
 /// </summary>
 public static class SampleGridAutomation
 {
+    public static GridAutomationCatalog CreateMultilineFixtureCatalog(bool useCommitTarget, bool commitTargetOnLeft = false) =>
+        new GridAutomationCatalog().AddRange(CreateCatalog(useKeyboardInputForNumbers: true).Select(definition =>
+        {
+            if (definition.PagePropertyName != "ArmComplexDataGridControl") return definition;
+            var columns = definition.Columns.Select(column => column.LogicalName == "Value"
+                    ? column.EditWith(GridCellEditorKind.Text, new GridCellEditorParts(
+                        Input: new GridRelativeLocator("ArmGridMultilineEditor_Input"),
+                        CommitTarget: useCommitTarget
+                            ? new GridRelativeLocator("ArmGridRowCommitTarget", GridRelativeLocatorScope.Row)
+                            : null))
+                    : column);
+            if (commitTargetOnLeft)
+                columns = columns.OrderBy(column => column.LogicalName == "IsApproved" ? 0 : column.LogicalName == "Value" ? 2 : 1);
+            return definition.WithColumns(columns.ToArray());
+        }));
+
     public static GridAutomationCatalog CreateRecorderCatalog() => CreateCatalog(useKeyboardInputForNumbers: true);
 
     public static GridAutomationCatalog CreateHeadlessCatalog() => CreateCatalog(useKeyboardInputForNumbers: true);
