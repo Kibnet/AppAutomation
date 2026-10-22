@@ -92,9 +92,10 @@ public sealed class DesktopPointerControllerTests
     {
         var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(45) };
         var controller = Controller(fake);
-        await controller.RunAsync("first", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
-        await controller.RunAsync("second", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
-        await Assert.That(fake.DownTimes[1] - fake.DownTimes[0] >= TimeSpan.FromMilliseconds(40)).IsTrue();
+        for (var index = 0; index < 8; index++)
+            await controller.RunAsync("single", TimeSpan.FromSeconds(1), op => op.ClickAsync(Target, new()));
+        for (var index = 1; index < fake.DownTimes.Count; index++)
+            await Assert.That(fake.DownTimes[index] - fake.DownTimes[index - 1] >= fake.DoubleClickTime).IsTrue();
     }
 
     [Test]
@@ -119,15 +120,17 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
-    public async Task MonotonicCooldown_UsesUptimeAndTreatsRebootOrCorruptFutureStateConservatively()
+    public async Task MonotonicCooldown_UsesPreciseTimestampsAndTreatsCorruptFutureStateConservatively()
     {
         var interval = TimeSpan.FromMilliseconds(500);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_100, 10_000, interval)).IsEqualTo(TimeSpan.FromMilliseconds(400));
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(11_000, 10_000, interval)).IsEqualTo(TimeSpan.Zero);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(100, 10_000, interval)).IsEqualTo(interval);
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_000, -1, interval)).IsEqualTo(interval);
+        var second = System.Diagnostics.Stopwatch.Frequency;
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second + second / 10, second, interval)).IsEqualTo(TimeSpan.FromMilliseconds(400));
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second + second / 2000, second, interval)).IsEqualTo(TimeSpan.FromMilliseconds(499.5));
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(2 * second, second, interval)).IsEqualTo(TimeSpan.Zero);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second / 10, second, interval)).IsEqualTo(interval);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second, -1, interval)).IsEqualTo(interval);
         // A wall clock correction is intentionally absent from the computation's inputs.
-        await Assert.That(DesktopInputCoordinator.ComputeCooldown(10_100, DateTime.MaxValue.Ticks, interval)).IsEqualTo(interval);
+        await Assert.That(DesktopInputCoordinator.ComputeCooldown(second, long.MaxValue, interval)).IsEqualTo(interval);
     }
 
     [Test]
@@ -729,7 +732,7 @@ public sealed class DesktopPointerControllerTests
         private readonly SemaphoreSlim _gate = new(1, 1);
         internal int Acquisitions;
         internal int Releases;
-        private long? _lastButtonUptimeMilliseconds;
+        private long? _lastButtonTimestamp;
         public IDisposable Acquire(string desktopKey, CancellationToken cancellationToken)
         {
             _gate.Wait(cancellationToken);
@@ -741,10 +744,10 @@ public sealed class DesktopPointerControllerTests
             public void Dispose() { Interlocked.Increment(ref owner.Releases); owner._gate.Release(); }
             public TimeSpan RemainingCooldown(TimeSpan interval)
             {
-                return owner._lastButtonUptimeMilliseconds is { } last
-                    ? DesktopInputCoordinator.ComputeCooldown(Environment.TickCount64, last, interval) : TimeSpan.Zero;
+                return owner._lastButtonTimestamp is { } last
+                    ? DesktopInputCoordinator.ComputeCooldown(System.Diagnostics.Stopwatch.GetTimestamp(), last, interval) : TimeSpan.Zero;
             }
-            public void RecordButtonEvent(long uptimeMilliseconds) => owner._lastButtonUptimeMilliseconds = uptimeMilliseconds;
+            public void RecordButtonEvent(long timestamp) => owner._lastButtonTimestamp = timestamp;
         }
     }
 }

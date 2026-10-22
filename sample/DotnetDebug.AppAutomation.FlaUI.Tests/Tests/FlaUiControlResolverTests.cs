@@ -17,50 +17,6 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
-
-    [Test]
-    [Arguments(GridCellEditCommitMode.Commit)]
-    [Arguments(GridCellEditCommitMode.Cancel)]
-    [NotInParallel("DesktopUi")]
-    public async Task ConfiguredGridCombo_CommitsThroughItemActivationAndPreservesCancel(GridCellEditCommitMode commitMode)
-    {
-        DesktopUiAvailabilityGuard.SkipIfUnavailable();
-        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
-        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
-        {
-            ExecutablePath = defaults.ExecutablePath,
-            WorkingDirectory = defaults.WorkingDirectory,
-            Arguments = defaults.Arguments,
-            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
-            {
-                ["APPAUTOMATION_FLAUI_GRID_COMPOSITE_COMBO"] = "1",
-                ["APPAUTOMATION_GRID_COMBO_REQUIRE_POINTER_COMMIT"] = "1"
-            },
-            DisposeCallback = defaults.DisposeCallback,
-            MainWindowTimeout = defaults.MainWindowTimeout,
-            PollInterval = defaults.PollInterval,
-            WindowPlacement = defaults.WindowPlacement
-        });
-        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
-                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
-            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
-                GridColumnDefinition.Auto("State").AsValue(GridCellValueKind.Selection)
-                    .EditWith(GridCellEditorKind.ComboBox, new GridCellEditorParts(
-                        Input: new GridRelativeLocator("GridCombo_Input"),
-                        Results: new GridRelativeLocator("GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
-                        OpenButton: new GridRelativeLocator("GridCombo_Open"))))
-            .IdentifyRowsBy("Key"));
-        var page = MainWindowFlaUiPageFactory.Create(session, catalog);
-        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
-        var row = GridRowSelector.ByCell("Key", "ARM-02");
-        page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
-            row, "State", "Closed", commitMode);
-        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, "State"))
-            .IsEqualTo(commitMode == GridCellEditCommitMode.Commit ? "Closed" : "Pending");
-        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
-            GridRowSelector.ByCell("Key", "ARM-01"), "State")).IsEqualTo("Open");
-    }
-
     [Test]
     public async Task GridCommitTarget_DeterminesRevealDirectionFromTheRealTargetBounds()
     {

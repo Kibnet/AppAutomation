@@ -93,8 +93,13 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             if (ownership is IDesktopClickTimeline timeline)
             {
                 var cooldown = timeline.RemainingCooldown(backend.DoubleClickTime);
-                if (cooldown > TimeSpan.Zero && deadline.Token.WaitHandle.WaitOne(cooldown))
-                    deadline.Token.ThrowIfCancellationRequested();
+                var cooldownStart = Stopwatch.GetTimestamp();
+                for (var remaining = cooldown; remaining > TimeSpan.Zero;
+                     remaining = cooldown - Stopwatch.GetElapsedTime(cooldownStart))
+                {
+                    if (deadline.Token.WaitHandle.WaitOne(remaining))
+                        deadline.Token.ThrowIfCancellationRequested();
+                }
             }
             backend.EnsureDesktopAvailable();
             operation.WaitForNeutralInput();
@@ -123,7 +128,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                         if (primary != null) primary.Data[CleanupKey] = cleanupFailure;
                         else primary = cleanupFailure;
                     }
-                    if (ownership is IDesktopClickTimeline timeline && operation.LastButtonUptimeMilliseconds is { } buttonTime)
+                    if (ownership is IDesktopClickTimeline timeline && operation.LastButtonTimestamp is { } buttonTime)
                         timeline.RecordButtonEvent(buttonTime);
                 }
                 catch (Exception cleanupError)
@@ -174,9 +179,9 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         private Point? _saved;
         private Point _expected;
         private PointerButtons _expectedButtons;
-        private long? _lastButtonUptimeMilliseconds;
+        private long? _lastButtonTimestamp;
         private long _lastDownTimestamp;
-        internal long? LastButtonUptimeMilliseconds => _lastButtonUptimeMilliseconds;
+        internal long? LastButtonTimestamp => _lastButtonTimestamp;
         internal IReadOnlyList<PointerTraceEntry> Entries => _entries;
         internal CancellationToken Token => token;
         internal TimeSpan Remaining => timeout - _elapsed.Elapsed;
@@ -256,7 +261,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 throw new TimeoutException("The second click exceeded the system double-click interval; no second single click was injected.");
             _potentiallyDown.Add(button); // Down may be delivered even if the provider throws.
             _expectedButtons |= WindowsPointerBackend.Mask(button);
-            _lastButtonUptimeMilliseconds = Environment.TickCount64;
+            _lastButtonTimestamp = Stopwatch.GetTimestamp();
             _lastDownTimestamp = Stopwatch.GetTimestamp();
             backend.Down(button);
             Check();
@@ -270,7 +275,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             _expectedButtons &= ~WindowsPointerBackend.Mask(button);
             Check();
             _potentiallyDown.Remove(button);
-            _lastButtonUptimeMilliseconds = Environment.TickCount64;
+            _lastButtonTimestamp = Stopwatch.GetTimestamp();
             Log("up", _expected, button.ToString());
         }
 
@@ -292,7 +297,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 firstDown ??= _lastDownTimestamp;
                 HoldClickPress(pressDuration);
                 Up(options.Button);
-                _lastButtonUptimeMilliseconds = Environment.TickCount64;
+                _lastButtonTimestamp = Stopwatch.GetTimestamp();
             }
             return Task.CompletedTask;
         }
@@ -421,7 +426,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                     if ((backend.ReadState().Buttons & WindowsPointerBackend.Mask(button)) != 0)
                         throw new PointerCleanupException($"The owned {button} button remains pressed after Up.");
                     _potentiallyDown.Remove(button);
-                    _lastButtonUptimeMilliseconds = Environment.TickCount64;
+                    _lastButtonTimestamp = Stopwatch.GetTimestamp();
                     Log("cleanup-up", detail: button.ToString());
                 }
                 catch (Exception error) { errors.Add(error); Log("cleanup-up-failed", detail: ErrorCode(error)); }

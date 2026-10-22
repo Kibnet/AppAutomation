@@ -77,7 +77,7 @@ public sealed class DesktopInputCoordinatorProcessTests
         File.WriteAllText(Path.Combine(directory, "ready"), Environment.ProcessId.ToString());
         using var lease = new DesktopInputCoordinator().Acquire(directory, timeout.Token);
         File.WriteAllText(Path.Combine(directory, "acquired"), Environment.ProcessId.ToString());
-        ((IDesktopClickTimeline)lease).RecordButtonEvent(Environment.TickCount64);
+        ((IDesktopClickTimeline)lease).RecordButtonEvent(Stopwatch.GetTimestamp());
     }
 
     private static async Task WaitForFileAsync(string path, Process child, CancellationToken token)

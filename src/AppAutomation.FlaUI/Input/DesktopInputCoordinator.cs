@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -12,7 +13,7 @@ internal interface IDesktopInputCoordinator
 internal interface IDesktopClickTimeline
 {
     TimeSpan RemainingCooldown(TimeSpan doubleClickTime);
-    void RecordButtonEvent(long uptimeMilliseconds);
+    void RecordButtonEvent(long timestamp);
 }
 
 /// <summary>The native mutex is acquired and released exclusively by its dedicated owner thread.</summary>
@@ -20,14 +21,13 @@ internal sealed class DesktopInputCoordinator : IDesktopInputCoordinator
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> LocalQueues = new(StringComparer.Ordinal);
 
-    internal static TimeSpan ComputeCooldown(long currentUptimeMilliseconds, long lastUptimeMilliseconds, TimeSpan interval)
+    internal static TimeSpan ComputeCooldown(long currentTimestamp, long lastTimestamp, TimeSpan interval)
     {
-        // TickCount64 is shared by processes on this OS. Reboots, corrupt state and future timestamps
-        // are conservatively treated as a recent click; wall-clock changes cannot shorten this wait.
-        if (lastUptimeMilliseconds < 0 || currentUptimeMilliseconds < lastUptimeMilliseconds) return interval;
-        var elapsedMilliseconds = currentUptimeMilliseconds - lastUptimeMilliseconds;
-        return elapsedMilliseconds < interval.TotalMilliseconds
-            ? interval - TimeSpan.FromMilliseconds(elapsedMilliseconds) : TimeSpan.Zero;
+        // Windows QPC is shared by processes and precise enough for the native double-click interval.
+        // Future/corrupt timestamps are conservative; wall-clock changes cannot shorten this wait.
+        if (lastTimestamp < 0 || currentTimestamp < lastTimestamp) return interval;
+        var elapsed = Stopwatch.GetElapsedTime(lastTimestamp, currentTimestamp);
+        return elapsed < interval ? interval - elapsed : TimeSpan.Zero;
     }
 
     public IDisposable Acquire(string desktopKey, CancellationToken cancellationToken)
@@ -56,7 +56,7 @@ internal sealed class DesktopInputCoordinator : IDesktopInputCoordinator
             _stop = CancellationTokenSource.CreateLinkedTokenSource(token);
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
             var name = "Local\\AppAutomation.Pointer." + hash;
-            _timelinePath = Path.Combine(Path.GetTempPath(), "AppAutomation.Pointer", hash + ".uptime-ms");
+            _timelinePath = Path.Combine(Path.GetTempPath(), "AppAutomation.Pointer", hash + ".qpc-ticks");
             var thread = new Thread(() => Own(name)) { IsBackground = true, Name = "AppAutomation desktop pointer mutex" };
             thread.Start();
         }
@@ -88,20 +88,20 @@ internal sealed class DesktopInputCoordinator : IDesktopInputCoordinator
 
         public TimeSpan RemainingCooldown(TimeSpan doubleClickTime)
         {
-            // The file contains only the last injected button's OS uptime in milliseconds. Access is protected by the
+            // The file contains only the last injected button's monotonic QPC timestamp. Access is protected by the
             // desktop mutex, so it also survives sequential short-lived test processes.
             if (_abandoned) { _abandoned = false; return doubleClickTime; }
             if (!File.Exists(_timelinePath)) return TimeSpan.Zero;
             var content = File.ReadAllText(_timelinePath);
-            if (!long.TryParse(content, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds))
+            if (!long.TryParse(content, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var timestamp))
                 return doubleClickTime;
-            return ComputeCooldown(Environment.TickCount64, milliseconds, doubleClickTime);
+            return ComputeCooldown(Stopwatch.GetTimestamp(), timestamp, doubleClickTime);
         }
 
-        public void RecordButtonEvent(long uptimeMilliseconds)
+        public void RecordButtonEvent(long timestamp)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_timelinePath)!);
-            File.WriteAllText(_timelinePath, uptimeMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            File.WriteAllText(_timelinePath, timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
 
         public void Dispose()
