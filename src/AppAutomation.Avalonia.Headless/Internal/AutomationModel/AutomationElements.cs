@@ -455,24 +455,23 @@ internal class ListBox : AutomationElement
 
     private global::Avalonia.Controls.ListBox Native => (global::Avalonia.Controls.ListBox)Control;
 
-    public ListBoxItem[] Items => Ui(() =>
+    public int ItemCount => Ui(() =>
     {
         Control.Dispatcher.RunJobs();
-        return Enumerable.Range(0, Native.Items.Count)
-            .Select(index => new ListBoxItem(ListItemCaptionReader.Read(Native, index))).ToArray();
+        return Native.Items.Count;
     });
 
-    public string? SelectedItemText => Ui(() =>
-    {
-        Control.Dispatcher.RunJobs();
-        return Native.SelectedIndex < 0 ? null : ListItemCaptionReader.Read(Native, Native.SelectedIndex);
-    });
+    public ListBoxItem[] Items => Ui(() => ListItemCaptionReader.ReadSnapshot(Native, read =>
+        Enumerable.Range(0, Native.Items.Count).Select(index => new ListBoxItem(read(index))).ToArray()));
 
-    public void SelectItem(string itemText)
+    public string? SelectedItemText => Ui(() => ListItemCaptionReader.ReadSnapshot(Native, read =>
+        Native.SelectedIndex < 0 ? null : read(Native.SelectedIndex)));
+
+    public void SelectItem(string itemText, int timeoutMs = 5000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
-        SelectMatchingItem(itemText, exact: false);
+        SelectMatchingItem(itemText, exact: false, timeoutMs);
     }
 
     public void SelectItemExact(string itemText)
@@ -488,34 +487,32 @@ internal class ListBox : AutomationElement
 
         Ui(() =>
         {
-            Control.Dispatcher.RunJobs();
             HeadlessPointerInput.ClickItem(Native, FindMatchingItemIndex(itemText, exact: true));
             return true;
         });
     }
 
-    private void SelectMatchingItem(string itemText, bool exact)
+    private void SelectMatchingItem(string itemText, bool exact, int timeoutMs = 5000)
     {
         Ui(() =>
         {
-            Control.Dispatcher.RunJobs();
-            Native.SelectedIndex = FindMatchingItemIndex(itemText, exact);
+            Native.SelectedIndex = FindMatchingItemIndex(itemText, exact, timeoutMs);
             Control.Dispatcher.RunJobs();
             return true;
         });
     }
 
-    private int FindMatchingItemIndex(string itemText, bool exact)
+    private int FindMatchingItemIndex(string itemText, bool exact, int timeoutMs = 5000)
     {
         var target = exact ? itemText : NormalizeLookupText(itemText);
-        var matches = Enumerable.Range(0, Native.Items.Count)
+        var matches = ListItemCaptionReader.ReadSnapshot(Native, read => Enumerable.Range(0, Native.Items.Count)
             .Where(index =>
             {
-                var caption = ListItemCaptionReader.Read(Native, index);
+                var caption = read(index);
                 return string.Equals(exact ? caption : NormalizeLookupText(caption), target, StringComparison.Ordinal);
             })
             .Take(2)
-            .ToArray();
+            .ToArray(), timeoutMs);
         return matches.Length switch
         {
             0 => throw new InvalidOperationException($"ListBox item '{itemText}' was not found."),
