@@ -1122,12 +1122,14 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
     private sealed class HeadlessListBoxControl : HeadlessControlBase<ListBox>, IExactSelectableListBoxControl, ITimedSelectableListBoxControl
     {
+        private readonly HeadlessListBoxItems _items;
+
         public HeadlessListBoxControl(ListBox inner) : base(inner)
         {
+            _items = new HeadlessListBoxItems(inner);
         }
 
-        public IReadOnlyList<IListBoxItem> Items =>
-            Inner.Items.Select(item => (IListBoxItem)new HeadlessListBoxItem(item)).ToArray();
+        public IReadOnlyList<IListBoxItem> Items => _items;
 
         public string? SelectedItemText => Inner.SelectedItemText;
 
@@ -1139,13 +1141,27 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public void SelectItem(string itemText, int timeoutMs)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            Inner.SelectItem(itemText);
+            Inner.SelectItem(itemText, timeoutMs);
         }
 
         public void SelectItemExact(string itemText)
         {
             Inner.SelectItemExact(itemText);
         }
+    }
+
+    private sealed class HeadlessListBoxItems(ListBox inner) : IReadOnlyList<IListBoxItem>
+    {
+        // Counting a virtualized list must not materialize its captions. Enumeration
+        // reads one complete snapshot, restarting if materialization changes the items.
+        public int Count => inner.ItemCount;
+
+        public IListBoxItem this[int index] => new HeadlessListBoxItem(inner.Items[index]);
+
+        public IEnumerator<IListBoxItem> GetEnumerator() =>
+            inner.Items.Select(item => (IListBoxItem)new HeadlessListBoxItem(item)).GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class HeadlessListBoxItem : IListBoxItem
@@ -1264,23 +1280,26 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
             if (FindListBoxCore() is { } listBox)
             {
-                if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
+                return ListItemCaptionReader.ReadSnapshot(listBox, read =>
                 {
-                    return listBox.SelectedIndex < 0
-                        ? []
-                        : [ReadListBoxItemText(listBox, listBox.SelectedIndex)];
-                }
+                    if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
+                    {
+                        return listBox.SelectedIndex < 0
+                            ? []
+                            : new[] { read(listBox.SelectedIndex)?.Trim() ?? string.Empty };
+                    }
 
-                var selectedItems = listBox.SelectedItems;
-                if (selectedItems is null)
-                {
-                    return [];
-                }
+                    var selectedItems = listBox.SelectedItems;
+                    if (selectedItems is null)
+                    {
+                        return [];
+                    }
 
-                return Enumerable.Range(0, listBox.Items.Count)
-                    .Where(index => selectedItems.Contains(listBox.Items[index]))
-                    .Select(index => ReadListBoxItemText(listBox, index))
-                    .ToArray();
+                    return Enumerable.Range(0, listBox.Items.Count)
+                        .Where(index => selectedItems.Contains(listBox.Items[index]))
+                        .Select(index => read(index)?.Trim() ?? string.Empty)
+                        .ToArray();
+                });
             }
 
             if (FindComboBoxCore() is { } comboBox)
@@ -1320,8 +1339,14 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             global::Avalonia.Controls.ListBox listBox,
             HashSet<string> requestedValues)
         {
-            var items = listBox.Items.Cast<object?>().ToArray();
-            var available = ReadListBoxItemTexts(listBox);
+            var snapshot = ListItemCaptionReader.ReadSnapshot(listBox, read =>
+            {
+                var currentItems = listBox.Items.Cast<object?>().ToArray();
+                var captions = Enumerable.Range(0, currentItems.Length)
+                    .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
+                return (Items: currentItems, Captions: captions);
+            });
+            var (items, available) = snapshot;
             ValidateAvailableItems(available, requestedValues);
 
             if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
@@ -1356,14 +1381,9 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private static string[] ReadListBoxItemTexts(global::Avalonia.Controls.ListBox listBox)
         {
-            return Enumerable.Range(0, listBox.Items.Count)
-                .Select(index => ReadListBoxItemText(listBox, index))
-                .ToArray();
-        }
-
-        private static string ReadListBoxItemText(global::Avalonia.Controls.ListBox listBox, int index)
-        {
-            return ListItemCaptionReader.Read(listBox, index)?.Trim() ?? string.Empty;
+            return ListItemCaptionReader.ReadSnapshot(listBox, read => Enumerable.Range(0, listBox.Items.Count)
+                .Select(index => read(index)?.Trim() ?? string.Empty)
+                .ToArray());
         }
 
         private static void ClickListBoxItem(global::Avalonia.Controls.ListBox listBox, int index)
