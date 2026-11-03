@@ -67,6 +67,13 @@ public sealed class GridRowSelectorTests
             Row("ORD-3", "New", "30"));
         var grid = fixture.CreateCatalogPage().Orders;
         var selector = GridRowKeyReader.Capture(grid, 1);
+        var available = GridRowKeyReader.CaptureFirst(grid);
+        var other = GridRowKeyReader.CaptureFirst(grid, excludingRows: [available, selector]);
+        await Assert.That(other.Conditions.Single().Value).IsEqualTo("ORD-3");
+        await Assert.That(() => GridRowKeyReader.CaptureFirst(grid, excludingRows: [available, selector, other]))
+            .Throws<InvalidOperationException>();
+        await Assert.That(() => GridRowKeyReader.CaptureFirst(grid, excludingRows: [GridRowSelector.ByCell("WrongKey", "x")]))
+            .Throws<ArgumentException>();
         fixture.Rows.Reverse();
 
         using (Assert.Multiple())
@@ -74,6 +81,47 @@ public sealed class GridRowSelectorTests
             await Assert.That(selector.Conditions.Single().Value).IsEqualTo("ORD-2");
             await Assert.That(GridValueReader.ReadCellText(grid, selector, "State")).IsEqualTo("Ready");
             await Assert.That(GridRowKeyReader.Capture(grid, 0).Conditions.Single().Value).IsEqualTo("ORD-3");
+            await Assert.That(GridValueReader.ReadCellText(grid, available, "State")).IsEqualTo("Draft");
+        }
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task AvailableRowCaptureRechecksReloadedIdentityWithoutHidingAmbiguity(bool ambiguous, bool alwaysReload)
+    {
+        var fixture = new GridFixture(Row("OLD", "Draft", "10"));
+        fixture.Grid.IdentityIsUnique = false;
+        fixture.Grid.AfterIdentityRead = () =>
+        {
+            if (!alwaysReload) fixture.Grid.AfterIdentityRead = null;
+            fixture.Rows.Clear();
+            fixture.Rows.Add(Row(alwaysReload ? $"NEXT-{fixture.Grid.IdentityReads}" : ambiguous ? "OLD" : "CURRENT", "Ready", "20"));
+            if (ambiguous) fixture.Rows.Add(Row("OLD", "New", "30"));
+        };
+        var grid = fixture.CreateCatalogPage().Orders;
+        if (alwaysReload)
+        {
+            var failure = Assert.Throws<TimeoutException>(() => GridRowKeyReader.CaptureFirst(grid, timeoutMs: 150));
+            await Assert.That(failure.Message).Contains("attempts=");
+            await Assert.That(failure.Message).Contains("candidate=");
+            await Assert.That(failure.Message).Contains("state=NotFound");
+            await Assert.That(failure.Message).Contains("remaining=");
+            await Assert.That(fixture.Grid.IdentityReads > 1).IsTrue();
+        }
+        else if (ambiguous)
+        {
+            await Assert.That(() => GridRowKeyReader.CaptureFirst(grid, timeoutMs: 500))
+                .Throws<InvalidOperationException>();
+            await Assert.That(fixture.Grid.IdentityReads).IsEqualTo(1);
+        }
+        else
+        {
+            var key = GridRowKeyReader.CaptureFirst(grid, timeoutMs: 500);
+            await Assert.That(key.Conditions.Single().Value).IsEqualTo("CURRENT");
+            await Assert.That(fixture.Grid.IdentityReads).IsEqualTo(2);
+            await Assert.That(fixture.Grid.IdentityTimeouts[1] < fixture.Grid.IdentityTimeouts[0]).IsTrue();
         }
     }
 
@@ -90,6 +138,8 @@ public sealed class GridRowSelectorTests
             await Assert.That(() => GridRowKeyReader.Capture(missing, 2)).Throws<InvalidOperationException>();
             await Assert.That(() => GridRowKeyReader.Capture(empty, 0)).Throws<InvalidOperationException>();
             await Assert.That(() => GridRowKeyReader.Capture(duplicate, 0)).Throws<InvalidOperationException>();
+            await Assert.That(() => GridRowKeyReader.CaptureFirst(empty)).Throws<InvalidOperationException>();
+            await Assert.That(() => GridRowKeyReader.CaptureFirst(duplicate)).Throws<InvalidOperationException>();
         }
     }
 
@@ -116,6 +166,9 @@ public sealed class GridRowSelectorTests
         var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
 
         var selector = GridRowKeyReader.Capture(page.Orders, 1);
+        var available = GridRowKeyReader.CaptureFirst(page.Orders);
+        var other = GridRowKeyReader.CaptureFirst(page.Orders, excludingRows: [selector, available]);
+        await Assert.That(other.Conditions.Select(static part => part.Value).ToArray()).IsEquivalentTo(new[] { "ORD-2", "Draft" });
 
         using (Assert.Multiple())
         {
@@ -326,7 +379,7 @@ public sealed class GridRowSelectorTests
             .WithGridAutomation(catalog));
         var displayValue = GridValueReader.ReadCellValue(displayPage.Orders, projectedIdentity, "Amount");
         ((MutableCell)nativeRow.Cells[1]).SemanticSnapshot = new GridCellValueSnapshot(null)
-            { ValueSource = new NativeProjection(null, 20m) };
+        { ValueSource = new NativeProjection(null, 20m) };
         var nullProjection = GridValueReader.ReadCellValue(
             fallbackPage.Orders, GridRowSelector.ByCell("Code", "ITEM-42"), "Status");
         var invalidPathCatalog = new GridAutomationCatalog().Add(
@@ -723,7 +776,7 @@ public sealed class GridRowSelectorTests
                 .IsEqualTo("20");
 
             cell.SemanticSnapshot = new GridCellValueSnapshot(533.6m.ToString("N2", culture))
-                { CultureName = cultureName };
+            { CultureName = cultureName };
             await Assert.That(GridValueReader.ReadCellNumber(page.Orders, row, "Amount")).IsEqualTo(533.6d);
 
             cell.SemanticSnapshot = new GridCellValueSnapshot("03/09/2026") { CultureName = cultureName };
@@ -732,7 +785,7 @@ public sealed class GridRowSelectorTests
 
             var expectedTime = new TimeSpan(0, 12, 34, 56, 700);
             cell.SemanticSnapshot = new GridCellValueSnapshot(expectedTime.ToString("g", culture))
-                { CultureName = cultureName };
+            { CultureName = cultureName };
             await Assert.That(GridValueReader.ReadCellTime(page.Orders, row, "Amount")).IsEqualTo(expectedTime);
 
             cell.SemanticSnapshot = new GridCellValueSnapshot(null) { CultureName = cultureName };
@@ -760,7 +813,7 @@ public sealed class GridRowSelectorTests
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
             CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru-RU");
             cell.SemanticSnapshot = new GridCellValueSnapshot(cell.Value)
-                { CultureName = "ru-RU" };
+            { CultureName = "ru-RU" };
             await Assert.That(GridValueReader.ReadCellDate(page.Orders, row, "Amount"))
                 .IsEqualTo(new DateTime(2026, 10, 7));
 
@@ -809,6 +862,104 @@ public sealed class GridRowSelectorTests
             await Assert.That(value).IsEqualTo(new DateTime(2026, 3, 9));
             await Assert.That(invalidFormat!.Message).Contains("configured format 'MM'/'dd'/'yyyy'");
             await Assert.That(invalidFormat.Message).Contains("culture 'ru-RU'");
+        }
+    }
+
+    [Test]
+    [Arguments("ru-RU", false)]
+    [Arguments("en-US", false)]
+    [Arguments("", false)]
+    [Arguments("ru-RU", true)]
+    [Arguments("en-US", true)]
+    [Arguments("", true)]
+    public async Task CatalogGrid_DateTimeKeepsWallClockAtDisplayedPrecision(string processCulture, bool displayOnly)
+    {
+        var previous = CultureInfo.CurrentCulture;
+        var previousUi = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(processCulture);
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(processCulture);
+            var grid = new ReadOnlyGrid("OrdersGrid", [Row("ITEM-1", "Ready", "03.11.2026 16:21")]);
+            var cell = (MutableCell)grid.GetRowByIndex(0)!.Cells[2];
+            var expected = new DateTime(2026, 11, 3, 16, 21, 0);
+            var column = GridColumnDefinition.Map("Timestamp").FromField("Amount")
+                .AsValue(GridCellValueKind.DateTime).FormatWith("dd.MM.yyyy HH:mm", "ru-RU");
+            var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds("Orders", "OrdersGridVisual", "OrdersGrid")
+                .WithColumns(GridColumnDefinition.Map("Code").FromField("OrderId"),
+                    GridColumnDefinition.Auto("Status"), column).IdentifyRowsBy("Code"));
+            var page = new GridPage(new GridResolver(grid).WithGridAutomation(catalog));
+            var row = GridRowSelector.ByCell("Code", "ITEM-1");
+            foreach (var offset in new[] { -7, 3 })
+            {
+                cell.SemanticSnapshot = new GridCellValueSnapshot(cell.Value,
+                    displayOnly ? cell.Value : new DateTimeOffset(expected.AddSeconds(47).AddTicks(123), TimeSpan.FromHours(offset)))
+                { IsDisplayOnly = displayOnly };
+                var read = GridValueReader.ReadCellDateTime(page.Orders, row, "Timestamp");
+                await Assert.That(read).IsEqualTo(expected);
+                await Assert.That(read!.Value.Kind).IsEqualTo(DateTimeKind.Unspecified);
+            }
+            cell.Value = "03.11.2026 16:22";
+            cell.SemanticSnapshot = new GridCellValueSnapshot(cell.Value,
+                displayOnly ? cell.Value : expected.AddMinutes(1).AddSeconds(59))
+            { IsDisplayOnly = displayOnly };
+            await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Timestamp")).IsEqualTo(expected.AddMinutes(1));
+            if (displayOnly)
+            {
+                cell.SemanticSnapshot = cell.SemanticSnapshot with { RawValue = expected.AddYears(1) };
+                await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Timestamp")).IsEqualTo(expected.AddMinutes(1));
+            }
+            cell.SemanticSnapshot = new GridCellValueSnapshot(null) { IsDisplayOnly = displayOnly };
+            await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Timestamp")).IsNull();
+            cell.SemanticSnapshot = new GridCellValueSnapshot("", "") { IsDisplayOnly = displayOnly };
+            await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Timestamp")).IsNull();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+            CultureInfo.CurrentUICulture = previousUi;
+        }
+    }
+
+    [Test]
+    [Arguments("ru-RU", "dd.MM.yyyy HH:mm", "03.11.2026 16:21")]
+    [Arguments("en-US", "MM/dd/yyyy hh:mm tt", "11/03/2026 04:21 PM")]
+    [Arguments("", "yyyy-MM-dd HH:mm", "2026-11-03 16:21")]
+    public async Task GridDateTimeReaderHonorsExplicitCultureAndRejectsGuessing(string culture, string format, string text)
+    {
+        var fixture = new GridFixture(Row("ITEM-1", "Ready", text));
+        var page = fixture.CreatePage();
+        var row = GridRowSelector.ByCell("OrderId", "ITEM-1");
+        var cell = (MutableCell)fixture.Rows[0].Cells[2];
+        cell.SemanticSnapshot = new GridCellValueSnapshot(text)
+        { CultureName = culture, FormatString = format };
+        await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+            .IsEqualTo(new DateTime(2026, 11, 3, 16, 21, 0));
+        cell.SemanticSnapshot = new GridCellValueSnapshot("03.11.2026 16:21");
+        var failure = await Assert.That(() => GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+            .Throws<InvalidOperationException>();
+        await Assert.That(failure!.Message).Contains("culture-ambiguous");
+        cell.SemanticSnapshot = new GridCellValueSnapshot("not a timestamp") { CultureName = culture, FormatString = format };
+        await Assert.That(() => GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+            .Throws<InvalidOperationException>();
+        cell.SemanticSnapshot = new GridCellValueSnapshot("16:21") { CultureName = culture };
+        await Assert.That(() => GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+            .Throws<InvalidOperationException>();
+        var full = new DateTime(2026, 11, 3, 16, 21, 42, DateTimeKind.Utc).AddTicks(1234567);
+        cell.SemanticSnapshot = new GridCellValueSnapshot("", full);
+        await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+            .IsEqualTo(DateTime.SpecifyKind(full, DateTimeKind.Unspecified));
+        await Assert.That(GridValueReader.ReadCellDate(page.Orders, row, "Amount")).IsEqualTo(full.Date);
+        await Assert.That(GridValueReader.ReadCellTime(page.Orders, row, "Amount")).IsEqualTo(full.TimeOfDay);
+        cell.SemanticSnapshot = new GridCellValueSnapshot("0001-01-01 00:00", DateTime.MinValue)
+        { CultureName = "", FormatString = "yyyy-MM-dd HH:mm" };
+        await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Amount")).IsEqualTo(DateTime.MinValue);
+        foreach (var offset in new[] { "+03:00", "-07:00" })
+        {
+            cell.SemanticSnapshot = new GridCellValueSnapshot($"2026-11-03T16:21:00{offset}")
+            { CultureName = "", IsDisplayOnly = true };
+            await Assert.That(GridValueReader.ReadCellDateTime(page.Orders, row, "Amount"))
+                .IsEqualTo(new DateTime(2026, 11, 3, 16, 21, 0));
         }
     }
 
@@ -953,6 +1104,29 @@ public sealed class GridRowSelectorTests
 
         public int ResolveRowCount { get; private set; }
 
+        public bool IdentityIsUnique { get; set; } = true;
+        public Action? AfterIdentityRead { get; set; }
+        public int IdentityReads { get; private set; }
+        public List<int> IdentityTimeouts { get; } = [];
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath, int timeoutMs) =>
+            ReadRowIdentityAtPosition(0, identityColumns, rowPath, timeoutMs);
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath,
+            IReadOnlyList<IReadOnlyList<string?>> excludedIdentities, int timeoutMs)
+        {
+            var rows = Rows;
+            for (var index = 0; index < rows.Count; index++)
+            {
+                var values = identityColumns.Select(column => rows[index].Cells[column.ColumnIndex].Value).ToArray();
+                if (!excludedIdentities.Any(excluded => excluded.SequenceEqual(values, StringComparer.Ordinal)))
+                    return ReadRowIdentityAtPosition(index, identityColumns, rowPath, timeoutMs);
+            }
+            throw new InvalidOperationException("No other available row exists.");
+        }
+
         public GridRowPositionIdentity ReadRowIdentityAtPosition(
             int position,
             IReadOnlyList<GridRuntimeColumn> identityColumns,
@@ -971,7 +1145,10 @@ public sealed class GridRowSelectorTests
                 throw new InvalidOperationException("The positioned row identity is not unique.");
             }
 
-            return new GridRowPositionIdentity(values, IsUnique: true);
+            IdentityReads++;
+            IdentityTimeouts.Add(timeoutMs);
+            AfterIdentityRead?.Invoke();
+            return new GridRowPositionIdentity(values, IsUnique: IdentityIsUnique);
         }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)

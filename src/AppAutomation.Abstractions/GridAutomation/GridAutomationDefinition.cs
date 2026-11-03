@@ -45,6 +45,23 @@ public sealed record GridAutomationDefinition
     /// <summary>Gets the structural DataContext paths used by non-native cell presenters.</summary>
     public GridCellContextDefinition CellContext { get; private init; } = GridCellContextDefinition.Default;
 
+    /// <summary>Gets the public structural metadata of real grid headers.</summary>
+    public GridHeaderContextDefinition HeaderContext { get; private init; } = new();
+
+    public GridAutomationDefinition WithHeaderContext(GridHeaderContextDefinition context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(context.GroupFieldPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(context.GroupValuePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(context.GroupTextPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(context.GroupLevelPath);
+        if (context.RuntimeAddressProperty is { } property && !Enum.IsDefined(property))
+            throw new ArgumentException("The header UIA property is not supported.", nameof(context));
+        if (context.RuntimeAddressProperty == GridRowAutomationProperty.Name)
+            throw new ArgumentException("The header Name is reserved for displayed text; publish its address in a metadata property.", nameof(context));
+        return this with { HeaderContext = context };
+    }
+
     /// <summary>Creates a definition whose locators are AutomationIds.</summary>
     public static GridAutomationDefinition ByAutomationIds(
         string pagePropertyName,

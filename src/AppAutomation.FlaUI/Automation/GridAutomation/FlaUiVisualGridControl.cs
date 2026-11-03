@@ -61,7 +61,7 @@ public sealed partial class FlaUiControlResolver
     internal static int? ResolveNativeGridRowIndex(int? rowIndex, int? firstCellIndex) =>
         NativeGridRowNormalizer.ResolveRowIndex(rowIndex, firstCellIndex);
 
-    private sealed class FlaUiVisualGridControl :
+    private sealed partial class FlaUiVisualGridControl :
         IGridUserActionControl,
         IEditableGridControl,
         IIndexedAddressableGridControl,
@@ -69,7 +69,8 @@ public sealed partial class FlaUiControlResolver
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl,
-        IGridRowPositionIdentityControl
+        IGridRowPositionIdentityControl,
+        IGridHeaderValueControl
     {
         private readonly Window _searchRoot;
         private readonly IGridControl? _fallback;
@@ -122,6 +123,77 @@ public sealed partial class FlaUiControlResolver
 
             return _fallback?.GetRowByIndex(index);
         }
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath, int timeoutMs) =>
+            ReadFirstAvailableRowIdentity(identityColumns, rowPath, [], timeoutMs);
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath,
+            IReadOnlyList<IReadOnlyList<string?>> excludedIdentities, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(identityColumns);
+            ArgumentNullException.ThrowIfNull(excludedIdentities);
+            ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var stopwatch = Stopwatch.StartNew();
+            if (!HasNativeDataRows(prefetchCells: false) && _fallback is IGridRowPositionIdentityControl availableFallback)
+                return excludedIdentities.Count == 0
+                    ? availableFallback.ReadFirstAvailableRowIdentity(identityColumns, rowPath, RemainingGridMilliseconds(stopwatch, timeoutMs))
+                    : availableFallback.ReadFirstAvailableRowIdentity(identityColumns, rowPath, excludedIdentities, RemainingGridMilliseconds(stopwatch, timeoutMs));
+            var indexes = identityColumns.Where(static column => column.RowIdentityAutomationProperty is null)
+                .Select(ResolveRuntimeColumnIndex).Distinct().ToArray();
+            var properties = identityColumns.Select(static column => column.RowIdentityAutomationProperty)
+                .OfType<GridRowAutomationProperty>().Distinct().ToArray();
+            var rows = indexes.Length == 0
+                ? WaitForNativeDataRows(stopwatch, timeoutMs, includeCells: false)
+                : WaitForNativeDataRows(stopwatch, timeoutMs, requiredCellIndexes: indexes);
+            var snapshots = new List<NativeGridRowSnapshot>();
+            var scroll = FindGridScrollState();
+            AppendNativeRows(snapshots, rows, ReadGridScrollPosition(scroll), indexes, properties);
+            var selected = snapshots.FirstOrDefault(IsAvailable);
+            if (selected is null && excludedIdentities.Count > 0)
+            {
+                var startedAtTop = IsGridScrollAtBoundary(scroll, forward: false);
+                _nativeSignatureColumnIndexes = indexes;
+                _nativeSignatureRowProperties = properties;
+                ScanAvailableRows();
+                if (selected is null && !startedAtTop)
+                {
+                    MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
+                    scroll = FindGridScrollState();
+                    ScanAvailableRows();
+                }
+            }
+            if (selected is null) throw new InvalidOperationException($"Grid '{AutomationId}' has no other available data row.");
+            return new GridRowPositionIdentity(ReadCapturedNativeIdentity(selected, identityColumns), IsUnique: false);
+
+            bool IsAvailable(NativeGridRowSnapshot row)
+            {
+                var values = ReadCapturedNativeIdentity(row, identityColumns);
+                return !excludedIdentities.Any(previous => previous.SequenceEqual(values, StringComparer.Ordinal));
+            }
+
+            void ScanAvailableRows() => NativeGridTraversal.Scan(
+                () => ReadNativeDataRows(includeCells: indexes.Length > 0, requiredCellIndexes: indexes),
+                observed =>
+                {
+                    var snapshot = AppendNativeRows(snapshots, observed, ReadGridScrollPosition(scroll), indexes, properties);
+                    selected ??= snapshot.FirstOrDefault(IsAvailable);
+                },
+                CreateNativeRowSignature,
+                (signature, observed) => selected is null && MoveGridScrollForward(
+                    scroll, stopwatch, timeoutMs, signature, EstimateNativeScrollIncrement(observed)));
+        }
+
+        private IReadOnlyList<string?> ReadCapturedNativeIdentity(NativeGridRowSnapshot row,
+            IReadOnlyList<GridRuntimeColumn> identityColumns) => identityColumns.Select(column =>
+        {
+            if (column.RowIdentityAutomationProperty is { } property)
+                return row.RowAutomationValues.GetValueOrDefault(property);
+            var index = ResolveRuntimeColumnIndex(column);
+            return index < row.CellTexts.Count ? row.CellTexts[index] : null;
+        }).ToArray();
 
         public GridRowPositionIdentity ReadRowIdentityAtPosition(
             int position,
@@ -195,21 +267,10 @@ public sealed partial class FlaUiControlResolver
             }
 
             var visibleScroll = FindGridScrollState();
-            var candidateButtonsAreHorizontal = visibleScroll.BackwardButton is not null
-                && visibleScroll.ForwardButton is not null
-                && GridScrollBoundary.AreHorizontalScrollButtons(
-                    TryRead(() => visibleScroll.BackwardButton.BoundingRectangle),
-                    TryRead(() => visibleScroll.ForwardButton.BoundingRectangle));
-            var hasNoScrollControls = visibleScroll.ScrollPattern is null
-                && visibleScroll.RangeValuePattern is null
-                && visibleScroll.ScrollBar is null
-                && (candidateButtonsAreHorizontal
-                    || visibleScroll.BackwardButton is null
-                        && visibleScroll.ForwardButton is null);
             var visibleAtPosition = NativeGridRowNormalizer.AtVisibleStartPosition(
                 visibleSnapshots,
                 position,
-                hasNoScrollControls || IsGridScrollAtBoundary(visibleScroll, forward: false));
+                HasNoVerticalScrollControls(visibleScroll) || IsGridScrollAtBoundary(visibleScroll, forward: false));
             if (visibleAtPosition is not null)
             {
                 return new GridRowPositionIdentity(ReadIdentity(visibleAtPosition), IsUnique: false);
@@ -296,16 +357,7 @@ public sealed partial class FlaUiControlResolver
 
             return new GridRowPositionIdentity(selectedValues, IsUnique: true);
 
-            IReadOnlyList<string?> ReadIdentity(NativeGridRowSnapshot row) => identityColumns.Select(column =>
-            {
-                if (column.RowIdentityAutomationProperty is { } property)
-                {
-                    return row.RowAutomationValues.GetValueOrDefault(property);
-                }
-
-                var index = ResolveRuntimeColumnIndex(column);
-                return index < row.CellTexts.Count ? row.CellTexts[index] : null;
-            }).ToArray();
+            IReadOnlyList<string?> ReadIdentity(NativeGridRowSnapshot row) => ReadCapturedNativeIdentity(row, identityColumns);
         }
 
         public bool TryGetColumnIndex(string columnName, out int columnIndex)
@@ -389,36 +441,41 @@ public sealed partial class FlaUiControlResolver
             string runtimeColumnName,
             int columnIndex,
             string? sourceFieldName,
-            bool selectedIdBelongsToDifferentSourceField)
+            bool selectedIdBelongsToDifferentSourceField,
+            NativeGridColumnHeader[]? headers = null)
         {
-            var headers = ReadNativeColumnHeaders();
-            if (row.Cells.Count == 0 && columnIndex >= 0 && columnIndex < headers.Length
-                && string.Equals(headers[columnIndex].Name, runtimeColumnName, StringComparison.Ordinal))
-            {
-                row = new NativeFlaUiRow(row.Element,
-                    ResolveNativeRowCells(row.Element, headers, [columnIndex]), hasSparseCells: true);
-            }
+            headers ??= ReadNativeColumnHeaders();
             if (columnIndex < 0 || columnIndex >= headers.Length
-                || !string.Equals(headers[columnIndex].Name, runtimeColumnName, StringComparison.Ordinal)
-                || columnIndex >= row.Cells.Count)
+                || !string.Equals(headers[columnIndex].Name, runtimeColumnName, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
                     $"Grid '{AutomationId}' changed its visible column layout while reading "
                     + $"'{runtimeColumnName}'; the row and header projections must be reacquired.");
             }
 
-            var geometricCell = row.Cells[columnIndex];
-            if (string.IsNullOrWhiteSpace(sourceFieldName))
-            {
-                return geometricCell;
-            }
-
-            selectedIdBelongsToDifferentSourceField |= row.Cells
-                .Where((_, index) => index != columnIndex)
-                .Any(cell => ReferenceEquals(cell, geometricCell));
-
             var headerBounds = headers[columnIndex].Bounds;
             var rowBounds = TryRead(() => row.Element.BoundingRectangle);
+            if (!string.IsNullOrWhiteSpace(sourceFieldName))
+            {
+                var sourceMatches = (TryRead(() => row.Element.FindAllChildren(
+                    row.Element.Automation.ConditionFactory.ByAutomationId(sourceFieldName))) ?? [])
+                .Where(candidate => TryRead(() => candidate.BoundingRectangle) is { Width: > 0, Height: > 0 } bounds
+                    && NativeGridCellMatcher.OverlapWidth(bounds, headerBounds) > 0
+                    && System.Drawing.Rectangle.Intersect(bounds, rowBounds).Height > 0)
+                .Take(2).ToArray();
+                if (sourceMatches.Length == 1) return sourceMatches[0];
+                if (sourceMatches.Length > 1)
+                    throw new InvalidOperationException($"Grid '{AutomationId}' has ambiguous cells for source field '{sourceFieldName}'.");
+            }
+            if (!row.HasCell(columnIndex))
+                row = new NativeFlaUiRow(row.Element,
+                    ResolveNativeRowCells(row.Element, headers, [columnIndex]), hasSparseCells: true);
+            if (!row.HasCell(columnIndex))
+                throw new InvalidOperationException($"Grid '{AutomationId}' row did not materialize column '{runtimeColumnName}'.");
+            var geometricCell = row.Cells[columnIndex];
+            if (string.IsNullOrWhiteSpace(sourceFieldName)) return geometricCell;
+            selectedIdBelongsToDifferentSourceField |= row.Cells
+                .Where((_, index) => index != columnIndex).Any(cell => ReferenceEquals(cell, geometricCell));
             var candidates = (TryRead(() => row.Element.FindAllChildren())
                     ?? Array.Empty<AutomationElement>())
                 .Select(candidate => new
@@ -554,10 +611,11 @@ public sealed partial class FlaUiControlResolver
             {
                 RevealInAncestorScrollViewport(gridRoot, stopwatch, timeoutMs);
             }
-            if (HasNativeDataRows())
+            if (HasNativeDataRows(prefetchCells: false))
             {
-                _ = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
+                var nativeRow = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
                 OpenNativeRow(
+                    nativeRow,
                     () => TryResolveVisibleNativeRow(row, forSelection: true)
                         ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs),
                     stopwatch, timeoutMs);
@@ -1134,7 +1192,8 @@ public sealed partial class FlaUiControlResolver
                 row => NativeRowMatches(row, selector),
                 stopwatch,
                 timeoutMs,
-                selector.HasDeclaredUniqueIdentity);
+                selector.HasDeclaredUniqueIdentity,
+                requiredCellIndexes: selectorColumnIndexes);
         }
 
         private NativeGridScan ScanNativeRows(
@@ -1148,6 +1207,7 @@ public sealed partial class FlaUiControlResolver
             bool provePositionOrder = false,
             IReadOnlyCollection<int>? requiredCellIndexes = null)
         {
+            if (requiredCellIndexes is not null) _prefetchedNativeRows = null;
             var rows = new List<NativeGridRowSnapshot>();
             var visibleRows = WaitForNativeDataRows(
                 stopwatch,
@@ -1156,13 +1216,12 @@ public sealed partial class FlaUiControlResolver
                 requiredCellIndexes: requiredCellIndexes);
             _nativeSignatureColumnIndexes = selectorColumnIndexes.Distinct().ToArray();
             _nativeSignatureRowProperties = selectorRowProperties.Distinct().ToArray();
-            var scroll = FindGridScrollState();
             if (hasDeclaredUniqueIdentity)
             {
                 AppendNativeRows(
                     rows,
                     visibleRows,
-                    ReadGridScrollPosition(scroll),
+                    new GridScrollPosition(null, null),
                     selectorColumnIndexes,
                     selectorRowProperties);
                 if (NativeGridVisibleResolution.TryResolve(
@@ -1179,6 +1238,8 @@ public sealed partial class FlaUiControlResolver
 
                 rows.Clear();
             }
+
+            var scroll = FindGridScrollState();
 
             if (visibleRows.Length == 0 && stopwatch.ElapsedMilliseconds >= timeoutMs)
             {
@@ -1202,7 +1263,11 @@ public sealed partial class FlaUiControlResolver
                     includeCells: requiredCellIndexes is null || requiredCellIndexes.Count > 0,
                     includeIncompleteRows: true,
                     requiredCellIndexes: requiredCellIndexes)
-                : TakePrefetchedNativeRows;
+                : requiredCellIndexes is null
+                    ? TakePrefetchedNativeRows
+                    : () => ReadNativeDataRows(
+                        includeCells: requiredCellIndexes.Count > 0,
+                        requiredCellIndexes: requiredCellIndexes);
             visibleRows = NativeGridTraversal.Scan(
                 readRows,
                 observed =>
@@ -1411,11 +1476,13 @@ public sealed partial class FlaUiControlResolver
             });
         }
 
-        private int ResolveRuntimeColumnIndex(GridRuntimeColumn column)
+        private int ResolveRuntimeColumnIndex(GridRuntimeColumn column) => ResolveRuntimeColumnIndex(column, null);
+
+        private int ResolveRuntimeColumnIndex(GridRuntimeColumn column, IReadOnlyList<string>? columnNames)
         {
             if (column.RuntimeColumnName is { } runtimeName)
             {
-                return ResolveNamedColumnIndex(runtimeName);
+                return ResolveNamedColumnIndex(runtimeName, columnNames);
             }
             if (column.RuntimeColumnIndex is { } runtimeColumnIndex)
             {
@@ -1522,9 +1589,9 @@ public sealed partial class FlaUiControlResolver
                 editorParts);
         }
 
-        private int ResolveNamedColumnIndex(string columnName)
+        private int ResolveNamedColumnIndex(string columnName, IReadOnlyList<string>? columnNames = null)
         {
-            var names = ColumnNames;
+            var names = columnNames ?? ColumnNames;
             var matches = names.Select((name, index) => (name, index))
                 .Where(candidate => string.Equals(candidate.name, columnName?.Trim(), StringComparison.Ordinal))
                 .Take(2).ToArray();
@@ -1548,7 +1615,7 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            if (HasNativeDataRows())
+            if (HasNativeDataRows(prefetchCells: false))
             {
                 var scan = ScanNativeRows(row, Stopwatch.StartNew(), timeoutMs);
                 var nativeDescription = DescribeIndexedNativeResolution(row, scan.MatchingRows.Count, scan.Rows);
@@ -1580,15 +1647,17 @@ public sealed partial class FlaUiControlResolver
             if (HasNativeDataRows(prefetchCells: false))
             {
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
-                var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
+                var headers = ReadNativeColumnHeaders();
+                var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column,
+                    headers.Select(static header => header.Name ?? string.Empty).ToArray());
                 var nativeCell = ResolveNativeTargetCell(
                     nativeRow,
-                    column.RuntimeColumnName ?? ReadNativeColumnHeaders()[nativeRuntimeColumnIndex].Name,
+                    column.RuntimeColumnName ?? headers[nativeRuntimeColumnIndex].Name,
                     nativeRuntimeColumnIndex,
                     column.SourceFieldName,
-                    selectedIdBelongsToDifferentSourceField: false);
+                    selectedIdBelongsToDifferentSourceField: false, headers);
                 var nativeDisplayText = ReadVisualGridCellText(nativeCell);
-                if (column.ValueKind == GridCellValueKind.Date
+                if (column.ValueKind is GridCellValueKind.Date or GridCellValueKind.DateTime
                     && IsEmptyNativeDateCellProjection(
                         nativeDisplayText,
                         TryRead(() => nativeCell.Patterns.Value.PatternOrDefault?.Value.Value),
@@ -1679,22 +1748,27 @@ public sealed partial class FlaUiControlResolver
             {
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
                 var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
-                var nativeRemaining = RemainingGridMilliseconds(stopwatch, timeoutMs);
-                var editScroll = ReadGridScrollPosition(FindGridScrollState(includeNavigationControls: false));
+                var metadataIdentity = row.Conditions.All(static condition => condition.Column.RowIdentityAutomationProperty is not null);
+                var editScroll = metadataIdentity ? new GridScrollPosition(null, null)
+                    : ReadGridScrollPosition(FindGridScrollState(includeNavigationControls: false));
                 var editAnchor = CaptureNativeRowAnchor(nativeRow);
                 var runtimeColumnName = column.RuntimeColumnName
                     ?? ReadNativeColumnHeaders()[nativeRuntimeColumnIndex].Name
                     ?? throw new InvalidOperationException(
                         $"Grid '{AutomationId}' target column has no stable runtime name.");
+                var initialCell = ResolveEditCell(nativeRow);
                 EditResolvedCell(
-                    ResolveEditCell(nativeRow),
-                    _ => ResolveEditCell(RebindNativeRowAfterHorizontalScroll(
-                        editAnchor, editScroll, observedRows: ReadNativeDataRows(includeCells: false))),
+                    initialCell,
+                    timeout => ResolveEditCell(metadataIdentity
+                        ? TryResolveVisibleNativeRow(row, forSelection: true)
+                            ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)
+                        : RebindNativeRowAfterHorizontalScroll(
+                            editAnchor, editScroll, observedRows: ReadNativeDataRows(includeCells: false))),
                     GridCellEditRequestValidation.CreateIndexedRequest(
                         0,
                         nativeRuntimeColumnIndex,
                         request,
-                        nativeRemaining,
+                        RemainingGridMilliseconds(stopwatch, timeoutMs),
                         request.EditorParts ?? column.EditorParts),
                     timeout => (TryResolveVisibleNativeRow(row, forSelection: true)
                         ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)).Element);
@@ -1702,9 +1776,11 @@ public sealed partial class FlaUiControlResolver
 
                 AutomationElement ResolveEditCell(NativeFlaUiRow currentRow)
                 {
-                    var currentIndex = ResolveNamedColumnIndex(runtimeColumnName);
+                    var currentHeaders = ReadNativeColumnHeaders();
+                    var currentIndex = ResolveNamedColumnIndex(runtimeColumnName,
+                        currentHeaders.Select(static header => header.Name ?? string.Empty).ToArray());
                     return ResolveNativeTargetCell(currentRow, runtimeColumnName, currentIndex,
-                        column.SourceFieldName, selectedIdBelongsToDifferentSourceField: false);
+                        column.SourceFieldName, selectedIdBelongsToDifferentSourceField: false, currentHeaders);
                 }
             }
 
@@ -1735,10 +1811,13 @@ public sealed partial class FlaUiControlResolver
             {
                 RevealInAncestorScrollViewport(gridRoot, stopwatch, timeoutMs);
             }
-            if (HasNativeDataRows())
+            if (HasNativeDataRows(prefetchCells: false))
             {
-                _ = ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
+                var nativeRow = (row.HasDeclaredUniqueIdentity
+                    ? TryResolveVisibleNativeRow(row, forSelection: true)
+                    : null) ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
                 OpenNativeRow(
+                    nativeRow,
                     () => TryResolveVisibleNativeRow(row, forSelection: true)
                         ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs),
                     stopwatch, timeoutMs);
@@ -1768,14 +1847,16 @@ public sealed partial class FlaUiControlResolver
                 exception);
         }
 
-        private void OpenNativeRow(Func<NativeFlaUiRow> resolveRow, Stopwatch stopwatch, int timeoutMs)
+        private void OpenNativeRow(NativeFlaUiRow initialRow, Func<NativeFlaUiRow> resolveRow, Stopwatch stopwatch, int timeoutMs)
         {
             string? columnName = null;
-            AutomationElement ResolveCell()
+            var currentRow = initialRow;
+            AutomationElement ResolveCell(NativeFlaUiRow? resolvedRow = null)
             {
                 _ = RemainingGridMilliseconds(stopwatch, timeoutMs);
                 _prefetchedNativeRows = null;
-                var row = resolveRow();
+                var row = resolvedRow ?? resolveRow();
+                currentRow = row;
                 var headers = ReadNativeColumnHeaders();
                 for (var index = 0; index < headers.Length; index++)
                 {
@@ -1799,33 +1880,42 @@ public sealed partial class FlaUiControlResolver
                     + (columnName is null ? "." : $" in column '{columnName}'."));
             }
 
-            DesktopPointer.ClickPrepared(ResolveCell, target =>
+            var target = ResolveCell(initialRow);
+            var prepared = false;
+            DesktopPointer.ClickPrepared(() => prepared ? ResolveCell() : target, _ =>
             {
+                // Acquiring desktop ownership/activation may have invalidated the initial cell.
+                target = ResolveCell();
                 // Selection/focus can scroll an outer viewport or replace the cell's template.
                 // Finish that preparation before the first press, not between the two presses.
-                var row = resolveRow();
+                var row = currentRow;
                 if (TryRead(() => row.Element.Patterns.SelectionItem.PatternOrDefault) is { } selection
                     && !TryRead(() => selection.IsSelected.ValueOrDefault))
+                {
                     selection.Select();
-                target = ResolveCell();
+                    target = ResolveCell();
+                }
                 TryFocus(target);
                 var focused = TryRead(() => target.Automation.FocusedElement());
                 var gridRoot = FindGridRoot();
                 if (gridRoot is not null && (focused is null
                     || !EnumerateAncestorsAndSelf(focused).Any(ancestor => ancestor.Equals(gridRoot))))
                     TryFocus(gridRoot);
-                target = ResolveCell();
                 TryScrollIntoView(target);
                 RevealInAncestorScrollViewport(target, stopwatch, timeoutMs, fullyVisible: true);
+                target = ResolveCell();
                 (System.Drawing.Rectangle Bounds, System.Drawing.Point Point, string RuntimeId)? previous = null;
-                _ = UiWait.Until(() =>
+                UiWait.Until(() =>
                 {
-                    var cell = ResolveCell();
+                    // Poll the prepared element's live geometry, not the complete grid. A final
+                    // stable-address lookup below still rejects recycled/replaced row targets.
+                    if (!TryRead(() => target.IsAvailable) || !HasVisibleBounds(target))
+                        target = ResolveCell();
+                    var cell = target;
                     var point = GetVisibleGridCellCenter(cell);
                     var current = (cell.BoundingRectangle, point,
                         string.Join(",", cell.FrameworkAutomationElement.RuntimeId.Value));
                     var focused = TryRead(() => cell.Automation.FocusedElement());
-                    var gridRoot = FindGridRoot();
                     var focusIsWithinGrid = focused is not null && gridRoot is not null
                         && EnumerateAncestorsAndSelf(focused).Any(ancestor => ancestor.Equals(gridRoot));
                     var stable = focusIsWithinGrid && previous == current;
@@ -1836,6 +1926,7 @@ public sealed partial class FlaUiControlResolver
                     Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)),
                     PollInterval = TimeSpan.FromMilliseconds(25)
                 }, $"Grid '{AutomationId}' row-open cell did not settle after focus and viewport preparation.");
+                prepared = true;
             }, GetVisibleGridCellCenter, new PointerClickOptions
             {
                 ClickCount = 2,
@@ -1863,9 +1954,30 @@ public sealed partial class FlaUiControlResolver
             AutomationElement target;
             Func<AutomationElement?> refreshTarget;
             Func<AutomationElement, bool>? isCurrentRowMatch = null;
-            if (HasNativeDataRows())
+            if (HasNativeDataRows(prefetchCells: false))
             {
-                target = ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
+                var visibleMatch = row.HasDeclaredUniqueIdentity
+                    ? TryResolveVisibleNativeRow(row, forSelection: true)
+                    : null;
+                if (visibleMatch is null && row.HasDeclaredUniqueIdentity
+                    && HasNoVerticalScrollControls(FindGridScrollState()))
+                {
+                    // Перезагрузка может временно убрать строку и вертикальные controls; при их возврате снова доступен обход.
+                    UiWait.Until(
+                        () =>
+                        {
+                            visibleMatch = TryResolveVisibleNativeRow(row, forSelection: true);
+                            return visibleMatch is not null || !HasNoVerticalScrollControls(FindGridScrollState());
+                        },
+                        static ready => ready,
+                        new UiWaitOptions
+                        {
+                            Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)),
+                            PollInterval = TimeSpan.FromMilliseconds(25)
+                        },
+                        $"Grid '{AutomationId}' did not materialize the requested stable row within the operation timeout.");
+                }
+                target = visibleMatch?.Element ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
                 refreshTarget = () => TryResolveVisibleNativeRow(row, forSelection: true)?.Element;
                 if (row.Conditions.All(static condition => condition.Column.RowIdentityAutomationProperty is not null))
                 {
@@ -1924,6 +2036,11 @@ public sealed partial class FlaUiControlResolver
         {
             var stopwatch = Stopwatch.StartNew();
             var activeCell = cell;
+            if (request.EditorKind == GridCellEditorKind.CheckBox
+                && request.CommitMode == GridCellEditCommitMode.Cancel
+                && ResolveEditorPart(cell, request.EditorParts?.CancelButton) is null)
+                throw new System.NotSupportedException(
+                    "Cancel for an immediate checkbox requires an explicit transactional CancelButton; the value was not changed.");
             AutomationElement? activeEditor = null;
             if (RequiresActivatedGridCell(request.EditorKind))
             {
@@ -1931,7 +2048,8 @@ public sealed partial class FlaUiControlResolver
                         activeCell,
                         request.EditorKind,
                         out var activationException,
-                        () => TryResolveCurrentCell(resolveCurrentCell, stopwatch, request.TimeoutMs)))
+                        () => TryResolveCurrentCell(resolveCurrentCell, stopwatch, request.TimeoutMs),
+                        RemainingGridMilliseconds(stopwatch, request.TimeoutMs)))
                 {
                     throw new InvalidOperationException(
                         $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' "
@@ -1972,6 +2090,7 @@ public sealed partial class FlaUiControlResolver
                 activeEditor,
                 activeRequest,
                 () => TryResolveCurrentCell(resolveCurrentCell, stopwatch, request.TimeoutMs));
+            activeRequest = activeRequest with { TimeoutMs = RemainingGridMilliseconds(stopwatch, request.TimeoutMs) };
             if (activeRequest.EditorKind == GridCellEditorKind.SearchPicker)
             {
                 EditSearchPickerCell(activeCell, activeEditor, activeRequest);
@@ -2161,8 +2280,10 @@ public sealed partial class FlaUiControlResolver
             AutomationElement cell,
             GridCellEditorKind editorKind,
             out Exception? exception,
-            Func<AutomationElement?>? refreshCell = null)
+            Func<AutomationElement?>? refreshCell = null,
+            int timeoutMs = 5000)
         {
+            var stopwatch = Stopwatch.StartNew();
             try
             {
                 var row = EnumerateSelfAndParents(cell)
@@ -2186,11 +2307,13 @@ public sealed partial class FlaUiControlResolver
                 DesktopPointer.ClickPrepared(
                     refreshCell is null ? () => cell : ResolveCurrentCell,
                     PrepareForPhysicalGridInput,
-                    GetVisibleGridCellCenter);
+                    GetVisibleGridCellCenter,
+                    new PointerClickOptions { Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)) });
                 if (row is not null)
                 {
                     var selectionWait = Stopwatch.StartNew();
                     while (selectionWait.ElapsedMilliseconds < 250
+                           && stopwatch.ElapsedMilliseconds < timeoutMs
                            && !TryRead(() => row.Patterns.SelectionItem.Pattern.IsSelected.Value))
                     {
                         Thread.Sleep(10);
@@ -2208,7 +2331,8 @@ public sealed partial class FlaUiControlResolver
                 DesktopPointer.ClickPrepared(
                     refreshCell is null ? () => cell : ResolveCurrentCell,
                     PrepareForPhysicalGridInput,
-                    GetVisibleGridCellCenter);
+                    GetVisibleGridCellCenter,
+                    new PointerClickOptions { Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)) });
                 exception = null;
                 return true;
             }
@@ -2539,6 +2663,7 @@ public sealed partial class FlaUiControlResolver
             AutomationElement materializedEditor,
             GridCellEditRequest request)
         {
+            var stopwatch = Stopwatch.StartNew();
             var explicitInput = ResolveEditorPart(cell, request.EditorParts?.Input)
                 ?? (TryRead(() => materializedEditor.ControlType) == ControlType.Edit
                     ? materializedEditor
@@ -2554,8 +2679,20 @@ public sealed partial class FlaUiControlResolver
                 if (spinner is not null
                     && double.TryParse(request.Value, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
                 {
-                    new FlaUiSpinnerControl(spinner.AsSpinner()).Value = number;
-                    return;
+                    if (explicitInput is not null)
+                        FocusGridTextInputForCommit(explicitInput, stopwatch, request.TimeoutMs);
+                    try
+                    {
+                        _ = RemainingGridMilliseconds(stopwatch, request.TimeoutMs);
+                        spinner.AsSpinner().Value = number;
+                        if (explicitInput is null
+                            || GridEditorTextMatchesRequest(TryRead(() => explicitInput.AsTextBox().Text), request))
+                            return;
+                    }
+                    catch (ArgumentException)
+                    {
+                        // Use the actual grid input below, not the standalone spinner's Enter fallback.
+                    }
                 }
             }
 
@@ -2568,21 +2705,20 @@ public sealed partial class FlaUiControlResolver
                     $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' does not expose a writable text editor.");
             }
 
-            if (request.NumericInput is not null
+            if (request.EditorKind == GridCellEditorKind.Number
+                || request.NumericInput is not null
                 || request.EditorParts?.UseKeyboardInput == true)
             {
-                EnterGridTextWithKeyboard(input, request);
+                EnterGridTextWithKeyboard(input, request with
+                {
+                    TimeoutMs = RemainingGridMilliseconds(stopwatch, request.TimeoutMs)
+                });
                 return;
             }
 
-            new FlaUiTextBoxControl(input.AsTextBox()).Enter(
-                request.EditorKind == GridCellEditorKind.Number
-                    ? request.NumericInput?.Text ?? request.Value
-                    : request.Value);
-            if (request.EditorKind == GridCellEditorKind.Text)
-            {
-                TryFocus(input);
-            }
+            _ = RemainingGridMilliseconds(stopwatch, request.TimeoutMs);
+            new FlaUiTextBoxControl(input.AsTextBox()).Enter(request.Value);
+            TryFocus(input);
         }
 
         private void EnterGridTextWithKeyboard(
@@ -2912,23 +3048,10 @@ public sealed partial class FlaUiControlResolver
                 return;
             }
 
-            if (request.EditorKind == GridCellEditorKind.ComboBox
-                && request.EditorParts?.Results is not null)
+            if (request.EditorKind == GridCellEditorKind.Number
+                || request.EditorKind == GridCellEditorKind.ComboBox && request.EditorParts?.Results is not null)
             {
-                var input = ResolveEditorPart(cell, request.EditorParts.Input);
-                var focused = TryRead(() => _searchRoot.Automation.FocusedElement());
-                if (focused is null) return;
-                var editor = input is null ? null : EnumerateAncestorsAndSelf(input).FirstOrDefault(candidate =>
-                    TryRead(() => candidate.ControlType) == ControlType.ComboBox) ?? input;
-                // An activated item may already have retired its editor. Never send its
-                // commit key to the surrounding grid (where Enter can open a row).
-                var results = ResolveEditorPart(cell, request.EditorParts.Results);
-                var editorIsVisible = editor is not null && HasVisibleBounds(editor);
-                var resultsAreVisible = results is not null && HasVisibleBounds(results);
-                if (EnumerateAncestorsAndSelf(focused).Any(candidate =>
-                        editorIsVisible && candidate.Equals(editor)
-                        || resultsAreVisible && candidate.Equals(results)))
-                    Keyboard.Type(VirtualKeyShort.RETURN);
+                FinishFocusedGridEditor(cell, request);
                 return;
             }
 
@@ -2947,11 +3070,35 @@ public sealed partial class FlaUiControlResolver
                 return;
             }
 
-            if (request.EditorKind is GridCellEditorKind.Number
-                or GridCellEditorKind.Color)
+            if (request.EditorKind == GridCellEditorKind.Color)
             {
                 TryFocus(ResolveEditorPart(cell, request.EditorParts?.Input) ?? cell);
                 Keyboard.Type(VirtualKeyShort.RETURN);
+            }
+        }
+
+        private void FinishFocusedGridEditor(AutomationElement cell, GridCellEditRequest request)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var input = ResolveEditorPart(cell, request.EditorParts?.Input)
+                ?? ResolveMaterializedCellEditor(cell, request);
+            var focused = TryRead(() => _searchRoot.Automation.FocusedElement());
+            if (focused is null) return;
+            var editor = input is null ? null : EnumerateAncestorsAndSelf(input).FirstOrDefault(candidate =>
+                TryRead(() => candidate.ControlType) is ControlType.ComboBox or ControlType.Spinner) ?? input;
+            var results = ResolveEditorPart(cell, request.EditorParts?.Results);
+            var editorIsVisible = editor is not null && HasVisibleBounds(editor)
+                && TryRead(() => editor.IsEnabled)
+                && System.Drawing.Rectangle.Intersect(TryRead(() => cell.BoundingRectangle),
+                    TryRead(() => editor.BoundingRectangle)) is { Width: > 0, Height: > 0 };
+            var resultsAreVisible = results is not null && HasVisibleBounds(results) && TryRead(() => results.IsEnabled);
+            if (EnumerateAncestorsAndSelf(focused).Any(candidate =>
+                    editorIsVisible && candidate.Equals(editor)
+                    || resultsAreVisible && candidate.Equals(results)))
+            {
+                // A visible/focused editor need not consume Enter; the parent grid may open a card.
+                _ = RemainingGridMilliseconds(stopwatch, request.TimeoutMs);
+                Keyboard.Type(VirtualKeyShort.TAB);
             }
         }
 
@@ -2973,10 +3120,10 @@ public sealed partial class FlaUiControlResolver
             }
             _ = UiWait.Until(() => TryRead(() => input.Properties.HasKeyboardFocus.Value),
                 static focused => focused, new UiWaitOptions
-            {
-                Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)),
-                PollInterval = TimeSpan.FromMilliseconds(25)
-            }, "The active grid text editor did not receive keyboard focus for commit.");
+                {
+                    Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)),
+                    PollInterval = TimeSpan.FromMilliseconds(25)
+                }, "The active grid text editor did not receive keyboard focus for commit.");
         }
 
         private void CancelCellEdit(AutomationElement cell, GridCellEditRequest request)
@@ -3975,7 +4122,7 @@ public sealed partial class FlaUiControlResolver
                 .ToArray();
         }
 
-        private AutomationElement? FindGridRoot()
+        private AutomationElement? FindGridRoot(UiOperationTimeoutBudget? budget = null)
         {
             if (_gridRoot is not null && TryRead(() => _gridRoot.IsAvailable))
             {
@@ -3985,7 +4132,8 @@ public sealed partial class FlaUiControlResolver
             _gridRoot = string.Equals(TryRead(() => _searchRoot.AutomationId), AutomationId, StringComparison.Ordinal)
                 ? _searchRoot
                 : ReadTransientUiaLookup(() => _searchRoot.FindFirstDescendant(
-                    _searchRoot.Automation.ConditionFactory.ByAutomationId(AutomationId)));
+                    _searchRoot.Automation.ConditionFactory.ByAutomationId(AutomationId)),
+                    budget is null ? null : () => budget.Remaining);
             return _gridRoot;
         }
 
@@ -4495,6 +4643,17 @@ public sealed partial class FlaUiControlResolver
             }
 
             return false;
+        }
+
+        private static bool HasNoVerticalScrollControls(GridScrollState scroll)
+        {
+            var buttonsAreHorizontal = scroll.BackwardButton is not null
+                && scroll.ForwardButton is not null
+                && GridScrollBoundary.AreHorizontalScrollButtons(
+                    TryRead(() => scroll.BackwardButton.BoundingRectangle),
+                    TryRead(() => scroll.ForwardButton.BoundingRectangle));
+            return scroll.ScrollPattern is null && scroll.RangeValuePattern is null && scroll.ScrollBar is null
+                && (buttonsAreHorizontal || scroll.BackwardButton is null && scroll.ForwardButton is null);
         }
 
         private static bool IsGridScrollAtBoundary(GridScrollState scroll, bool forward)

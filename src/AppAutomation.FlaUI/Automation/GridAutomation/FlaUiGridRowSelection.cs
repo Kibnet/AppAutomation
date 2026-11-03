@@ -53,7 +53,7 @@ public sealed partial class FlaUiControlResolver
                 return remaining;
             }
 
-            AutomationElement ResolvePhysicalTarget(bool preferTextChild)
+            AutomationElement ResolvePhysicalTarget()
             {
                 _ = RemainingPointerTimeout();
                 var bounds = TryRead(() => currentTarget.BoundingRectangle);
@@ -69,9 +69,7 @@ public sealed partial class FlaUiControlResolver
                     if (refreshSelectionContainer is not null)
                         selectionContainer = refreshSelectionContainer();
                 }
-                return preferTextChild
-                    ? FindGridRowClickTarget(currentTarget) ?? currentTarget
-                    : FindSelectableGridRowElement(currentTarget) ?? currentTarget;
+                return currentTarget;
             }
 
             if (!TryConfirmGridRowSelection(
@@ -92,9 +90,9 @@ public sealed partial class FlaUiControlResolver
                     {
                         System.Drawing.Point clickPoint = default;
                         DesktopPointer.ClickPrepared(
-                            () => ResolvePhysicalTarget(preferTextChild: true),
+                            ResolvePhysicalTarget,
                             element => { TryScrollIntoView(element); TryFocus(element); },
-                            element => clickPoint = element.TryGetClickablePoint(out var point) ? point : GetBoundsCenter(element),
+                            element => clickPoint = GetVisibleGridRowPoint(element, selectionContainer),
                             options: new PointerClickOptions { Timeout = RemainingPointerTimeout() });
                         completedClickPoint = clickPoint;
                     }
@@ -106,7 +104,7 @@ public sealed partial class FlaUiControlResolver
                         selectable = FindSelectableGridRowElement(currentTarget);
                         System.Drawing.Point clickPoint = default;
                         DesktopPointer.ClickPrepared(
-                            () => ResolvePhysicalTarget(preferTextChild: false),
+                            ResolvePhysicalTarget,
                             element => { TryScrollIntoView(element); TryFocus(element); },
                             element => clickPoint = GetVisibleGridRowPoint(element, selectionContainer),
                             options: new PointerClickOptions { Timeout = RemainingPointerTimeout() });
@@ -196,21 +194,6 @@ public sealed partial class FlaUiControlResolver
             return null;
         }
 
-        private static AutomationElement? FindGridRowClickTarget(AutomationElement row)
-        {
-            var rowBounds = TryRead(() => row.BoundingRectangle);
-            return FindAutomationDescendants(row)
-                    .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Text)
-                    .FirstOrDefault(candidate =>
-                    {
-                        var bounds = TryRead(() => candidate.BoundingRectangle);
-                        return bounds.Width > 0
-                            && bounds.Height > 0
-                            && System.Drawing.Rectangle.Intersect(rowBounds, bounds) is { Width: > 0, Height: > 0 };
-                    })
-                ?? row;
-        }
-
         private static string DescribeGridSelectionEvidence(
             AutomationElement target,
             AutomationElement? selectionContainer)
@@ -244,12 +227,50 @@ public sealed partial class FlaUiControlResolver
                     TryRead(() => selectionContainer.BoundingRectangle));
             if (visibleBounds.Width <= 0 || visibleBounds.Height <= 0)
             {
-                return row.TryGetClickablePoint(out var point) ? point : GetBoundsCenter(row);
+                throw new InvalidOperationException("The current grid row is outside its selection viewport.");
             }
+            var children = TryRead(() => row.FindAllChildren()) ?? [];
+            var cells = children
+                .Where(child => TryRead(() => child.ControlType) is ControlType.Group or ControlType.Custom or ControlType.DataItem)
+                .Select(child => System.Drawing.Rectangle.Intersect(visibleBounds, TryRead(() => child.BoundingRectangle)))
+                .Where(static bounds => bounds.Width > 0 && bounds.Height > 0)
+                .ToArray();
+            if (cells.Length == 0)
+                throw new System.NotSupportedException("The grid row exposes no cell bounds for a safe selection-only click.");
+            var content = cells.Aggregate(System.Drawing.Rectangle.Union);
+            // Click row background/selector space, never a cell's text or editor.
+            var background = new[]
+            {
+                System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, visibleBounds.Top, content.Left, visibleBounds.Bottom),
+                System.Drawing.Rectangle.FromLTRB(content.Right, visibleBounds.Top, visibleBounds.Right, visibleBounds.Bottom),
+                System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, visibleBounds.Top, visibleBounds.Right, content.Top),
+                System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, content.Bottom, visibleBounds.Right, visibleBounds.Bottom)
+            }.Where(static bounds => bounds.Width > 0 && bounds.Height > 0)
+                .OrderByDescending(static bounds => (long)bounds.Width * bounds.Height).FirstOrDefault();
+            if (background.Width > 0 && background.Height > 0)
+                return new System.Drawing.Point(background.Left + background.Width / 2, background.Top + background.Height / 2);
 
-            return new System.Drawing.Point(
-                visibleBounds.Left + Math.Min(64, Math.Max(1, visibleBounds.Width / 2)),
-                visibleBounds.Top + Math.Max(1, visibleBounds.Height / 2));
+            // Some providers expose a trailing filler as a cell-shaped Custom peer.
+            // Column headers prove where real columns end, even when that filler has row-sized bounds.
+            if (selectionContainer is not null)
+            {
+                var headers = TryRead(() => selectionContainer.FindAllDescendants(
+                    selectionContainer.Automation.ConditionFactory.ByControlType(ControlType.HeaderItem))) ?? [];
+                var columnBounds = headers.Where(header => IsUsefulAutomationText(TryRead(() => header.Name))
+                        || !string.IsNullOrWhiteSpace(TryRead(() => header.AutomationId)))
+                    .Select(header => TryRead(() => header.BoundingRectangle))
+                    .Where(bounds => bounds.Width > 0 && bounds.Height > 0 && bounds.Bottom <= visibleBounds.Top
+                        && bounds.Right > visibleBounds.Left && bounds.Left < visibleBounds.Right).ToArray();
+                if (columnBounds.Length > 0)
+                {
+                    var columnsRight = columnBounds.Max(static bounds => bounds.Right);
+                    if (columnsRight < visibleBounds.Right)
+                        return new System.Drawing.Point(columnsRight + (visibleBounds.Right - columnsRight) / 2,
+                            visibleBounds.Top + visibleBounds.Height / 2);
+                }
+            }
+            throw new System.NotSupportedException(
+                "The grid row exposes no background selection area; a SelectionItem pattern or row selector is required.");
         }
 
         private static bool TryConfirmGridRowSelection(

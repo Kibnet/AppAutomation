@@ -9,6 +9,7 @@ using DotnetDebug.AppAutomation.Configuration;
 using DotnetDebug.AppAutomation.FlaUI.Tests.Infrastructure;
 using DotnetDebug.AppAutomation.TestHost;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
 using FlaUI.Core.Definitions;
 using TUnit.Assertions;
 using TUnit.Core;
@@ -17,6 +18,172 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
 public sealed class FlaUiControlResolverTests
 {
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeGridComboAppliesValueWithinOriginalBudgetAndPreservesCancel(bool cancel, bool enterOpensRow)
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession(enterOpensRow ? "enter" : "1");
+        var page = CreateNativeGridRuntimePage(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var row = GridRowSelector.ByCell("Key", "ARM-02");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl, row, "State", "Closed",
+            cancel ? GridCellEditCommitMode.Cancel : GridCellEditCommitMode.Commit);
+        Console.WriteLine($"Native grid combo action completed in {watch.ElapsedMilliseconds}ms; cancel={cancel}.");
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, "State"))
+            .IsEqualTo(cancel ? "Pending" : "Closed");
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-01"), "State")).IsEqualTo("Pending");
+        await Assert.That(GridRowKeyReader.CaptureFirst(page.ArmComplexDataGridControl).Conditions.Single().Value).IsNotEmpty();
+        await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("No row opened");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeGridCaptureUsesRowMetadataWithoutWaitingForCellProjection()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession("metadata");
+        var page = CreateNativeGridRuntimePage(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var native = session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("ArmComplexDataGridControl"));
+        var rows = native.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.DataItem));
+        await Assert.That(rows.Any(row => !string.IsNullOrEmpty(row.ItemStatus))).IsTrue();
+        await Assert.That(rows.All(row => row.FindAllChildren(session.ConditionFactory.ByAutomationId("State")).Length == 0)).IsTrue();
+        var key = GridRowKeyReader.CaptureFirst(page.ArmComplexDataGridControl, timeoutMs: 2000);
+        await Assert.That(key.Conditions.Single().Value).IsEqualTo(rows[0].ItemStatus);
+    }
+
+    [Test]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "997", "997", false, false, true)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "1\u00a0200,5", "1200.5", false, false, true)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "10 001", "10001", false, false, true)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "-12,5", "-12.5", false, false, true)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "500", "500", false, true, true)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "500", "500", false, false, false)]
+    [Arguments("RequiredAmount", GridCellEditorKind.Number, "997", "997", true, false, true)]
+    [Arguments("Value", GridCellEditorKind.Text, "First line\nSecond line", "First line\nSecond line", false, false, true)]
+    [Arguments("Value", GridCellEditorKind.Text, "Canceled text", "Canceled text", true, false, true)]
+    [Arguments("IsApproved", GridCellEditorKind.CheckBox, "True", "True", false, false, true)]
+    [Arguments("IsApproved", GridCellEditorKind.CheckBox, "True", "True", true, false, true)]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeGridEditsCommitAndCancelWithoutParentEnter(
+        string field, GridCellEditorKind kind, string input, string expected, bool cancel, bool commitTarget, bool keyboard)
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession("enter", "ru-RU");
+        var page = CreateNativeGridRuntimePage(session, commitTarget, keyboard);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var row = GridRowSelector.ByCell("Key", "ARM-02");
+        var original = GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, field);
+        var originalNumber = kind == GridCellEditorKind.Number
+            ? GridValueReader.ReadCellNumber(page.ArmComplexDataGridControl, row, field) : 0;
+        var mode = cancel ? GridCellEditCommitMode.Cancel : GridCellEditCommitMode.Commit;
+        if (kind == GridCellEditorKind.Number)
+        {
+            var number = double.Parse(expected, System.Globalization.CultureInfo.InvariantCulture);
+            if (input == expected)
+                page.EditGridCellNumber(static candidate => candidate.ArmComplexDataGridControl, row, field, number, mode);
+            else
+                page.EditGridCellNumber(static candidate => candidate.ArmComplexDataGridControl, row, field,
+                    number, input, "ru-RU", mode);
+            await Assert.That(GridValueReader.ReadCellNumber(page.ArmComplexDataGridControl, row, field))
+                .IsEqualTo(cancel ? originalNumber : number);
+        }
+        else
+        {
+            if (kind == GridCellEditorKind.CheckBox && cancel)
+            {
+                var failure = Assert.Throws<UiOperationException>(() => page.EditGridCell(
+                    static candidate => candidate.ArmComplexDataGridControl, row, field, input, kind, mode));
+                await Assert.That(failure.InnerException is NotSupportedException).IsTrue();
+            }
+            else
+                page.EditGridCell(static candidate => candidate.ArmComplexDataGridControl, row, field, input, kind, mode);
+            await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl, row, field))
+                .IsEqualTo(cancel ? original : expected);
+        }
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-01"), "Value")).IsEqualTo("Value-0");
+        await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("No row opened");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task NativeGridRowSelectionDoesNotActivateItsFirstComboCell()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession("selection");
+        var page = CreateNativeGridRuntimePage(session);
+        page.SelectTabItem(static candidate => candidate.DataGridTabItem);
+        var nativeGrid = session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("ArmComplexDataGridControl"));
+        var saveButton = session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("SaveArmGridProductButton"));
+        var gridTitle = session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByName("Three-row complex editor grid"));
+        await Assert.That(nativeGrid.BoundingRectangle.Top).IsGreaterThanOrEqualTo(gridTitle.BoundingRectangle.Bottom);
+        await Assert.That(nativeGrid.BoundingRectangle.Bottom).IsLessThanOrEqualTo(saveButton.BoundingRectangle.Top);
+        var artifacts = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+        Capture.Element(session.MainWindow).ToFile(Path.Combine(artifacts.FullName, "native-grid-layout.png"));
+        page.SelectGridRow(static candidate => candidate.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"));
+        await Assert.That(page.GridOpenMarkerLabel.Text).IsEqualTo("No row opened");
+        await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
+            GridRowSelector.ByCell("Key", "ARM-02"), "State")).IsEqualTo("Pending");
+    }
+
+    private static DesktopAppSession LaunchNativeGridRuntimeSession(string mode, string? culture = null)
+    {
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildBeforeLaunch: false);
+        var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement,
+            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+            {
+                ["APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE"] = mode,
+                ["APPAUTOMATION_NATIVE_GRID_CULTURE"] = culture
+            }
+        });
+        try
+        {
+            session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+            return session;
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
+    }
+
+    private static MainWindowPage CreateNativeGridRuntimePage(DesktopAppSession session, bool commitTarget = false, bool keyboard = true)
+    {
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus),
+                GridColumnDefinition.Auto("State").AsValue(GridCellValueKind.Selection).EditWith(GridCellEditorKind.ComboBox,
+                    new GridCellEditorParts(new GridRelativeLocator("GridCombo_Input"),
+                        Results: new GridRelativeLocator("GridCombo_Results", GridRelativeLocatorScope.DetachedPopup),
+                        OpenButton: new GridRelativeLocator("GridCombo_Open", GridRelativeLocatorScope.GridRoot))),
+                GridColumnDefinition.Auto("RequiredAmount").AsValue(GridCellValueKind.Number).FormatWith("G", "ru-RU")
+                    .EditWith(GridCellEditorKind.Number, new GridCellEditorParts(new GridRelativeLocator("GridNumber_Input"),
+                        CommitTarget: commitTarget ? new GridRelativeLocator("Key", GridRelativeLocatorScope.Row) : null,
+                        UseKeyboardInput: keyboard)),
+                GridColumnDefinition.Auto("Value").AsValue(GridCellValueKind.Text).EditWith(GridCellEditorKind.Text),
+                GridColumnDefinition.Auto("IsApproved").AsValue(GridCellValueKind.Boolean).EditWith(GridCellEditorKind.CheckBox))
+            .IdentifyRowsBy("Key"));
+        return MainWindowFlaUiPageFactory.Create(session, catalog);
+    }
+
     [Test]
     public async Task GridCommitTarget_DeterminesRevealDirectionFromTheRealTargetBounds()
     {
@@ -82,7 +249,55 @@ public sealed class FlaUiControlResolverTests
             {
                 permanentReads++;
                 throw new System.Runtime.InteropServices.COMException("Access denied", unchecked((int)0x80070005));
-            }));
+            }, () => TimeSpan.FromSeconds(1), () => throw new InvalidOperationException("Permanent errors must not retry")));
+
+        var root = "old";
+        var refreshes = 0;
+        var rebound = FlaUiControlResolver.ReadTransientUiaLookup(() =>
+        {
+            if (root == "old")
+                throw new System.Runtime.InteropServices.COMException("Header enumeration failed", unchecked((int)0x80004005));
+            return root;
+        }, () => TimeSpan.FromSeconds(1), () => { refreshes++; root = "current"; });
+
+        var transient = new System.Runtime.InteropServices.COMException("Original header read", unchecked((int)0x80004005));
+        var budgetReads = 0;
+        var boundedReads = 0;
+        var exhausted = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup<string>(() =>
+            {
+                boundedReads++;
+                throw transient;
+            }, () => ++budgetReads == 1 ? TimeSpan.FromSeconds(1) : throw new TimeoutException("Original budget exhausted")));
+
+        var lateReads = 0;
+        var expired = false;
+        var late = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup(() =>
+            {
+                if (++lateReads == 1) throw transient;
+                expired = true;
+                return "Late header snapshot";
+            }, () => expired ? TimeSpan.Zero : TimeSpan.FromSeconds(1)));
+
+        var failedReads = 0;
+        var failedRefreshes = 0;
+        var failed = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup<string>(() =>
+            {
+                failedReads++;
+                throw transient;
+            }, () => TimeSpan.FromSeconds(1), () => failedRefreshes++));
+
+        var nestedReads = 0;
+        var nestedExpired = false;
+        var nestedTimeout = Assert.Throws<System.Runtime.InteropServices.COMException>(() =>
+            FlaUiControlResolver.ReadTransientUiaLookup<string>(() =>
+            {
+                if (++nestedReads == 1) throw transient;
+                nestedExpired = true;
+                throw new TimeoutException("Grid root lookup exhausted the original budget");
+            }, () => nestedExpired ? TimeSpan.Zero : TimeSpan.FromSeconds(1)));
 
         using (Assert.Multiple())
         {
@@ -90,6 +305,18 @@ public sealed class FlaUiControlResolverTests
             await Assert.That(reads).IsEqualTo(2);
             await Assert.That(permanentReads).IsEqualTo(1);
             await Assert.That(permanent.HResult).IsEqualTo(unchecked((int)0x80070005));
+            await Assert.That(rebound).IsEqualTo("current");
+            await Assert.That(refreshes).IsEqualTo(1);
+            await Assert.That(ReferenceEquals(exhausted, transient)).IsTrue();
+            await Assert.That(exhausted.StackTrace).Contains(nameof(UiaLookup_RetriesOnlyKnownTransientComFailureBeforeInvokingAnAction));
+            await Assert.That(boundedReads).IsEqualTo(1);
+            await Assert.That(ReferenceEquals(late, transient)).IsTrue();
+            await Assert.That(lateReads).IsEqualTo(2);
+            await Assert.That(ReferenceEquals(failed, transient)).IsTrue();
+            await Assert.That(failedReads).IsEqualTo(3);
+            await Assert.That(failedRefreshes).IsEqualTo(2);
+            await Assert.That(ReferenceEquals(nestedTimeout, transient)).IsTrue();
+            await Assert.That(nestedReads).IsEqualTo(2);
         }
     }
 
@@ -930,7 +1157,9 @@ public sealed class FlaUiControlResolverTests
             new([key], null, new System.Drawing.Rectangle(10, top, 300, 25),
                 new GridScrollPosition(scroll, null))
             {
-                StableValues = [key], RuntimeId = key, ObservationIndex = observation
+                StableValues = [key],
+                RuntimeId = key,
+                ObservationIndex = observation
             };
 
         var first = new[] { Row("R1", 20, 0, 0), Row("R2", 50, 0, 0), Row("R3", 80, 0, 0) };

@@ -5,6 +5,17 @@ namespace AppAutomation.Abstractions;
 /// </summary>
 public static class GridValueReader
 {
+    /// <summary>Читает отображаемый текст однозначно адресованного заголовка.</summary>
+    public static string ReadHeaderText(IGridControl grid, GridHeaderSelector selector, int timeoutMs = 5000)
+    {
+        ArgumentNullException.ThrowIfNull(grid);
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        return grid is IGridHeaderValueControl headers
+            ? headers.ReadHeaderText(selector, timeoutMs)
+            : throw new InvalidOperationException($"Grid '{grid.AutomationId}' does not expose readable header metadata for {selector}.");
+    }
+
     /// <summary>Reads a displayed cell using zero-based row and column indexes.</summary>
     public static string ReadCellText(IGridControl grid, int rowIndex, int columnIndex)
     {
@@ -105,6 +116,23 @@ public static class GridValueReader
         int timeoutMs = 5000)
     {
         return ConvertDate(ReadCellValue(grid, rowSelector, columnName, timeoutMs));
+    }
+
+    /// <summary>
+    /// Reads a nullable wall-clock date and time without timezone conversion.
+    /// A configured display format limits precision to the value visible to the user.
+    /// Declare the column as <see cref="GridCellValueKind.DateTime"/> to preserve its time during normalization.
+    /// </summary>
+    public static DateTime? ReadCellDateTime(
+        IGridControl grid,
+        GridRowSelector rowSelector,
+        string columnName,
+        int timeoutMs = 5000)
+    {
+        var snapshot = ReadCellValue(grid, rowSelector, columnName, timeoutMs);
+        return GridDateTimeValueConversion.TryConvert(snapshot, out var value, out var diagnostic)
+            ? value
+            : throw new InvalidOperationException(diagnostic);
     }
 
     /// <summary>Reads a nullable time cell value through a stable address.</summary>
