@@ -3111,6 +3111,24 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         {
         }
 
+        public IReadOnlyList<IMenuItemControl> Items => Inner.Items
+            .Where(IsVisible).Select(static item => (IMenuItemControl)new ObservedMenuItem(item)).ToArray();
+
+        public void Dismiss()
+        {
+            if (TryRead(() => Inner.IsAvailable) && !TryRead(() => Inner.IsOffscreen)
+                && TryRead(() => Inner.BoundingRectangle) is { Width: > 0, Height: > 0 })
+                Keyboard.Type(VirtualKeyShort.ESCAPE);
+        }
+
+        private sealed class ObservedMenuItem(MenuItem item) : IMenuItemControl
+        {
+            public string AutomationId => TryRead(() => item.AutomationId) ?? string.Empty;
+            public string Name => ReadVisibleCaption(item);
+            public bool IsEnabled => TryRead(() => item.IsEnabled);
+            public void Invoke(int timeoutMs) => InvokeLeaf(item, TimeSpan.FromMilliseconds(timeoutMs), waitForPopupClose: true);
+        }
+
         public void InvokeItem(IReadOnlyList<string> path, int timeoutMs)
         {
             var exactPath = MenuPathValue.Normalize(path);

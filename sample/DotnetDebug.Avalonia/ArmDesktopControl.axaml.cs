@@ -29,6 +29,8 @@ public partial class ArmDesktopControl : UserControl
         ArmDateRangeTo.SelectedDate = new DateTimeOffset(new DateTime(2026, 4, 30));
         ArmShellNavigationList.SelectedIndex = 0;
         ArmShellPaneTabs.SelectedIndex = 0;
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_SHELL_OVERFLOW_FIXTURE") == "1")
+            ConfigureShellOverflowFixture();
         SelectedArmStatusFilterItems.Add(ArmStatusFilterItems[0]);
         SelectedArmStatusFilterItems.CollectionChanged += (_, _) => UpdateArmStatusFilterLabel();
         UpdateArmStatusFilterLabel();
@@ -60,6 +62,36 @@ public partial class ArmDesktopControl : UserControl
         "Orders",
         "Reports"
     ];
+
+    private void ConfigureShellOverflowFixture()
+    {
+        var report = ArmShellPaneTabs.Items.OfType<TabItem>().Single(tab => Equals(tab.Header, "Reports"));
+        ArmShellPaneTabs.Items.Remove(report);
+        var menu = new MenuFlyout();
+        var item = new MenuItem { Header = "Reports" };
+        var counter = new Label { Content = "0:0" };
+        var button = new Button { Content = "More panes", Flyout = menu };
+        AutomationProperties.SetAutomationId(button, "ArmShellOverflowButton");
+        AutomationProperties.SetAutomationId(counter, "ArmShellOverflowCounter");
+        var opens = 0;
+        var selections = 0;
+        button.Click += (_, _) => counter.Content = $"{++opens}:{selections}";
+        item.AttachedToVisualTree += (_, _) =>
+        {
+            var presenter = item.GetVisualAncestors().OfType<MenuFlyoutPresenter>().Single();
+            AutomationProperties.SetAutomationId(presenter, "ArmShellOverflowMenu");
+        };
+        item.Click += (_, _) =>
+        {
+            if (!ArmShellPaneTabs.Items.Contains(report)) ArmShellPaneTabs.Items.Add(report);
+            ArmShellPaneTabs.SelectedItem = report;
+            counter.Content = $"{opens}:{++selections}";
+        };
+        menu.Items.Add(item);
+        var panel = (StackPanel)ArmShellPaneTabs.Parent!;
+        panel.Children.Insert(panel.Children.IndexOf(ArmShellPaneTabs), button);
+        panel.Children.Add(counter);
+    }
 
     private void OnArmCopyClick(object? sender, RoutedEventArgs e)
     {

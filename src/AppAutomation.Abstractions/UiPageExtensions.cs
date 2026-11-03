@@ -2722,6 +2722,7 @@ public static partial class UiPageExtensions
 
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, actionName);
         var shell = Resolve(selector, page);
         try
         {
@@ -2729,13 +2730,13 @@ public static partial class UiPageExtensions
                 page,
                 selector,
                 () => shell.IsEnabled,
-                timeoutMs,
+                budget.RemainingMilliseconds,
                 $"Shell navigation '{shell.AutomationId}' is not enabled.",
                 expectedValue: "IsEnabled=true",
                 lastObservedValueFactory: () => $"IsEnabled={shell.IsEnabled}",
                 actionName);
 
-            shell.OpenOrActivate(request);
+            shell.OpenOrActivate(request with { TimeoutMs = budget.RemainingMilliseconds });
         }
         catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
         {
@@ -2758,7 +2759,7 @@ public static partial class UiPageExtensions
                 page,
                 selector,
                 () => ShellNavigationReached(shell, request.PaneName),
-                timeoutMs,
+                budget.RemainingMilliseconds,
                 $"Shell navigation '{shell.AutomationId}' did not reach expected pane.",
                 expectedValue: request.PaneName,
                 lastObservedValueFactory: () => DescribeShellNavigationState(ReadShellNavigationState(shell)),

@@ -128,7 +128,7 @@ internal class AutomationElement
 
     public Expander AsExpander() => this as Expander ?? new Expander(RequireControl<global::Avalonia.Controls.Expander>());
 
-    public Menu AsMenu() => this as Menu ?? new Menu(RequireControl<global::Avalonia.Controls.Menu>());
+    public Menu AsMenu() => this as Menu ?? new Menu(RequireControl<global::Avalonia.Controls.MenuBase>());
 
     public MenuItem AsMenuItem() => this as MenuItem ?? new MenuItem(RequireControl<global::Avalonia.Controls.MenuItem>());
 
@@ -231,7 +231,7 @@ internal class AutomationElement
             global::Avalonia.Controls.DatePicker datePicker => new DateTimePicker(datePicker),
             global::Avalonia.Controls.TimePicker timePicker => new TimePicker(timePicker),
             global::Avalonia.Controls.Expander expander => new Expander(expander),
-            global::Avalonia.Controls.Menu menu => new Menu(menu),
+            global::Avalonia.Controls.MenuBase menu => new Menu(menu),
             global::Avalonia.Controls.MenuItem menuItem => new MenuItem(menuItem),
             global::Avalonia.Controls.Calendar calendar => new Calendar(calendar),
             global::Avalonia.Controls.TabControl tabControl => new Tab(tabControl),
@@ -294,7 +294,7 @@ internal class AutomationElement
             global::Avalonia.Controls.Label => ControlType.Text,
             global::Avalonia.Controls.ListBox => ControlType.List,
             global::Avalonia.Controls.ComboBox => ControlType.ComboBox,
-            global::Avalonia.Controls.Menu => ControlType.Menu,
+            global::Avalonia.Controls.MenuBase => ControlType.Menu,
             global::Avalonia.Controls.MenuItem => ControlType.MenuItem,
             global::Avalonia.Controls.Slider => ControlType.Slider,
             global::Avalonia.Controls.ProgressBar => ControlType.ProgressBar,
@@ -812,17 +812,18 @@ internal sealed class Expander : AutomationElement
 
 internal sealed class Menu : AutomationElement
 {
-    internal Menu(global::Avalonia.Controls.Menu menu) : base(menu)
+    internal Menu(global::Avalonia.Controls.MenuBase menu) : base(menu)
     {
     }
 
-    private global::Avalonia.Controls.Menu Native => (global::Avalonia.Controls.Menu)Control;
+    private global::Avalonia.Controls.MenuBase Native => (global::Avalonia.Controls.MenuBase)Control;
 
     public MenuItem[] Items => Ui(() => Native.Items
         .OfType<global::Avalonia.Controls.MenuItem>()
         .Select(static item => new MenuItem(item))
         .ToArray());
 
+    public void Dismiss() => Ui(() => { Native.Close(); Native.Dispatcher.RunJobs(); return true; });
 }
 
 internal sealed class MenuItem : AutomationElement
@@ -1165,7 +1166,8 @@ internal class Grid : AutomationElement
             return new GridCellValueSnapshot(
                 rawValue?.ToString(),
                 rawValue,
-                InferValueKind(rawValue)) { ValueSource = items[rowIndex] };
+                InferValueKind(rawValue))
+            { ValueSource = items[rowIndex] };
         });
     }
 

@@ -49,9 +49,10 @@ internal static class ControlTree
         }
 
         if (control is global::Avalonia.Controls.Button
-            { Flyout: Flyout { IsOpen: true, Content: Control flyoutContent } })
+            { Flyout: global::Avalonia.Controls.Primitives.PopupFlyoutBase { IsOpen: true } flyout }
+            && flyout.Popup.Child is { } popupChild)
         {
-            queue.Enqueue(flyoutContent);
+            queue.Enqueue(popupChild);
         }
 
         switch (control)

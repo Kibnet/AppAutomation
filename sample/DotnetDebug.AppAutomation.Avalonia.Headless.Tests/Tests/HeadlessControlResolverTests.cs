@@ -413,6 +413,38 @@ public sealed class HeadlessControlResolverTests
         public DateTime UpdatedAt => new(2026, 10, 29);
         public string PlannedToDeliverFromTo => "29.10.2026 - 30.10.2026";
     }
+    
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ShellNavigationActivatesHiddenPaneThroughRealMenuFlyout()
+    {
+        const string flag = "APPAUTOMATION_SHELL_OVERFLOW_FIXTURE";
+        var previous = Environment.GetEnvironmentVariable(flag);
+        Environment.SetEnvironmentVariable(flag, "1");
+        try
+        {
+            using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+            HeadlessRuntime.Dispatch(() =>
+            {
+                session.MainWindow.Show();
+                session.MainWindow.UpdateLayout();
+                session.MainWindow.Dispatcher.RunJobs();
+            });
+            var resolver = new HeadlessControlResolver(session.MainWindow).WithShellNavigation("ArmShellNavigation",
+                ShellNavigationParts.ByAutomationIds("ArmShellNavigationList", "ArmShellPaneTabs", "ArmShellActivePaneLabel",
+                    ShellNavigationSourceKind.ListBox) with
+                { OverflowButtonLocator = "ArmShellOverflowButton", OverflowMenuLocator = "ArmShellOverflowMenu", FallbackToName = false });
+            var page = new MainWindowPage(resolver);
+            page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+            page.OpenOrActivateShellPane(static candidate => candidate.ArmShellNavigation, "Reports");
+            page.ActivateShellPane(static candidate => candidate.ArmShellNavigation, "Reports");
+            await Assert.That(page.ArmShellNavigation.ActivePaneName).IsEqualTo("Reports");
+            await Assert.That(resolver.Resolve<ILabelControl>(new UiControlDefinition("Counter", UiControlType.Label,
+                "ArmShellOverflowCounter")).Text).IsEqualTo("1:1");
+        }
+        
+        finally { Environment.SetEnvironmentVariable(flag, previous); }
+    }
 
 
     [Test]
