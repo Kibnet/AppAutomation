@@ -6,7 +6,6 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 
 namespace AppAutomation.Avalonia.Headless.Automation;
@@ -21,7 +20,8 @@ public sealed partial class HeadlessControlResolver
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
         IGridColumnMetadataControl,
-        IGridRowPositionIdentityControl
+        IGridRowPositionIdentityControl,
+        IGridHeaderValueControl
     {
         private readonly AutomationElement _searchRoot;
         private readonly string _gridDescription;
@@ -46,6 +46,123 @@ public sealed partial class HeadlessControlResolver
                 : null;
         }
 
+        public string ReadHeaderText(GridHeaderSelector selector, int timeoutMs = 5000, GridHeaderContextDefinition? context = null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            ArgumentNullException.ThrowIfNull(selector);
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                GridHeaderMetadataReader.ResolveText(ReadHeaderMetadata(context), selector, _gridDescription));
+        }
+
+        public GridHeaderSelector CaptureFirstGroup(IReadOnlyList<string> fields, int timeoutMs = 5000,
+            GridHeaderContextDefinition? context = null) => UiWait.Until(
+                () => AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    GridHeaderMetadataReader.FirstGroup(ReadHeaderMetadata(context, availableOnly: true), fields, _gridDescription)),
+                static address => address is not null,
+                new UiWaitOptions { Timeout = TimeSpan.FromMilliseconds(timeoutMs), PollInterval = TimeSpan.FromMilliseconds(25) },
+                $"Grid '{_gridDescription}' did not expose an available group for '{string.Join(" / ", fields)}'.")!;
+
+        private IReadOnlyList<GridHeaderMetadata> ReadHeaderMetadata(GridHeaderContextDefinition? context, bool availableOnly = false)
+        {
+            var metadata = context ?? new GridHeaderContextDefinition();
+            var grid = Inner.Control;
+            var nodes = grid.GetVisualDescendants().OfType<Control>()
+                .Where(c => c.IsEffectivelyVisible && GridHeaderMetadataReader.IsHeader(c, metadata))
+                .Where(c => !c.GetVisualAncestors().OfType<Control>().TakeWhile(a => !ReferenceEquals(a, grid))
+                    .Any(a => GridPropertyValueReader.TryReadProperty(a, "ItemsSource", out _)
+                        && GridPropertyValueReader.TryReadProperty(a, "Columns", out _)))
+                .Select(c =>
+                {
+                    var parts = c.GetVisualDescendants().OfType<TextBlock>()
+                        .Where(static t => t.IsEffectivelyVisible && t.Name != "PART_ItemCountElement")
+                        .Select(static t => t.Text).Where(static text => text is not null).ToArray();
+                    return new GridHeaderNode(c, c.TranslatePoint(default, grid)?.Y ?? double.NaN,
+                        c is ContentControl { Content: string text } ? text
+                            : parts.Length > 0 ? string.Join(" ", parts) : null,
+                        metadata.RuntimeAddressProperty switch
+                        {
+                            GridRowAutomationProperty.AutomationId => AutomationProperties.GetAutomationId(c),
+                            GridRowAutomationProperty.ItemStatus => AutomationProperties.GetItemStatus(c),
+                            GridRowAutomationProperty.HelpText => AutomationProperties.GetHelpText(c),
+                            _ => null
+                        }, AutomationProperties.GetName(c));
+                })
+                .ToArray();
+            var headers = GridHeaderMetadataReader.Read(nodes, metadata, grid);
+            return availableOnly ? headers.Where(header => header.Source is Control control
+                && control.Bounds.Height > 0 && control.TranslatePoint(default, grid) is { } point
+                && point.Y + control.Bounds.Height > 0 && point.Y < grid.Bounds.Height).ToArray() : headers;
+        }
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath, int timeoutMs) =>
+            ReadFirstAvailableRowIdentity(identityColumns, rowPath, [], timeoutMs);
+
+        public GridRowPositionIdentity ReadFirstAvailableRowIdentity(
+            IReadOnlyList<GridRuntimeColumn> identityColumns, string rowPath,
+            IReadOnlyList<IReadOnlyList<string?>> excludedIdentities, int timeoutMs)
+        {
+            ArgumentNullException.ThrowIfNull(identityColumns);
+            ArgumentNullException.ThrowIfNull(excludedIdentities);
+            ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            return UiWait.Until(() =>
+            {
+                var rows = ReadIndexedRows();
+                var selected = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                {
+                    var grid = Inner.Control;
+                    var view = HeadlessGridRuntimeAccess.ReadCurrentViewItems(grid);
+                    var currentItems = view.IsAuthoritative
+                        ? view.Items.ToHashSet(ReferenceEqualityComparer.Instance) : null;
+                    var visual = rows.FirstOrDefault(row => row.VisualRow?.Control is { IsEffectivelyVisible: true } control
+                        && control.Bounds.Width > 0 && control.Bounds.Height > 0 && IsAvailable(row));
+                    if (visual is not null) return visual;
+                    // Native providers enumerate items separately from genuine visual row containers.
+                    var visibleItems = grid.GetVisualDescendants().OfType<Control>()
+                        .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0 && c.Bounds.Height > 0
+                            && c.TranslatePoint(default, grid) is { Y: >= 0 } point && point.Y < grid.Bounds.Height)
+                        .Select(c => c.DataContext is { } data
+                            && GridPropertyValueReader.TryReadPath(data, rowPath, out var item) ? item : c.DataContext)
+                        .Where(static item => item is not null)
+                        .ToHashSet(ReferenceEqualityComparer.Instance);
+                    return rows.FirstOrDefault(row => row.Item is not null && visibleItems.Contains(row.Item) && IsAvailable(row))
+                        ?? (excludedIdentities.Count > 0 && view.IsAuthoritative ? rows.FirstOrDefault(IsAvailable) : null);
+
+                    bool IsAvailable(IndexedHeadlessRow row)
+                    {
+                        if (currentItems is not null && row.Item is not null && !currentItems.Contains(row.Item)) return false;
+                        if (excludedIdentities.Count == 0) return true;
+                        var values = identityColumns.Select(column => ReadCellSnapshot(row, column).DisplayText).ToArray();
+                        return !excludedIdentities.Any(previous => previous.SequenceEqual(values, StringComparer.Ordinal));
+                    }
+                });
+                if (selected is null) return null;
+                if (selected.Item is null) return CaptureIdentity();
+                return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                {
+                    var current = HeadlessGridRuntimeAccess.ReadSourceItems(Inner.Control);
+                    if (!current.SequenceEqual(rows.Select(static row => row.Item), ReferenceEqualityComparer.Instance)) return null;
+                    var view = HeadlessGridRuntimeAccess.ReadCurrentViewItems(Inner.Control);
+                    if (view.IsAuthoritative && !view.Items.Any(item => ReferenceEquals(item, selected.Item))) return null;
+                    return CaptureIdentity();
+                });
+
+                GridRowPositionIdentity CaptureIdentity()
+                {
+                    var values = identityColumns.Select(column => ReadCellSnapshot(selected, column).DisplayText).ToArray();
+                    if (rows.Count(row => identityColumns.Select(column => ReadCellSnapshot(row, column).DisplayText)
+                            .SequenceEqual(values, StringComparer.Ordinal)) != 1)
+                        throw new InvalidOperationException($"Grid '{_gridDescription}' available row has a non-unique runtime key.");
+                    return new GridRowPositionIdentity(values, IsUnique: true);
+                }
+            }, static identity => identity is not null,
+                new UiWaitOptions { Timeout = TimeSpan.FromMilliseconds(timeoutMs), PollInterval = TimeSpan.FromMilliseconds(25) },
+                excludedIdentities.Count == 0
+                    ? $"Grid '{_gridDescription}' did not materialize an available data row."
+                    : $"Grid '{_gridDescription}' did not materialize a data row different from the {excludedIdentities.Count} previously captured rows.")!;
+        }
+
         public GridRowPositionIdentity ReadRowIdentityAtPosition(
             int position,
             IReadOnlyList<GridRuntimeColumn> identityColumns,
@@ -56,9 +173,15 @@ public sealed partial class HeadlessControlResolver
             ArgumentNullException.ThrowIfNull(identityColumns);
             ArgumentException.ThrowIfNullOrWhiteSpace(rowPath);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "capture grid row key");
             AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 BringIntoOuterViewport(Inner.Control));
-            var rows = ReadIndexedRows();
+            var rows = UiWait.Until(ReadIndexedRows, available => available.Length > position,
+                new UiWaitOptions
+                {
+                    Timeout = budget.Remaining,
+                    PollInterval = TimeSpan.FromMilliseconds(25)
+                }, $"Grid '{_gridDescription}' did not materialize a row at current view position {position} within the operation timeout.");
             if (rows.Length > 0 && rows[0].Item is not null)
             {
                 var item = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
@@ -72,13 +195,6 @@ public sealed partial class HeadlessControlResolver
 
                 var selected = rows.Single(row => ReferenceEquals(row.Item, item));
                 return CaptureUniqueIdentity(selected);
-            }
-
-            if (position >= rows.Length)
-            {
-                throw new InvalidOperationException(
-                    $"Grid '{AutomationId}' has no logical row at current view position {position}; "
-                    + $"available rows: {rows.Length}.");
             }
 
             var row = rows[position];
@@ -170,12 +286,13 @@ public sealed partial class HeadlessControlResolver
                 return false;
             }
 
-            var matches = ColumnNames
+            var metadata = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                HeadlessGridRuntimeAccess.ReadColumnMetadata(Inner.Control));
+            var matches = metadata.Names
                 .Select(static (name, index) => (Name: name, Index: index))
-                .Where(candidate => string.Equals(
-                    candidate.Name,
-                    columnName.Trim(),
-                    StringComparison.Ordinal))
+                .Where(candidate => string.Equals(candidate.Name, columnName.Trim(), StringComparison.Ordinal)
+                    || candidate.Index < metadata.Fields.Length
+                        && string.Equals(metadata.Fields[candidate.Index], columnName.Trim(), StringComparison.Ordinal))
                 .Take(2)
                 .ToArray();
             columnIndex = matches.Length == 1 ? matches[0].Index : -1;
@@ -418,22 +535,19 @@ public sealed partial class HeadlessControlResolver
                 .Select(static condition => condition.Column.CellContext.RowPath)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            var rowMoved = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
                 var hadFocus = Inner.Control.IsKeyboardFocusWithin;
                 if (!hadFocus) Inner.Control.Focus();
                 Inner.Control.Dispatcher.RunJobs();
                 TopLevel.GetTopLevel(Inner.Control)?.UpdateLayout();
                 var target = FindOpenRowTarget(match, rowPaths);
-                return target is not null && (BringIntoOuterViewport(target) || !hadFocus);
+                if (target is not null) BringIntoOuterViewport(target);
             });
-            if (rowMoved)
-            {
-                match = ResolveUniqueRow(row, Remaining());
-                EnsureVisualRow(match);
-            }
+            match = ResolveUniqueRow(row, Remaining());
+            EnsureVisualRow(match);
 
-            var deliveredPresses = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
                 var target = FindOpenRowTarget(match, rowPaths)
                     ?? throw new NotSupportedException(
@@ -441,43 +555,15 @@ public sealed partial class HeadlessControlResolver
                 var topLevel = TopLevel.GetTopLevel(target)
                     ?? throw new InvalidOperationException(
                         $"Visual grid '{_gridDescription}' row target has no owning top-level window.");
-                var center = new Point(target.Bounds.Width / 2, target.Bounds.Height / 2);
-                var point = target.TranslatePoint(center, topLevel)
-                    ?? throw new InvalidOperationException(
-                        $"Visual grid '{_gridDescription}' row target has no position in its top-level window.");
+                var point = GetVisibleRowPoint(target, topLevel);
+                _ = Remaining();
 
-                var receivedPresses = 0;
-                EventHandler<PointerPressedEventArgs> onPressed = (_, args) =>
-                {
-                    if (args.Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
-                    {
-                        receivedPresses++;
-                    }
-                };
-                target.AddHandler(InputElement.PointerPressedEvent, onPressed,
-                    RoutingStrategies.Bubble, handledEventsToo: true);
-                try
-                {
-                    topLevel.MouseMove(point);
-                    topLevel.MouseDown(point, MouseButton.Left);
-                    topLevel.MouseUp(point, MouseButton.Left);
-                    topLevel.MouseDown(point, MouseButton.Left);
-                    topLevel.MouseUp(point, MouseButton.Left);
-                    Inner.Control.Dispatcher.RunJobs();
-                }
-                finally
-                {
-                    target.RemoveHandler(InputElement.PointerPressedEvent, onPressed);
-                }
-
-                return receivedPresses;
+                topLevel.MouseDown(point, MouseButton.Left);
+                topLevel.MouseUp(point, MouseButton.Left);
+                topLevel.MouseDown(point, MouseButton.Left);
+                topLevel.MouseUp(point, MouseButton.Left);
+                Inner.Control.Dispatcher.RunJobs();
             });
-            if (deliveredPresses != 2)
-            {
-                throw new InvalidOperationException(
-                    $"Visual grid '{AutomationId}' stable row was occluded: "
-                    + $"the row received {deliveredPresses} of 2 pointer presses.");
-            }
 
             int Remaining()
             {
@@ -486,6 +572,41 @@ public sealed partial class HeadlessControlResolver
                     ? remaining
                     : throw new TimeoutException($"Grid '{_gridDescription}' row opening exceeded its timeout.");
             }
+        }
+
+        private Point GetVisibleRowPoint(Control target, TopLevel topLevel)
+        {
+            var visible = GetVisibleRowBounds(target, topLevel);
+            if (target.IsEffectivelyVisible && visible.Width > 0 && visible.Height > 0)
+            {
+                var point = visible.Center;
+                topLevel.MouseMove(point);
+                var inputHit = topLevel.InputHitTest(point);
+                if (inputHit is Visual hit
+                    && (ReferenceEquals(hit, target) || hit.GetVisualAncestors().Contains(target)))
+                    return point;
+                throw new InvalidOperationException($"Visual grid '{_gridDescription}' stable row is occluded at {point}: "
+                    + $"hit={inputHit?.GetType().Name ?? "<none>"}, target={target.GetType().Name}, bounds={target.Bounds}.");
+            }
+
+            throw new InvalidOperationException(
+                $"Visual grid '{_gridDescription}' stable row is occluded or outside its clipped viewport ({visible}).");
+        }
+
+        private Rect GetVisibleRowBounds(Control target, TopLevel topLevel)
+        {
+            var visible = new Rect(topLevel.ClientSize);
+            foreach (var visual in target.GetVisualAncestors().Prepend(target))
+            {
+                if (visual.TransformToVisual(topLevel) is not { } transform)
+                    throw new InvalidOperationException($"Grid '{_gridDescription}' row is detached from its top-level window.");
+                if (ReferenceEquals(visual, target) || visual.ClipToBounds)
+                    visible = visible.Intersect(new Rect(visual.Bounds.Size).TransformToAABB(transform));
+                if (visual.Clip is { } clip)
+                    visible = visible.Intersect(clip.Bounds.TransformToAABB(transform));
+                if (ReferenceEquals(visual, topLevel)) break;
+            }
+            return visible;
         }
 
         private static bool BringIntoOuterViewport(Control target)
@@ -527,29 +648,29 @@ public sealed partial class HeadlessControlResolver
                 return null;
             }
 
-            var visualRows = Inner.Control.GetVisualDescendants()
-                .OfType<DataGridRow>()
-                .Where(candidate => candidate.IsEffectivelyVisible
-                    && ReferenceEquals(candidate.DataContext, row.Item))
-                .Take(2)
-                .ToArray();
-            if (visualRows.Length == 1)
-            {
-                return visualRows[0];
-            }
-
-            return Inner.Control.GetVisualDescendants()
+            var candidates = Inner.Control.GetVisualDescendants()
                 .OfType<Control>()
-                .FirstOrDefault(candidate => candidate.IsEffectivelyVisible
+                .Where(candidate => candidate.IsEffectivelyVisible
                     && candidate.Bounds.Width > 0
                     && candidate.Bounds.Height > 0
                     && candidate.DataContext is { } context
-                    && rowPaths.Any(path => GridPropertyValueReader.TryReadPath(
+                    && (ReferenceEquals(context, row.Item)
+                        || rowPaths.Any(path => GridPropertyValueReader.TryReadPath(
                             context,
                             path,
                             out var candidateRow)
                         && (ReferenceEquals(candidateRow, row.Item)
-                            || Equals(candidateRow, row.Item))));
+                            || Equals(candidateRow, row.Item)))))
+                .ToArray();
+            var rowContainers = candidates
+                .Where(candidate => ReferenceEquals(candidate.DataContext, row.Item)
+                    && !candidate.GetVisualAncestors().OfType<Control>()
+                        .TakeWhile(ancestor => !ReferenceEquals(ancestor, Inner.Control))
+                        .Any(ancestor => ReferenceEquals(ancestor.DataContext, row.Item)));
+            var targets = rowContainers.Concat(candidates).Distinct().ToArray();
+            return targets.FirstOrDefault(candidate => TopLevel.GetTopLevel(candidate) is { } topLevel
+                    && GetVisibleRowBounds(candidate, topLevel) is { Width: > 0, Height: > 0 })
+                ?? targets.FirstOrDefault();
         }
 
         public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
@@ -821,7 +942,34 @@ public sealed partial class HeadlessControlResolver
             }
 
             // Keep focus inside the editor: focusing a detached list may commit the old value.
-            // Only use keys accepted by the real control; never write its text or selection.
+            // A highlighted results index alone is not an applied editor value.
+            var requestedItem = results.Items[targetIndex];
+            var hasEditorValue = activeEditor is not null
+                && GridPropertyValueReader.TryReadProperty(activeEditor, "EditorValue", out _);
+            object? originalValue = null;
+            object? originalSelection = null;
+            if (hasEditorValue)
+            {
+                GridPropertyValueReader.TryReadProperty(activeEditor!, "EditorValue", out originalValue);
+                GridPropertyValueReader.TryReadProperty(activeEditor!, "SelectedItem", out originalSelection);
+            }
+            if (request.CommitMode == GridCellEditCommitMode.Commit && hasEditorValue
+                && global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(input)
+                    ?.GetProvider<global::Avalonia.Automation.Provider.IValueProvider>() is { IsReadOnly: false } valueInput)
+            {
+                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
+                var previousText = valueInput.Value;
+                valueInput.SetValue(request.Value);
+                input.Dispatcher.RunJobs();
+                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
+                if (SelectionApplied()) return true;
+                if (!input.IsAttachedToVisualTree() || !input.IsKeyboardFocusWithin) return false;
+                valueInput.SetValue(previousText);
+                input.Dispatcher.RunJobs();
+                targetIndex = Enumerable.Range(0, results.ItemCount)
+                    .FirstOrDefault(index => Equals(results.Items[index], requestedItem), -1);
+                if (targetIndex < 0) return false;
+            }
             var currentIndex = results.SelectedIndex;
             for (var step = 0; currentIndex != targetIndex && step < results.ItemCount; step++)
             {
@@ -842,7 +990,23 @@ public sealed partial class HeadlessControlResolver
             {
                 Press(Key.Enter);
             }
-            return true;
+            if (request.CommitMode == GridCellEditCommitMode.Cancel) return true;
+            return SelectionApplied();
+
+            bool SelectionApplied()
+            {
+                if (activeEditor is null
+                    || !GridPropertyValueReader.TryReadProperty(activeEditor, "SelectedItem", out var appliedSelection)
+                    || !Equals(appliedSelection, requestedItem)) return false;
+                if (!hasEditorValue) return true;
+                GridPropertyValueReader.TryReadProperty(activeEditor, "EditorValue", out var appliedValue);
+                if (GridPropertyValueReader.TryReadProperty(activeEditor, "ValueMember", out var valueMember)
+                    && valueMember is string { Length: > 0 } member)
+                    return GridPropertyValueReader.TryReadPath(requestedItem, member, out var expectedValue)
+                        && Equals(appliedValue, expectedValue);
+                return Equals(appliedValue, requestedItem) || !Equals(appliedValue, originalValue)
+                    || Equals(originalSelection, requestedItem) && Equals(appliedValue, originalValue);
+            }
 
             void Press(Key key)
             {
@@ -1550,27 +1714,16 @@ public sealed partial class HeadlessControlResolver
 
         private GridRuntimeColumn ResolveRuntimeColumn(string columnName)
         {
-            var columnNames = ColumnNames;
-            var matches = columnNames
-                .Select(static (name, index) => (Name: name, Index: index))
-                .Where(candidate => string.Equals(
-                    candidate.Name,
-                    columnName?.Trim(),
-                    StringComparison.Ordinal))
-                .Take(2)
-                .ToArray();
-            if (matches.Length != 1)
+            if (!TryGetColumnIndex(columnName, out var columnIndex))
             {
                 throw new InvalidOperationException(
                     $"Grid column '{columnName}' was not found in grid '{AutomationId}'. "
-                    + $"Available columns: {string.Join(", ", columnNames)}.");
+                    + $"Available columns: {string.Join(", ", ColumnNames)}.");
             }
-
-            var columnIndex = matches[0].Index;
 
             return new GridRuntimeColumn(
                 columnIndex,
-                columnNames[columnIndex],
+                columnName.Trim(),
                 displayValuePath: null,
                 formatString: null,
                 cultureName: null,

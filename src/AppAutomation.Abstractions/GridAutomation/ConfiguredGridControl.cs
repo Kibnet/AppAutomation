@@ -5,7 +5,8 @@ internal class ConfiguredGridControl :
     IGridRowSelectionControl,
     IGridColumnMetadataControl,
     IGridLogicalColumnMetadataControl,
-    IGridAutomationCatalogControl
+    IGridAutomationCatalogControl,
+    IGridHeaderValueControl
 {
     private readonly IEditableGridControl? _editableGrid;
     private readonly IGridUserActionControl? _actionGrid;
@@ -73,7 +74,43 @@ internal class ConfiguredGridControl :
 
     public IGridRowControl? GetRowByIndex(int index) => Inner.GetRowByIndex(index);
 
-    internal GridRowSelector CaptureRowKey(int position, int timeoutMs)
+    public string ReadHeaderText(GridHeaderSelector selector, int timeoutMs = 5000, GridHeaderContextDefinition? context = null)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        var path = selector.Path.Select(part => selector.Kind == GridHeaderKind.Band ? part : part with
+        {
+            Name = Definition.FindColumn(part.Name)?.SourceFieldName ?? part.Name
+        }).ToArray();
+        var metadata = (context ?? Definition.HeaderContext) with
+        {
+            RuntimeColumnNames = _columns.GroupBy(static column => column.SourceFieldName, StringComparer.Ordinal)
+                .Select(static group => (group.Key, Names: group.Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
+                    .Distinct(StringComparer.Ordinal).Take(2).ToArray()))
+                .Where(static group => group.Names.Length == 1)
+                .ToDictionary(static group => group.Key, static group => group.Names[0], StringComparer.Ordinal)
+        };
+        return Inner is IGridHeaderValueControl headers
+            ? headers.ReadHeaderText(new GridHeaderSelector(selector.Kind, path), timeoutMs, metadata)
+            : throw new InvalidOperationException($"Grid '{AutomationId}' does not expose readable header metadata for {selector}.");
+    }
+
+    public GridHeaderSelector CaptureFirstGroup(IReadOnlyList<string> fields, int timeoutMs = 5000,
+        GridHeaderContextDefinition? context = null)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+        var sourceFields = fields.Select(field => Definition.FindColumn(field)?.SourceFieldName ?? field).ToArray();
+        var captured = Inner is IGridHeaderValueControl headers
+            ? headers.CaptureFirstGroup(sourceFields, timeoutMs, context ?? Definition.HeaderContext)
+            : throw new NotSupportedException($"Grid '{AutomationId}' does not expose group metadata.");
+        if (captured.Kind != GridHeaderKind.Group
+            || !captured.Path.Select(static part => part.Name).SequenceEqual(sourceFields, StringComparer.Ordinal))
+            throw new InvalidOperationException($"Grid '{AutomationId}' returned a different group field path.");
+        return new GridHeaderSelector(captured.Kind, captured.Path.Select((part, index) => part with { Name = fields[index] }).ToArray());
+    }
+
+    internal GridRowSelector CaptureRowKey(int position, int timeoutMs, bool firstAvailable = false,
+        IReadOnlyList<GridRowSelector>? excludingRows = null)
     {
         var identityNames = Definition.RowIdentityColumns.Count > 0
             ? Definition.RowIdentityColumns
@@ -86,74 +123,126 @@ internal class ConfiguredGridControl :
         }
 
         var budget = UiOperationTimeoutBudget.Start(timeoutMs, "capture grid row key");
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var attempts = 0;
+        GridRowSelector? lastCandidate = null;
+        GridRowResolution? lastResolution = null;
         var indexes = identityNames.Select(ResolveColumnIndex).ToArray();
         var columns = indexes.Select(MapColumn).ToArray();
-        IReadOnlyList<string?> values;
-        var uniquenessProven = false;
-        if (Inner is IGridRowPositionIdentityControl positioned)
+        var excluded = (excludingRows ?? []).Select(selector =>
         {
-            var capture = positioned.ReadRowIdentityAtPosition(
-                position,
-                columns,
-                Definition.CellContext.RowPath,
-                budget.RemainingMilliseconds);
-            values = capture.Values;
-            uniquenessProven = capture.IsUnique;
+            ArgumentNullException.ThrowIfNull(selector);
+            if (selector.Conditions.Count != identityNames.Count
+                || identityNames.Any(name => !selector.Conditions.Any(condition => condition.ColumnName == name)))
+                throw new ArgumentException("Excluded rows must contain the complete identity of this grid.", nameof(excludingRows));
+            return (IReadOnlyList<string?>)identityNames.Select(name =>
+                selector.Conditions.Single(condition => condition.ColumnName == name).Value).ToArray();
+        }).ToArray();
+        try
+        {
+            return UiWait.Until(CaptureCandidate, static candidate => candidate is not null,
+                new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(25) },
+                $"Grid '{AutomationId}' did not capture a row that remains present while its unique identity is confirmed.")!;
         }
-        else
+        catch (TimeoutException error)
         {
-            var row = Inner.GetRowByIndex(position)
-                ?? throw new InvalidOperationException(
-                    $"Grid '{AutomationId}' has no logical row at current view position {position}.");
-            values = Enumerable.Range(0, indexes.Length).Select(keyPart =>
+            throw new TimeoutException($"Grid '{AutomationId}' could not confirm a current row identity; "
+                + $"attempts={attempts}; candidate={(lastCandidate is null ? "<none>" : GridRuntimeResolver.DescribeRowSelector(lastCandidate))}; "
+                + $"state={lastResolution?.State.ToString() ?? "<not resolved>"}; "
+                + $"remaining={Math.Max(0, timeoutMs - elapsed.ElapsedMilliseconds)}ms; "
+                + $"resolution={lastResolution?.Description ?? "<none>"}.", error);
+        }
+
+        GridRowSelector? CaptureCandidate()
+        {
+            _ = budget.Remaining;
+            attempts++;
+            IReadOnlyList<string?> values;
+            var uniquenessProven = false;
+            if (Inner is IGridRowPositionIdentityControl positioned)
             {
-                var runtimeIndex = columns[keyPart].RuntimeColumnIndex;
-                if (runtimeIndex is not { } cellIndex || cellIndex >= row.Cells.Count)
+                var capture = firstAvailable
+                    ? excluded.Length == 0
+                        ? positioned.ReadFirstAvailableRowIdentity(columns, Definition.CellContext.RowPath, budget.RemainingMilliseconds)
+                        : positioned.ReadFirstAvailableRowIdentity(columns, Definition.CellContext.RowPath, excluded, budget.RemainingMilliseconds)
+                    : positioned.ReadRowIdentityAtPosition(position, columns, Definition.CellContext.RowPath, budget.RemainingMilliseconds);
+                values = capture.Values;
+                uniquenessProven = capture.IsUnique;
+            }
+            else
+            {
+                IReadOnlyList<string?> ReadIdentity(IGridRowControl row) => Enumerable.Range(0, indexes.Length).Select(keyPart =>
+                {
+                    var runtimeIndex = columns[keyPart].RuntimeColumnIndex;
+                    if (runtimeIndex is not { } cellIndex || cellIndex >= row.Cells.Count)
+                    {
+                        throw new InvalidOperationException(
+                            $"Grid '{AutomationId}' cannot read hidden identity column '{identityNames[keyPart]}' "
+                            + "at the selected view position without provider row metadata.");
+                    }
+
+                    return GridRuntimeResolver.ReadCellSnapshot(Inner, row.Cells[cellIndex], cellIndex).DisplayText;
+                }).ToArray();
+                if (firstAvailable && excluded.Length > 0)
+                {
+                    values = Inner.Rows.Select(ReadIdentity).FirstOrDefault(candidate =>
+                        !excluded.Any(previous => previous.SequenceEqual(candidate, StringComparer.Ordinal)))
+                        ?? throw new InvalidOperationException($"Grid '{AutomationId}' has no other available data row.");
+                }
+                else
+                {
+                    var row = Inner.GetRowByIndex(position)
+                        ?? throw new InvalidOperationException(
+                            $"Grid '{AutomationId}' has no logical row at current view position {position}.");
+                    values = ReadIdentity(row);
+                }
+            }
+
+            if (values.Count != identityNames.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Grid '{AutomationId}' returned {values.Count} key parts at position {position}; "
+                    + $"expected {identityNames.Count}.");
+            }
+
+            GridRowSelector? selector = null;
+            for (var index = 0; index < values.Count; index++)
+            {
+                var value = values[index];
+                if (string.IsNullOrWhiteSpace(value))
                 {
                     throw new InvalidOperationException(
-                        $"Grid '{AutomationId}' cannot read hidden identity column '{identityNames[keyPart]}' "
-                        + "at the selected view position without provider row metadata.");
+                        $"Grid '{AutomationId}' row at current view position {position} has no readable "
+                        + $"stable key in '{identityNames[index]}'.");
                 }
 
-                return GridRuntimeResolver.ReadCellSnapshot(Inner, row.Cells[cellIndex], cellIndex).DisplayText;
-            }).ToArray();
-        }
-
-        if (values.Count != identityNames.Count)
-        {
-            throw new InvalidOperationException(
-                $"Grid '{AutomationId}' returned {values.Count} key parts at position {position}; "
-                + $"expected {identityNames.Count}.");
-        }
-
-        GridRowSelector? selector = null;
-        for (var index = 0; index < values.Count; index++)
-        {
-            var value = values[index];
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new InvalidOperationException(
-                    $"Grid '{AutomationId}' row at current view position {position} has no readable "
-                    + $"stable key in '{identityNames[index]}'.");
+                selector = selector is null
+                    ? GridRowSelector.ByCell(identityNames[index], value)
+                    : selector.AndCell(identityNames[index], value);
             }
 
-            selector = selector is null
-                ? GridRowSelector.ByCell(identityNames[index], value)
-                : selector.AndCell(identityNames[index], value);
-        }
-
-        if (!uniquenessProven)
-        {
-            var resolution = ResolveRow(selector!, budget.RemainingMilliseconds);
-            if (resolution.State != GridRowResolutionState.Unique)
+            if (!uniquenessProven)
             {
-                throw new InvalidOperationException(
-                    $"Grid '{AutomationId}' row at current view position {position} has a non-unique "
-                    + $"runtime key ({GridRuntimeResolver.DescribeRowSelector(selector!)}): {resolution.Description}");
+                lastCandidate = selector;
+                lastResolution = null;
+                var resolution = ResolveRow(selector!, budget.RemainingMilliseconds);
+                lastResolution = resolution;
+                if (firstAvailable && resolution.State == GridRowResolutionState.NotFound)
+                {
+                    _ = budget.Remaining;
+                    return null;
+                }
+                if (resolution.State != GridRowResolutionState.Unique)
+                {
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' row at current view position {position} has a {resolution.State} "
+                        + $"runtime key ({GridRuntimeResolver.DescribeRowSelector(selector!)}): {resolution.Description}");
+                }
             }
-        }
 
-        return selector!;
+            _ = budget.Remaining;
+            return selector!;
+        }
     }
 
     public bool TryGetColumnIndex(string columnName, out int columnIndex)

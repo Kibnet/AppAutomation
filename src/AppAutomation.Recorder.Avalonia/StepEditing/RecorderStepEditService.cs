@@ -154,7 +154,10 @@ internal static class RecorderStepEditService
                 ?? (step.RowIndex is >= 0 ? step.RowIndex : null),
             CanConvertTextCheckpointToNumber = step.ActionKind == RecordedActionKind.CaptureCheckpoint
                 && CanConvertTextCheckpointToNumber(step),
-            NumericType = step.NumericType
+            NumericType = step.NumericType,
+            GridHeader = step.GridHeader,
+            TextTransform = step.TextTransform,
+            SourceTextPreview = step.CapturedDisplayText ?? currentValuePreview
         };
         return true;
     }
@@ -212,9 +215,17 @@ internal static class RecorderStepEditService
         }
 
         var target = ApplyRetarget(source, draft.RetargetPrototype);
+        var previewDraft = draft.TextTransform is null && target.TextTransform is not null
+            ? draft with { CurrentPreview = draft.SourceTextPreview ?? draft.CurrentPreview } : draft;
+        if (!TryTransformPreview(previewDraft, out var transformedPreview, out error))
+        {
+            candidate = null;
+            return false;
+        }
         double? numericPreview = null;
         if (source.ActionKind == RecordedActionKind.CaptureCheckpoint
-            && (draft.ValueKind != target.ValueKind || draft.NumericType != target.NumericType))
+            && (draft.ValueKind != target.ValueKind || draft.NumericType != target.NumericType
+                || draft.ValueKind == RecorderValueKind.Number && draft.TextTransform != target.TextTransform))
         {
             if (!CanConvertTextCheckpointToNumber(target)
                 || draft.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.Number)
@@ -229,7 +240,7 @@ internal static class RecorderStepEditService
 
             var parsed = default(double);
             if (draft.ValueKind == RecorderValueKind.Number
-                && !TryParseNumericPreview(draft.CurrentPreview, draft.NumericType, out parsed, out var diagnostic))
+                && !TryParseNumericPreview(transformedPreview, draft.NumericType, out parsed, out var diagnostic))
             {
                 candidate = null;
                 error = diagnostic ?? "The checkpoint does not display a readable number.";
@@ -253,6 +264,9 @@ internal static class RecorderStepEditService
             NumericType = source.ActionKind == RecordedActionKind.CaptureCheckpoint
                 ? draft.NumericType
                 : target.NumericType,
+            GridHeader = draft.GridHeader,
+            TextTransform = draft.TextTransform,
+            CapturedDisplayText = target.CapturedDisplayText ?? draft.SourceTextPreview,
             CheckpointVariableName = source.ActionKind == RecordedActionKind.CaptureCheckpoint
                 ? draft.VariableName?.Trim()
                 : target.CheckpointVariableName,
@@ -262,7 +276,9 @@ internal static class RecorderStepEditService
             CopiedValueVariableName = source.ActionKind == RecordedActionKind.CaptureCopiedValue
                 ? draft.VariableName?.Trim()
                 : target.CopiedValueVariableName,
-            StringValue = draft.StringValue,
+            StringValue = source.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.CaptureCopiedValue
+                && draft.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
+                && (draft.TextTransform is not null || target.TextTransform is not null) ? transformedPreview : draft.StringValue,
             ItemValue = draft.ItemValue,
             BoolValue = draft.BoolValue,
             IntValue = draft.IntValue,
@@ -380,6 +396,9 @@ internal static class RecorderStepEditService
             ValueAccessorKind = prototype.ValueAccessorKind,
             NumericType = prototype.NumericType,
             CurrentPreview = snapshot.Description.CurrentValueText,
+            SourceTextPreview = prototype.CapturedDisplayText ?? snapshot.Description.CurrentValueText,
+            TextTransform = CanTransformText(prototype.ValueKind, prototype.ValueAccessorKind) ? draft.TextTransform : null,
+            GridHeader = prototype.GridHeader,
             GridRowConditions = prototype.GridRowConditions,
             GridTargetColumnName = prototype.GridTargetColumnName,
             GridCapturedRowPosition = rowPosition,
@@ -398,6 +417,25 @@ internal static class RecorderStepEditService
         && (step.ValueKind, step.ValueAccessorKind) is
             (RecorderValueKind.Text, RecorderValueAccessorKind.Text)
             or (RecorderValueKind.Number, RecorderValueAccessorKind.NumericText);
+
+    private static bool CanTransformText(RecorderValueKind? valueKind, RecorderValueAccessorKind? accessorKind) =>
+        valueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
+        || accessorKind == RecorderValueAccessorKind.NumericText;
+
+    internal static bool TryTransformPreview(RecorderStepEditDraft draft, out string value, out string error)
+    {
+        value = draft.CurrentPreview;
+        error = string.Empty;
+        if (draft.TextTransform is not { } transform) return true;
+        if (!CanTransformText(draft.ValueKind, draft.ValueAccessorKind))
+        {
+            error = "A text transformation requires a readable text source.";
+            return false;
+        }
+        try { value = transform.Apply(draft.SourceTextPreview); return true; }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        { error = $"Value source '{draft.ControlName}': {ex.Message}"; return false; }
+    }
 
     internal static bool TryParseNumericPreview(
         string? text,
@@ -441,17 +479,23 @@ internal static class RecorderStepEditService
             Control = prototype.Control,
             ValueKind = prototype.ValueKind,
             ValueAccessorKind = prototype.ValueAccessorKind,
+            NumericType = prototype.NumericType,
+            TextTransform = CanTransformText(prototype.ValueKind, prototype.ValueAccessorKind) ? source.TextTransform : null,
             RowIndex = prototype.RowIndex,
             ColumnIndex = prototype.ColumnIndex,
             GridRowConditions = prototype.GridRowConditions,
             GridTargetColumnName = prototype.GridTargetColumnName,
+            GridHeader = prototype.GridHeader,
+            CapturedDisplayText = prototype.CapturedDisplayText,
             GridCapturedRowPosition = prototype.GridCapturedRowPosition,
+            CanCaptureGridRowKey = prototype.CanCaptureGridRowKey,
             GridRowSourceMode = prototype.GridRowSourceMode,
             GridRowAnchorCheckpointId = null,
             StringValue = prototype.StringValue,
             BoolValue = prototype.BoolValue,
             DoubleValue = prototype.DoubleValue,
             DateValue = prototype.DateValue,
+            DateExpression = prototype.ValueKind == RecorderValueKind.DateTime ? null : source.DateExpression,
             TimeValue = prototype.TimeValue,
             StringValues = prototype.StringValues,
             Warning = prototype.Warning,

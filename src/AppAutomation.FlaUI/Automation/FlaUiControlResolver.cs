@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using AppAutomation.Abstractions;
@@ -619,18 +620,54 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         return descendant ?? SearchDetachedProcessRootsByNameContains(normalized);
     }
 
-    internal static T ReadTransientUiaLookup<T>(Func<T> read)
+    internal static T ReadTransientUiaLookup<T>(Func<T> read,
+        Func<TimeSpan>? remaining = null, Action? beforeRetry = null)
     {
-        for (var attempt = 0; ; attempt++)
+        ExceptionDispatchInfo? lastFailure = null;
+
+        TimeSpan? ReadRemaining()
         {
             try
             {
-                return read();
+                var time = remaining?.Invoke();
+                if (time is { } value && value <= TimeSpan.Zero)
+                    throw new TimeoutException("The UIA lookup operation exceeded its timeout.");
+                return time;
+            }
+            catch (TimeoutException) when (lastFailure is not null)
+            {
+                lastFailure.Throw();
+                throw;
+            }
+        }
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var time = ReadRemaining();
+            if (attempt > 0)
+            {
+                var delay = TimeSpan.FromMilliseconds(25);
+                Thread.Sleep(time is { } value && value < delay ? value : delay);
+                _ = ReadRemaining();
+                beforeRetry?.Invoke();
+                _ = ReadRemaining();
+            }
+            try
+            {
+                var result = read();
+                _ = ReadRemaining();
+                return result;
             }
             catch (System.Runtime.InteropServices.COMException exception) when (
                 attempt < 2 && TransientUiaLookupFailure.IsRetryable(exception))
             {
-                Thread.Sleep(25);
+                lastFailure = ExceptionDispatchInfo.Capture(exception);
+            }
+            catch (TimeoutException) when (lastFailure is not null)
+            {
+                // A nested root lookup can exhaust the same budget during recovery.
+                _ = ReadRemaining();
+                throw;
             }
         }
     }
@@ -3810,9 +3847,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         IEnumerable<AutomationElement> candidates = locator.Scope switch
         {
             GridRelativeLocatorScope.Cell =>
-                new[] { cell }.Concat(FindAutomationDescendants(cell)),
+                new[] { cell }.Concat(FindMatchingDescendants(cell)),
             GridRelativeLocatorScope.GridRoot when gridRoot is not null =>
-                new[] { gridRoot }.Concat(FindAutomationDescendants(gridRoot)),
+                new[] { gridRoot }.Concat(FindMatchingDescendants(gridRoot)),
             GridRelativeLocatorScope.DetachedPopup => FindProcessElements(searchRoot, locator),
             _ => Array.Empty<AutomationElement>()
         };

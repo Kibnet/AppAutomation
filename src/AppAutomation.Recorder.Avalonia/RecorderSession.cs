@@ -4102,14 +4102,16 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        var description = targetSelection.ValueSnapshot.Description;
-        if (description.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText))
+        if (!RecorderStepFactory.TryCreateTextCopySnapshot(targetSelection.ValueSnapshot, out var textSnapshot))
         {
             SetStatus(
-                "Copy value supports text-bearing controls and grid cells only.",
+                "The selected value does not expose displayed text for copying.",
                 RecorderValidationStatus.Invalid);
             return;
         }
+
+        targetSelection = targetSelection with { ValueSnapshot = textSnapshot };
+        var description = textSnapshot.Description;
 
         var copiedValue = CreateNextCopiedValueOption(
             targetSelection.ValueSnapshot,
@@ -4833,6 +4835,8 @@ internal sealed partial class RecorderSession :
                 StringComparison.Ordinal)
             && previous.GridRowSourceMode == step.GridRowSourceMode
             && previous.GridCapturedRowPosition == step.GridCapturedRowPosition
+            && Equals(previous.GridHeader, step.GridHeader)
+            && previous.TextTransform == step.TextTransform
             && GridRowConditionsEqual(previous.GridRowConditions, step.GridRowConditions);
     }
 
@@ -5164,6 +5168,8 @@ internal sealed partial class RecorderSession :
             step.ColumnIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.RepeatedItemKey ?? string.Empty,
             step.GridTargetColumnName ?? string.Empty,
+            System.Text.Json.JsonSerializer.Serialize(step.GridHeader),
+            System.Text.Json.JsonSerializer.Serialize(step.TextTransform),
             step.GridRowSourceMode.ToString(),
             step.GridCapturedRowPosition?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             step.GridRowAnchorCheckpointId?.ToString("N") ?? string.Empty,

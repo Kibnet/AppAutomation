@@ -11,6 +11,7 @@ internal static class HeadlessGridRuntimeAccess
 {
     private const BindingFlags PublicInstance = BindingFlags.Public | BindingFlags.Instance;
     private static readonly string[] CancelEditingMethods = ["CancelEditing", "CloseEditor", "HideEditor"];
+    private static readonly string[] ColumnSourcePaths = ["FieldName", "SortMemberPath", "Binding.Path"];
 
     public static object?[] ReadSourceItems(Control grid)
     {
@@ -44,28 +45,34 @@ internal static class HeadlessGridRuntimeAccess
             return (values.Cast<object?>().ToArray(), true);
         }
 
+        if (GridPropertyValueReader.TryReadProperty(grid, "VisibleRowCount", out var visibleCount)
+            && visibleCount is int count && count >= 0
+            && grid.GetType().GetMethod("GetSourceItemByVisibleRowIndex", PublicInstance,
+                binder: null, types: [typeof(int)], modifiers: null) is { } getVisibleItem)
+        {
+            return (Enumerable.Range(0, count).Select(index => getVisibleItem.Invoke(grid, [index]))
+                .Where(static item => item is not null).ToArray(), true);
+        }
+
         return (ReadSourceItems(grid), false);
     }
 
-    public static string[] ReadColumnNames(Control grid)
+    public static string[] ReadColumnNames(Control grid) => ReadColumnMetadata(grid).Names;
+
+    public static (string[] Names, string[] Fields) ReadColumnMetadata(Control grid)
     {
         ArgumentNullException.ThrowIfNull(grid);
-        if (grid is DataGrid dataGrid)
-        {
-            return dataGrid.Columns
-                .Select(ReadDataGridColumnName)
-                .ToArray();
-        }
-
         if (!GridPropertyValueReader.TryReadProperty(grid, "Columns", out var columns)
             || columns is not IEnumerable values
             || columns is string)
         {
-            return Array.Empty<string>();
+            return ([], []);
         }
 
-        return values.Cast<object?>()
-            .Select(static column =>
+        var nativeColumns = values.Cast<object?>().ToArray();
+        var fields = nativeColumns.Select(ReadSourceColumnName).ToArray();
+        var names = nativeColumns
+            .Select((column, index) =>
             {
                 if (column is null)
                 {
@@ -79,17 +86,33 @@ internal static class HeadlessGridRuntimeAccess
                     return headerText.Trim();
                 }
 
-                if (GridPropertyValueReader.TryReadProperty(column!, "FieldName", out var fieldName)
-                    && Convert.ToString(fieldName, System.Globalization.CultureInfo.InvariantCulture) is { } sourceName
-                    && !string.IsNullOrWhiteSpace(sourceName))
-                {
-                    return sourceName.Trim();
-                }
-
-                return null;
+                return fields[index];
             })
             .Select(static name => name ?? string.Empty)
             .ToArray();
+        return (DisambiguateColumnNames(fields, names), fields);
+    }
+
+    private static string[] DisambiguateColumnNames(IReadOnlyList<string> fields, string[] names)
+    {
+        var repeated = names.Where(static name => !string.IsNullOrWhiteSpace(name))
+            .GroupBy(static name => name, StringComparer.Ordinal).Where(static group => group.Count() > 1)
+            .Select(static group => group.Key).ToHashSet(StringComparer.Ordinal);
+        for (var index = 0; index < names.Length; index++)
+        {
+            if (repeated.Contains(names[index]) && fields[index].Length > 0)
+                names[index] = fields[index];
+        }
+        return names;
+    }
+
+    private static string ReadSourceColumnName(object? column)
+    {
+        if (column is null) return string.Empty;
+        foreach (var path in ColumnSourcePaths)
+            if (GridPropertyValueReader.TryReadPath(column, path, out var field)
+                && field is string name && !string.IsNullOrWhiteSpace(name)) return name.Trim();
+        return string.Empty;
     }
 
     public static Control? FindCell(
@@ -413,19 +436,6 @@ internal static class HeadlessGridRuntimeAccess
         return false;
     }
 
-    private static string ReadDataGridColumnName(DataGridColumn column)
-    {
-        var header = MenuPathValue.TryGetVisibleCaption(column.Header);
-        if (!string.IsNullOrWhiteSpace(header))
-        {
-            return header.Trim();
-        }
-
-        return string.IsNullOrWhiteSpace(column.SortMemberPath)
-            ? string.Empty
-            : column.SortMemberPath.Trim();
-    }
-
     private static object? FindProviderColumn(Control grid, GridRuntimeColumn column)
     {
         if (grid is DataGrid dataGrid)
@@ -549,9 +559,9 @@ internal static class HeadlessGridRuntimeAccess
     private static string? ReadDataGridBindingPath(DataGridColumn column)
     {
         return column is DataGridBoundColumn
-            {
-                Binding: global::Avalonia.Data.Binding binding
-            }
+        {
+            Binding: global::Avalonia.Data.Binding binding
+        }
             ? binding.Path
             : null;
     }

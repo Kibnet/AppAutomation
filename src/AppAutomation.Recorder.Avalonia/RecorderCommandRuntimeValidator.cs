@@ -324,6 +324,7 @@ internal sealed class RecorderCommandRuntimeValidator
     {
         return (controlType, valueKind, accessorKind) switch
         {
+            (UiControlType.Grid or UiControlType.DataGridView, RecorderValueKind.Text, RecorderValueAccessorKind.GridHeaderText) => true,
             (UiControlType.TextBox or UiControlType.Label or UiControlType.Button or UiControlType.Search,
                 RecorderValueKind.Text,
                 RecorderValueAccessorKind.Text) => true,
@@ -375,7 +376,7 @@ internal sealed class RecorderCommandRuntimeValidator
                 RecorderValueAccessorKind.GridCellText) => true,
             (UiControlType.Grid or UiControlType.DataGridView,
                 RecorderValueKind.Text or RecorderValueKind.Number or RecorderValueKind.Boolean
-                    or RecorderValueKind.Date or RecorderValueKind.Time or RecorderValueKind.Color
+                    or RecorderValueKind.Date or RecorderValueKind.DateTime or RecorderValueKind.Time or RecorderValueKind.Color
                     or RecorderValueKind.GridCellText,
                 RecorderValueAccessorKind.GridCellValue) => true,
             _ => false
@@ -401,7 +402,7 @@ internal sealed class RecorderCommandRuntimeValidator
             RecorderValueKind.Boolean => step.BoolValue.HasValue
                 ? []
                 : [Invalid(target, "literal-missing-boolean", "Boolean assertion requires an expected value.")],
-            RecorderValueKind.Date or RecorderValueKind.Time => [],
+            RecorderValueKind.Date or RecorderValueKind.DateTime or RecorderValueKind.Time => [],
             RecorderValueKind.StringSet => step.StringValues is null
                 ? [Invalid(target, "literal-missing-string-set", "Collection assertion requires an expected string set.")]
                 : [],

@@ -93,6 +93,7 @@ internal static class GridCellValueNormalizer
         {
             GridCellValueKind.Number when GridValueConversion.TryConvertNumber(snapshot, out var number, out _) => number,
             GridCellValueKind.Date when GridValueConversion.TryConvertDate(snapshot, out var date, out _) => date,
+            GridCellValueKind.DateTime when GridDateTimeValueConversion.TryConvert(snapshot, out var dateTime, out _) => dateTime,
             GridCellValueKind.Time when GridValueConversion.TryConvertTime(snapshot, out var time, out _) => time,
             GridCellValueKind.Boolean when snapshot.RawValue is bool value => value,
             GridCellValueKind.Boolean when snapshot.DisplayText is { } text

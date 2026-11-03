@@ -592,19 +592,24 @@ public sealed class RecorderStableGridSelectorTests
 
         var result = fixture.CaptureCheckpoint("rowKey");
 
-        await Assert.That(result.Success).IsEqualTo(expectedSuccess);
+        await Assert.That(result.Success).IsTrue();
         if (expectedSuccess)
         {
             await Assert.That(result.Step!.GridCapturedRowPosition).IsEqualTo(expectedPosition);
         }
         else
         {
-            await Assert.That(result.Message).Contains("cannot prove");
+            await Assert.That(result.Step!.GridCapturedRowPosition).IsNull();
+            await Assert.That(result.Step.GridRowSourceMode).IsEqualTo(RecorderGridRowSourceMode.RecordedStableKey);
+            await Assert.That(result.Step.GridRowConditions).IsEquivalentTo(
+                [new RecordedGridRowCondition("Key", "ITEM-20")]);
         }
     }
 
     [Test]
-    public async Task GridCatalog_NumericCellsSupportCalculatedTargetAndOperands()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task GridCatalog_NumericCellsSupportCalculatedTargetAndOperands(bool rememberTargetFirst)
     {
         using var fixture = new CalculatedGridAssertionFixture();
         var details = (IRecorderCheckpointSessionDetails)fixture.Session;
@@ -630,6 +635,20 @@ public sealed class RecorderStableGridSelectorTests
         await Assert.That(leftOperand).IsNotNull();
         await Assert.That(rightOperand).IsNotNull();
 
+        if (rememberTargetFirst)
+        {
+            fixture.Session.AddRecordedStepForTesting(targetSelection!.ValueSnapshot!.Prototype with
+            {
+                ActionKind = RecordedActionKind.CaptureCheckpoint,
+                StepId = Guid.NewGuid(),
+                CheckpointId = Guid.NewGuid(),
+                CheckpointVariableName = "requiredAmount",
+                GridRowSourceMode = RecorderGridRowSourceMode.RecordedStableKey,
+                GridCapturedRowPosition = null,
+                CanCaptureGridRowKey = true
+            });
+        }
+
         details.CaptureCalculatedAssertion(
             targetSelection!,
             new RecorderNumericExpectedExpression(
@@ -637,7 +656,7 @@ public sealed class RecorderStableGridSelectorTests
                 leftOperand!,
                 rightOperand!));
 
-        var entry = fixture.Session.StepJournal.Single();
+        var entry = fixture.Session.StepJournal.Last();
         var preview = fixture.Session.ExportPreview();
 
         using (Assert.Multiple())
@@ -651,11 +670,12 @@ public sealed class RecorderStableGridSelectorTests
             await Assert.That(leftOperand).IsNotNull();
             await Assert.That(rightOperand).IsNotNull();
             await Assert.That(entry.CanPersist).IsTrue();
-            await Assert.That(preview).IsEqualTo(
+            await Assert.That(entry.Preview).IsEqualTo(
                 "await Assert.That(GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-30\"), \"RequiredAmount\")).IsEqualTo("
                 + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-10\"), \"RequiredAmount\") - "
                 + "GridValueReader.ReadCellNumber(Page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"ITEM-20\"), \"RequiredAmount\"));");
             await Assert.That(preview).DoesNotContain("TargetAmountEditor");
+            await Assert.That(preview).EndsWith(entry.Preview);
             await Assert.That(preview).DoesNotContain("LeftAmountEditor");
             await Assert.That(preview).DoesNotContain("RightAmountEditor");
         }
@@ -703,8 +723,10 @@ public sealed class RecorderStableGridSelectorTests
                 new RecordedGridRowCondition("Key", expectedKey)
             ]);
             await Assert.That(capture.StepResult.Step.RowIndex).IsNull();
+            await Assert.That(preview).Contains("var gridRow = GridRowKeyReader.CaptureFirst(Page.ItemsGrid);");
             await Assert.That(preview).Contains(
-                $"Page.SelectGridRow(static page => page.ItemsGrid, GridRowSelector.ByCell(\"Key\", \"{expectedKey}\"));");
+                "Page.SelectGridRow(static page => page.ItemsGrid, gridRow);");
+            await Assert.That(preview).DoesNotContain(expectedKey);
         }
     }
 
@@ -725,7 +747,9 @@ public sealed class RecorderStableGridSelectorTests
         using (Assert.Multiple())
         {
             await Assert.That(step.Preview).Contains("Page.OpenGridRow(");
-            await Assert.That(step.Preview).Contains("GridRowSelector.ByCell(\"Key\", \"ITEM-30\")");
+            await Assert.That(step.Preview).Contains("GridRowKeyReader.CaptureFirst(Page.ItemsGrid)");
+            await Assert.That(step.Preview).Contains("Page.OpenGridRow(static page => page.ItemsGrid, gridRow);");
+            await Assert.That(step.Preview).DoesNotContain("ITEM-30");
             await Assert.That(step.Preview).DoesNotContain("Page.SelectGridRow(");
             await Assert.That(session.ExportPreview()).Contains("Page.OpenGridRow(");
         }
@@ -766,8 +790,11 @@ public sealed class RecorderStableGridSelectorTests
         session.CaptureCatalogGridRowGestureForTesting(fixture.SelectedCell);
 
         await Assert.That(session.StepJournal).Count().IsEqualTo(2);
-        await Assert.That(session.StepJournal[0].Preview).Contains("ITEM-10");
-        await Assert.That(session.StepJournal[1].Preview).Contains("ITEM-30");
+        await Assert.That(session.StepJournal[0].Preview).Contains("Page.SelectGridRow(static page => page.ItemsGrid, gridRow);");
+        await Assert.That(session.StepJournal[1].Preview).Contains(
+            "var gridRow2 = GridRowKeyReader.CaptureFirst(Page.ItemsGrid, excludingRows: new[] { gridRow });");
+        await Assert.That(session.StepJournal[1].Preview).Contains("Page.SelectGridRow(static page => page.ItemsGrid, gridRow2);");
+        await Assert.That(session.ExportPreview()).DoesNotContain("GridRowSelector.ByCell");
     }
 
     [Test]
@@ -1011,9 +1038,10 @@ public sealed class RecorderStableGridSelectorTests
         using (Assert.Multiple())
         {
             await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(entry.Preview).Contains("GridRowKeyReader.CaptureFirst(Page.ItemsGrid)");
             await Assert.That(entry.Preview).Contains(
-                "Page.EditGridCellText(static page => page.ItemsGrid, "
-                + "GridRowSelector.ByCell(\"Key\", \"ITEM-42\"), \"Value\", \"Updated\"");
+                "Page.EditGridCellText(static page => page.ItemsGrid, gridRow, \"Value\", \"Updated\"");
+            await Assert.That(entry.Preview).DoesNotContain("ITEM-42");
             await Assert.That(entry.Preview.Contains("GridCellEditCommitMode.Cancel", StringComparison.Ordinal))
                 .IsEqualTo(cancel);
             await Assert.That(entry.Preview).DoesNotContain("Page.EnterText");
@@ -1047,9 +1075,10 @@ public sealed class RecorderStableGridSelectorTests
         using (Assert.Multiple())
         {
             await Assert.That(entry.CanPersist).IsTrue();
+            await Assert.That(entry.Preview).Contains("GridRowKeyReader.CaptureFirst(Page.ItemsGrid)");
             await Assert.That(entry.Preview).Contains(
-                $"Page.{generatedMethod}(static page => page.ItemsGrid, "
-                + "GridRowSelector.ByCell(\"Key\", \"ITEM-42\"), \"Status\"");
+                $"Page.{generatedMethod}(static page => page.ItemsGrid, gridRow, \"Status\"");
+            await Assert.That(entry.Preview).DoesNotContain("ITEM-42");
             await Assert.That(entry.Preview).DoesNotContain("SelectListBoxItem");
         }
 

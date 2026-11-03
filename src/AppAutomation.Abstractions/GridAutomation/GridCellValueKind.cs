@@ -10,5 +10,7 @@ public enum GridCellValueKind
     Boolean = 4,
     Selection = 5,
     Reference = 6,
-    Color = 7
+    Color = 7,
+    /// <summary>A wall-clock date and time, without timezone conversion.</summary>
+    DateTime = 8
 }

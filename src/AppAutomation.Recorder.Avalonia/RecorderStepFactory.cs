@@ -890,9 +890,14 @@ internal sealed partial class RecorderStepFactory
 
     public bool ShouldSuppressGridComboSelectionButton(Control? source)
     {
-        return EnumerateRelatedControls(source)
-            .OfType<ComboBox>()
-            .Any(comboBox => ResolveGridComboSelectionContext(comboBox).IsConfigured);
+        var related = EnumerateRelatedControls(source).ToArray();
+        if (related.OfType<ComboBox>().Any(comboBox => ResolveGridComboSelectionContext(comboBox).IsConfigured)) return true;
+        if (source is null || !IsCatalogGridEditor(source, GridCellEditorKind.ComboBox)
+            || !TryResolveGridHint(source, out var hint, out _)
+            || FindGridDefinition(hint) is not { } definition) return false;
+        return definition.Columns.Any(column => column.EditorKind == GridCellEditorKind.ComboBox
+            && column.EditorParts?.OpenButton is { } part
+            && related.Any(control => MatchesLocator(control, part.LocatorKind, part.LocatorValue)));
     }
 
     public StepCreationResult TryCreateSearchPickerStep(
@@ -1539,13 +1544,13 @@ internal sealed partial class RecorderStepFactory
         return IsSingleSelectPair(searchInput, results)
             || IsCatalogGridSelectionPair(searchInput, results)
             || results switch
-        {
-            ComboBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _)
-                || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _),
-            ListBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _)
-                || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _),
-            _ => false
-        };
+            {
+                ComboBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _)
+                    || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ComboBox, out _),
+                ListBox => TryResolveSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _)
+                    || TryResolveGridSearchPickerHint(searchInput, results, SearchPickerResultsKind.ListBox, out _),
+                _ => false
+            };
     }
 
     public bool IsCompositeSelectedValue(TextBox searchInput, Control results, string? text)
@@ -2474,11 +2479,13 @@ internal sealed partial class RecorderStepFactory
                 out error,
                 out isDefinitiveFailure))
         {
+            isDefinitiveFailure |= source is not null && !string.IsNullOrWhiteSpace(error)
+                && TryResolveGridHint(source, out _, out var failedGrid) && !ReferenceEquals(source, failedGrid);
             return false;
         }
 
         var captured = TryCreateSemanticValueSnapshot(source!, candidate, out snapshot, out error);
-        if (!captured && candidate.RepeatedItemKey is not null)
+        if (!captured && (candidate.RepeatedItemKey is not null || candidate.GridContext is not null))
         {
             isDefinitiveFailure = true;
         }
@@ -2540,7 +2547,7 @@ internal sealed partial class RecorderStepFactory
 
                 firstFailedSource ??= source;
                 firstError ??= snapshotError;
-                if (candidate.RepeatedItemKey is not null)
+                if (candidate.RepeatedItemKey is not null || candidate.GridContext is not null)
                 {
                     definitiveFailedSource ??= source;
                     definitiveError ??= snapshotError;
@@ -2572,6 +2579,9 @@ internal sealed partial class RecorderStepFactory
         {
             resolvedSource = firstFailedSource;
             error = firstError ?? string.Empty;
+            isDefinitiveFailure = firstFailedSource is not null
+                && TryResolveGridHint(firstFailedSource, out _, out var failedGrid)
+                && !ReferenceEquals(firstFailedSource, failedGrid);
             return false;
         }
 
@@ -2604,6 +2614,8 @@ internal sealed partial class RecorderStepFactory
         out string? error)
     {
         snapshot = null;
+        if (candidate.GridContext is not null && ExtractTextValue(source) is { } displayedText)
+            candidate = candidate with { DisplayText = displayedText };
         var prototypeResult = TryCreateSemanticSnapshotPrototype(source!, candidate);
         if (!prototypeResult.Success || prototypeResult.Step is null)
         {
@@ -2691,9 +2703,9 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported("The selected control does not expose a semantic value snapshot.");
         }
 
-        if (snapshot.Description.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText))
+        if (!TryCreateTextCopySnapshot(snapshot, out snapshot))
         {
-            return StepCreationResult.Unsupported("Copy value supports text-bearing controls and grid cells only.");
+            return StepCreationResult.Unsupported("The selected value does not expose displayed text for copying.");
         }
 
         var candidate = CreateCandidate(snapshot);
@@ -2703,6 +2715,27 @@ internal sealed partial class RecorderStepFactory
             CopiedValueVariableName = copiedValue.VariableName
         };
         return CreateStepFromSnapshot(snapshot, step, "Captured text for replay-time clipboard copy.");
+    }
+
+    internal static bool TryCreateTextCopySnapshot(RecorderSemanticValueSnapshot source,
+        out RecorderSemanticValueSnapshot snapshot)
+    {
+        snapshot = source;
+        if (source.Description.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText) return true;
+        var step = source.Prototype;
+        if (step.ValueAccessorKind != RecorderValueAccessorKind.GridCellValue || step.CapturedDisplayText is null) return false;
+        snapshot = new(step with
+        {
+            ValueKind = RecorderValueKind.GridCellText,
+            ValueAccessorKind = RecorderValueAccessorKind.GridCellText,
+            StringValue = step.CapturedDisplayText,
+            DoubleValue = null,
+            BoolValue = null,
+            DateValue = null,
+            TimeValue = null,
+            NumericType = null
+        }, source.Description with { ValueKind = RecorderValueKind.GridCellText, CurrentValueText = step.CapturedDisplayText });
+        return true;
     }
 
     internal StepCreationResult TryCreateCheckpointAssertionStep(
@@ -3138,7 +3171,10 @@ internal sealed partial class RecorderStepFactory
                 step with
                 {
                     GridRowConditions = grid.RowConditions,
-                    GridTargetColumnName = grid.TargetColumnName
+                    GridTargetColumnName = grid.TargetColumnName,
+                    CanCaptureGridRowKey = _options.GridAutomation.Any(definition =>
+                        definition.RuntimeLocatorKind == candidate.Control.LocatorKind
+                        && string.Equals(definition.RuntimeLocatorValue, candidate.Control.LocatorValue, StringComparison.Ordinal))
                 },
                 "Captured stable grid value target.");
         }
@@ -3242,6 +3278,9 @@ internal sealed partial class RecorderStepFactory
             isDefinitiveFailure = true;
             return false;
         }
+
+        if (TryResolveGridHeaderSemanticValue(source, out candidate, out error, out var headerHandled)) return true;
+        if (headerHandled) { isDefinitiveFailure = true; return false; }
 
         if (TryResolveConfiguredSemanticValue(
                 source,
@@ -3759,6 +3798,7 @@ internal sealed partial class RecorderStepFactory
                 or RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Date => accessorKind is RecorderValueAccessorKind.SelectedDate
                 or RecorderValueAccessorKind.GridCellValue,
+            RecorderValueKind.DateTime => accessorKind == RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Time => accessorKind is RecorderValueAccessorKind.SelectedTime
                 or RecorderValueAccessorKind.GridCellValue,
             RecorderValueKind.Color => accessorKind is RecorderValueAccessorKind.Color
@@ -4122,6 +4162,7 @@ internal sealed partial class RecorderStepFactory
         {
             GridCellValueKind.Number => RecorderValueKind.Number,
             GridCellValueKind.Date => RecorderValueKind.Date,
+            GridCellValueKind.DateTime => RecorderValueKind.DateTime,
             GridCellValueKind.Time => RecorderValueKind.Time,
             GridCellValueKind.Boolean => RecorderValueKind.Boolean,
             GridCellValueKind.Color => RecorderValueKind.Color,
@@ -4143,6 +4184,13 @@ internal sealed partial class RecorderStepFactory
                     recorderKind,
                     RecorderValueAccessorKind.GridCellValue,
                     DateValue: date,
+                    GridContext: gridContext),
+            RecorderValueKind.DateTime when RecorderGridValueConversion.TryConvertGridDateTime(rawValue, displayText, column, out var dateTime) =>
+                new SemanticValueCandidate(
+                    control,
+                    recorderKind,
+                    RecorderValueAccessorKind.GridCellValue,
+                    DateValue: dateTime,
                     GridContext: gridContext),
             RecorderValueKind.Time when RecorderGridValueConversion.TryConvertGridTime(rawValue, displayText, column, out var time) =>
                 new SemanticValueCandidate(
@@ -4175,6 +4223,7 @@ internal sealed partial class RecorderStepFactory
 
         if (candidate is not null)
         {
+            candidate = candidate with { DisplayText = displayText };
             error = string.Empty;
             return true;
         }
@@ -6562,6 +6611,7 @@ internal sealed partial class RecorderStepFactory
         bool excludeTargetColumnFromIdentity)
     {
         var matchingHints = _options.EnumerateGridHints()
+            .Concat(_nativeGridDefinitions.Values.Select(static entry => entry.Hint))
             .Where(hint => hint.TargetLocatorKind == targetGridLocatorKind
                 && string.Equals(
                     hint.TargetLocatorValue.Trim(),
@@ -6806,14 +6856,6 @@ internal sealed partial class RecorderStepFactory
             definition,
             items,
             item);
-        if (step.ActionKind == RecordedActionKind.CaptureCheckpoint
-            && capturedViewPosition is null)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' cannot prove the selected row's current view position. "
-                + "The visible rows do not establish the complete sorted or filtered view order; "
-                + "capture a key from a source that exposes its current view order.");
-        }
         var conditions = effectiveIdentityColumns
             .Select((columnName, index) => new RecordedGridRowCondition(columnName, identityValues[index]))
             .ToArray();
@@ -6824,6 +6866,7 @@ internal sealed partial class RecorderStepFactory
                 GridRowConditions = conditions,
                 GridTargetColumnName = targetColumnName,
                 GridCapturedRowPosition = capturedViewPosition,
+                CanCaptureGridRowKey = true,
                 RowIndex = null,
                 ColumnIndex = null
             },
@@ -8299,11 +8342,11 @@ internal sealed partial class RecorderStepFactory
     private static bool IsSingleSelectResults(Control results, RecorderSingleSelectHint hint)
     {
         return (hint.Parts.ResultsKind switch
-            {
-                SingleSelectResultsKind.ComboBox => results is ComboBox,
-                SingleSelectResultsKind.ListBox => results is ListBox,
-                _ => false
-            })
+        {
+            SingleSelectResultsKind.ComboBox => results is ComboBox,
+            SingleSelectResultsKind.ListBox => results is ListBox,
+            _ => false
+        })
             && MatchesLocator(results, hint.Parts.LocatorKind, hint.Parts.ResultsLocator);
     }
 

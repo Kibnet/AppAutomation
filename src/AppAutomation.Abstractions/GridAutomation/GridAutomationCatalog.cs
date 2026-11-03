@@ -169,6 +169,7 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
                 or GridCellEditorKind.Text,
             GridCellValueKind.Time => editorKind is GridCellEditorKind.Time
                 or GridCellEditorKind.Text,
+            GridCellValueKind.DateTime => editorKind is GridCellEditorKind.Text,
             GridCellValueKind.Boolean => editorKind == GridCellEditorKind.CheckBox,
             GridCellValueKind.Selection or GridCellValueKind.Reference =>
                 editorKind is GridCellEditorKind.ComboBox or GridCellEditorKind.SearchPicker,
@@ -216,6 +217,12 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
             AppendField(builder, definition.CellContext.RowPath);
             AppendField(builder, definition.CellContext.FieldNamePath);
             AppendField(builder, definition.CellContext.ValuePath);
+            AppendField(builder, definition.HeaderContext.GroupFieldPath);
+            AppendField(builder, definition.HeaderContext.GroupValuePath);
+            AppendField(builder, definition.HeaderContext.GroupTextPath);
+            AppendField(builder, definition.HeaderContext.GroupLevelPath);
+            AppendField(builder, definition.HeaderContext.ParentGroupPath);
+            AppendField(builder, definition.HeaderContext.RuntimeAddressProperty);
             AppendField(builder, definition.RowIdentityColumns.Count);
             foreach (var identity in definition.RowIdentityColumns)
             {

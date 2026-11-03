@@ -1,6 +1,7 @@
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
+using AppAutomation.Recorder.Avalonia;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
@@ -13,6 +14,406 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task GroupedNativeHeadersReadFullParentPathThroughTheConfiguredResolver(bool avaloniaGrid)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = new[] { new HeaderContractRow("First", "42", 500), new HeaderContractRow("Second", "42", 1200) };
+        void SetRows(Control control, HeaderContractRow[] items)
+        {
+            if (control is DataGrid native)
+            {
+                var view = new global::Avalonia.Collections.DataGridCollectionView(items);
+                view.GroupDescriptions.Add(new global::Avalonia.Collections.DataGridPathGroupDescription("Customer"));
+                view.GroupDescriptions.Add(new global::Avalonia.Collections.DataGridPathGroupDescription("Order"));
+                native.ItemsSource = view;
+            }
+            else if (control is Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl custom)
+            {
+                custom.ItemsSource = items;
+                custom.ExpandAllGroups();
+            }
+        }
+        var grid = HeadlessRuntime.Dispatch(() =>
+        {
+            Control control;
+            if (avaloniaGrid)
+            {
+                var native = new DataGrid { Width = 720, Height = 360, AutoGenerateColumns = false };
+                foreach (var field in new[] { "Customer", "Order", "Quantity" })
+                    native.Columns.Add(new DataGridTextColumn
+                    {
+                        Header = field,
+                        Binding = new global::Avalonia.Data.Binding(field)
+                    });
+                control = native;
+            }
+            else
+            {
+                var custom = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl
+                { Width = 720, Height = 360, AutoGenerateColumns = false, AutoExpandAllGroups = true, ShowGroupPanel = false };
+                custom.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+                { FieldName = "Customer", Header = "Контрагент", SortIndex = 0, SortDirection = System.ComponentModel.ListSortDirection.Ascending });
+                custom.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+                { FieldName = "Order", Header = "Номер заказа", SortIndex = 1, SortDirection = System.ComponentModel.ListSortDirection.Ascending });
+                custom.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn { FieldName = "Quantity", Header = "Количество", BandName = "VolumePlan" });
+                custom.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn { FieldName = "OtherQuantity", Header = "Количество", BandName = "CostPlan" });
+                foreach (var name in new[] { "Volume", "Cost" })
+                {
+                    var band = new Eremex.AvaloniaUI.Controls.DataGrid.GridBand { BandName = name, Header = name };
+                    band.Bands.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridBand { BandName = name + "Plan", Header = "План" });
+                    custom.Bands.Add(band);
+                }
+                custom.CustomGroupValueDisplayText += (_, e) => e.DisplayText = $"{e.Column.Header}: {e.Value}";
+                custom.GroupCount = 2;
+                control = custom;
+            }
+            SetRows(control, rows);
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "HeaderContractGrid");
+            session.MainWindow.Content = control;
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            session.MainWindow.UpdateLayout();
+            return control;
+        });
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "HeaderContractGrid", "HeaderContractGrid", "HeaderContractGrid")
+            .WithColumns(GridColumnDefinition.Map("CustomerLogical").FromField("Customer"),
+                GridColumnDefinition.Map("Order").FromField("Order"), GridColumnDefinition.Map("Quantity").FromField("Quantity"))
+            .IdentifyRowsBy("CustomerLogical", "Order"));
+        var resolved = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog)
+            .Resolve<IGridControl>(new UiControlDefinition("HeaderContractGrid", UiControlType.Grid, "HeaderContractGrid"));
+        var address = GridHeaderSelector.Group("CustomerLogical", "Second").ThenGroup("Order", "42");
+        var availableHeader = GridHeaderKeyReader.CaptureFirst(resolved, ["CustomerLogical", "Order"]);
+        await Assert.That(GridValueReader.ReadHeaderText(resolved, GridHeaderSelector.Column("Quantity")))
+            .IsEqualTo(avaloniaGrid ? "Quantity" : "Количество");
+        await Assert.That(GridValueReader.ReadHeaderText(resolved, address)).IsEqualTo(avaloniaGrid ? "42" : "Номер заказа: 42");
+        HeadlessRuntime.Dispatch(() =>
+        {
+            SetRows(grid, [new HeaderContractRow("Second", "42", 1500), new HeaderContractRow("First", "42", 750)]);
+            session.MainWindow.UpdateLayout();
+        });
+        var display = GridValueReader.ReadHeaderText(resolved, address);
+        await Assert.That(avaloniaGrid ? display : TextValue.AfterFirstSeparator(display, ":")).IsEqualTo("42");
+        await Assert.That(GridValueReader.ReadHeaderText(resolved, availableHeader)).IsEqualTo(avaloniaGrid ? "42" : "Номер заказа: 42");
+        var nativeAddress = GridHeaderSelector.Group("Customer", "Second").ThenGroup("Order", "42");
+        await Assert.That(GridHeaderSelector.FromAutomationValue(nativeAddress.ToAutomationValue())).IsEqualTo(nativeAddress);
+        var unconfigured = new HeadlessControlResolver(session.MainWindow)
+            .Resolve<IGridControl>(new UiControlDefinition("HeaderContractGrid", UiControlType.Grid, "HeaderContractGrid"));
+        await Assert.That(GridValueReader.ReadCellNumber(unconfigured, GridRowSelector.ByCell("Customer", "Second").AndCell("Order", "42"), "Quantity"))
+            .IsEqualTo(1500d);
+        if (!avaloniaGrid)
+        {
+            await Assert.That(GridValueReader.ReadHeaderText(resolved, GridHeaderSelector.Band("Volume").ThenBand("VolumePlan"))).IsEqualTo("План");
+            await Assert.That(GridValueReader.ReadHeaderText(resolved, GridHeaderSelector.Band("Cost").ThenBand("CostPlan"))).IsEqualTo("План");
+            var row = GridRowSelector.ByCell("CustomerLogical", "Second").AndCell("Order", "42");
+            await Assert.That(GridValueReader.ReadCellNumber(resolved, row, "Quantity")).IsEqualTo(1500d);
+            await Assert.That(GridValueReader.ReadCellNumber(resolved, row, "OtherQuantity")).IsEqualTo(3000d);
+            HeadlessRuntime.Dispatch(() =>
+            {
+                var headers = grid.GetVisualDescendants()
+                    .OfType<Eremex.AvaloniaUI.Controls.DataGrid.Visuals.DataGridGroupRowControl>()
+                    .Where(static header => header.IsEffectivelyVisible)
+                    .OrderBy(header => header.TranslatePoint(default, grid)?.Y).ToArray();
+                var target = headers.Last(static header => header.Level == 1);
+                global::Avalonia.Automation.AutomationProperties.SetItemStatus(target, nativeAddress.ToAutomationValue());
+                global::Avalonia.Automation.AutomationProperties.SetName(target, "Заказ: 42");
+                foreach (var parent in headers.Where(static header => header.Level == 0)) parent.IsVisible = false;
+            });
+            await Assert.That(GridValueReader.ReadHeaderText(resolved, address)).IsEqualTo("Заказ: 42");
+            await Assert.That(GridValueReader.ReadHeaderText(unconfigured, nativeAddress)).IsEqualTo("Заказ: 42");
+        }
+
+        // Another database: neither the recorded order nor its parent exists.
+        var newRows = new[] { new HeaderContractRow("Other", "RU-other-1", 3100), new HeaderContractRow("Else", "RU-other-2", 4700) };
+        HeadlessRuntime.Dispatch(() =>
+        {
+            // Remove the preceding synthetic publication before reusing native containers with other data.
+            foreach (var header in grid.GetVisualDescendants().OfType<Eremex.AvaloniaUI.Controls.DataGrid.Visuals.DataGridGroupRowControl>())
+            {
+                header.ClearValue(global::Avalonia.Automation.AutomationProperties.ItemStatusProperty);
+                header.ClearValue(global::Avalonia.Automation.AutomationProperties.NameProperty);
+                header.ClearValue(Visual.IsVisibleProperty);
+            }
+            SetRows(grid, newRows);
+            session.MainWindow.UpdateLayout();
+        });
+        var newHeader = GridHeaderKeyReader.CaptureFirst(resolved, ["CustomerLogical", "Order"]);
+        await Assert.That(newHeader.Path.Last().Value).IsNotEqualTo("42");
+        var newText = GridValueReader.ReadHeaderText(resolved, newHeader);
+        await Assert.That(avaloniaGrid ? newText : TextValue.AfterFirstSeparator(newText, ":")).IsEqualTo(newHeader.Path.Last().Value);
+        var availableRow = GridRowKeyReader.CaptureFirst(resolved);
+        var otherAvailableRow = GridRowKeyReader.CaptureFirst(resolved, excludingRows: [availableRow]);
+        await Assert.That(otherAvailableRow.Conditions.Select(static part => part.Value).ToArray())
+            .IsNotEquivalentTo(availableRow.Conditions.Select(static part => part.Value).ToArray());
+        var quantity = GridValueReader.ReadCellNumber(resolved, availableRow, "Quantity");
+        var otherQuantity = GridValueReader.ReadCellNumber(resolved, otherAvailableRow, "Quantity");
+        HeadlessRuntime.Dispatch(() => { SetRows(grid, newRows.Reverse().ToArray()); session.MainWindow.UpdateLayout(); });
+        await Assert.That(GridValueReader.ReadCellNumber(resolved, availableRow, "Quantity")).IsEqualTo(quantity);
+        await Assert.That(GridValueReader.ReadCellNumber(resolved, otherAvailableRow, "Quantity")).IsEqualTo(otherQuantity);
+        await Assert.That(GridValueReader.ReadHeaderText(resolved, newHeader)).IsEqualTo(newText);
+
+        HeadlessRuntime.Dispatch(() =>
+        {
+            if (grid is DataGrid native)
+                ((global::Avalonia.Collections.DataGridCollectionView)native.CollectionView).Filter =
+                    item => item is HeaderContractRow { Quantity: > 4000 };
+            else
+                ((Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl)grid).FilterString = "[Quantity] > 4000";
+            session.MainWindow.UpdateLayout();
+            grid.Dispatcher.RunJobs();
+        });
+        var filteredRow = GridRowKeyReader.CaptureFirst(resolved);
+        await Assert.That(filteredRow.Conditions.Single(part => part.ColumnName == "Order").Value).IsEqualTo("RU-other-2");
+        Assert.Throws<TimeoutException>(() =>
+            GridRowKeyReader.CaptureFirst(resolved, excludingRows: [filteredRow], timeoutMs: 150));
+
+        HeadlessRuntime.Dispatch(() =>
+        {
+            if (grid is DataGrid native)
+                ((global::Avalonia.Collections.DataGridCollectionView)native.CollectionView).Filter = null;
+            else
+                ((Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl)grid).FilterString = null;
+            session.MainWindow.UpdateLayout();
+            grid.Dispatcher.RunJobs();
+        });
+        var restoredRow = GridRowKeyReader.CaptureFirst(resolved, excludingRows: [filteredRow]);
+        await Assert.That(restoredRow.Conditions.Single(part => part.ColumnName == "Order").Value).IsEqualTo("RU-other-1");
+    }
+
+    public sealed record HeaderContractRow(string Customer, string Order, double Quantity)
+    {
+        public double OtherQuantity => Quantity * 2;
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task GroupedEditableGridChecksEveryFieldHeaderAndLaterRowWithoutRecordedKeys()
+    {
+        using var app = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = Enumerable.Range(0, 100).Select(index => new FullGridContractRow(index)).ToArray();
+        var fields = new (string Name, string Caption, GridCellValueKind Kind)[]
+        {
+            ("OrderNumber", "Номер заказа", GridCellValueKind.Text), ("MarketProductName", "Продукт", GridCellValueKind.Text),
+            ("IsRequest", "Заявка", GridCellValueKind.Boolean), ("ProductionStatus", "🏭 Произв.", GridCellValueKind.Selection),
+            ("ShipmentStatus", "🚚 Отгр.", GridCellValueKind.Selection), ("RequiredVolume", "Объем", GridCellValueKind.Number),
+            ("ShippedVolume", "Объем отгруженного", GridCellValueKind.Number), ("UnitPrice", "Цена за единицу", GridCellValueKind.Number),
+            ("Cost", "Общая стоимость", GridCellValueKind.Number), ("PriceSaveStatus", "Сохранение цены", GridCellValueKind.Text),
+            ("CustomerName", "Контрагент", GridCellValueKind.Text), ("CreatedByLogin", "Автор", GridCellValueKind.Text),
+            ("ContactPersonName", "Контактное лицо", GridCellValueKind.Text), ("OrderExternalId", "Внешний номер заказа", GridCellValueKind.Text),
+            ("OrderSpecialRequirements", "Комментарий заказа", GridCellValueKind.Text), ("PreferencesForProduction", "Требования к производству", GridCellValueKind.Text),
+            ("OrderCreatedAt", "Дата создания заказа", GridCellValueKind.Date), ("ActuallyShippedAt", "Фактическая дата отгрузки", GridCellValueKind.Date),
+            ("ReadyDate", "Дата готовности", GridCellValueKind.DateTime), ("DeliveryAddressName", "Адрес доставки", GridCellValueKind.Text),
+            ("UpdatedAt", "Дата последнего изменения", GridCellValueKind.Date), ("PlannedToDeliverFromTo", "Дата отгрузки", GridCellValueKind.Text)
+        };
+        string[] groupedFields = ["CustomerName", "OrderNumber", "OrderSpecialRequirements", "DeliveryAddressName"];
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds("FullContractGrid", "FullContractGrid", "FullContractGrid")
+            .WithColumns(new[] { GridColumnDefinition.Auto("Id").ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus) }
+                .Concat(fields.Select(field => field.Kind == GridCellValueKind.DateTime
+                    ? GridColumnDefinition.Auto(field.Name).AtRuntime(field.Caption).AsValue(field.Kind).FormatWith("dd.MM.yyyy HH:mm", "ru-RU")
+                    : GridColumnDefinition.Auto(field.Name).AtRuntime(field.Caption).AsValue(field.Kind))).ToArray())
+            .IdentifyRowsBy("Id"));
+        var grid = HeadlessRuntime.Dispatch(() =>
+        {
+            var native = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl { AutoExpandAllGroups = true, ShowGroupedColumns = false, RowMinHeight = 31 };
+            foreach (var field in fields)
+            {
+                var column = new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn { FieldName = field.Name, Header = field.Caption, Width = new GridLength(160) };
+                if (field.Kind == GridCellValueKind.Selection)
+                    column.EditorProperties = new Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditorProperties
+                    { ItemsSource = new[] { "Запланирован", "Готов", "Частично отгружен", "Отгружен" } };
+                else if (field.Name is "ShippedVolume" or "UnitPrice")
+                    column.EditorProperties = new Eremex.AvaloniaUI.Controls.Editors.SpinEditorProperties { Minimum = 0 };
+                else if (field.Kind == GridCellValueKind.DateTime)
+                {
+                    column.ReadOnly = true;
+                    column.EditorProperties = new Eremex.AvaloniaUI.Controls.Editors.TextEditorProperties
+                    { DisplayFormatString = "dd.MM.yyyy HH:mm" };
+                }
+                native.Columns.Add(column);
+            }
+            for (var index = 0; index < groupedFields.Length; index++)
+            {
+                native.Columns[groupedFields[index]].SortIndex = index;
+                native.Columns[groupedFields[index]].SortDirection = System.ComponentModel.ListSortDirection.Ascending;
+            }
+            native.GroupCount = groupedFields.Length;
+            native.CustomGroupValueDisplayText += (_, e) => e.DisplayText = $"{e.Column.Header}: {e.Value}";
+            native.ItemsSource = rows;
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(native, "FullContractGrid");
+            app.MainWindow.Width = 1100;
+            app.MainWindow.Height = 650;
+            app.MainWindow.Content = native;
+            app.MainWindow.Show();
+            app.MainWindow.UpdateLayout();
+            return native;
+        });
+        var counts = HeadlessRuntime.Dispatch(() =>
+        {
+            using var recorder = new RecorderSession(app.MainWindow, new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                GridAutomation = catalog,
+                Validation = new RecorderValidationOptions { ValidateSelectors = true, ValidateRuntimeTargets = false }
+            }, validationRootProvider: () => grid, attachWindowHandlers: false);
+            var details = (IRecorderCheckpointSessionDetails)recorder;
+            RecorderCheckTargetSelection? selection = null;
+            recorder.CheckTargetSelected += (_, e) => selection = e.Selection;
+            recorder.Start();
+            var cellsChecked = 0;
+            var groupsChecked = 0;
+            var columnsChecked = 0;
+            var copyFactory = new RecorderStepFactory(new AppAutomationRecorderOptions { GridAutomation = catalog }, app.MainWindow);
+            RecordedActionKind[] readActions = [RecordedActionKind.AssertValue, RecordedActionKind.CaptureCheckpoint, RecordedActionKind.CaptureCopiedValue];
+            void RecordRead(RecordedActionKind action)
+            {
+                if (action == RecordedActionKind.AssertValue) details.CaptureCurrentValueAssertion(selection!);
+                else if (action == RecordedActionKind.CaptureCheckpoint) details.CaptureCheckpoint(selection!, "cellValue");
+                else
+                {
+                    var copied = new RecorderCopiedValueOption(Guid.NewGuid(), "copiedCell", RecorderValueKind.Text, "FullContractGrid", string.Empty);
+                    var result = copyFactory.TryCreateCopiedValueStep(selection!.ValueSnapshot, copied);
+                    if (!result.Success) throw new InvalidOperationException(result.Message);
+                    recorder.AddRecordedStepForTesting(result.Step!);
+                }
+                if (recorder.StepCount != 1 || recorder.PersistableStepCount != 1
+                    || !recorder.ExportPreview().Contains("GridValueReader.Read", StringComparison.Ordinal))
+                    throw new InvalidOperationException($"{action} did not create one persistable value read: {recorder.LatestStatus}");
+            }
+            foreach (var header in grid.GetVisualDescendants().OfType<Eremex.AvaloniaUI.Controls.DataGrid.Visuals.DataGridGroupRowControl>()
+                .Where(static header => header.IsEffectivelyVisible).ToArray())
+            {
+                foreach (var action in readActions)
+                {
+                    recorder.Clear();
+                    recorder.BeginCheckTargetSelection();
+                    recorder.SelectCheckTargetForTesting(header);
+                    if (selection?.ValueSnapshot?.Prototype.GridHeader is null)
+                        throw new InvalidOperationException(selection?.ValueDescriptionError ?? "Group header was not captured.");
+                    RecordRead(action);
+                    if (recorder.ExportPreview().Contains("GridHeaderSelector.Group(", StringComparison.Ordinal))
+                        throw new InvalidOperationException("Group capture leaked a recorded path value.");
+                }
+                groupsChecked++;
+            }
+            foreach (var rowIndex in new[] { 0, 9, 99 })
+                foreach (var field in fields.Where(field => !groupedFields.Contains(field.Name, StringComparer.Ordinal)))
+                {
+                    var column = grid.Columns[field.Name];
+                    grid.FocusedItem = rows[rowIndex];
+                    grid.FocusedColumn = column;
+                    grid.Focus();
+                    app.MainWindow.UpdateLayout();
+                    grid.Dispatcher.RunJobs();
+                    app.MainWindow.UpdateLayout();
+                    global::Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    if (rowIndex == 0)
+                    {
+                        var heading = grid.GetVisualDescendants().OfType<Eremex.AvaloniaUI.Controls.DataControl.Visuals.ColumnHeaderControl>()
+                            .First(header => header.IsEffectivelyVisible && header.Column is Eremex.AvaloniaUI.Controls.DataGrid.GridColumn headerColumn
+                                && headerColumn.FieldName == field.Name);
+                        foreach (var action in readActions)
+                        {
+                            recorder.Clear();
+                            recorder.BeginCheckTargetSelection();
+                            recorder.SelectCheckTargetForTesting(heading);
+                            if (selection?.ValueSnapshot?.Prototype.GridHeader is not { Kind: GridHeaderKind.Column } headerAddress
+                                || headerAddress.Path.Single().Name != field.Name)
+                                throw new InvalidOperationException($"Column header '{field.Name}' was not captured: {selection?.ValueDescriptionError}");
+                            RecordRead(action);
+                            if (recorder.ExportPreview().Contains("GridRowSelector.ByCell(", StringComparison.Ordinal))
+                                throw new InvalidOperationException($"Column header '{field.Name}' was incorrectly recorded as a data row.");
+                        }
+                        columnsChecked++;
+                    }
+                    var cell = grid.GetVisualDescendants().OfType<Eremex.AvaloniaUI.Controls.DataControl.Visuals.CellControl>()
+                        .FirstOrDefault(control => control.IsEffectivelyVisible
+                            && control.DataContext is Eremex.AvaloniaUI.Controls.DataControl.Visuals.CellData data
+                            && ReferenceEquals(data.Row, rows[rowIndex])
+                            && data.Column is Eremex.AvaloniaUI.Controls.DataGrid.GridColumn cellColumn && cellColumn.FieldName == field.Name)
+                        ?? throw new InvalidOperationException($"Cell '{field.Name}' of row {rowIndex + 1} was not materialized.");
+                    var cellOrigin = cell.TranslatePoint(default, grid)
+                        ?? throw new InvalidOperationException("The cell has no position in its grid.");
+                    var visibleCell = new Rect(cellOrigin, cell.Bounds.Size).Intersect(new Rect(grid.Bounds.Size));
+                    if (visibleCell.Width <= 0 || visibleCell.Height <= 0)
+                        throw new InvalidOperationException($"Cell '{field.Name}' of row {rowIndex + 1} is outside the viewport.");
+                    var point = grid.TranslatePoint(visibleCell.Center, app.MainWindow)!.Value;
+                    foreach (var action in readActions)
+                    {
+                        recorder.Clear();
+                        recorder.BeginCheckTargetSelection();
+                        recorder.SelectCheckTargetAtForTesting(cell, app.MainWindow, point);
+                        if (selection?.ValueSnapshot is null) throw new InvalidOperationException($"{field.Name}: {selection?.ValueDescriptionError}");
+                        if (field.Kind == GridCellValueKind.DateTime)
+                        {
+                            var expected = rows[rowIndex].ReadyDate is { } date
+                                ? date.AddTicks(-(date.Ticks % TimeSpan.TicksPerMinute)) : (DateTime?)null;
+                            if (selection.ValueSnapshot.Description.ValueKind != RecorderValueKind.DateTime
+                                || selection.ValueSnapshot.Prototype.DateValue != expected)
+                                throw new InvalidOperationException("The date-time checkpoint lost its date or minute precision.");
+                        }
+                        if (selection.ValueSnapshot.Prototype.GridTargetColumnName != field.Name)
+                            throw new InvalidOperationException($"Check selected a different field instead of '{field.Name}'.");
+                        if (selection.ValueSnapshot.Prototype.GridRowConditions?.Single().Value != rows[rowIndex].Id.ToString())
+                            throw new InvalidOperationException($"Check selected a different row instead of row {rowIndex + 1}.");
+                        RecordRead(action);
+                        if (recorder.ExportPreview().Contains("GridRowSelector.ByCell(", StringComparison.Ordinal))
+                            throw new InvalidOperationException($"{field.Name}: recorded row key leaked in {action}.");
+                        cellsChecked++;
+                    }
+                }
+            return (cellsChecked, groupsChecked, columnsChecked);
+        });
+        await Assert.That(counts.cellsChecked).IsEqualTo((fields.Length - groupedFields.Length) * 3 * 3);
+        await Assert.That(counts.groupsChecked).IsEqualTo(groupedFields.Length);
+        await Assert.That(counts.columnsChecked).IsEqualTo(fields.Length - groupedFields.Length);
+        var resolved = new HeadlessControlResolver(app.MainWindow).WithGridAutomation(catalog)
+            .Resolve<IGridControl>(new UiControlDefinition("FullContractGrid", UiControlType.Grid, "FullContractGrid"));
+        var captured = new List<GridRowSelector>();
+        for (var index = 0; index < rows.Length; index++) captured.Add(GridRowKeyReader.CaptureFirst(resolved, excludingRows: captured));
+        await Assert.That(captured.Select(key => key.Conditions.Single().Value).Distinct(StringComparer.Ordinal).Count()).IsEqualTo(rows.Length);
+        await Assert.That(captured.Select(key => key.Conditions.Single().Value).ToArray())
+            .IsEquivalentTo(rows.Select(static row => row.Id.ToString()).ToArray());
+        var first = captured[0];
+        var product = GridValueReader.ReadCellText(resolved, first, "MarketProductName");
+        var firstRow = rows.Single(row => row.Id.ToString() == first.Conditions.Single().Value);
+        var firstDateTime = firstRow.ReadyDate is { } dateTime
+            ? dateTime.AddTicks(-(dateTime.Ticks % TimeSpan.TicksPerMinute)) : (DateTime?)null;
+        await Assert.That(GridValueReader.ReadCellDateTime(resolved, first, "ReadyDate")).IsEqualTo(firstDateTime);
+        HeadlessRuntime.Dispatch(() => { grid.ItemsSource = rows.Reverse().ToArray(); app.MainWindow.UpdateLayout(); });
+        await Assert.That(GridValueReader.ReadCellText(resolved, first, "MarketProductName")).IsEqualTo(product);
+    }
+
+    public sealed record FullGridContractRow(int Index)
+    {
+        [System.ComponentModel.DataAnnotations.Key] public Guid Id { get; } = Guid.NewGuid();
+        public string CustomerName => "Customer";
+        public string OrderNumber => "CurrentOrder";
+        public string OrderSpecialRequirements => "Requirements";
+        public string DeliveryAddressName => "Address";
+        public string MarketProductName => $"Product {Index}";
+        public bool IsRequest => Index % 2 == 0;
+        public string ProductionStatus => "Запланирован";
+        public string ShipmentStatus => "Частично отгружен";
+        public double RequiredVolume => 1000 + Index;
+        public double ShippedVolume => 997 + Index;
+        public double UnitPrice => 182;
+        public double Cost => RequiredVolume * UnitPrice;
+        public string PriceSaveStatus => "Saved";
+        public string CreatedByLogin => "Author";
+        public string ContactPersonName => "Contact";
+        public string OrderExternalId => "ExternalOrder";
+        public string PreferencesForProduction => "Production requirements";
+        public DateTime OrderCreatedAt => new(2026, 10, 29);
+        public DateTime? ActuallyShippedAt => Index % 2 == 0 ? new DateTime(2026, 10, 29) : null;
+        public DateTime? ReadyDate => Index % 2 == 0 ? new DateTime(2026, 11, 3, 16, 21, 47).AddTicks(12345) : null;
+        public DateTime UpdatedAt => new(2026, 10, 29);
+        public string PlannedToDeliverFromTo => "29.10.2026 - 30.10.2026";
+    }
+
 
     [Test]
     [Arguments(false)]
@@ -140,7 +541,8 @@ public sealed class HeadlessControlResolverTests
                 "ReadOnlySelection",
                 "UnavailableResults",
                 selectedValueAutomationId: "ReadOnlySelection",
-                resultsKind: SingleSelectResultsKind.ListBox) with { FallbackToName = false });
+                resultsKind: SingleSelectResultsKind.ListBox) with
+            { FallbackToName = false });
         var selection = resolver.Resolve<IComboBoxControl>(new UiControlDefinition(
             "ReadOnlySelection", UiControlType.ComboBox, "ReadOnlySelection"));
 
@@ -281,7 +683,7 @@ public sealed class HeadlessControlResolverTests
             [new VirtualOrderColumn("Key")];
 
     }
-    
+
     [Test]
     [NotInParallel("DesktopUi")]
     public async Task CompositeFilterReadsRenderedValueFromItsLogicalRoot()
@@ -336,7 +738,7 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(UiControlText.Read(page.ArmStatusFilter)).IsEqualTo("Pending");
         }
     }
-    
+
 
     [Test]
     [Arguments(-1)]
@@ -894,37 +1296,58 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
-    [Arguments("ARM-01", "Новый", "Запланирован", false, false, false)]
-    [Arguments("ARM-02", "Новый", "Готов", false, false, false)]
-    [Arguments("ARM-03", "Новый", "Запланирован", true, false, false)]
-    [Arguments("ARM-02", "Готов", "Новый", false, false, false)]
-    [Arguments("ARM-02", "Новый", "Готов", false, true, false)]
-    [Arguments("ARM-02", "Новый", "Готов", false, false, true)]
+    [Arguments("ARM-01", "Новый", "Запланирован", false, false, false, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, false, false, false)]
+    [Arguments("ARM-03", "Новый", "Запланирован", true, false, false, false)]
+    [Arguments("ARM-02", "Готов", "Новый", false, false, false, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, true, false, false)]
+    [Arguments("ARM-02", "Новый", "Готов", false, false, true, false)]
+    [Arguments("ARM-01", "🚚 ⚪ Не отгружен", "🚚 🟡 Частично отгружен", false, false, false, true)]
+    [Arguments("ARM-03", "🚚 ⚪ Не отгружен", "🚚 🟡 Частично отгружен", true, false, false, true)]
+    [Arguments("ARM-02", "🚚 🟡 Частично отгружен", "🚚 ⚪ Не отгружен", false, false, false, true)]
+    [Arguments("ARM-02", "🚚 ⚪ Не отгружен", "🚚 🟡 Частично отгружен", false, true, false, true)]
     [NotInParallel("DesktopUi")]
-    public async Task NativeCompositeGridCombo_CommitsEditorAndRowWithoutWritingInput(
-        string rowKey, string initial, string expected, bool afterNavigation, bool cancel, bool expireDuringSelection)
+    public async Task NativeCompositeGridCombo_CommitsTypedValueAndRowThroughUiParts(
+        string rowKey, string initial, string expected, bool afterNavigation, bool cancel, bool expireDuringSelection, bool enumItems)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
-        var rows = Enumerable.Range(0, 3).Select(index =>
-            new global::DotnetDebug.Avalonia.ArmDesktopGridRowViewModel(index, "Value", initial, "Red")).ToArray();
+        var rows = Enumerable.Range(0, 3).Select(index => enumItems
+            ? (object)new EnumGridRow($"ARM-{index + 1:00}", ShipmentValue(initial))
+            : new global::DotnetDebug.Avalonia.ArmDesktopGridRowViewModel(index, "Value", initial, "Red")).ToArray();
+        static string KeyOf(object row) => row is EnumGridRow typed ? typed.Key
+            : ((global::DotnetDebug.Avalonia.ArmDesktopGridRowViewModel)row).Key;
+        static string StateOf(object row) => row is EnumGridRow typed ? ShipmentText(typed.State)
+            : ((global::DotnetDebug.Avalonia.ArmDesktopGridRowViewModel)row).State;
         Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor? selectedEditor = null;
         Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl? nativeGrid = null;
         var keyboardSelections = 0;
-        var navigationKeys = 0;
+        var timedInteractions = 0;
         var popupOpens = 0;
+        var valueInputs = 0;
+        var declaredValueInput = enumItems && afterNavigation;
         HeadlessRuntime.Dispatch(() =>
         {
             var grid = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl
-                { ItemsSource = rows, AllowEditing = true, Height = 300 };
+            { ItemsSource = rows, AllowEditing = true, Height = 300 };
             nativeGrid = grid;
+            if (declaredValueInput)
+                grid.AddHandler(global::Avalonia.Input.InputElement.KeyDownEvent, (_, key) =>
+                {
+                    if (key.Key == global::Avalonia.Input.Key.Enter) key.Handled = true;
+                }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "ArmComplexDataGridControl");
             grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
-                { Header = "Key", FieldName = "Key", ReadOnly = true });
+            { Header = "Key", FieldName = "Key", ReadOnly = true });
             grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
             {
-                Header = "State", FieldName = "State",
+                Header = "State",
+                FieldName = "State",
                 EditorProperties = new Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditorProperties
-                    { ItemsSource = new[] { "Новый", "Запланирован", "Готов" } }
+                {
+                    ItemsSource = enumItems
+                        ? new Eremex.AvaloniaUI.Controls.Common.EnumItemsSource { EnumType = typeof(ShipmentState) }
+                        : new[] { "Новый", "Запланирован", "Готов" }
+                }
             });
             grid.ShownEditor += (_, args) =>
             {
@@ -933,17 +1356,20 @@ public sealed class HeadlessControlResolverTests
                 editor.PropertyChanged += (_, change) =>
                 {
                     if (change.Property == Eremex.AvaloniaUI.Controls.Editors.PopupEditor.IsPopupOpenProperty
-                        && editor.IsPopupOpen) popupOpens++;
+                        && editor.IsPopupOpen)
+                    {
+                        popupOpens++;
+                    }
                 };
                 editor.AddHandler(global::Avalonia.Input.InputElement.KeyDownEvent, (_, key) =>
                 {
                     if (key.Key == global::Avalonia.Input.Key.Enter) keyboardSelections++;
                     if (key.Key is global::Avalonia.Input.Key.Down or global::Avalonia.Input.Key.Up)
                     {
-                        navigationKeys++;
-                        if (expireDuringSelection && navigationKeys == 1) Thread.Sleep(1100);
+                        if (expireDuringSelection && ++timedInteractions == 1) Thread.Sleep(1100);
                     }
                 }, global::Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+                var registeredInputs = new HashSet<Control>();
                 editor.TemplateApplied += (_, _) => ConfigureParts();
                 editor.LayoutUpdated += (_, _) => ConfigureParts();
                 ConfigureParts();
@@ -951,7 +1377,20 @@ public sealed class HeadlessControlResolverTests
                 void ConfigureParts()
                 {
                     if (editor.RealEditor is Control input)
+                    {
                         global::Avalonia.Automation.AutomationProperties.SetAutomationId(input, "GridCombo_Input");
+                        if (declaredValueInput && input is global::Avalonia.Controls.TextBox text
+                            && registeredInputs.Add(input))
+                            text.TextChanged += (_, _) =>
+                            {
+                                var item = editor.ItemsSource?.Cast<Eremex.AvaloniaUI.Controls.Common.EnumMemberInfo>()
+                                    .SingleOrDefault(item => item.Name == text.Text);
+                                if (item is null) return;
+                                valueInputs++;
+                                editor.SelectedItem = item;
+                                editor.EditorValue = item.Id;
+                            };
+                    }
                     var open = editor.GetVisualDescendants().OfType<Control>()
                         .FirstOrDefault(static part => part.Name == "PART_PopupOpenButton");
                     if (open is not null)
@@ -999,9 +1438,9 @@ public sealed class HeadlessControlResolverTests
                 failure = exception;
             }
             await Assert.That(failure).IsNotNull();
-            await Assert.That(navigationKeys).IsEqualTo(1);
+            await Assert.That(timedInteractions).IsEqualTo(1);
             await Assert.That(keyboardSelections).IsEqualTo(0);
-            await Assert.That(HeadlessRuntime.Dispatch(() => rows.All(row => row.State == initial))).IsTrue();
+            await Assert.That(HeadlessRuntime.Dispatch(() => rows.All(row => StateOf(row) == initial))).IsTrue();
             await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
             return;
         }
@@ -1010,23 +1449,31 @@ public sealed class HeadlessControlResolverTests
             commitMode: cancel ? GridCellEditCommitMode.Cancel : GridCellEditCommitMode.Commit);
         if (!cancel)
         {
-            await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.EditorValue?.ToString())).IsEqualTo(expected);
-            await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.SelectedItem?.ToString())).IsEqualTo(expected);
+            await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.EditorValue))
+                .IsEqualTo(enumItems ? (object)ShipmentValue(expected) : expected);
+            if (!enumItems)
+                await Assert.That(HeadlessRuntime.Dispatch(() => selectedEditor?.SelectedItem?.ToString())).IsEqualTo(expected);
         }
-        await Assert.That(keyboardSelections).IsEqualTo(cancel ? 0 : 1);
+        if (cancel) await Assert.That(keyboardSelections).IsEqualTo(0);
+        if (declaredValueInput)
+        {
+            await Assert.That(valueInputs > 0).IsTrue();
+            await Assert.That(keyboardSelections).IsEqualTo(0);
+        }
         await Assert.That(popupOpens).IsEqualTo(1);
         await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
         page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem)
             .SelectTabItem(static candidate => candidate.DataGridTabItem);
         await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
             GridRowSelector.ByCell("Key", rowKey), "State")).IsEqualTo(cancel ? initial : expected);
-        await Assert.That(HeadlessRuntime.Dispatch(() => rows.Single(row => row.Key == rowKey).State))
+        await Assert.That(HeadlessRuntime.Dispatch(() => StateOf(rows.Single(row => KeyOf(row) == rowKey))))
             .IsEqualTo(cancel ? initial : expected);
-        await Assert.That(HeadlessRuntime.Dispatch(() => rows.Where(row => row.Key != rowKey).All(row => row.State == initial)))
+        await Assert.That(HeadlessRuntime.Dispatch(() => rows.Where(row => KeyOf(row) != rowKey).All(row => StateOf(row) == initial)))
             .IsTrue();
 
-        var secondRow = rows.First(row => row.Key != rowKey).Key;
-        var nextState = expected == "Готов" ? "Запланирован" : "Готов";
+        var secondRow = KeyOf(rows.First(row => KeyOf(row) != rowKey));
+        var nextState = enumItems ? ShipmentText(ShipmentState.Shipped)
+            : expected == "Готов" ? "Запланирован" : "Готов";
         page.SelectGridCellComboItem(static candidate => candidate.ArmComplexDataGridControl,
             GridRowSelector.ByCell("Key", secondRow), "State", nextState);
         await Assert.That(GridValueReader.ReadCellText(page.ArmComplexDataGridControl,
@@ -1035,6 +1482,29 @@ public sealed class HeadlessControlResolverTests
             GridRowSelector.ByCell("Key", rowKey), "State")).IsEqualTo(cancel ? initial : expected);
         await Assert.That(HeadlessRuntime.Dispatch(() => nativeGrid?.ActiveEditor is null)).IsTrue();
     }
+
+    public enum ShipmentState
+    {
+        [System.ComponentModel.DataAnnotations.Display(Name = "🚚 ⚪ Не отгружен")] NotShipped,
+        [System.ComponentModel.DataAnnotations.Display(Name = "🚚 🟡 Частично отгружен")] PartiallyShipped,
+        [System.ComponentModel.DataAnnotations.Display(Name = "🚚 🟢 Отгружен")] Shipped
+    }
+
+    public sealed class EnumGridRow(string key, ShipmentState state)
+    {
+        [System.ComponentModel.DataAnnotations.Key] public string Key { get; } = key;
+        public ShipmentState State { get; set; } = state;
+    }
+
+    private static string ShipmentText(ShipmentState value) => value switch
+    {
+        ShipmentState.NotShipped => "🚚 ⚪ Не отгружен",
+        ShipmentState.PartiallyShipped => "🚚 🟡 Частично отгружен",
+        _ => "🚚 🟢 Отгружен"
+    };
+
+    private static ShipmentState ShipmentValue(string text) => Enum.GetValues<ShipmentState>()
+        .Single(value => ShipmentText(value) == text);
 
     private static GridAutomationCatalog CreateCompositeGridComboCatalog() => new GridAutomationCatalog().Add(
         GridAutomationDefinition.ByAutomationIds(
@@ -1049,14 +1519,18 @@ public sealed class HeadlessControlResolverTests
             .IdentifyRowsBy("Key"));
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("DesktopUi")]
-    public async Task NestedGridOpenRow_IgnoresContainersWithoutRowContext()
+    public async Task NestedGridOpenRow_IgnoresContainersWithoutRowContext(bool clippedWideRow)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var first = new VisualGridTestRow("ROW-A");
         var second = new VisualGridTestRow("ROW-B");
         var targetPresses = 0;
         var opened = new List<string>();
+        var rowWidth = 0d;
+        var deliveredX = 0d;
         HeadlessRuntime.Dispatch(() =>
         {
             var grid = new VisualGridTestHost { ItemsSource = [first, second] };
@@ -1077,21 +1551,36 @@ public sealed class HeadlessControlResolverTests
             });
             var target = new global::Avalonia.Controls.Border
             {
-                Width = 300,
+                Width = clippedWideRow ? 2419 : 300,
                 Height = 30,
+                HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left,
                 Background = global::Avalonia.Media.Brushes.Transparent,
                 DataContext = new VisualGridRowContext(second)
             };
             target.AddHandler(
                 global::Avalonia.Input.InputElement.PointerPressedEvent,
-                (_, _) => targetPresses++,
+                (_, pointer) =>
+                {
+                    targetPresses++;
+                    deliveredX = pointer.GetPosition(session.MainWindow).X;
+                },
                 global::Avalonia.Interactivity.RoutingStrategies.Bubble);
             target.DoubleTapped += (_, _) => opened.Add(second.Key);
-            grid.Children.Add(target);
+            grid.Children.Add(clippedWideRow
+                ? new Border
+                {
+                    Child = target,
+                    Width = 320,
+                    Height = 30,
+                    ClipToBounds = true,
+                    HorizontalAlignment = global::Avalonia.Layout.HorizontalAlignment.Left
+                }
+                : target);
             session.MainWindow.Content = grid;
             session.MainWindow.Show();
             session.MainWindow.Dispatcher.RunJobs();
             session.MainWindow.UpdateLayout();
+            rowWidth = target.Bounds.Width;
         });
         var catalog = new GridAutomationCatalog().Add(
             GridAutomationDefinition.ByAutomationIds("NestedGrid", "NestedGrid", "NestedGrid")
@@ -1107,6 +1596,11 @@ public sealed class HeadlessControlResolverTests
 
         await Assert.That(targetPresses).IsEqualTo(2);
         await Assert.That(opened).IsEquivalentTo(new[] { "ROW-B" });
+        if (clippedWideRow)
+        {
+            await Assert.That(rowWidth).IsGreaterThan(2000d);
+            await Assert.That(deliveredX).IsLessThan(320d);
+        }
     }
 
     [Test]
@@ -1161,6 +1655,7 @@ public sealed class HeadlessControlResolverTests
     [NotInParallel("DesktopUi")]
     public async Task OpenGridRow_RejectsAnOccludedRowInsteadOfReportingGestureSuccess()
     {
+        var overlayPresses = 0;
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         HeadlessRuntime.Dispatch(() =>
         {
@@ -1181,11 +1676,13 @@ public sealed class HeadlessControlResolverTests
             session.MainWindow.Content = null;
             var root = new global::Avalonia.Controls.Grid();
             root.Children.Add(originalContent);
-            root.Children.Add(new global::Avalonia.Controls.Border
+            var overlay = new global::Avalonia.Controls.Border
             {
                 Background = global::Avalonia.Media.Brushes.Transparent,
                 IsHitTestVisible = true
-            });
+            };
+            overlay.PointerPressed += (_, _) => overlayPresses++;
+            root.Children.Add(overlay);
             session.MainWindow.Content = root;
             session.MainWindow.Dispatcher.RunJobs();
             session.MainWindow.UpdateLayout();
@@ -1195,12 +1692,15 @@ public sealed class HeadlessControlResolverTests
             ((IAddressableGridControl)page.DemoDataGrid).OpenRow(
                 GridRowSelector.ByCell("Row", "R2"), 5000));
         await Assert.That(failure.Message).Contains("occluded");
+        await Assert.That(overlayPresses).IsEqualTo(0);
         await Assert.That(page.GridOpenMarkerLabel.Text).IsNotEqualTo("Opened row: R2");
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("DesktopUi")]
-    public async Task ReadGridCell_WaitsForStableRowAfterSourceReload()
+    public async Task ReadGridCell_WaitsForStableRowAfterSourceReload(bool captureRowKey)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var host = HeadlessRuntime.Dispatch(() =>
@@ -1211,12 +1711,15 @@ public sealed class HeadlessControlResolverTests
             session.MainWindow.Show();
             return grid;
         });
-        var gridControl = new HeadlessControlResolver(session.MainWindow).Resolve<IGridControl>(
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds("DelayedRowsGrid", "DelayedRowsGrid", "DelayedRowsGrid")
+            .WithColumns(GridColumnDefinition.Map("Key").FromField("Key"), GridColumnDefinition.Map("Value").FromField("Value"))
+            .IdentifyRowsBy("Key"));
+        var gridControl = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog).Resolve<IGridControl>(
             new UiControlDefinition("DelayedRowsGrid", UiControlType.Grid, "DelayedRowsGrid"));
 
         var value = GridValueReader.ReadCellText(
             gridControl,
-            GridRowSelector.ByCell("Key", "K1"),
+            captureRowKey ? GridRowKeyReader.Capture(gridControl, 0) : GridRowSelector.ByCell("Key", "K1"),
             "Value");
 
         using (Assert.Multiple())
@@ -1224,6 +1727,13 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(value).IsEqualTo("Loaded");
             await Assert.That(host.ReadCount).IsGreaterThan(1);
         }
+        var native = new HeadlessControlResolver(session.MainWindow).Resolve<IGridControl>(
+            new UiControlDefinition("DelayedRowsGrid", UiControlType.Grid, "DelayedRowsGrid"));
+        var before = host.ColumnReadCount;
+        var found = ((IGridColumnMetadataControl)native).TryGetColumnIndex("Value", out var columnIndex);
+        await Assert.That(found).IsTrue();
+        await Assert.That(columnIndex).IsEqualTo(1);
+        await Assert.That(host.ColumnReadCount - before).IsEqualTo(1);
     }
 
     private sealed class DelayedRowsGrid : global::Avalonia.Controls.StackPanel
@@ -1232,9 +1742,16 @@ public sealed class HeadlessControlResolverTests
         private bool _loadScheduled;
 
         public int ReadCount { get; private set; }
+        public int ColumnReadCount { get; private set; }
 
-        public IReadOnlyList<DelayedGridColumn> Columns { get; } =
-            [new("Key"), new("Value")];
+        private static readonly IReadOnlyList<DelayedGridColumn> ColumnDefinitions = [new("Key"), new("Value")];
+
+        public IReadOnlyList<DelayedGridColumn> Columns
+        {
+            get { ColumnReadCount++; return ColumnDefinitions; }
+        }
+
+        public IEnumerable<DelayedGridRow> CollectionView => _rows;
 
         public IEnumerable<DelayedGridRow> ItemsSource
         {
@@ -1244,8 +1761,13 @@ public sealed class HeadlessControlResolverTests
                 if (!_loadScheduled)
                 {
                     _loadScheduled = true;
-                    Dispatcher.Post(() => _rows.Add(new DelayedGridRow("K1", "Loaded")),
-                        global::Avalonia.Threading.DispatcherPriority.Background);
+                    Dispatcher.Post(() =>
+                    {
+                        var row = new DelayedGridRow("K1", "Loaded");
+                        _rows.Add(row);
+                        Children.Add(new Border { DataContext = row, Height = 30 });
+                        UpdateLayout();
+                    }, global::Avalonia.Threading.DispatcherPriority.Background);
                 }
 
                 return _rows;

@@ -51,6 +51,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
+        InitializeNativeGridRuntimeFixture();
 
         UpdateModeLabel(ComputeMode.Gcd, useAbsoluteValues: false, showSteps: false);
         StartDatePicker.SelectedDate = DateTime.Today;

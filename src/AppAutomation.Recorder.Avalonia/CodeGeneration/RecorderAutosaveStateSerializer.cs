@@ -61,7 +61,7 @@ internal static class RecorderAutosaveStateSerializer
                 Convert.FromBase64String(payload),
                 JsonOptions);
         }
-        catch (Exception exception) when (exception is FormatException or JsonException or NotSupportedException)
+        catch (Exception exception) when (exception is FormatException or JsonException or NotSupportedException or ArgumentException)
         {
             error = $"Recorder autosave recovery file '{filePath}' contains an invalid recovery payload: {exception.Message}";
             return false;

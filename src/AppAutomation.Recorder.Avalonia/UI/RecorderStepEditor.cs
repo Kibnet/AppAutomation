@@ -19,6 +19,10 @@ internal sealed class RecorderStepEditor : Border
     private readonly Button _applyButton;
     private TextBox? _variableName;
     private ComboBox? _checkpointValueKind;
+    private ComboBox? _textTransformMode;
+    private TextBox? _textSeparator;
+    private ComboBox? _trimLeadingSpaces;
+    private TextBlock? _transformPreview;
     private TextBox? _stringValue;
     private TextBox? _itemValue;
     private TextBox? _integerValue;
@@ -131,6 +135,31 @@ internal sealed class RecorderStepEditor : Border
         else if (draft.EditKind is not (RecorderStepEditKind.GeneratedValue or RecorderStepEditKind.CopiedValue))
         {
             BuildPayloadFields(fields, draft);
+        }
+
+        if (draft.ActionKind is RecordedActionKind.CaptureCheckpoint or RecordedActionKind.CaptureCopiedValue or RecordedActionKind.AssertValue
+            && (draft.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText
+                || draft.ValueAccessorKind == RecorderValueAccessorKind.NumericText))
+        {
+            _textTransformMode = AddComboField(fields, "Text", "RecorderStepEditTextTransform",
+                new[] { "Full text", "Text after first separator" },
+                draft.TextTransform is null ? "Full text" : "Text after first separator");
+            _textSeparator = AddTextField(fields, "Separator", "RecorderStepEditTextSeparator", draft.TextTransform?.Separator ?? ":");
+            _trimLeadingSpaces = AddComboField(fields, "Remove leading spaces", "RecorderStepEditTrimLeadingSpaces",
+                BooleanOptions, draft.TextTransform?.TrimLeadingSpaces ?? true);
+            _additionalComboInputs.Add(_textTransformMode);
+            _additionalComboInputs.Add(_trimLeadingSpaces);
+            _additionalTextInputs.Add(_textSeparator);
+            _transformPreview = new TextBlock { Name = "RecorderStepEditTransformedPreview", Foreground = mutedBrush, TextWrapping = TextWrapping.Wrap };
+            fields.Children.Add(_transformPreview);
+            void RefreshTransformFields()
+            {
+                var enabled = !Equals(_textTransformMode.SelectedItem, "Full text");
+                _textSeparator.IsEnabled = enabled;
+                _trimLeadingSpaces.IsEnabled = enabled;
+            }
+            _textTransformMode.SelectionChanged += (_, _) => RefreshTransformFields();
+            RefreshTransformFields();
         }
 
         if (draft.GridRowConditions is { Count: > 0 })
@@ -822,6 +851,20 @@ internal sealed class RecorderStepEditor : Border
                     .ToArray()
         };
 
+        if (_textTransformMode is not null)
+        {
+            draft = draft with
+            {
+                TextTransform = Equals(_textTransformMode.SelectedItem, "Full text") ? null
+                : new TextValueTransform(_textSeparator?.Text ?? string.Empty, _trimLeadingSpaces?.SelectedItem as bool? ?? true)
+            };
+            if (draft.TextTransform is null && _sourceDraft.TextTransform is not null)
+                draft = draft with { CurrentPreview = draft.SourceTextPreview ?? draft.CurrentPreview };
+            if (!RecorderStepEditService.TryTransformPreview(draft, out var textPreview, out error)) return false;
+            if (_transformPreview is not null) _transformPreview.Text = $"Transformed preview: {textPreview}";
+            draft = draft with { CurrentPreview = textPreview };
+        }
+
         if (_checkpointValueKind?.SelectedItem is RecorderCheckpointValueType valueType)
         {
             if (valueType != RecorderCheckpointValueType.Text)
@@ -834,7 +877,8 @@ internal sealed class RecorderStepEditor : Border
                         && _sourceDraft.NumericType is null => null,
                     _ => RecorderNumericType.Double
                 };
-                var previewText = _stringValue?.Text ?? _sourceDraft.CurrentPreview;
+                var previewText = draft.TextTransform is not null || _sourceDraft.TextTransform is not null ? draft.CurrentPreview
+                    : _stringValue?.Text ?? _sourceDraft.CurrentPreview;
                 if (!RecorderStepEditService.TryParseNumericPreview(
                     previewText, numericType, out var numericValue, out var diagnostic))
                 {
@@ -854,13 +898,16 @@ internal sealed class RecorderStepEditor : Border
             }
             else
             {
+                var textPreview = _textTransformMode is not null
+                    && (_sourceDraft.TextTransform is not null || draft.TextTransform is not null)
+                        ? draft.CurrentPreview : draft.StringValue ?? _sourceDraft.CurrentPreview;
                 draft = draft with
                 {
                     ValueKind = RecorderValueKind.Text,
                     ValueAccessorKind = RecorderValueAccessorKind.Text,
                     NumericType = null,
-                    CurrentPreview = draft.StringValue ?? _sourceDraft.CurrentPreview,
-                    StringValue = draft.StringValue ?? _sourceDraft.CurrentPreview,
+                    CurrentPreview = textPreview,
+                    StringValue = textPreview,
                     DoubleValue = null
                 };
             }
@@ -1172,6 +1219,10 @@ internal sealed class RecorderStepEditor : Border
 
                 draft = source with { DateValue = date, DateExpression = dateExpression };
                 break;
+            case RecorderValueKind.DateTime:
+                if (!RecorderValueCodec.TryParseDateTime(value, out var dateTime, out error)) return false;
+                draft = source with { DateValue = dateTime, DateExpression = null };
+                break;
             case RecorderValueKind.Time:
                 if (!RecorderValueCodec.TryParseTimeOfDay(value, out var time))
                 {
@@ -1458,6 +1509,8 @@ internal sealed class RecorderStepEditor : Border
             RecorderValueKind.Number => draft.DoubleValue?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty,
             RecorderValueKind.Boolean => draft.BoolValue?.ToString().ToLowerInvariant() ?? string.Empty,
             RecorderValueKind.Date when draft.DateValue.HasValue => RecorderValueCodec.FormatDate(draft.DateValue.Value, draft.DateExpression),
+            RecorderValueKind.DateTime => draft.DateValue.HasValue
+                ? RecorderValueCodec.FormatDateTime(draft.DateValue.Value) : "null",
             RecorderValueKind.Time => draft.TimeValue?.ToString("c", CultureInfo.InvariantCulture) ?? string.Empty,
             RecorderValueKind.StringSet => string.Join(Environment.NewLine, draft.StringValues ?? Array.Empty<string>()),
             _ => draft.StringValue ?? string.Empty

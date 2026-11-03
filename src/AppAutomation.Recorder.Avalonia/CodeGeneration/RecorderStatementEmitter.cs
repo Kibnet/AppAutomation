@@ -156,7 +156,8 @@ internal static class RecorderStatementEmitter
         IReadOnlyDictionary<Guid, string> gridRowAnchorNames,
         IReadOnlyDictionary<string, string>? controlPropertyNames = null,
         SpinnerKeyVariables? spinnerKeyVariables = null,
-        IReadOnlyDictionary<Guid, RecorderNumericType>? numericTypes = null)
+        IReadOnlyDictionary<Guid, RecorderNumericType>? numericTypes = null,
+        RecorderGridTargetVariables? gridTargets = null)
     {
         spinnerKeyVariables ??= CreateSpinnerKeyVariables(
             checkpointVariables,
@@ -164,11 +165,13 @@ internal static class RecorderStatementEmitter
             copiedValueVariables,
             generatedValueSeriesVariable,
             gridRowAnchorNames);
+        spinnerKeyVariables.ReserveNames(gridTargets?.Names ?? []);
         var rowVariables = new GridRowVariableNames(
             checkpointVariables,
             generatedValueVariables,
             copiedValueVariables,
-            gridRowAnchorNames);
+            gridRowAnchorNames)
+        { Targets = gridTargets };
         var rowSelector = HasNamedGridRow(step)
             ? FormatGridRowSelector(step, rowVariables)
             : string.Empty;
@@ -307,6 +310,17 @@ internal static class RecorderStatementEmitter
             _ => $"// Unsupported recorded action '{step.ActionKind}'."
         };
 
+        if (gridTargets?.Find(step) is { } target && ReferenceEquals(target.Definition, step))
+        {
+            var capture = target.IsHeader
+                ? $"GridHeaderKeyReader.CaptureFirst(Page.{propertyName}, new[] {{ {string.Join(", ", step.GridHeader!.Path.Select(part => $"\"{EscapeString(part.Name)}\""))} }})"
+                : $"GridRowKeyReader.CaptureFirst(Page.{propertyName}"
+                    + (target.ExcludedRows is { Count: > 0 }
+                        ? $", excludingRows: new[] {{ {string.Join(", ", target.ExcludedRows)} }})"
+                        : ")");
+            statement = $"var {target.Name} = {capture};{Environment.NewLine}{statement}";
+        }
+
         var commentParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(step.Warning))
         {
@@ -374,7 +388,7 @@ internal static class RecorderStatementEmitter
                 RecorderNumericType.Integer => "ParseInteger",
                 _ => "ParseDouble"
             };
-            return $"var {textVariable} = Page.{propertyName}.Text;"
+            return $"var {textVariable} = {ApplyTextTransform(step, $"Page.{propertyName}.Text")};"
                 + Environment.NewLine
                 + $"var {variableName} = NumericText.{parser}({textVariable});";
         }
@@ -776,7 +790,7 @@ internal static class RecorderStatementEmitter
         SpinnerKeyVariables spinnerKeyVariables)
     {
         var control = $"Page.{propertyName}";
-        return step.ValueAccessorKind switch
+        var expression = step.ValueAccessorKind switch
         {
             RecorderValueAccessorKind.NumericValue when step.Control.ControlType == UiControlType.MultiItemControlCollection =>
                 $"{GenerateKeyedSpinnerExpression(step.RepeatedItemKey, control, spinnerKeyVariables)}.Value",
@@ -807,9 +821,46 @@ internal static class RecorderStatementEmitter
             RecorderValueAccessorKind.IsReadOnly => $"{control}.IsReadOnly",
             RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue =>
                 GenerateGridCellExpression(step, control, rowVariables),
+            RecorderValueAccessorKind.GridHeaderText =>
+                $"GridValueReader.ReadHeaderText({control}, {rowVariables.Targets?.Find(step)?.Name ?? FormatGridHeader(step.GridHeader!)})",
             _ => throw new InvalidOperationException(
                 $"Value accessor '{step.ValueAccessorKind}' is not supported for {step.Control.ControlType}.")
         };
+        if (step.ValueAccessorKind == RecorderValueAccessorKind.NumericText && step.TextTransform is not null)
+        {
+            var parser = step.NumericType switch
+            {
+                RecorderNumericType.Decimal => "ParseDecimal",
+                RecorderNumericType.Integer => "ParseInteger",
+                _ => "ParseDouble"
+            };
+            return $"NumericText.{parser}({ApplyTextTransform(step, $"{control}.Text")})";
+        }
+        return ApplyTextTransform(step, expression);
+    }
+
+    private static string ApplyTextTransform(RecordedStep step, string expression) => step.TextTransform is { } transform
+        ? $"TextValue.AfterFirstSeparator({expression}, \"{EscapeString(transform.Separator)}\", {(transform.TrimLeadingSpaces ? "true" : "false")})"
+        : expression;
+
+    private static string FormatGridHeader(GridHeaderSelector selector)
+    {
+        var statements = selector.Path.Select((part, index) =>
+        {
+            var method = selector.Kind switch
+            {
+                GridHeaderKind.Group => index == 0 ? "Group" : "ThenGroup",
+                GridHeaderKind.Column => "Column",
+                _ => index == 0 ? "Band" : "ThenBand"
+            };
+            var value = part.Value is null ? "null" : $"\"{EscapeString(part.Value)}\"";
+            var arguments = selector.Kind == GridHeaderKind.Group
+                ? $"\"{EscapeString(part.Name)}\", {value}"
+                    + (part.ValueKind == GridCellValueKind.Text ? string.Empty : $", GridCellValueKind.{part.ValueKind}")
+                : $"\"{EscapeString(part.Name)}\"";
+            return $"{method}({arguments})";
+        });
+        return "GridHeaderSelector." + string.Join(".", statements);
     }
 
     private static string GenerateKeyedSpinnerExpression(
@@ -840,6 +891,7 @@ internal static class RecorderStatementEmitter
             {
                 RecorderValueKind.Number => "ReadCellNumber",
                 RecorderValueKind.Date => "ReadCellDate",
+                RecorderValueKind.DateTime => "ReadCellDateTime",
                 RecorderValueKind.Time => "ReadCellTime",
                 RecorderValueKind.Boolean => "ReadCellBoolean",
                 _ => "ReadCellText"
@@ -857,6 +909,7 @@ internal static class RecorderStatementEmitter
             RecorderValueKind.Number => FormatDouble(step.DoubleValue),
             RecorderValueKind.Boolean => FormatBoolean(step.BoolValue),
             RecorderValueKind.Date => FormatNullableDate(step.DateValue, step.DateExpression),
+            RecorderValueKind.DateTime => FormatNullableDateTime(step.DateValue),
             RecorderValueKind.Time => FormatNullableTimeSpan(step.TimeValue),
             RecorderValueKind.StringSet => FormatStringValues(step.StringValues),
             _ => throw new InvalidOperationException($"Literal value kind '{step.ValueKind}' is not supported.")
@@ -950,6 +1003,8 @@ internal static class RecorderStatementEmitter
         {
             return FormatGridRowAnchorName(checkpointId, variables);
         }
+
+        if (variables.Targets?.Find(step) is { IsHeader: false } target) return target.Name;
 
         var conditions = step.GridRowConditions
             ?? throw new InvalidOperationException("Named grid step does not contain row conditions.");
@@ -1069,6 +1124,8 @@ internal static class RecorderStatementEmitter
 
         public SpinnerKeyVariables(ISet<string> reservedNames) => _reservedNames = reservedNames;
 
+        public void ReserveNames(IEnumerable<string> names) => _reservedNames.UnionWith(names);
+
         public string FormatKey(string control, string? itemKey)
         {
             if (string.IsNullOrWhiteSpace(itemKey))
@@ -1162,7 +1219,10 @@ internal static class RecorderStatementEmitter
         IReadOnlyDictionary<Guid, string> Checkpoints,
         IReadOnlyDictionary<Guid, string> GeneratedValues,
         IReadOnlyDictionary<Guid, string> CopiedValues,
-        IReadOnlyDictionary<Guid, string> RowAnchors);
+        IReadOnlyDictionary<Guid, string> RowAnchors)
+    {
+        public RecorderGridTargetVariables? Targets { get; init; }
+    }
 
     private static string FormatGridTargetColumn(RecordedStep step)
     {
@@ -1255,6 +1315,16 @@ internal static class RecorderStatementEmitter
 
         var date = (value ?? DateTime.Today).Date;
         return $"new global::System.DateTime({date.Year}, {date.Month}, {date.Day})";
+    }
+
+    private static string FormatNullableDateTime(DateTime? value)
+    {
+        if (!value.HasValue) return "null";
+        var date = value.Value;
+        var literal = FormattableString.Invariant(
+            $"new global::System.DateTime({date.Year}, {date.Month}, {date.Day}, {date.Hour}, {date.Minute}, {date.Second})");
+        var fraction = date.Ticks % TimeSpan.TicksPerSecond;
+        return fraction == 0 ? literal : $"{literal}.AddTicks({fraction.ToString(CultureInfo.InvariantCulture)}L)";
     }
 
     private static string FormatTimeSpan(TimeSpan? value)

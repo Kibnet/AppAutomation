@@ -235,7 +235,9 @@ internal static class GridCellMetadataExtractor
             }
         }
 
-        return false;
+        return GridPropertyValueReader.TryReadProperty(control, "ItemsSource", out _)
+            && GridPropertyValueReader.TryReadProperty(control, "Columns", out var columns)
+            && columns is IEnumerable;
     }
 
     public static IReadOnlyList<RecorderNativeGridColumn> ReadNativeColumns(Control grid)
@@ -259,7 +261,7 @@ internal static class GridCellMetadataExtractor
             }
 
             var sourceField = ReadColumnSourceField(column);
-            var logicalName = ReadColumnCaption(column) ?? sourceField;
+            var logicalName = !string.IsNullOrWhiteSpace(sourceField) ? sourceField : ReadColumnCaption(column);
             if (string.IsNullOrWhiteSpace(logicalName))
             {
                 continue;
@@ -521,6 +523,8 @@ internal static class GridCellMetadataExtractor
 
     private static string ReadColumnSourceField(object column)
     {
+        if (TryReadProperty(column, "FieldName", out var fieldValue)
+            && fieldValue is string field && !string.IsNullOrWhiteSpace(field)) return field.Trim();
         if (TryReadProperty(column, "SortMemberPath", out var sortMemberPathValue)
             && sortMemberPathValue is string sortMemberPath
             && !string.IsNullOrWhiteSpace(sortMemberPath))
@@ -544,7 +548,12 @@ internal static class GridCellMetadataExtractor
 
     private static GridCellEditorKind? InferNativeEditorKind(object column)
     {
-        var typeName = column.GetType().Name;
+        var typeName = TryReadProperty(column, "EditorProperties", out var editor) && editor is not null
+            ? editor.GetType().Name : column.GetType().Name;
+        if (typeName.Contains("Spin", StringComparison.OrdinalIgnoreCase)
+            || typeName.Contains("Numeric", StringComparison.OrdinalIgnoreCase)) return GridCellEditorKind.Number;
+        if (typeName.Contains("Date", StringComparison.OrdinalIgnoreCase)) return GridCellEditorKind.Date;
+        if (typeName.Contains("Time", StringComparison.OrdinalIgnoreCase)) return GridCellEditorKind.Time;
         if (typeName.Contains("CheckBox", StringComparison.OrdinalIgnoreCase))
         {
             return GridCellEditorKind.CheckBox;

@@ -33,6 +33,31 @@ internal static class RecorderValueCodec
         };
     }
 
+    public static string FormatDateTime(DateTime date) =>
+        date.ToString(date.Ticks % TimeSpan.TicksPerMinute == 0
+            ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd HH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture);
+
+    public static bool TryParseDateTime(string text, out DateTime? value, out string error)
+    {
+        value = null;
+        if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
+        {
+            error = string.Empty;
+            return true;
+        }
+        if (DateTime.TryParseExact(text.Trim(),
+                ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm:ss.FFFFFFF",
+                    "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF"],
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            value = parsed;
+            error = string.Empty;
+            return true;
+        }
+        error = "Expected date-time must use yyyy-MM-dd HH:mm[:ss[.fffffff]] or null.";
+        return false;
+    }
+
     public static bool TryCreateRelativeExpression(
         DateTime? recordedDate,
         string? dayOffsetText,

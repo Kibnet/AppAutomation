@@ -61,6 +61,24 @@ internal static class RecorderScenarioGraphValidator
         {
             var step = steps[index];
             var tableRowValidation = ValidateTableRowAnchor(step, index, tableRowAnchors);
+            if ((step.GridHeader is not null || step.ValueAccessorKind == RecorderValueAccessorKind.GridHeaderText)
+                && (step.GridHeader is null
+                || step.Control.ControlType is not (AppAutomation.Abstractions.UiControlType.Grid or AppAutomation.Abstractions.UiControlType.DataGridView)
+                || step.ValueAccessorKind != RecorderValueAccessorKind.GridHeaderText
+                || step.GridRowConditions is not null || step.GridRowAnchorCheckpointId is not null
+                || step.RowIndex is not null || step.ColumnIndex is not null))
+            {
+                stepErrors[step.StepId] = "A header value requires its own grid header address, not a data-row address.";
+                continue;
+            }
+            if (step.TextTransform is { } transform && (!Enum.IsDefined(transform.Kind) || string.IsNullOrEmpty(transform.Separator)
+                || step.ActionKind is not (RecordedActionKind.CaptureCheckpoint or RecordedActionKind.CaptureCopiedValue or RecordedActionKind.AssertValue)
+                || step.ValueKind is not (RecorderValueKind.Text or RecorderValueKind.GridCellText)
+                    && step.ValueAccessorKind != RecorderValueAccessorKind.NumericText))
+            {
+                stepErrors[step.StepId] = "A text transformation requires a text source and a nonempty separator.";
+                continue;
+            }
             if (!tableRowValidation.IsValid)
             {
                 stepErrors[step.StepId] = tableRowValidation.Error;
