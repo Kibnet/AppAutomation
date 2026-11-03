@@ -739,11 +739,12 @@ public sealed partial class FlaUiControlResolver
             Func<NativeGridRowSnapshot, bool> snapshotMatches,
             Func<NativeFlaUiRow, bool> liveRowMatches,
             out NativeFlaUiRow? matchingRow,
-            bool forSelection = false)
+            bool forSelection = false,
+            GridIndexedRowSelector? metadataSelector = null)
         {
             matchingRow = null;
             var visibleRows = forSelection && selectorColumnIndexes.Count == 0
-                ? ReadNativeDataRows(includeCells: false)
+                ? ReadNativeDataRows(includeCells: false, metadataSelector: metadataSelector)
                 : TakePrefetchedNativeRows();
             var snapshots = new List<NativeGridRowSnapshot>();
             AppendNativeRows(
@@ -818,7 +819,8 @@ public sealed partial class FlaUiControlResolver
                 candidate => NativeRowMatches(candidate, selector),
                 candidate => NativeRowMatches(candidate, selector),
                 out var matchingRow,
-                forSelection)
+                forSelection,
+                metadataSelector: selector)
                 ? matchingRow
                 : null;
         }
@@ -975,6 +977,9 @@ public sealed partial class FlaUiControlResolver
             if (visibleSelectorColumns.Length != 1)
             {
                 EnsureNativeColumnVisible(targetColumn, stopwatch, timeoutMs);
+                if (visibleSelectorColumns.Length == 0 && selector.HasDeclaredUniqueIdentity
+                    && TryResolveVisibleNativeRow(selector, forSelection: true) is { } visibleMatch)
+                    return visibleMatch;
                 return ResolveUniqueNativeRow(selector, stopwatch, timeoutMs);
             }
 
@@ -4007,7 +4012,8 @@ public sealed partial class FlaUiControlResolver
         private NativeFlaUiRow[] ReadNativeDataRows(
             bool includeCells = true,
             bool includeIncompleteRows = false,
-            IReadOnlyCollection<int>? requiredCellIndexes = null)
+            IReadOnlyCollection<int>? requiredCellIndexes = null,
+            GridIndexedRowSelector? metadataSelector = null)
         {
             var root = FindGridRoot();
             var headers = includeCells ? ReadNativeColumnHeaders() : [];
@@ -4016,7 +4022,24 @@ public sealed partial class FlaUiControlResolver
                 return Array.Empty<NativeFlaUiRow>();
             }
 
-            var dataItemCondition = root.Automation.ConditionFactory.ByControlType(ControlType.DataItem);
+            ConditionBase dataItemCondition = root.Automation.ConditionFactory.ByControlType(ControlType.DataItem);
+            if (metadataSelector is not null)
+            {
+                var properties = root.Automation.PropertyLibrary.Element;
+                foreach (var condition in metadataSelector.Conditions)
+                {
+                    if (condition.Column.RowIdentityAutomationProperty is not { } property) continue;
+                    var propertyId = property switch
+                    {
+                        GridRowAutomationProperty.AutomationId => properties.AutomationId,
+                        GridRowAutomationProperty.Name => properties.Name,
+                        GridRowAutomationProperty.HelpText => properties.HelpText,
+                        GridRowAutomationProperty.ItemStatus => properties.ItemStatus,
+                        _ => throw new InvalidOperationException($"Unsupported grid row automation property '{property}'.")
+                    };
+                    dataItemCondition = dataItemCondition.And(new PropertyCondition(propertyId, condition.ExpectedText));
+                }
+            }
             var rootBounds = TryRead(() => root.BoundingRectangle);
             var rowElements = TryRead(() => root.FindAllDescendants(dataItemCondition))
                 ?? Array.Empty<AutomationElement>();
