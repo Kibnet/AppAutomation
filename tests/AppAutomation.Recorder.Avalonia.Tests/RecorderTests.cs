@@ -1495,7 +1495,7 @@ public sealed class RecorderTests
             await Assert.That(overlayResolved).IsEqualTo(false);
             await Assert.That(legend.Contains("Alt+R: Start/Stop", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Ctrl+Alt+E: Export", StringComparison.Ordinal)).IsEqualTo(true);
-            await Assert.That(legend.Contains("Ctrl+Alt+F: Assert Exists", StringComparison.Ordinal)).IsEqualTo(true);
+            await Assert.That(legend.Contains("Ctrl+Alt+F: Wait Exists", StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(legend.Contains("Shift+M", StringComparison.Ordinal)).IsEqualTo(false);
             await Assert.That(legend.Contains("Overlay", StringComparison.Ordinal)).IsEqualTo(false);
         }

@@ -155,6 +155,7 @@ internal static class RecorderStepEditService
             CanConvertTextCheckpointToNumber = step.ActionKind == RecordedActionKind.CaptureCheckpoint
                 && CanConvertTextCheckpointToNumber(step),
             NumericType = step.NumericType,
+            WaitForValue = step.WaitForValue,
             GridHeader = step.GridHeader,
             TextTransform = step.TextTransform,
             SourceTextPreview = step.CapturedDisplayText ?? currentValuePreview
@@ -264,6 +265,7 @@ internal static class RecorderStepEditService
             NumericType = source.ActionKind == RecordedActionKind.CaptureCheckpoint
                 ? draft.NumericType
                 : target.NumericType,
+            WaitForValue = source.WaitForValue,
             GridHeader = draft.GridHeader,
             TextTransform = draft.TextTransform,
             CapturedDisplayText = target.CapturedDisplayText ?? draft.SourceTextPreview,

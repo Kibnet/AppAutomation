@@ -581,6 +581,9 @@ internal sealed record RecordedStep(
 
     public string? CapturedDisplayText { get; init; }
 
+    // Hotkey waits reuse the semantic target/expected-value payload; Check keeps immediate assertion semantics.
+    public bool WaitForValue { get; init; }
+
     public Guid? GridRowAnchorCheckpointId { get; init; }
 
     public string? GridTargetColumnName { get; init; }
