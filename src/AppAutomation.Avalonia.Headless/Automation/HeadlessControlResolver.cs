@@ -1812,6 +1812,11 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         {
         }
 
+        public IReadOnlyList<IMenuItemControl> Items => Inner.Items
+            .Select(static item => (IMenuItemControl)new HeadlessMenuItemControl(item)).ToArray();
+
+        public void Dismiss() => Inner.Dismiss();
+
         public void InvokeItem(IReadOnlyList<string> path, int timeoutMs)
         {
             var exactPath = MenuPathValue.Normalize(path);

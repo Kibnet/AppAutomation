@@ -509,6 +509,12 @@ public interface IColorPickerControl : IUiControl
 /// </summary>
 public interface IMenuControl : IUiControl
 {
+    /// <summary>Gets the currently materialized root items, without opening the menu.</summary>
+    IReadOnlyList<IMenuItemControl> Items => throw new NotSupportedException("The menu provider does not expose readable items.");
+
+    /// <summary>Dismisses this menu without invoking an item.</summary>
+    void Dismiss() => throw new NotSupportedException("The menu provider does not support dismissing the menu.");
+
     /// <summary>
     /// Opens the menu hierarchy and invokes one unambiguous leaf item.
     /// </summary>
@@ -902,7 +908,11 @@ public enum ShellNavigationSourceKind
 /// <param name="Mode">How to open or activate the pane.</param>
 public sealed record ShellPaneNavigationRequest(
     string PaneName,
-    ShellPaneNavigationMode Mode = ShellPaneNavigationMode.OpenOrActivate);
+    ShellPaneNavigationMode Mode = ShellPaneNavigationMode.OpenOrActivate)
+{
+    /// <summary>Gets the remaining time available for the runtime navigation action.</summary>
+    public int TimeoutMs { get; init; } = 5000;
+}
 
 /// <summary>
 /// Represents application shell navigation over stable page and pane anchors.

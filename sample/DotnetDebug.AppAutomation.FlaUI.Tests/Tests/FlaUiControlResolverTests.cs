@@ -19,6 +19,38 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 public sealed class FlaUiControlResolverTests
 {
     [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ShellNavigationActivatesHiddenPaneThroughRealMenuFlyout()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions();
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+            { ["APPAUTOMATION_SHELL_OVERFLOW_FIXTURE"] = "1" },
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement
+        });
+        session.MainWindow.Patterns.Window.Pattern.SetWindowVisualState(WindowVisualState.Maximized);
+        var resolver = new FlaUiControlResolver(session.MainWindow, session.ConditionFactory).WithShellNavigation("ArmShellNavigation",
+            ShellNavigationParts.ByAutomationIds("ArmShellNavigationList", "ArmShellPaneTabs", "ArmShellActivePaneLabel",
+                ShellNavigationSourceKind.ListBox) with
+            { OverflowButtonLocator = "ArmShellOverflowButton", OverflowMenuLocator = "ArmShellOverflowMenu", FallbackToName = false });
+        var page = new MainWindowPage(resolver);
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        page.OpenOrActivateShellPane(static candidate => candidate.ArmShellNavigation, "Reports");
+        page.ActivateShellPane(static candidate => candidate.ArmShellNavigation, "Reports");
+        await Assert.That(page.ArmShellNavigation.ActivePaneName).IsEqualTo("Reports");
+        await Assert.That(resolver.Resolve<ILabelControl>(new UiControlDefinition("Counter", UiControlType.Label,
+            "ArmShellOverflowCounter")).Text).IsEqualTo("1:1");
+    }
+
+    [Test]
     [Arguments(false, false)]
     [Arguments(true, false)]
     [Arguments(false, true)]

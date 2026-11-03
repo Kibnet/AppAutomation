@@ -469,6 +469,12 @@ public sealed record ShellNavigationParts(
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = true)
 {
+    /// <summary>Optional button that opens the menu of hidden, already-open panes.</summary>
+    public string? OverflowButtonLocator { get; init; }
+
+    /// <summary>Optional locator of the actual popup menu containing hidden pane items.</summary>
+    public string? OverflowMenuLocator { get; init; }
+
     /// <summary>
     /// Creates a <see cref="ShellNavigationParts"/> configuration using automation IDs.
     /// </summary>
@@ -2151,6 +2157,8 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         _propertyName = propertyName.Trim();
         _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+        if (string.IsNullOrWhiteSpace(parts.OverflowButtonLocator) != string.IsNullOrWhiteSpace(parts.OverflowMenuLocator))
+            throw new ArgumentException("Shell overflow requires both its button and menu locators.", nameof(parts));
     }
 
     /// <inheritdoc />
@@ -2242,6 +2250,7 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
         {
             ArgumentNullException.ThrowIfNull(request);
             ArgumentException.ThrowIfNullOrWhiteSpace(request.PaneName);
+            var budget = UiOperationTimeoutBudget.Start(request.TimeoutMs, "shell navigation");
 
             switch (request.Mode)
             {
@@ -2249,10 +2258,10 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
                     OpenPane(request.PaneName);
                     break;
                 case ShellPaneNavigationMode.Activate:
-                    ActivatePane(request.PaneName);
+                    ActivatePane(request.PaneName, budget);
                     break;
                 case ShellPaneNavigationMode.OpenOrActivate:
-                    if (!TryActivateOpenPane(request.PaneName))
+                    if (!TryActivateOpenPane(request.PaneName, budget))
                     {
                         OpenPane(request.PaneName);
                     }
@@ -2263,16 +2272,50 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
             }
         }
 
-        private bool TryActivateOpenPane(string paneName)
+        private bool TryActivateOpenPane(string paneName, UiOperationTimeoutBudget budget)
         {
             var matchingPaneName = FindOpenPaneName(paneName);
             if (matchingPaneName is null)
             {
-                return false;
+                return TryActivateOverflowPane(paneName, budget);
             }
 
-            ActivatePane(matchingPaneName);
+            ResolvePaneTabsOrDefault()!.SelectTabItem(matchingPaneName);
             return true;
+        }
+
+        private bool TryActivateOverflowPane(string paneName, UiOperationTimeoutBudget budget)
+        {
+            if (string.IsNullOrWhiteSpace(_parts.OverflowButtonLocator)) return false;
+            var button = _innerResolver.Resolve<IButtonControl>(
+                CreateDefinition("OverflowButton", UiControlType.Button, _parts.OverflowButtonLocator));
+            UiWait.Until(() => button.IsEnabled, static enabled => enabled,
+                new UiWaitOptions { Timeout = budget.Remaining }, "The shell overflow button did not become enabled.");
+            button.Invoke();
+            var menu = UiWait.Until(() =>
+            {
+                try
+                {
+                    return _innerResolver.Resolve<IMenuControl>(
+                        CreateDefinition("OverflowMenu", UiControlType.Menu, _parts.OverflowMenuLocator!));
+                }
+                catch (UiControlResolutionException error) when (error.IsTransient) { return null; }
+            }, static candidate => candidate is not null,
+                new UiWaitOptions { Timeout = budget.Remaining }, "The shell overflow menu did not open.")!;
+            try
+            {
+                var name = NormalizeLookupText(paneName);
+                var matches = menu.Items.Where(item => string.Equals(NormalizeLookupText(item.Name), name,
+                    StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
+                if (matches.Length > 1)
+                    throw new InvalidOperationException($"Hidden shell pane '{paneName}' is ambiguous.");
+                if (matches.Length == 0) return false;
+                if (!matches[0].IsEnabled)
+                    throw new InvalidOperationException($"Hidden shell pane '{paneName}' is disabled.");
+                matches[0].Invoke(budget.RemainingMilliseconds);
+                return true;
+            }
+            finally { menu.Dismiss(); }
         }
 
         private string? FindOpenPaneName(string paneName)
@@ -2308,13 +2351,13 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
             }
         }
 
-        private void ActivatePane(string paneName)
+        private void ActivatePane(string paneName, UiOperationTimeoutBudget budget)
         {
-            var paneTabs = ResolvePaneTabsOrDefault()
-                ?? throw new NotSupportedException(
+            if (ResolvePaneTabsOrDefault() is null && string.IsNullOrWhiteSpace(_parts.OverflowButtonLocator))
+                throw new NotSupportedException(
                     $"Shell navigation '{AutomationId}' cannot activate pane '{paneName}' because pane tabs are not configured.");
-
-            paneTabs.SelectTabItem(paneName);
+            if (!TryActivateOpenPane(paneName, budget))
+                throw new InvalidOperationException($"Shell pane '{paneName}' was not found in the visible tabs or overflow menu.");
         }
 
         private IUiControl ResolveNavigationSource()

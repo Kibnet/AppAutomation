@@ -1296,6 +1296,39 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    [Arguments(ShellPaneNavigationMode.Activate)]
+    [Arguments(ShellPaneNavigationMode.OpenOrActivate)]
+    public async Task ShellNavigationAdapterUsesRealOverflowItemsWithoutOpeningAnotherPane(ShellPaneNavigationMode mode)
+    {
+        var active = new FakeLabelControl("ActivePaneTitle", "Home");
+        var visibleTab = new FakeTabItemControl("HomeTab", "Home") { IsSelected = true };
+        var overflow = new FakeObservableMenu("HiddenPanes");
+        var reports = new FakeOverflowItem("HiddenReports", "Reports", () => active.Text = "Reports");
+        overflow.Items = [reports];
+        var open = new FakeButtonControl("OverflowOpen") { OnInvoke = () => overflow.IsOpen = true };
+        var navigation = new FakeTreeItemControl("ReportsNode", "Reports", "Reports");
+        var resolver = new FakeResolver(("DockPaneTabs", new FakeTabControl("DockPaneTabs", visibleTab)),
+            ("ActivePaneTitle", active), ("OverflowOpen", open), ("HiddenPanes", overflow),
+            ("Navigation", new FakeTreeControl("Navigation", navigation)))
+            .WithShellNavigation("Shell", ShellNavigationParts.ByAutomationIds("Navigation", "DockPaneTabs", "ActivePaneTitle") with
+            { OverflowButtonLocator = "OverflowOpen", OverflowMenuLocator = "HiddenPanes" });
+        var page = new WorkflowPage(resolver);
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Reports", mode) { TimeoutMs = 500 });
+        await Assert.That(active.Text).IsEqualTo("Reports");
+        await Assert.That(open.InvokeCount).IsEqualTo(1);
+        await Assert.That(reports.Invocations).IsEqualTo(1);
+        await Assert.That(navigation.SelectCount).IsEqualTo(0);
+        await Assert.That(overflow.IsOpen).IsFalse();
+
+        overflow.Items = [reports, new FakeOverflowItem("Duplicate", "Reports", () => throw new InvalidOperationException())];
+        await Assert.That(() => page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Reports", mode)))
+            .Throws<InvalidOperationException>();
+        await Assert.That(reports.Invocations).IsEqualTo(1);
+        await Assert.That(navigation.SelectCount).IsEqualTo(0);
+        await Assert.That(overflow.IsOpen).IsFalse();
+    }
+
+    [Test]
     public async Task ShellNavigationAdapter_ThrowsWhenActivationTabsAreMissing()
     {
         var navigationTree = new FakeTreeControl(
@@ -2264,6 +2297,27 @@ public sealed class UiControlAdapterTests
     }
 
     private sealed record FakeComboBoxItem(string Text, string Name) : IComboBoxItem;
+
+    private sealed class FakeObservableMenu(string id) : FakeControlBase(id), IMenuControl
+    {
+        public bool IsOpen { get; set; }
+        private IReadOnlyList<IMenuItemControl> _items = [];
+        public IReadOnlyList<IMenuItemControl> Items
+        {
+            get => IsOpen ? _items : throw new InvalidOperationException("The popup was not opened.");
+            set => _items = value;
+        }
+        public void Dismiss() => IsOpen = false;
+        public void InvokeItem(IReadOnlyList<string> path, int timeoutMs) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeOverflowItem : FakeControlBase, IMenuItemControl
+    {
+        private readonly Action _invoke;
+        public FakeOverflowItem(string id, string title, Action invoke) : base(id) { Name = title; _invoke = invoke; }
+        public int Invocations { get; private set; }
+        public void Invoke(int timeoutMs) { Invocations++; _invoke(); }
+    }
 
     private sealed class FakeTabControl : FakeControlBase, ITabControl
     {
