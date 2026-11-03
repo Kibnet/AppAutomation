@@ -1,3 +1,5 @@
+using AppAutomation.Abstractions;
+
 namespace AppAutomation.Recorder.Avalonia;
 
 internal enum RecorderStepEditKind
@@ -85,6 +87,12 @@ internal sealed record RecorderStepEditDraft(
     public bool CanConvertTextCheckpointToNumber { get; init; }
 
     public RecorderNumericType? NumericType { get; init; }
+
+    public GridHeaderSelector? GridHeader { get; init; }
+
+    public TextValueTransform? TextTransform { get; init; }
+
+    public string SourceTextPreview { get; init; } = string.Empty;
 }
 
 internal sealed record RecorderStepEditResult(

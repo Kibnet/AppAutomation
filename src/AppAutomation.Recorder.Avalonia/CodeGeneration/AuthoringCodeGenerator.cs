@@ -380,6 +380,7 @@ internal sealed class AuthoringCodeGenerator
             static pair => pair.Value.PropertyName,
             StringComparer.Ordinal);
         var gridRowAnchorNames = RecorderStatementEmitter.CreateGridRowAnchorNames(persistableSteps, graphValidation);
+        var gridTargets = RecorderGridTargetVariables.Create(persistableSteps, graphValidation, gridRowAnchorNames);
         var spinnerKeyVariables = RecorderStatementEmitter.CreateSpinnerKeyVariables(graphValidation, gridRowAnchorNames);
         var numericTypes = RecorderStatementEmitter.CreateNumericTypes(persistableSteps);
         foreach (var step in persistableSteps)
@@ -400,7 +401,8 @@ internal sealed class AuthoringCodeGenerator
                 gridRowAnchorNames,
                 propertyNamesByControlKey,
                 spinnerKeyVariables,
-                numericTypes));
+                numericTypes,
+                gridTargets));
         }
 
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
@@ -617,6 +619,7 @@ internal sealed class AuthoringCodeGenerator
 
         var builder = new StringBuilder();
         var gridRowAnchorNames = RecorderStatementEmitter.CreateGridRowAnchorNames(steps, graphValidation);
+        var gridTargets = RecorderGridTargetVariables.Create(steps, graphValidation, gridRowAnchorNames);
         var spinnerKeyVariables = RecorderStatementEmitter.CreateSpinnerKeyVariables(graphValidation, gridRowAnchorNames);
         var numericTypes = RecorderStatementEmitter.CreateNumericTypes(steps);
         if (graphValidation.GeneratedValueSeriesVariable is { } generatedValueSeriesVariable)
@@ -637,7 +640,8 @@ internal sealed class AuthoringCodeGenerator
                 graphValidation.GeneratedValueSeriesVariable,
                 gridRowAnchorNames,
                 spinnerKeyVariables: spinnerKeyVariables,
-                numericTypes: numericTypes));
+                numericTypes: numericTypes,
+                gridTargets: gridTargets));
         }
 
         return builder.ToString().TrimEnd();
@@ -678,6 +682,8 @@ internal sealed class AuthoringCodeGenerator
         var gridRowAnchorNames = RecorderStatementEmitter.CreateGridRowAnchorNames(
             scenarioSteps,
             graphValidation with { CheckpointVariables = checkpointVariables });
+        var gridTargets = RecorderGridTargetVariables.Create(scenarioSteps,
+            graphValidation with { CheckpointVariables = checkpointVariables }, gridRowAnchorNames);
         var spinnerKeyVariables = RecorderStatementEmitter.CreateSpinnerKeyVariables(
             graphValidation with { CheckpointVariables = checkpointVariables },
             gridRowAnchorNames);
@@ -691,7 +697,8 @@ internal sealed class AuthoringCodeGenerator
             graphValidation.GeneratedValueSeriesVariable,
             gridRowAnchorNames,
             spinnerKeyVariables: spinnerKeyVariables,
-            numericTypes: RecorderStatementEmitter.CreateNumericTypes(scenarioSteps));
+            numericTypes: RecorderStatementEmitter.CreateNumericTypes(scenarioSteps),
+            gridTargets: gridTargets);
         return step.DefinesGeneratedValue && graphValidation.GeneratedValueSeriesVariable is { } seriesVariable
             ? $"var {seriesVariable} = RecordedValueGenerator.Start();{Environment.NewLine}{statement}"
             : statement;

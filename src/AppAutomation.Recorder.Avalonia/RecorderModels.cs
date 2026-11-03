@@ -102,7 +102,8 @@ public enum RecorderValueKind
     Time = 4,
     Color = 5,
     StringSet = 6,
-    GridCellText = 7
+    GridCellText = 7,
+    DateTime = 8
 }
 
 internal enum RecorderNumericType
@@ -137,7 +138,8 @@ public enum RecorderValueAccessorKind
     GridCellText = 12,
     GridCellValue = 13,
     IsReadOnly = 14,
-    NumericText = 15
+    NumericText = 15,
+    GridHeaderText = 16
 }
 
 internal enum RecorderComparisonKind
@@ -188,6 +190,7 @@ internal static class RecorderValueAssertions
                 assertionKind = RecorderHasValueAssertionKind.NotEmpty;
                 return true;
             case RecorderValueKind.Date:
+            case RecorderValueKind.DateTime:
             case RecorderValueKind.Time:
                 assertionKind = RecorderHasValueAssertionKind.NotNull;
                 return true;
@@ -569,6 +572,14 @@ internal sealed record RecordedStep(
     public RecorderGridRowSourceMode GridRowSourceMode { get; init; }
 
     public int? GridCapturedRowPosition { get; init; }
+
+    public bool CanCaptureGridRowKey { get; init; }
+
+    public GridHeaderSelector? GridHeader { get; init; }
+
+    public TextValueTransform? TextTransform { get; init; }
+
+    public string? CapturedDisplayText { get; init; }
 
     public Guid? GridRowAnchorCheckpointId { get; init; }
 

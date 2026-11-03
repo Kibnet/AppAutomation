@@ -19,6 +19,7 @@ internal static class RecorderSemanticValueModel
                 StringComparison.Ordinal)
             && leftStep.RowIndex == rightStep.RowIndex
             && leftStep.ColumnIndex == rightStep.ColumnIndex
+            && Equals(leftStep.GridHeader, rightStep.GridHeader)
             && string.Equals(leftStep.RepeatedItemKey, rightStep.RepeatedItemKey, StringComparison.Ordinal)
             && string.Equals(
                 leftStep.GridTargetColumnName,
@@ -58,6 +59,7 @@ internal static class RecorderSemanticValueModel
     {
         var step = snapshot.Prototype;
         var target = $"{step.Control.LocatorKind}:{step.Control.LocatorValue}";
+        if (step.GridHeader is { } header) return $"{target}[{header}]";
         if (step.RepeatedItemKey is { } itemKey)
         {
             return $"{target}[{itemKey}]";
@@ -111,6 +113,8 @@ internal static class RecorderSemanticValueModel
         {
             GridRowConditions = candidate.GridContext?.RowConditions,
             GridTargetColumnName = candidate.GridContext?.TargetColumnName,
+            GridHeader = candidate.Header,
+            CapturedDisplayText = candidate.DisplayText ?? candidate.StringValue,
             RepeatedItemKey = candidate.RepeatedItemKey
         };
     }
@@ -187,7 +191,9 @@ internal static class RecorderSemanticValueModel
             prototype.TimeValue,
             prototype.StringValues,
             gridContext,
-            prototype.RepeatedItemKey);
+            prototype.RepeatedItemKey,
+            prototype.GridHeader,
+            prototype.CapturedDisplayText);
     }
 
     internal static StepCreationResult CreateStepFromSnapshot(
@@ -210,6 +216,10 @@ internal static class RecorderSemanticValueModel
                 GridRowConditions = prototype.GridRowConditions,
                 GridTargetColumnName = prototype.GridTargetColumnName,
                 GridCapturedRowPosition = prototype.GridCapturedRowPosition,
+                CanCaptureGridRowKey = prototype.CanCaptureGridRowKey,
+                GridHeader = prototype.GridHeader,
+                TextTransform = prototype.TextTransform,
+                CapturedDisplayText = prototype.CapturedDisplayText,
                 RepeatedItemKey = prototype.RepeatedItemKey
             },
             message);
@@ -222,7 +232,7 @@ internal static class RecorderSemanticValueModel
             RecorderValueKind.Text or RecorderValueKind.Color or RecorderValueKind.GridCellText => candidate.StringValue is not null,
             RecorderValueKind.Number => candidate.DoubleValue.HasValue,
             RecorderValueKind.Boolean => candidate.BoolValue.HasValue,
-            RecorderValueKind.Date => true,
+            RecorderValueKind.Date or RecorderValueKind.DateTime => true,
             RecorderValueKind.Time => true,
             RecorderValueKind.StringSet => candidate.StringValues is not null,
             _ => false
@@ -237,6 +247,8 @@ internal static class RecorderSemanticValueModel
             RecorderValueKind.Number => candidate.DoubleValue?.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
             RecorderValueKind.Boolean => candidate.BoolValue == true ? "true" : "false",
             RecorderValueKind.Date => candidate.DateValue?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
+            RecorderValueKind.DateTime => candidate.DateValue.HasValue
+                ? RecorderValueCodec.FormatDateTime(candidate.DateValue.Value) : "null",
             RecorderValueKind.Time => candidate.TimeValue?.ToString("c", System.Globalization.CultureInfo.InvariantCulture) ?? "null",
             RecorderValueKind.StringSet => string.Join(", ", candidate.StringValues ?? []),
             _ => string.Empty
@@ -299,6 +311,10 @@ internal static class RecorderSemanticValueModel
 
                 error = "Expected date must use yyyy-MM-dd or null.";
                 return false;
+            case RecorderValueKind.DateTime:
+                if (!RecorderValueCodec.TryParseDateTime(text, out var dateTime, out error)) return false;
+                updated = candidate with { DateValue = dateTime };
+                return true;
             case RecorderValueKind.Time:
                 if (string.Equals(text.Trim(), "null", StringComparison.OrdinalIgnoreCase))
                 {
@@ -337,7 +353,9 @@ internal static class RecorderSemanticValueModel
         TimeSpan? TimeValue = null,
         IReadOnlyList<string>? StringValues = null,
         GridValueContext? GridContext = null,
-        string? RepeatedItemKey = null);
+        string? RepeatedItemKey = null,
+        GridHeaderSelector? Header = null,
+        string? DisplayText = null);
 
     internal sealed record GridValueContext(
         int RowIndex,

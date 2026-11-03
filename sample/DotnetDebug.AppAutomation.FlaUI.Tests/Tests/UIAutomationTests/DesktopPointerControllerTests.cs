@@ -39,7 +39,19 @@ public sealed class DesktopPointerControllerTests
         var fake = new FakeBackend { ClickPressDuration = TimeSpan.FromMilliseconds(100) };
         var error = await Capture(() => Controller(fake).RunAsync("double", TimeSpan.FromMilliseconds(150),
             op => op.ClickAsync(Target, new PointerClickOptions { ClickCount = 2 })));
-        await Assert.That(error is TimeoutException or OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(0);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
+
+        var preparationTimeout = await Capture(() => Controller(fake).RunAsync("double-preparation", TimeSpan.FromMilliseconds(35), op =>
+        {
+            // A synchronous UIA preparation can return after the operation's own deadline.
+            op.Token.WaitHandle.WaitOne();
+            op.Check();
+            return op.ClickAsync(Target, new PointerClickOptions { ClickCount = 2 });
+        }));
+        await Assert.That(preparationTimeout is TimeoutException).IsTrue();
+        await Assert.That(preparationTimeout!.InnerException is OperationCanceledException).IsTrue();
         await Assert.That(fake.DownPositions.Count).IsEqualTo(0);
         await Assert.That(fake.State.Position).IsEqualTo(Saved);
     }
@@ -113,7 +125,7 @@ public sealed class DesktopPointerControllerTests
         var readsAfterFirst = fake.Reads;
         var eventsAfterFirst = fake.Events.Count;
         var error = await Capture(() => controller.RunAsync("second", TimeSpan.FromMilliseconds(80), op => op.ClickAsync(Target, new())));
-        await Assert.That(error is OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
         await Assert.That(fake.Reads).IsEqualTo(readsAfterFirst);
         await Assert.That(fake.Events.Count).IsEqualTo(eventsAfterFirst);
         await Assert.That(queue.Releases).IsEqualTo(2);
@@ -184,7 +196,7 @@ public sealed class DesktopPointerControllerTests
             callbackToken = ct;
             return never.Task;
         })));
-        await Assert.That(error is OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
         await Assert.That(callbackToken.IsCancellationRequested).IsTrue();
         await Assert.That(timer.Elapsed < TimeSpan.FromSeconds(2)).IsTrue();
         await Assert.That(fake.State.Position).IsEqualTo(Saved);
@@ -379,7 +391,7 @@ public sealed class DesktopPointerControllerTests
     {
         var fake = new FakeBackend { State = new PointerState(Saved, PointerButtons.None, 2) };
         var error = await Capture(() => Controller(fake).RunAsync("click", TimeSpan.FromMilliseconds(35), op => op.ClickAsync(Target, new())));
-        await Assert.That(error is OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
         await Assert.That(fake.Events.Count).IsEqualTo(0);
     }
 
@@ -389,7 +401,7 @@ public sealed class DesktopPointerControllerTests
         var fake = new FakeBackend { State = new PointerState(Saved, PointerButtons.None, WindowsPointerBackend.EscapeInputFlag) };
         var error = await Capture(() => Controller(fake).RunAsync("drag", TimeSpan.FromMilliseconds(35),
             op => op.DragAsync(Target, new Point(300, 300), new())));
-        await Assert.That(error is OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
         await Assert.That(fake.Events.Count).IsEqualTo(0);
         await Assert.That(fake.State.Modifiers).IsEqualTo(WindowsPointerBackend.EscapeInputFlag);
     }
@@ -486,7 +498,7 @@ public sealed class DesktopPointerControllerTests
         var queue = new FakeCoordinator();
         using var owned = queue.Acquire("fake", default);
         var error = await Task.Run(() => Capture(() => Controller(fake, queue).RunAsync("queued", TimeSpan.FromMilliseconds(35), op => op.ClickAsync(Target, new()))));
-        await Assert.That(error is OperationCanceledException).IsTrue();
+        await Assert.That(error is TimeoutException).IsTrue();
         await Assert.That(fake.Reads).IsEqualTo(0);
         await Assert.That(fake.Events.Count).IsEqualTo(0);
     }

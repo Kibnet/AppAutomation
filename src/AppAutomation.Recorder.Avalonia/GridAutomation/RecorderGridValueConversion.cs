@@ -108,6 +108,17 @@ internal static class RecorderGridValueConversion
         return success;
     }
 
+    internal static bool TryConvertGridDateTime(
+        object? rawValue,
+        string displayText,
+        GridColumnDefinition? column,
+        out DateTime? dateTime) =>
+        GridDateTimeValueConversion.TryConvert(new GridCellValueSnapshot(displayText, rawValue, GridCellValueKind.DateTime)
+        {
+            FormatString = column?.FormatString,
+            CultureName = column?.CultureName
+        }, out dateTime, out _);
+
     internal static bool TryConvertGridTime(
         object? rawValue,
         string displayText,

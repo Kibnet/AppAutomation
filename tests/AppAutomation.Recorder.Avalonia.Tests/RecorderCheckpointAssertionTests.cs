@@ -2391,7 +2391,7 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task GridCheckpointRejectsUnprovenViewPositionAfterVirtualizedReorder()
+    public async Task GridCheckpointKeepsStableKeyWithoutInventingPositionAfterVirtualizedReorder()
     {
         const int selectedIndex = 21;
         var visibleStart = Math.Clamp(selectedIndex - 1, 0, 57);
@@ -2456,15 +2456,28 @@ public sealed class RecorderCheckpointAssertionTests
         session.BeginCheckTargetSelection();
         var selected = session.SelectCheckTargetForTesting(selectedEditor!);
 
+        await Assert.That(selection!.ValueSnapshot).IsNotNull();
+        ((IRecorderCheckpointSessionDetails)session).CaptureCheckpoint(selection, "selectedOrder");
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        var captured = selection.ValueSnapshot!.Prototype;
+        editing.TryCreateStepEditDraft(session.StepJournal.Single().StepId, out var draft, out _);
+        var positional = draft is null ? null : editing.ApplyStepEdit(draft with
+        {
+            GridRowSourceMode = RecorderGridRowSourceMode.CurrentTableRow
+        });
+
         using (Assert.Multiple())
         {
             await Assert.That(selected).IsTrue();
-            await Assert.That(selection!.ValueSnapshot).IsNull();
-            await Assert.That(selection.ValueDescriptionError).Contains("cannot prove the selected row's current view position");
-            await Assert.That(session.StepJournal).IsEmpty();
+            await Assert.That(selection!.ValueSnapshot).IsNotNull();
+            await Assert.That(selection.ValueDescriptionError).IsNullOrEmpty();
+            await Assert.That(captured.GridCapturedRowPosition).IsNull();
+            await Assert.That(captured.GridRowSourceMode).IsEqualTo(RecorderGridRowSourceMode.RecordedStableKey);
+            await Assert.That(captured.GridRowConditions!.Single().Value).IsEqualTo("ORDER-21");
+            await Assert.That(positional!.Success).IsFalse();
         }
     }
-    
+
     [Test]
     public async Task CheckMode_FilterInputKeepsItsLogicalTargetWhenAnotherSurfaceIsCandidate()
     {
@@ -2513,7 +2526,7 @@ public sealed class RecorderCheckpointAssertionTests
         public object? SelectedItem { get; set; }
 
         public IReadOnlyList<object?> SelectedItems { get; set; } = [];
-        
+
     }
 
     private sealed record ProductGridRow(string PositionNumber, ProductValue MarketProduct);

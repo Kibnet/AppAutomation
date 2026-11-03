@@ -109,9 +109,12 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         }
         catch (Exception error)
         {
-            primary = error;
-            error.Data[OperationKey] = id.ToString();
-            operation.Log("failed", detail: ErrorCode(error));
+            primary = error is OperationCanceledException && deadline.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested && session?.Token.IsCancellationRequested != true
+                ? new TimeoutException($"Desktop pointer operation '{kind}' exceeded its {timeout.TotalMilliseconds:0}ms timeout.", error)
+                : error;
+            primary.Data[OperationKey] = id.ToString();
+            operation.Log("failed", detail: ErrorCode(primary));
         }
         finally
         {

@@ -17,6 +17,153 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderStepEditingTests
 {
     [Test]
+    public async Task GridDateTimeLiteralEditPreservesMinuteFractionAndNull()
+    {
+        using var session = CreateSession(new StackPanel());
+        var step = new RecordedStep(RecordedActionKind.AssertValue, Descriptor("OrdersGrid", UiControlType.Grid),
+            StepId: Guid.NewGuid(), ValueKind: RecorderValueKind.DateTime,
+            ValueAccessorKind: RecorderValueAccessorKind.GridCellValue, DateValue: new DateTime(2026, 11, 3, 16, 21, 0))
+        {
+            GridRowConditions = [new RecordedGridRowCondition("Id", "row")],
+            GridTargetColumnName = "RecordedAt"
+        };
+        session.AddRecordedStepForTesting(step);
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        foreach (var (literal, expected) in new (string, DateTime?)[]
+        {
+            ("2026-11-03 16:22", new DateTime(2026, 11, 3, 16, 22, 0)),
+            ("2026-11-03 16:22:07.1234567", new DateTime(2026, 11, 3, 16, 22, 7).AddTicks(1234567)),
+            ("null", null)
+        })
+        {
+            var editor = OpenEditor(overlay, step.StepId);
+            editor.GetLogicalDescendants().OfType<TextBox>()
+                .Single(input => input.Name == "RecorderStepEditExpectedLiteral").Text = literal;
+            ClickApply(editor);
+            await Assert.That(overlay.LastStepEditorForTesting).IsNull();
+            await Assert.That(editing.TryCreateStepEditDraft(step.StepId, out var draft, out var error)).IsTrue().Because(error);
+            await Assert.That(draft!.DateValue).IsEqualTo(expected);
+            await Assert.That(draft.DateExpression).IsNull();
+            await Assert.That(session.ExportPreview()).Contains("GridValueReader.ReadCellDateTime");
+            if (expected?.Ticks % TimeSpan.TicksPerSecond > 0)
+                await Assert.That(session.ExportPreview()).Contains(".AddTicks(1234567L)");
+        }
+        await Assert.That(session.ExportPreview()).Contains(".IsEqualTo(null)");
+    }
+
+    [Test]
+    [Arguments("Контрагент: ООО Тапок", "ООО Тапок")]
+    [Arguments("Номер заказа: 123", "123")]
+    [Arguments("Подпись: значение: ещё", "значение: ещё")]
+    [Arguments("Подпись:", "")]
+    public async Task InlineTextTransformPersistsAndReadsNewUiText(string original, string expected)
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage, RecorderScenarioDestinationSources.CompilableScenario);
+        var input = new TextBox { Text = original };
+        using var session = CreateSession(input);
+        var stepId = Guid.NewGuid();
+        var step = CheckpointStep(stepId, Guid.NewGuid(), "savedValue") with
+        { StringValue = original, CapturedDisplayText = original };
+        session.AddRecordedStepForTesting(step);
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = OpenEditor(overlay, stepId);
+        editor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(c => c.Name == "RecorderStepEditTextTransform").SelectedItem = "Text after first separator";
+        ClickApply(editor);
+        await Assert.That(overlay.LastStepEditorForTesting).IsNull();
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(stepId, out var draft, out _);
+        await Assert.That(draft!.TextTransform).IsNotNull();
+        await Assert.That(draft.StringValue).IsEqualTo(expected);
+        await Assert.That(draft.SourceTextPreview).IsEqualTo(original);
+        var applied = RecorderStepEditService.TryCreateCandidate(step, draft, out var candidate, out _);
+        await Assert.That(applied).IsTrue();
+        await Assert.That(session.ExportPreview()).Contains("TextValue.AfterFirstSeparator(Page.Product.Text, \":\", true)");
+        input.Text = "Подпись: Новое значение";
+        await Assert.That(candidate!.TextTransform!.Apply(input.Text)).IsEqualTo("Новое значение");
+        foreach (var (controlType, accessor, keepsTransform) in new[]
+        {
+            (UiControlType.Spinner, RecorderValueAccessorKind.NumericValue, false),
+            (UiControlType.Grid, RecorderValueAccessorKind.GridCellValue, false),
+            (UiControlType.TextBox, RecorderValueAccessorKind.NumericText, true)
+        })
+        {
+            var replacement = candidate with
+            {
+                Control = Descriptor("Replacement", controlType),
+                ValueKind = RecorderValueKind.Number,
+                ValueAccessorKind = accessor,
+                NumericType = RecorderNumericType.Double,
+                DoubleValue = 42,
+                StringValue = null,
+                CapturedDisplayText = keepsTransform ? "Количество: 42" : "42",
+                TextTransform = null,
+                GridRowConditions = controlType == UiControlType.Grid ? [new RecordedGridRowCondition("Id", "row")] : null,
+                GridTargetColumnName = controlType == UiControlType.Grid ? "Quantity" : null
+            };
+            var snapshot = new RecorderSemanticValueSnapshot(replacement,
+                new RecorderSemanticValueDescription(RecorderValueKind.Number, "replacement", replacement.CapturedDisplayText));
+            var retargeted = RecorderStepEditService.RetargetDraft(draft, snapshot);
+            await Assert.That(retargeted.TextTransform).IsEqualTo(keepsTransform ? draft.TextTransform : null);
+            await Assert.That(RecorderStepEditService.TryCreateCandidate(candidate, retargeted, out var numeric, out var retargetError))
+                .IsTrue().Because(retargetError);
+            var retargetPreview = project.Generator.GeneratePreview(numeric!);
+            await Assert.That(retargetPreview.Contains("TextValue.AfterFirstSeparator", StringComparison.Ordinal)).IsEqualTo(keepsTransform);
+        }
+        var assertion = CheckpointAssertionStep(Guid.NewGuid(), candidate.CheckpointId!.Value) with
+        {
+            StringValue = original,
+            CapturedDisplayText = original
+        };
+        session.AddRecordedStepForTesting(assertion);
+        var assertionEditor = OpenEditor(overlay, assertion.StepId);
+        assertionEditor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(c => c.Name == "RecorderStepEditTextTransform").SelectedItem = "Text after first separator";
+        ClickApply(assertionEditor);
+        editing.TryCreateStepEditDraft(assertion.StepId, out var assertionDraft, out _);
+        await Assert.That(RecorderStepEditService.TryCreateCandidate(assertion, assertionDraft!, out var editedAssertion, out _)).IsTrue();
+        var resetEditor = OpenEditor(overlay, stepId);
+        resetEditor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(c => c.Name == "RecorderStepEditTextTransform").SelectedItem = "Full text";
+        ClickApply(resetEditor);
+        editing.TryCreateStepEditDraft(stepId, out var resetDraft, out _);
+        await Assert.That(resetDraft!.TextTransform).IsNull();
+        await Assert.That(resetDraft.StringValue).IsEqualTo(original);
+        await Assert.That(session.ExportPreview()).Contains("var savedValue = Page.Product.Text;");
+        var saved = await project.SaveAsync(project.CreateSaveContext("Text transformation", "transform-draft"), [candidate, editedAssertion!]);
+        var source = await File.ReadAllTextAsync(saved.ScenarioFilePath!);
+        await Assert.That(source).Contains("TextValue.AfterFirstSeparator(Page.Product.Text");
+        await Assert.That(source).Contains("Assert.That(TextValue.AfterFirstSeparator(Page.Product.Text, \":\", true)).IsEqualTo(savedValue)");
+        await Assert.That(RecorderGeneratedSourceCompiler.Compile(project.RootPath)).IsEmpty();
+    }
+
+    [Test]
+    public async Task InvalidTextTransformAndCancelLeaveCheckpointUnchanged()
+    {
+        using var session = CreateSession(new StackPanel());
+        var id = Guid.NewGuid();
+        session.AddRecordedStepForTesting(CheckpointStep(id, Guid.NewGuid(), "savedValue"));
+        var before = session.ExportPreview();
+        var editing = (IRecorderStepEditingSessionDetails)session;
+        editing.TryCreateStepEditDraft(id, out var draft, out _);
+        var result = editing.ApplyStepEdit(draft! with { TextTransform = new(":") });
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(session.ExportPreview()).IsEqualTo(before);
+        var overlay = new RecorderOverlay();
+        overlay.Attach(session, new AppAutomationRecorderOptions());
+        var editor = OpenEditor(overlay, id);
+        editor.GetLogicalDescendants().OfType<ComboBox>()
+            .Single(c => c.Name == "RecorderStepEditTextTransform").SelectedItem = "Text after first separator";
+        editor.GetLogicalDescendants().OfType<Button>().Single(c => c.Name == "RecorderStepEditCancel")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Assert.That(session.ExportPreview()).IsEqualTo(before);
+    }
+
+    [Test]
     public async Task CheckpointRenameKeepsStableIdAndRefreshesDependentAssertionAndCheckMenu()
     {
         var root = new StackPanel();
