@@ -88,6 +88,8 @@ internal sealed record RecorderStepEditDraft(
 
     public RecorderNumericType? NumericType { get; init; }
 
+    public bool WaitForValue { get; init; }
+
     public GridHeaderSelector? GridHeader { get; init; }
 
     public TextValueTransform? TextTransform { get; init; }

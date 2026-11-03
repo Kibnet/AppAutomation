@@ -480,6 +480,18 @@ internal static class RecorderStatementEmitter
                     $"A presence assertion is not supported for value kind '{step.ValueKind}'.");
             }
 
+            if (step.WaitForValue)
+            {
+                var predicate = assertionKind switch
+                {
+                    RecorderHasValueAssertionKind.NotEmpty => "value is not null && global::System.Linq.Enumerable.Any(value)",
+                    RecorderHasValueAssertionKind.Empty => "value is not null && !global::System.Linq.Enumerable.Any(value)",
+                    RecorderHasValueAssertionKind.NotNull => "value is not null",
+                    _ => "value is null"
+                };
+                return $"UiWait.Until(() => {actual}, value => {predicate});";
+            }
+
             return assertionKind switch
             {
                 RecorderHasValueAssertionKind.NotEmpty => $"await Assert.That({actual}).IsNotEmpty();",
@@ -523,6 +535,11 @@ internal static class RecorderStatementEmitter
             expected = FormatExpectedLiteral(step);
         }
 
+        if (step.WaitForValue)
+        {
+            return GenerateValueWait(step, propertyName, actual, expected, decimalCalculation);
+        }
+
         var assertion = step.ComparisonKind switch
         {
             RecorderComparisonKind.Equal =>
@@ -537,6 +554,38 @@ internal static class RecorderStatementEmitter
         };
 
         return $"await {assertion};";
+    }
+
+    private static string GenerateValueWait(RecordedStep step, string propertyName, string actual, string expected, bool decimalCalculation)
+    {
+        var method = step.HasExpectedLiteral && step.ComparisonKind == RecorderComparisonKind.Equal
+            && actual.StartsWith($"Page.{propertyName}.", StringComparison.Ordinal)
+            && step.Control.ControlType != UiControlType.MultiItemControlCollection
+            ? step.ValueAccessorKind switch
+            {
+                RecorderValueAccessorKind.IsEnabled => "WaitUntilIsEnabled",
+                RecorderValueAccessorKind.Text => "WaitUntilTextEquals",
+                RecorderValueAccessorKind.SelectedItemText when step.Control.ControlType == UiControlType.ComboBox => "WaitUntilTextEquals",
+                RecorderValueAccessorKind.NumericValue when step.Control.ControlType == UiControlType.Spinner && !decimalCalculation => "WaitUntilValueEquals",
+                RecorderValueAccessorKind.IsChecked => "WaitUntilIsChecked",
+                RecorderValueAccessorKind.IsToggled => "WaitUntilIsToggled",
+                RecorderValueAccessorKind.IsSelected => "WaitUntilIsSelected",
+                RecorderValueAccessorKind.IsExpanded => "WaitUntilIsExpanded",
+                RecorderValueAccessorKind.SelectedTime when step.TimeValue.HasValue => "WaitUntilTimeEquals",
+                RecorderValueAccessorKind.Color => "WaitUntilColorEquals",
+                _ => null
+            } : null;
+        if (method is not null) return $"Page.{method}(static page => page.{propertyName}, {expected});";
+        if (step.ValueKind == RecorderValueKind.StringSet && step.ComparisonKind == RecorderComparisonKind.Equivalent)
+            return $"Page.WaitUntilSelectedItemsEqual(static page => page.{propertyName}, {expected});";
+        var predicate = step.ComparisonKind switch
+        {
+            RecorderComparisonKind.Equal => $"value == {expected}",
+            RecorderComparisonKind.NotEqual => $"value != {expected}",
+            RecorderComparisonKind.Contains => $"value is not null && value.Contains({expected})",
+            _ => throw new InvalidOperationException("The recorded value does not support this wait comparison.")
+        };
+        return $"UiWait.Until(() => {actual}, value => {predicate});";
     }
 
     private static string GenerateNumericExpectedExpression(

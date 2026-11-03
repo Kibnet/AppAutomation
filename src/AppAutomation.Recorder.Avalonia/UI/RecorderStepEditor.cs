@@ -75,7 +75,7 @@ internal sealed class RecorderStepEditor : Border
         var fields = new StackPanel { Spacing = 7 };
         fields.Children.Add(new TextBlock
         {
-            Text = $"Edit {DescribeKind(draft.EditKind)}",
+            Text = $"Edit {(draft.WaitForValue ? "wait" : DescribeKind(draft.EditKind))}",
             FontWeight = FontWeight.SemiBold,
             Foreground = textBrush
         });

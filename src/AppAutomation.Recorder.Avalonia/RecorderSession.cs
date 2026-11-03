@@ -3301,13 +3301,14 @@ internal sealed partial class RecorderSession :
 
     private void CaptureAssertion(RecorderAssertionMode mode, bool suppressRecentDuplicate = true)
     {
-        CaptureAssertion(PrepareSemanticCaptureSelection(), mode, suppressRecentDuplicate);
+        CaptureAssertion(PrepareSemanticCaptureSelection(), mode, suppressRecentDuplicate, waitForValue: true);
     }
 
     private void CaptureAssertion(
         RecorderCheckTargetSelection? selection,
         RecorderAssertionMode mode,
-        bool suppressRecentDuplicate = true)
+        bool suppressRecentDuplicate = true,
+        bool waitForValue = false)
     {
         if (selection is null)
         {
@@ -3332,7 +3333,11 @@ internal sealed partial class RecorderSession :
                     selection.ValueSnapshot,
                     selection.IsEnabled)
                 : _stepFactory.TryCreateAssertionStep(selection.Target, mode);
-        AddStep(result, selection.Target, $"Assertion:{mode}", suppressRecentDuplicate);
+        if (waitForValue && result.Step is { ActionKind: RecordedActionKind.AssertValue } step)
+        {
+            result = result with { Step = step with { WaitForValue = true }, Message = "Added replay-time value wait." };
+        }
+        AddStep(result, selection.Target, $"{(waitForValue ? "WaitUntil" : "Assertion")}:{mode}", suppressRecentDuplicate);
     }
 
     private bool TryDescribeCurrentValue(
@@ -5198,6 +5203,7 @@ internal sealed partial class RecorderSession :
             step.InputCopiedValueId?.ToString("N") ?? string.Empty,
             CreateNumericExpressionFingerprint(step.NumericExpectedExpression),
             step.HasExpectedLiteral,
+            step.WaitForValue,
             step.CanPersist);
     }
 
@@ -6246,15 +6252,16 @@ internal sealed partial class RecorderSession :
 
         if (step.ActionKind == RecordedActionKind.AssertValue)
         {
+            var verb = step.WaitForValue ? "Wait until" : "Assert";
             var target = $"{step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)}";
             if (step.ComparisonKind == RecorderComparisonKind.HasValue)
             {
-                return $"Assert {target} has value";
+                return $"{verb} {target} has value";
             }
 
             if (step.ComparisonKind == RecorderComparisonKind.IsEmpty)
             {
-                return $"Assert {target} is empty";
+                return $"{verb} {target} is empty";
             }
 
             var comparison = step.ComparisonKind switch
@@ -6275,7 +6282,7 @@ internal sealed partial class RecorderSession :
                     : step.NumericExpectedExpression is not null
                         ? "calculated value"
                         : "expected literal";
-            return $"Assert {target} {comparison} {expected}";
+            return $"{verb} {target} {comparison} {expected}";
         }
 
         if (step.ActionKind == RecordedActionKind.EnterText

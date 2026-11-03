@@ -60,6 +60,11 @@ internal static class RecorderScenarioGraphValidator
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            if (step.WaitForValue && step.ActionKind != RecordedActionKind.AssertValue)
+            {
+                stepErrors[step.StepId] = "A semantic value wait requires a readable value comparison.";
+                continue;
+            }
             var tableRowValidation = ValidateTableRowAnchor(step, index, tableRowAnchors);
             if ((step.GridHeader is not null || step.ValueAccessorKind == RecorderValueAccessorKind.GridHeaderText)
                 && (step.GridHeader is null
