@@ -273,7 +273,9 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
-    public async Task CatalogGrid_ReResolvesStableAddressForActionAndPostcondition()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CatalogGrid_ReResolvesStableAddressForActionAndPostcondition(bool cancel)
     {
         var fixture = new GridFixture(
             Row("ITEM-01", "Draft", "10"),
@@ -287,6 +289,7 @@ public sealed class GridRowSelectorTests
                 GridRowSelector.ByCell("Code", "ITEM-02"),
                 "State",
                 "Done",
+                cancel ? GridCellEditCommitMode.Cancel : GridCellEditCommitMode.Commit,
                 timeoutMs: 250)
             .CopyGridCell(
                 static candidate => candidate.Orders,
@@ -298,9 +301,10 @@ public sealed class GridRowSelectorTests
         {
             await Assert.That(page.Orders is IAddressableGridControl).IsTrue();
             await Assert.That(fixture.Rows[0].Cells[0].Value).IsEqualTo("ITEM-02");
-            await Assert.That(fixture.Rows[0].Cells[1].Value).IsEqualTo("Done");
+            await Assert.That(fixture.Rows[0].Cells[1].Value).IsEqualTo(cancel ? "Ready" : "Done");
             await Assert.That(fixture.Grid.CopiedValue).IsEqualTo("20");
             await Assert.That(fixture.Grid.IndexedOperationCount).IsGreaterThan(0);
+            await Assert.That(fixture.Grid.IndexedCellReadCount).IsEqualTo(cancel ? 2 : 1);
         }
     }
 
@@ -1178,6 +1182,8 @@ public sealed class GridRowSelectorTests
 
         public int IndexedOperationCount { get; private set; }
 
+        public int IndexedCellReadCount { get; private set; }
+
         public void OpenRow(int rowIndex)
         {
             OpenedOrderId = GetRowByIndex(rowIndex)?.Cells[0].Value;
@@ -1234,6 +1240,7 @@ public sealed class GridRowSelectorTests
             int timeoutMs)
         {
             IndexedOperationCount++;
+            IndexedCellReadCount++;
             LastIndexedColumn = column;
             var rowIndex = ResolveUniqueIndex(row);
             var value = GetRowByIndex(rowIndex)?.Cells[column.ColumnIndex].Value;

@@ -536,7 +536,8 @@ public static partial class UiPageExtensions
         GridCellValueSnapshot? originalValue = null;
         try
         {
-            originalValue = grid.ReadCell(address, budget.RemainingMilliseconds);
+            if (request.CommitMode == GridCellEditCommitMode.Cancel)
+                originalValue = grid.ReadCell(address, budget.RemainingMilliseconds);
             grid.EditCell(address, request, budget.RemainingMilliseconds);
         }
         catch (Exception ex) when (ex is not UiOperationException and not OperationCanceledException)
