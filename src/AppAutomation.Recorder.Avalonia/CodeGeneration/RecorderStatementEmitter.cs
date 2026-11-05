@@ -793,7 +793,8 @@ internal static class RecorderStatementEmitter
                 $"Generated value definition '{generatedValueId}' does not have a validated series and ordinal.");
         }
 
-        return $"var {variableName} = {generatedValueSeriesVariable}.Create({step.GeneratedValueOrdinal.Value});{Environment.NewLine}{enterText}";
+        var method = RecorderGeneratedValueFormats.Get(step.GeneratedValueKind).FactoryMethod;
+        return $"var {variableName} = {generatedValueSeriesVariable}.{method}({step.GeneratedValueOrdinal.Value});{Environment.NewLine}{enterText}";
     }
 
     private static string GenerateEnterSearchStatement(

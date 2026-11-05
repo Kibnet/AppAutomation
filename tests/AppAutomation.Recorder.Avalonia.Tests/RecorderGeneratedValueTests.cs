@@ -4,6 +4,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
+using AppAutomation.Recorder.Avalonia.CodeGeneration;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
@@ -11,8 +12,14 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderGeneratedValueTests
 {
     [Test]
-    public async Task GeneratedValue_CanBeReusedAndComparedByCheck()
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(3)]
+    [Arguments(4)]
+    public async Task GeneratedValue_CanBeReusedAndComparedByCheck(int kindValue)
     {
+        var kind = (RecorderGeneratedValueKind)kindValue;
+        var format = RecorderGeneratedValueFormats.Get(kind);
         var first = TextBox("PrimaryCode");
         var second = TextBox("ConfirmationCode");
         var root = new StackPanel { Children = { first, second } };
@@ -23,7 +30,7 @@ public sealed class RecorderGeneratedValueTests
         session.CheckTargetSelected += (_, eventArgs) => checkSelection = eventArgs.Selection;
         session.Start();
 
-        session.BeginGeneratedValueTargetSelection();
+        session.BeginGeneratedValueTargetSelection(kind: kind);
         session.SelectGeneratedValueTargetForTesting(first);
         session.ApplyGeneratedValue(generatedSelection!);
         var generatedValue = session.GeneratedValues.Single();
@@ -32,7 +39,10 @@ public sealed class RecorderGeneratedValueTests
         {
             await Assert.That(generatedSelection).IsNotNull();
             await Assert.That(generatedSelection!.DefinesGeneratedValue).IsTrue();
-            await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
+            await Assert.That(first.Text).IsNotEmpty();
+            await Assert.That(generatedValue.Kind).IsEqualTo(kind);
+            if (kind == RecorderGeneratedValueKind.Text)
+                await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
             await Assert.That(session.StepCount).IsEqualTo(1);
             await Assert.That(session.PersistableStepCount).IsEqualTo(1);
         }
@@ -59,16 +69,28 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(second.Text).IsEqualTo(first.Text);
             await Assert.That(session.GeneratedValues.Count).IsEqualTo(1);
             await Assert.That(CountOccurrences(preview, "RecordedValueGenerator.Start()")).IsEqualTo(1);
-            await Assert.That(CountOccurrences(preview, "recordedValues.Create(1)")).IsEqualTo(1);
+            await Assert.That(CountOccurrences(preview, $"recordedValues.{format.FactoryMethod}(1)")).IsEqualTo(1);
             await Assert.That(preview).Contains(
-                "Page.EnterText(static page => page.PrimaryCode, generatedValue1);");
+                $"Page.EnterText(static page => page.PrimaryCode, {generatedValue.VariableName});");
             await Assert.That(preview).Contains(
-                "Page.EnterText(static page => page.ConfirmationCode, generatedValue1);");
+                $"Page.EnterText(static page => page.ConfirmationCode, {generatedValue.VariableName});");
             await Assert.That(preview).Contains(
-                "await Assert.That(Page.ConfirmationCode.Text).IsEqualTo(generatedValue1);");
+                $"await Assert.That(Page.ConfirmationCode.Text).IsEqualTo({generatedValue.VariableName});");
             await Assert.That(preview).Contains(
-                "await Assert.That(Page.ConfirmationCode.Text).IsNotEqualTo(generatedValue1);");
+                $"await Assert.That(Page.ConfirmationCode.Text).IsNotEqualTo({generatedValue.VariableName});");
             await Assert.That(session.StepJournal.All(static entry => entry.CanPersist)).IsTrue();
+        }
+        var replay = RecorderGeneratedSourceCompiler.CompileGeneratedValues(
+            preview.Replace($"await Assert.That(Page.ConfirmationCode.Text).IsNotEqualTo({generatedValue.VariableName});", string.Empty, StringComparison.Ordinal));
+        var firstReplay = await replay();
+        var secondReplay = await replay();
+        await Assert.That(firstReplay).IsNotEmpty();
+        await Assert.That(secondReplay).IsNotEmpty();
+        // Bounded numeric formats can coincide between independent series; that is not a replay failure.
+        if (kind is RecorderGeneratedValueKind.Text or RecorderGeneratedValueKind.Email)
+        {
+            await Assert.That(firstReplay).IsNotEqualTo(secondReplay);
+            await Assert.That(firstReplay).IsNotEqualTo(first.Text!);
         }
     }
 
@@ -127,6 +149,11 @@ public sealed class RecorderGeneratedValueTests
         var forward = RecorderScenarioGraphValidator.Validate([use, definition]);
         var duplicateOrdinal = RecorderScenarioGraphValidator.Validate(
             [definition, GeneratedEnterText("OtherValue", Guid.NewGuid(), defines: true, ordinal: 1)]);
+        var unknownKind = RecorderScenarioGraphValidator.Validate([definition with { GeneratedValueKind = (RecorderGeneratedValueKind)999 }]);
+        var removedKind = RecorderScenarioGraphValidator.Validate([definition with { GeneratedValueKind = (RecorderGeneratedValueKind)2 }]);
+        var mismatchedKind = RecorderScenarioGraphValidator.Validate([definition, use with { GeneratedValueKind = RecorderGeneratedValueKind.Email }]);
+        var invalidOrdinal = RecorderScenarioGraphValidator.Validate([definition with
+        { GeneratedValueKind = RecorderGeneratedValueKind.OrganizationInn, GeneratedValueOrdinal = 100_001 }]);
         using var session = CreateSession(new StackPanel());
         session.AddRecordedStepForTesting(definition);
         session.AddRecordedStepForTesting(use);
@@ -138,6 +165,10 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(forward.Success).IsFalse();
             await Assert.That(forward.Error).Contains("missing or later generated value");
             await Assert.That(duplicateOrdinal.Success).IsFalse();
+            await Assert.That(unknownKind.Success).IsFalse();
+            await Assert.That(removedKind.Success).IsFalse();
+            await Assert.That(mismatchedKind.Success).IsFalse();
+            await Assert.That(invalidOrdinal.Success).IsFalse();
             await Assert.That(duplicateOrdinal.Error).Contains("ordinal '1' is defined more than once");
             await Assert.That(session.StepJournal.Single().CanPersist).IsFalse();
             await Assert.That(session.StepJournal.Single().StatusMessage)
@@ -218,8 +249,13 @@ public sealed class RecorderGeneratedValueTests
     }
 
     [Test]
-    public async Task Overlay_OffersValueModesAndGeneratedCancelLeavesJournalUntouched()
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(3)]
+    [Arguments(4)]
+    public async Task Overlay_OffersValueModesAndGeneratedCancelLeavesJournalUntouched(int kindValue)
     {
+        var kind = (RecorderGeneratedValueKind)kindValue;
         var input = TextBox("GeneratedValueTarget");
         var root = new StackPanel { Children = { input } };
         using var session = CreateSession(root);
@@ -233,11 +269,15 @@ public sealed class RecorderGeneratedValueTests
         var menu = overlay.CreateGeneratedValueMenuForTesting();
         var generate = menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "Generate value"));
         var copy = menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "Copy value"));
-        var create = generate.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "New value"));
+        await Assert.That(generate.Items.OfType<MenuItem>().Select(item => item.Header!.ToString()))
+            .IsEquivalentTo(["New value", "INN", "Russian phone", "Email"]);
+        var create = generate.Items.OfType<MenuItem>().Single(item => Equals(item.Header,
+            kind == RecorderGeneratedValueKind.Text ? "New value" : RecorderGeneratedValueFormats.Get(kind).Label));
 
         create.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         session.SelectGeneratedValueTargetForTesting(input);
         var confirmation = overlay.CreateGeneratedValueConfirmationForTesting(selection!);
+        await Assert.That(selection!.GeneratedValue.Kind).IsEqualTo(kind);
         confirmation.GetLogicalDescendants()
             .OfType<Button>()
             .Single(button => Equals(button.Content, "Cancel"))
@@ -253,11 +293,20 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(session.StepCount).IsEqualTo(0);
             await Assert.That(string.IsNullOrEmpty(input.Text)).IsTrue();
         }
+        // Cancel must not carry the requested format into the next ordinary New value operation.
+        session.BeginGeneratedValueTargetSelection();
+        session.SelectGeneratedValueTargetForTesting(input);
+        await Assert.That(selection!.GeneratedValue.Kind).IsEqualTo(RecorderGeneratedValueKind.Text);
     }
 
     [Test]
-    public async Task Autosave_GeneratedValueGraphCarriesRecoveryStateAndFinalSourceCompiles()
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(3)]
+    [Arguments(4)]
+    public async Task Autosave_GeneratedValueGraphCarriesRecoveryStateAndFinalSourceCompiles(int kindValue)
     {
+        var kind = (RecorderGeneratedValueKind)kindValue;
         using var project = RecorderScenarioDestinationProject.Create(
             RecorderScenarioDestinationSources.CompilableMainWindowPage,
             RecorderScenarioDestinationSources.CompilableScenario);
@@ -272,7 +321,7 @@ public sealed class RecorderGeneratedValueTests
                 GeneratedValueId: generatedValueId,
                 GeneratedValueVariableName: "generatedValue1",
                 GeneratedValueOrdinal: 1,
-                DefinesGeneratedValue: true),
+                DefinesGeneratedValue: true) { GeneratedValueKind = kind },
             new RecordedStep(
                 RecordedActionKind.AssertValue,
                 Descriptor("CustomerName", UiControlType.TextBox),
@@ -294,6 +343,14 @@ public sealed class RecorderGeneratedValueTests
                     RecorderNumericOperand.FromLiteral(1)))
         };
 
+        if (kind == RecorderGeneratedValueKind.Text)
+        {
+            var legacyJson = System.Text.Json.JsonSerializer.Serialize(steps[0]);
+            await Assert.That(legacyJson).Contains("\"GeneratedValueKind\":0");
+            var legacyStep = System.Text.Json.JsonSerializer.Deserialize<RecordedStep>(
+                legacyJson.Replace("\"GeneratedValueKind\":0,", string.Empty, StringComparison.Ordinal));
+            await Assert.That(legacyStep!.GeneratedValueKind).IsEqualTo(RecorderGeneratedValueKind.Text);
+        }
         var autosave = await project.AutosaveAsync(context, steps);
         var autosaveSource = await File.ReadAllTextAsync(autosave.ScenarioFilePath!);
         var customerName = TextBox("CustomerName");
@@ -329,6 +386,7 @@ public sealed class RecorderGeneratedValueTests
         using (Assert.Multiple())
         {
             await Assert.That(restored).IsTrue();
+            await Assert.That(restoredSession.GeneratedValues[0].Kind).IsEqualTo(kind);
             await Assert.That(restoredSession.StepCount).IsEqualTo(4);
             await Assert.That(restoredSession.GeneratedValues.Select(value => value.Ordinal))
                 .IsEquivalentTo([1, 2]);
@@ -337,7 +395,7 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(autosaveSource)
                 .Contains("// AppAutomation recorder autosave state: ");
             await Assert.That(source).Contains("var recordedValues = RecordedValueGenerator.Start();");
-            await Assert.That(source).Contains("var generatedValue1 = recordedValues.Create(1);");
+            await Assert.That(source).Contains($"var generatedValue1 = recordedValues.{RecorderGeneratedValueFormats.Get(kind).FactoryMethod}(1);");
             await Assert.That(source).Contains("var generatedValue2 = recordedValues.Create(2);");
             await Assert.That(source).Contains("IsEqualTo(generatedValue1)");
             await Assert.That(source)

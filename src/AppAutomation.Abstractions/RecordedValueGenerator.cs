@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace AppAutomation.Abstractions;
 
@@ -47,5 +49,43 @@ public sealed class RecordedValueSeries
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(ordinal, 1);
         return $"Recorded_{_identifier}_{ordinal.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>Creates a synthetic ten-digit INN with a valid check digit. Ordinals are limited to 100,000.</summary>
+    public string CreateOrganizationInn(int ordinal)
+    {
+        var digits = "7701" + CreateDigits(ordinal, 5, "organization-inn");
+        return digits + CheckDigit(digits, [2, 4, 10, 3, 5, 9, 4, 6, 8]);
+    }
+
+    /// <summary>Creates a compact synthetic +7999 mobile number. Ordinals are limited to 10,000,000.</summary>
+    public string CreateRussianPhoneNumber(int ordinal) => "+7999" + CreateDigits(ordinal, 7, "phone");
+
+    /// <summary>Creates an address for test data; no mailbox existence or safe delivery is implied.</summary>
+    public string CreateEmail(int ordinal)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(ordinal, 1);
+        var suffix = _identifier[(_identifier.IndexOf('_') + 1)..];
+        return $"{suffix.ToLowerInvariant()}_{ordinal.ToString(CultureInfo.InvariantCulture)}@example.ru";
+    }
+
+    private string CreateDigits(int ordinal, int count, string format)
+    {
+        var capacity = (int)Math.Pow(10, count);
+        ArgumentOutOfRangeException.ThrowIfLessThan(ordinal, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ordinal, capacity);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{_identifier}:{format}"));
+        var offset = BinaryPrimitives.ReadUInt64BigEndian(hash) % (ulong)capacity;
+        // A rotation, not a retry loop: distinct supported ordinals cannot collide within a series.
+        var value = (offset + (ulong)ordinal - 1) % (ulong)capacity;
+        return value.ToString($"D{count}", CultureInfo.InvariantCulture);
+    }
+
+    private static char CheckDigit(string digits, ReadOnlySpan<int> weights)
+    {
+        var sum = 0;
+        for (var index = 0; index < weights.Length; index++)
+            sum += (digits[index] - '0') * weights[index];
+        return (char)('0' + sum % 11 % 10);
     }
 }

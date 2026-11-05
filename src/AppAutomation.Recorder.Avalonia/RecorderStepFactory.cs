@@ -332,6 +332,10 @@ internal sealed partial class RecorderStepFactory
         ArgumentNullException.ThrowIfNull(generatedValue);
         ArgumentException.ThrowIfNullOrWhiteSpace(previewValue);
 
+        if (!RecorderGeneratedValueFormats.TryGet(generatedValue.Kind, out var format)
+            || generatedValue.Ordinal < 1 || generatedValue.Ordinal > format.MaximumOrdinal)
+            return StepCreationResult.Unsupported("The generated value has an unsupported format or ordinal.");
+
         if (TryResolveSearchControlHint(textBox, out _))
         {
             return StepCreationResult.Unsupported(
@@ -373,7 +377,8 @@ internal sealed partial class RecorderStepFactory
                 GeneratedValueId: generatedValue.GeneratedValueId,
                 GeneratedValueVariableName: generatedValue.VariableName,
                 GeneratedValueOrdinal: generatedValue.Ordinal,
-                DefinesGeneratedValue: definesGeneratedValue),
+                DefinesGeneratedValue: definesGeneratedValue)
+            { GeneratedValueKind = generatedValue.Kind },
             locatorResult.Message);
     }
 

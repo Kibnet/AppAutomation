@@ -440,7 +440,15 @@ internal sealed partial class RecorderOverlay : UserControl
         var generate = new MenuItem { Header = "Generate value" };
         var create = new MenuItem { Header = "New value" };
         create.Click += (_, _) => _generatedValueDetails.BeginGeneratedValueTargetSelection();
+        AutomationProperties.SetAutomationId(create, "RecorderGenerateTextValue");
         var generateItems = new List<object> { create };
+        foreach (var kind in Enum.GetValues<RecorderGeneratedValueKind>().Where(static kind => kind != RecorderGeneratedValueKind.Text))
+        {
+            var item = new MenuItem { Header = RecorderGeneratedValueFormats.Get(kind).Label };
+            AutomationProperties.SetAutomationId(item, $"RecorderGenerate{kind}");
+            item.Click += (_, _) => _generatedValueDetails.BeginGeneratedValueTargetSelection(kind: kind);
+            generateItems.Add(item);
+        }
 
         var existingValues = _generatedValueDetails.GeneratedValues;
         if (existingValues.Count > 0)
@@ -547,6 +555,11 @@ internal sealed partial class RecorderOverlay : UserControl
                         ? "Generate and enter value"
                         : "Enter generated value",
                     FontWeight = FontWeight.SemiBold
+                },
+                new TextBlock
+                {
+                    Text = $"Format: {RecorderGeneratedValueFormats.Get(selection.GeneratedValue.Kind).Label}",
+                    TextWrapping = TextWrapping.Wrap
                 },
                 new TextBlock
                 {
