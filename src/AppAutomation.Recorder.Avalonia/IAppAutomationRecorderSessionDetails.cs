@@ -102,7 +102,8 @@ internal interface IRecorderGeneratedValueSessionDetails
 
     bool IsGeneratedValueTargetSelectionActive { get; }
 
-    void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null);
+    void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null,
+        RecorderGeneratedValueKind kind = RecorderGeneratedValueKind.Text);
 
     void CancelGeneratedValueTargetSelection();
 

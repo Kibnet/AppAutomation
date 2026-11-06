@@ -403,7 +403,8 @@ internal sealed record RecorderGeneratedValueOption(
     Guid GeneratedValueId,
     string VariableName,
     int Ordinal,
-    string PreviewValue);
+    string PreviewValue,
+    RecorderGeneratedValueKind Kind = RecorderGeneratedValueKind.Text);
 
 internal sealed record RecorderCopiedValueOption(
     Guid CopiedValueId,
@@ -583,6 +584,8 @@ internal sealed record RecordedStep(
 
     // Hotkey waits reuse the semantic target/expected-value payload; Check keeps immediate assertion semantics.
     public bool WaitForValue { get; init; }
+
+    public RecorderGeneratedValueKind GeneratedValueKind { get; init; }
 
     public Guid? GridRowAnchorCheckpointId { get; init; }
 

@@ -53,24 +53,66 @@ internal static class RecorderGeneratedSourceCompiler
                 public double Value { get; set; }
             }
             """;
-        var compilation = CSharpCompilation.Create(
-            $"RecorderNumericReplay_{Guid.NewGuid():N}",
-            [CSharpSyntaxTree.ParseText(source)],
-            CreateMetadataReferences(),
+        var assembly = CompileAndLoad(source);
+        var method = assembly.GetType("GeneratedNumericAssertion")!
+            .GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Static)!;
+        return displayedTotal => (Task)method.Invoke(null, [displayedTotal, checkpointText])!;
+    }
+
+    public static Func<Task<string>> CompileGeneratedValues(string generatedStatements)
+    {
+        var source = $$"""
+            using System;
+            using System.Threading.Tasks;
+            using AppAutomation.Abstractions;
+            using TUnit.Assertions;
+            using TUnit.Assertions.Extensions;
+            public static class GeneratedTextReplay
+            {
+                public static async Task<string> RunAsync()
+                {
+                    var Page = new ReplayPage();
+                    {{generatedStatements}}
+                    if (Page.PrimaryCode.Text != Page.ConfirmationCode.Text)
+                        throw new InvalidOperationException("Generated value was not reused.");
+                    return Page.PrimaryCode.Text;
+                }
+            }
+            public sealed class ReplayPage() : UiPage(new ReplayResolver())
+            {
+                public ReplayTextBox PrimaryCode { get; } = new();
+                public ReplayTextBox ConfirmationCode { get; } = new();
+            }
+            public sealed class ReplayResolver : IUiControlResolver
+            {
+                public UiRuntimeCapabilities Capabilities => new("generated-replay");
+                public TControl Resolve<TControl>(UiControlDefinition definition) where TControl : class
+                    => throw new NotSupportedException();
+            }
+            public sealed class ReplayTextBox : ITextBoxControl
+            {
+                public string AutomationId => "Text";
+                public string Name => AutomationId;
+                public bool IsEnabled => true;
+                public string Text { get; set; } = string.Empty;
+                public void Enter(string value) => Text = value;
+            }
+            """;
+        var method = CompileAndLoad(source).GetType("GeneratedTextReplay")!.GetMethod("RunAsync")!;
+        return () => (Task<string>)method.Invoke(null, null)!;
+    }
+
+    private static Assembly CompileAndLoad(string source)
+    {
+        var compilation = CSharpCompilation.Create($"RecorderReplay_{Guid.NewGuid():N}",
+            [CSharpSyntaxTree.ParseText(source)], CreateMetadataReferences(),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var image = new MemoryStream();
         var emitted = compilation.Emit(image);
         if (!emitted.Success)
-        {
-            throw new InvalidOperationException(
-                "Generated numeric assertion did not compile: "
+            throw new InvalidOperationException("Generated replay did not compile: "
                 + string.Join(Environment.NewLine, emitted.Diagnostics.Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)));
-        }
-
-        var assembly = System.Reflection.Assembly.Load(image.ToArray());
-        var method = assembly.GetType("GeneratedNumericAssertion")!
-            .GetMethod("RunAsync", BindingFlags.Public | BindingFlags.Static)!;
-        return displayedTotal => (Task)method.Invoke(null, [displayedTotal, checkpointText])!;
+        return System.Reflection.Assembly.Load(image.ToArray());
     }
 
     public static IReadOnlyList<Diagnostic> Compile(string projectDirectory)

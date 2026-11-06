@@ -50,6 +50,7 @@ internal static class RecorderScenarioGraphValidator
         var checkpointValueKinds = new Dictionary<Guid, RecorderValueKind>();
         var checkpointNumericTypes = new Dictionary<Guid, RecorderNumericType>();
         var generatedValueVariables = new Dictionary<Guid, string>();
+        var generatedValueDefinitions = new Dictionary<Guid, RecordedStep>();
         var copiedValueVariables = new Dictionary<Guid, string>();
         var generatedValueOrdinals = new HashSet<int>();
         var reservedNames = new HashSet<string>(StringComparer.Ordinal);
@@ -60,6 +61,12 @@ internal static class RecorderScenarioGraphValidator
         for (var index = 0; index < steps.Count; index++)
         {
             var step = steps[index];
+            if (!RecorderGeneratedValueFormats.TryGet(step.GeneratedValueKind, out _)
+                || step.GeneratedValueKind != RecorderGeneratedValueKind.Text && step.GeneratedValueId is null)
+            {
+                stepErrors[step.StepId] = "A generated value format requires a supported generated text input.";
+                continue;
+            }
             if (step.WaitForValue && step.ActionKind != RecordedActionKind.AssertValue)
             {
                 stepErrors[step.StepId] = "A semantic value wait requires a readable value comparison.";
@@ -116,6 +123,7 @@ internal static class RecorderScenarioGraphValidator
                     step,
                     index,
                     generatedValueVariables,
+                    generatedValueDefinitions,
                     generatedValueOrdinals,
                     reservedNames);
                 if (!generatedValueValidation.IsValid)
@@ -468,6 +476,7 @@ internal static class RecorderScenarioGraphValidator
         RecordedStep step,
         int index,
         Dictionary<Guid, string> variables,
+        Dictionary<Guid, RecordedStep> definitions,
         HashSet<int> ordinals,
         HashSet<string> reservedNames)
     {
@@ -492,10 +501,11 @@ internal static class RecorderScenarioGraphValidator
                     $"Generated value id '{generatedValueId}' is defined more than once.");
             }
 
-            if (step.GeneratedValueOrdinal is not > 0)
+            if (step.GeneratedValueOrdinal is not > 0
+                || step.GeneratedValueOrdinal > RecorderGeneratedValueFormats.Get(step.GeneratedValueKind).MaximumOrdinal)
             {
                 return RecorderGraphStepValidationResult.Invalid(
-                    $"Generated value step {index + 1} does not define a positive ordinal.");
+                    $"Generated value step {index + 1} does not define a supported positive ordinal for its format.");
             }
 
             if (!ordinals.Add(step.GeneratedValueOrdinal.Value))
@@ -504,6 +514,7 @@ internal static class RecorderScenarioGraphValidator
                     $"Generated value ordinal '{step.GeneratedValueOrdinal.Value}' is defined more than once.");
             }
 
+            definitions.Add(generatedValueId, step);
             variables.Add(
                 generatedValueId,
                 RecorderNaming.CreateGeneratedValueVariableName(
@@ -513,10 +524,13 @@ internal static class RecorderScenarioGraphValidator
             return RecorderGraphStepValidationResult.Valid;
         }
 
-        return variables.ContainsKey(generatedValueId)
-            ? RecorderGraphStepValidationResult.Valid
-            : RecorderGraphStepValidationResult.Invalid(
+        if (!definitions.TryGetValue(generatedValueId, out var definition))
+            return RecorderGraphStepValidationResult.Invalid(
                 $"Generated value step {index + 1} references a missing or later generated value '{generatedValueId}'.");
+        return step.GeneratedValueKind == definition.GeneratedValueKind
+            && (step.GeneratedValueOrdinal is null || step.GeneratedValueOrdinal == definition.GeneratedValueOrdinal)
+            ? RecorderGraphStepValidationResult.Valid
+            : RecorderGraphStepValidationResult.Invalid($"Generated value step {index + 1} does not match its definition's format or ordinal.");
     }
 
     private static RecorderGraphStepValidationResult ValidateCheckpoint(

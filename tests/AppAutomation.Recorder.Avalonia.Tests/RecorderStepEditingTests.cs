@@ -245,13 +245,15 @@ public sealed class RecorderStepEditingTests
     }
 
     [Test]
-    public async Task GeneratedAndCopiedValueDefinitionsCanBeRenamedWithoutChangingStableIds()
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(3)]
+    [Arguments(4)]
+    public async Task GeneratedAndCopiedValueDefinitionsCanBeRenamedWithoutChangingStableIds(int kindValue)
     {
         using var session = CreateSession(new StackPanel());
         var generatedValueId = Guid.NewGuid();
-        var copiedValueId = Guid.NewGuid();
         var generatedStepId = Guid.NewGuid();
-        var copiedStepId = Guid.NewGuid();
         session.AddRecordedStepForTesting(new RecordedStep(
             RecordedActionKind.EnterText,
             Descriptor("GeneratedInput", UiControlType.TextBox),
@@ -260,7 +262,27 @@ public sealed class RecorderStepEditingTests
             GeneratedValueId: generatedValueId,
             GeneratedValueVariableName: "generatedValue1",
             GeneratedValueOrdinal: 1,
-            DefinesGeneratedValue: true));
+            DefinesGeneratedValue: true)
+        { GeneratedValueKind = (RecorderGeneratedValueKind)kindValue });
+        var editing = (IRecorderStepEditingSessionDetails)session;
+
+        await Apply(editing, generatedStepId, draft => draft with { VariableName = "uniqueCustomer" });
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(session.GeneratedValues.Single().GeneratedValueId).IsEqualTo(generatedValueId);
+            await Assert.That(session.GeneratedValues.Single().Kind).IsEqualTo((RecorderGeneratedValueKind)kindValue);
+            await Assert.That(session.GeneratedValues.Single().VariableName).IsEqualTo("uniqueCustomer");
+            await Assert.That(session.StepJournal[0].Preview).Contains("uniqueCustomer");
+        }
+
+        if ((RecorderGeneratedValueKind)kindValue != RecorderGeneratedValueKind.Text)
+        {
+            return;
+        }
+
+        var copiedValueId = Guid.NewGuid();
+        var copiedStepId = Guid.NewGuid();
         session.AddRecordedStepForTesting(new RecordedStep(
             RecordedActionKind.CaptureCopiedValue,
             Descriptor("CopiedSource", UiControlType.TextBox),
@@ -270,18 +292,12 @@ public sealed class RecorderStepEditingTests
             ValueAccessorKind: RecorderValueAccessorKind.Text,
             CopiedValueId: copiedValueId,
             CopiedValueVariableName: "copiedValue"));
-        var editing = (IRecorderStepEditingSessionDetails)session;
-
-        await Apply(editing, generatedStepId, draft => draft with { VariableName = "uniqueCustomer" });
         await Apply(editing, copiedStepId, draft => draft with { VariableName = "customerFromClipboard" });
 
         using (Assert.Multiple())
         {
-            await Assert.That(session.GeneratedValues.Single().GeneratedValueId).IsEqualTo(generatedValueId);
-            await Assert.That(session.GeneratedValues.Single().VariableName).IsEqualTo("uniqueCustomer");
             await Assert.That(session.CopiedValues.Single().CopiedValueId).IsEqualTo(copiedValueId);
             await Assert.That(session.CopiedValues.Single().VariableName).IsEqualTo("customerFromClipboard");
-            await Assert.That(session.StepJournal[0].Preview).Contains("uniqueCustomer");
             await Assert.That(session.StepJournal[1].Preview).Contains("customerFromClipboard");
         }
     }

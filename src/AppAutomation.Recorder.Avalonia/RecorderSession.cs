@@ -83,6 +83,7 @@ internal sealed partial class RecorderSession :
     private Control? _pendingTargetSelectionControl;
     private IReadOnlyList<Control> _pendingTargetSelectionCandidates = Array.Empty<Control>();
     private Guid? _requestedGeneratedValueId;
+    private RecorderGeneratedValueKind _requestedGeneratedValueKind;
     private TextBox? _generatedValueTextApplication;
     private TextBox? _completedGeneratedValueInput;
     private string? _completedGeneratedValueText;
@@ -3675,8 +3676,14 @@ internal sealed partial class RecorderSession :
             "Assertion:Literal");
     }
 
-    public void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null)
+    public void BeginGeneratedValueTargetSelection(Guid? generatedValueId = null,
+        RecorderGeneratedValueKind kind = RecorderGeneratedValueKind.Text)
     {
+        if (!RecorderGeneratedValueFormats.TryGet(kind, out _))
+        {
+            SetStatus("The generated value format is unsupported.", RecorderValidationStatus.Invalid);
+            return;
+        }
         if (generatedValueId is not null
             && CreateGeneratedValueOptions().All(option => option.GeneratedValueId != generatedValueId.Value))
         {
@@ -3690,6 +3697,7 @@ internal sealed partial class RecorderSession :
         }
 
         _requestedGeneratedValueId = generatedValueId;
+        _requestedGeneratedValueKind = kind;
     }
 
     public void CancelGeneratedValueTargetSelection()
@@ -4012,6 +4020,7 @@ internal sealed partial class RecorderSession :
         IReadOnlyList<Control>? visualCandidates)
     {
         var requestedGeneratedValueId = _requestedGeneratedValueId;
+        var requestedKind = _requestedGeneratedValueKind;
         CancelTargetSelectionCore(RecorderTargetSelectionMode.GeneratedValue);
 
         var existingValue = requestedGeneratedValueId is { } generatedValueId
@@ -4025,7 +4034,16 @@ internal sealed partial class RecorderSession :
         }
 
         var definesGeneratedValue = existingValue is null;
-        var generatedValue = existingValue ?? CreateNextGeneratedValueOption();
+        RecorderGeneratedValueOption generatedValue;
+        try
+        {
+            generatedValue = existingValue ?? CreateNextGeneratedValueOption(requestedKind);
+        }
+        catch (Exception exception) when (exception is ArgumentOutOfRangeException or OverflowException)
+        {
+            SetStatus("The selected generated value format has exhausted its supported ordinals.", RecorderValidationStatus.Invalid);
+            return;
+        }
         var candidates = (visualCandidates ?? [target])
             .Prepend(target)
             .OfType<TextBox>()
@@ -4144,19 +4162,20 @@ internal sealed partial class RecorderSession :
             previewValue);
     }
 
-    private RecorderGeneratedValueOption CreateNextGeneratedValueOption()
+    private RecorderGeneratedValueOption CreateNextGeneratedValueOption(RecorderGeneratedValueKind kind)
     {
-        var ordinal = _lastGeneratedValueOrdinal + 1;
+        var ordinal = checked(_lastGeneratedValueOrdinal + 1);
+        var format = RecorderGeneratedValueFormats.Get(kind);
         var reservedNames = CreateReservedScenarioVariableNames(GetCurrentScenarioGraphValidation());
         var variableName = RecorderNaming.CreateGeneratedValueVariableName(
-            $"generatedValue{ordinal}",
+            kind == RecorderGeneratedValueKind.Text ? $"generatedValue{ordinal}" : format.VariableName,
             reservedNames);
         _recordingGeneratedValueSeries ??= RecordedValueGenerator.Start();
         return new RecorderGeneratedValueOption(
             Guid.NewGuid(),
             variableName,
             ordinal,
-            _recordingGeneratedValueSeries.Create(ordinal));
+            format.Create(_recordingGeneratedValueSeries, ordinal), kind);
     }
 
     private static HashSet<string> CreateReservedScenarioVariableNames(
@@ -4275,6 +4294,7 @@ internal sealed partial class RecorderSession :
         if (_targetSelectionMode == RecorderTargetSelectionMode.GeneratedValue)
         {
             _requestedGeneratedValueId = null;
+            _requestedGeneratedValueKind = RecorderGeneratedValueKind.Text;
         }
 
         _pendingTargetSelectionControl = null;
@@ -5196,6 +5216,7 @@ internal sealed partial class RecorderSession :
             step.GeneratedValueId?.ToString("N") ?? string.Empty,
             step.GeneratedValueVariableName ?? string.Empty,
             step.GeneratedValueOrdinal?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            step.GeneratedValueKind,
             step.DefinesGeneratedValue,
             step.ExpectedGeneratedValueId?.ToString("N") ?? string.Empty,
             step.CopiedValueId?.ToString("N") ?? string.Empty,
@@ -6546,7 +6567,7 @@ internal sealed partial class RecorderSession :
                     ? variableName
                     : step.GeneratedValueVariableName ?? $"generatedValue{step.GeneratedValueOrdinal}",
                 step.GeneratedValueOrdinal!.Value,
-                step.StringValue ?? string.Empty))
+                step.StringValue ?? string.Empty, step.GeneratedValueKind))
             .ToArray();
         var copiedValues = graphSteps
             .Where(static step => step.ActionKind == RecordedActionKind.CaptureCopiedValue
