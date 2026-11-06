@@ -62,8 +62,7 @@ internal static class FlaUiMultiSelectItemProjections
         }
 
         var checkBoxSet = checkBoxTexts.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return selectableTexts.Count > checkBoxTexts.Count
-            || selectableTexts.All(text => !checkBoxSet.Contains(text));
+        return selectableTexts.All(text => !checkBoxSet.Contains(text));
     }
 
     internal static bool CanUseVisibleSelection(

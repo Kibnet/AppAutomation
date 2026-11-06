@@ -413,7 +413,7 @@ public sealed class HeadlessControlResolverTests
         public DateTime UpdatedAt => new(2026, 10, 29);
         public string PlannedToDeliverFromTo => "29.10.2026 - 30.10.2026";
     }
-    
+
     [Test]
     [NotInParallel("DesktopUi")]
     public async Task ShellNavigationActivatesHiddenPaneThroughRealMenuFlyout()
@@ -442,7 +442,7 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(resolver.Resolve<ILabelControl>(new UiControlDefinition("Counter", UiControlType.Label,
                 "ArmShellOverflowCounter")).Text).IsEqualTo("1:1");
         }
-        
+
         finally { Environment.SetEnvironmentVariable(flag, previous); }
     }
 
@@ -600,9 +600,15 @@ public sealed class HeadlessControlResolverTests
         global::Avalonia.Controls.Flyout? flyout = null;
         HeadlessRuntime.Dispatch(() =>
         {
+            var items = new global::Avalonia.Controls.ListBox
+            {
+                ItemsSource = new[] { "Alpha", "Beta" },
+                SelectionMode = global::Avalonia.Controls.SelectionMode.Multiple
+            };
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(items, "FilterItems");
             var panel = new global::Avalonia.Controls.Border
             {
-                Child = new global::Avalonia.Controls.TextBlock { Text = "Filter content" }
+                Child = items
             };
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(panel, "FilterPanel");
             flyout = new global::Avalonia.Controls.Flyout { Content = panel };
@@ -635,6 +641,15 @@ public sealed class HeadlessControlResolverTests
 
         await Assert.That(HeadlessRuntime.Dispatch(() => flyout!.IsOpen)).IsEqualTo(true);
         await Assert.That(panelControl.IsAvailable).IsEqualTo(true);
+
+        var page = new MainWindowPage(resolver.WithComboBoxFilter(
+            "ArmStatusFilter",
+            ComboBoxFilterParts.ByAutomationIds(
+                "FilterButton", "FilterButton", "FilterItems", applyButtonAutomationId: "FilterButton")));
+        page.ArmStatusFilter.SetSelectedItems(["Alpha", "Beta"]);
+        page.WaitUntilSelectedItemsEqual(static candidate => candidate.ArmStatusFilter, ["Alpha", "Beta"], timeoutMs: 250);
+        page.ArmStatusFilter.Apply();
+        await Assert.That(HeadlessRuntime.Dispatch(() => flyout!.IsOpen)).IsEqualTo(false);
     }
 
     [Test]
@@ -718,15 +733,18 @@ public sealed class HeadlessControlResolverTests
 
     [Test]
     [NotInParallel("DesktopUi")]
-    public async Task CompositeFilterReadsRenderedValueFromItsLogicalRoot()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CompositeFilterReadsRenderedValueFromItsLogicalRoot(bool staleEmptyInput)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         HeadlessRuntime.Dispatch(() =>
         {
-            var editor = new global::Avalonia.Controls.Border
-            {
-                Child = new global::Avalonia.Controls.TextBlock { Text = "ООО Тест" }
-            };
+            var content = new global::Avalonia.Controls.StackPanel();
+            if (staleEmptyInput)
+                content.Children.Add(new global::Avalonia.Controls.TextBox { Text = string.Empty });
+            content.Children.Add(new global::Avalonia.Controls.TextBlock { Text = "ООО Тест" });
+            var editor = new global::Avalonia.Controls.Border { Child = content };
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(editor, "FilterEditor");
             session.MainWindow.Content = editor;
         });
@@ -1085,25 +1103,46 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("DesktopUi")]
-    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems()
+    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems(bool checkboxRows)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
-        var entries = new[] { new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B") };
+        var entries = checkboxRows
+            ? Enumerable.Range(1, 34).Select(index => new DisplayListEntry($"Customer {index:00}")).ToArray()
+            : [new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B")];
         var list = HeadlessRuntime.Dispatch(() =>
         {
             var control = new global::Avalonia.Controls.ListBox
             {
+                Height = 150,
+                Width = 360,
                 ItemsSource = entries,
                 ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
                 {
+                    if (checkboxRows)
+                    {
+                        var checkBox = new global::Avalonia.Controls.CheckBox { Content = entry?.Caption };
+                        checkBox.Bind(global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty,
+                            new global::Avalonia.Data.Binding(nameof(DisplayListEntry.IsChecked))
+                            { Source = entry, Mode = global::Avalonia.Data.BindingMode.TwoWay });
+                        return checkBox;
+                    }
                     var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
                     global::Avalonia.Automation.AutomationProperties.SetName(text, entry?.Caption);
                     return text;
                 })
             };
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "CustomerResults");
-            session.MainWindow.Content = control;
+            session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
+            {
+                Children =
+                {
+                    new global::Avalonia.Controls.ListBox { ItemsSource = new[] { "Service item" }, Height = 40 },
+                    control
+                }
+            };
             session.MainWindow.Show();
             session.MainWindow.Dispatcher.RunJobs();
             session.MainWindow.UpdateLayout();
@@ -1112,15 +1151,23 @@ public sealed class HeadlessControlResolverTests
         var items = new HeadlessControlResolver(session.MainWindow).Resolve<IMultiSelectItemsControl>(
             new UiControlDefinition("CustomerResults", UiControlType.ListBox, "CustomerResults"));
 
+        if (checkboxRows)
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.GetRealizedContainers().Count())).IsLessThan(entries.Length);
         var available = items.Items;
-        items.SetSelectedItems(["Customer B"]);
+        var expected = checkboxRows ? new[] { entries[18].Caption, entries[31].Caption } : ["Customer B"];
+        items.SetSelectedItems(expected);
 
         using (Assert.Multiple())
         {
-            await Assert.That(available).IsEquivalentTo(["Customer A", "Customer B"]);
-            await Assert.That(items.SelectedItems).IsEquivalentTo(["Customer B"]);
-            await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[1]);
+            await Assert.That(available).IsEquivalentTo(entries.Select(entry => entry.Caption));
+            await Assert.That(items.SelectedItems).IsEquivalentTo(expected);
+            if (!checkboxRows)
+                await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[1]);
+            else
+                await Assert.That(entries.Where(entry => entry.IsChecked).Select(entry => entry.Caption)).IsEquivalentTo(expected);
         }
+        items.SetSelectedItems([]);
+        await Assert.That(items.SelectedItems).IsEmpty();
     }
 
     [Test]
@@ -1729,22 +1776,27 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
     [NotInParallel("DesktopUi")]
-    public async Task ReadGridCell_WaitsForStableRowAfterSourceReload(bool captureRowKey)
+    public async Task ReadGridCell_WaitsForStableRowAfterSourceReload(bool captureRowKey, bool localizedColumns)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var host = HeadlessRuntime.Dispatch(() =>
         {
-            var grid = new DelayedRowsGrid();
+            var grid = new DelayedRowsGrid(localizedColumns);
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(grid, "DelayedRowsGrid");
             session.MainWindow.Content = grid;
             session.MainWindow.Show();
             return grid;
         });
         var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds("DelayedRowsGrid", "DelayedRowsGrid", "DelayedRowsGrid")
-            .WithColumns(GridColumnDefinition.Map("Key").FromField("Key"), GridColumnDefinition.Map("Value").FromField("Value"))
+            .WithColumns(
+                GridColumnDefinition.Map("Key").FromField("Key").AtRuntime(localizedColumns ? "Имя" : "Key"),
+                GridColumnDefinition.Map("Value").FromField("RawValue").DisplayValueFrom("Value")
+                    .AtRuntime(localizedColumns ? "Значение" : "Value"))
             .IdentifyRowsBy("Key"));
         var gridControl = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog).Resolve<IGridControl>(
             new UiControlDefinition("DelayedRowsGrid", UiControlType.Grid, "DelayedRowsGrid"));
@@ -1759,16 +1811,20 @@ public sealed class HeadlessControlResolverTests
             await Assert.That(value).IsEqualTo("Loaded");
             await Assert.That(host.ReadCount).IsGreaterThan(1);
         }
+        var addressable = (IAddressableGridControl)gridControl;
+        var row = GridRowSelector.ByCell("Key", "K1").AndCell("Value", "Loaded");
+        await Assert.That(addressable.ResolveRow(row, 250).State).IsEqualTo(GridRowResolutionState.Unique);
+        await Assert.That(addressable.CopyCell(new GridCellAddress(row, "Value"), 250)).IsEqualTo("Loaded");
         var native = new HeadlessControlResolver(session.MainWindow).Resolve<IGridControl>(
             new UiControlDefinition("DelayedRowsGrid", UiControlType.Grid, "DelayedRowsGrid"));
         var before = host.ColumnReadCount;
-        var found = ((IGridColumnMetadataControl)native).TryGetColumnIndex("Value", out var columnIndex);
+        var found = ((IGridColumnMetadataControl)native).TryGetColumnIndex("RawValue", out var columnIndex);
         await Assert.That(found).IsTrue();
         await Assert.That(columnIndex).IsEqualTo(1);
         await Assert.That(host.ColumnReadCount - before).IsEqualTo(1);
     }
 
-    private sealed class DelayedRowsGrid : global::Avalonia.Controls.StackPanel
+    private sealed class DelayedRowsGrid(bool localizedColumns) : global::Avalonia.Controls.StackPanel
     {
         private readonly List<DelayedGridRow> _rows = [];
         private bool _loadScheduled;
@@ -1776,11 +1832,12 @@ public sealed class HeadlessControlResolverTests
         public int ReadCount { get; private set; }
         public int ColumnReadCount { get; private set; }
 
-        private static readonly IReadOnlyList<DelayedGridColumn> ColumnDefinitions = [new("Key"), new("Value")];
+        private readonly IReadOnlyList<DelayedGridColumn> _columnDefinitions =
+            [new("Key", localizedColumns ? "Имя" : "Key"), new("RawValue", localizedColumns ? "Значение" : "Value")];
 
         public IReadOnlyList<DelayedGridColumn> Columns
         {
-            get { ColumnReadCount++; return ColumnDefinitions; }
+            get { ColumnReadCount++; return _columnDefinitions; }
         }
 
         public IEnumerable<DelayedGridRow> CollectionView => _rows;
@@ -1807,13 +1864,18 @@ public sealed class HeadlessControlResolverTests
         }
     }
 
-    private sealed record DelayedGridColumn(string FieldName);
+    private sealed record DelayedGridColumn(string FieldName, string Header);
 
-    private sealed record DelayedGridRow(string Key, string Value);
+    private sealed record DelayedGridRow(string Key, string Value)
+    {
+        public string RawValue => $"Raw {Key}";
+    }
 
     private sealed class DisplayListEntry(string caption)
     {
         public string Caption { get; } = caption;
+
+        public bool IsChecked { get; set; }
     }
 
     private sealed class EnableableCommand : global::System.Windows.Input.ICommand

@@ -72,8 +72,8 @@ public sealed class RecordedValueGeneratorTests
         var first = series.Create(1);
         var second = series.Create(2);
 
-        await Assert.That(first).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
-        await Assert.That(first.Length).IsEqualTo(31);
+        await Assert.That(first).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{6}_1$");
+        await Assert.That(first.Length).IsEqualTo(26);
         await Assert.That(series.Create(1)).IsEqualTo(first);
         await Assert.That(second).IsEqualTo(first[..^1] + "2");
     }

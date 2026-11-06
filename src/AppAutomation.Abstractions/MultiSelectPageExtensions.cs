@@ -139,49 +139,7 @@ public static partial class UiPageExtensions
             lastObservedValueFactory: () => DescribeMultiSelect(control),
             operationName: operationName);
 
-        if (!cancel && IsConfirmedByClosedFilterDisplay(control, expectedItems))
-        {
-            return page;
-        }
-
         return WaitUntilSelectedItemsEqual(page, selector, committedItems, timeoutMs);
-    }
-
-    private static bool IsConfirmedByClosedFilterDisplay(
-        IMultiSelectControl control,
-        IReadOnlyList<string> expectedItems)
-    {
-        if (expectedItems.Count == 0
-            || control is not IComboBoxFilterControl
-            || control is not IReadableTextControl display)
-        {
-            return false;
-        }
-
-        try
-        {
-            var displayedText = display.Text?.Trim();
-            if (expectedItems.Count == 1)
-            {
-                return string.Equals(displayedText, expectedItems[0], StringComparison.OrdinalIgnoreCase);
-            }
-
-            char[] separators = [',', ';'];
-            var availableItems = control.Items;
-            if (availableItems.Count == 0
-                || availableItems.Any(item => item is null || item.IndexOfAny(separators) >= 0))
-            {
-                return false;
-            }
-
-            var displayedItems = (displayedText ?? string.Empty)
-                .Split(separators, StringSplitOptions.TrimEntries);
-            return MultiSelectSetsEqual(displayedItems, expectedItems);
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
     }
 
     /// <summary>
@@ -206,17 +164,18 @@ public static partial class UiPageExtensions
             nameof(WaitUntilSelectedItemsEqual),
             startedAtUtc);
 
-        if (control is IMultiSelectCommittedStateControl committedState && !control.IsOpen)
-        {
-            ExecuteMultiSelectAction(page, selector, expectedItems, control, timeoutMs, startedAtUtc,
-                () => committedState.RefreshCommittedItems(),
-                "failed to refresh its committed selection", nameof(WaitUntilSelectedItemsEqual));
-        }
-
+        var refreshLegacy = true;
         WaitUntil(
             page,
             selector,
-            () => ReadMultiSelectState(() => MultiSelectSetsEqual(control.SelectedItems, expectedItems)),
+            () => ReadMultiSelectState(() =>
+            {
+                var actualItems = control is IMultiSelectCommittedStateControl committedState
+                    ? committedState.RefreshCommittedItems(refreshLegacy)
+                    : control.SelectedItems;
+                refreshLegacy = false;
+                return MultiSelectSetsEqual(actualItems, expectedItems);
+            }),
             timeoutMs,
             $"Multi-select popup '{control.AutomationId}' did not expose the expected committed selection.",
             expectedValue: FormatMultiSelectItems(expectedItems),
@@ -370,13 +329,9 @@ public static partial class UiPageExtensions
 
     private static string DescribeMultiSelect(IMultiSelectControl control)
     {
-        var selected = !control.IsOpen
-            && control is IMultiSelectCommittedStateControl committedState
-            && !committedState.TryGetCommittedItems(out _)
-                ? "<unobserved>"
-                : FormatMultiSelectItems(control.SelectedItems);
-        return $"IsOpen={control.IsOpen}; Available={FormatMultiSelectItems(control.Items)}; "
-            + $"Selected={selected}";
+        return control is IMultiSelectCommittedStateControl observed
+            ? observed.DescribeLastObservation()
+            : "Multi-select state was not observed; see the original operation failure.";
     }
 
     private static UiOperationException CreateMultiSelectException<TSelf>(

@@ -736,6 +736,14 @@ public static partial class UiControlResolverExtensions
             };
         }
 
+        public UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition) =>
+            _innerResolver is IComboBoxFilterDisplayValueReader reader
+                ? reader.ReadDisplayedValueSnapshot(definition)
+                : new(ReadDisplayedValue(definition));
+
+        public string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition) =>
+            (_innerResolver as IComboBoxFilterDisplayValueReader)?.ReadDisplayedValueSourceIdentity(definition);
+
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {

@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Text;
+using System.Runtime.CompilerServices;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation.GridAutomation;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel;
@@ -20,6 +21,8 @@ namespace AppAutomation.Avalonia.Headless.Automation;
 
 public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArtifactCollector, IUiClipboardRuntime, INotificationRuntimeResolver, IComboBoxFilterDisplayValueReader
 {
+    private readonly ConditionalWeakTable<AvaloniaControl, DisplaySourceIdentity> _displaySourceIds = new();
+    private sealed record DisplaySourceIdentity(string Value);
     private readonly Window _window;
     private readonly ConditionFactory _conditionFactory;
     private readonly string _screenshotDirectory;
@@ -61,25 +64,44 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         SupportsClipboardText = true
     };
 
-    public string? ReadDisplayedValue(UiControlDefinition definition)
+    public string? ReadDisplayedValue(UiControlDefinition definition) => ReadDisplayedValueSnapshot(definition).Text;
+
+    public string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return GetDisplaySourceIdentity(FindElement(definition).Control);
+    }
+
+    private string GetDisplaySourceIdentity(AvaloniaControl source) =>
+        _displaySourceIds.GetValue(source, _ => new(Guid.NewGuid().ToString("N"))).Value;
+
+    public UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
         var source = FindElement(definition).Control;
         return HeadlessRuntime.Dispatch(() =>
         {
+            var identity = GetDisplaySourceIdentity(source);
+            string? placeholder = null;
+            UiDisplayedValueSnapshot Snapshot(string? text) => new(text, placeholder, identity);
             if (!source.IsEffectivelyVisible)
             {
-                return null;
+                return Snapshot(null);
             }
 
             if (source is global::Avalonia.Controls.TextBox
                 or global::Avalonia.Controls.TextBlock
                 or global::Avalonia.Controls.Label)
             {
-                return ReadControlVisibleText(source);
+                placeholder = (source as global::Avalonia.Controls.TextBox)?.PlaceholderText?.ToString();
+                return Snapshot(ReadControlVisibleText(source) ?? string.Empty);
             }
 
-            var visibleTexts = ControlTree.EnumerateDescendants(source)
+            var descendants = ControlTree.EnumerateDescendants(source).ToArray();
+            var inputs = descendants.OfType<global::Avalonia.Controls.TextBox>()
+                .Where(input => input.IsEffectivelyVisible).Take(2).ToArray();
+            placeholder = inputs.Length == 1 ? inputs[0].PlaceholderText?.ToString() : AutomationProperties.GetHelpText(source);
+            var visibleTexts = descendants
                 .OfType<global::Avalonia.Controls.TextBlock>()
                 .Where(static block => block.IsEffectivelyVisible && !string.IsNullOrWhiteSpace(block.Text))
                 .Select(static block => block.Text!.Trim())
@@ -93,9 +115,13 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                     + "Configure DisplayValueLocator for the committed value.");
             }
 
-            return visibleTexts.FirstOrDefault()
-                ?? ReadControlVisibleText(source)
-                ?? AutomationProperties.GetName(source);
+            var valueProvider = global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(source)
+                ?.GetProvider<global::Avalonia.Automation.Provider.IValueProvider>();
+            if (visibleTexts.Length == 0 && inputs.Length > 1)
+                throw new InvalidOperationException("The multi-select display exposes multiple input values. Configure DisplayValueLocator.");
+            var text = visibleTexts.FirstOrDefault() ?? inputs.FirstOrDefault()?.Text ?? valueProvider?.Value
+                ?? ReadControlVisibleText(source) ?? AutomationProperties.GetName(source);
+            return Snapshot(string.Equals(text, AutomationProperties.GetAutomationId(source), StringComparison.Ordinal) ? null : text);
         });
     }
 
@@ -1207,28 +1233,32 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                 ReadSelectedItemsCore());
 
         public void SetSelectedItems(IReadOnlyCollection<string> values)
+            => _ = SetSelectedItemsAndGetAvailableItems(values);
+
+        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
         {
             ArgumentNullException.ThrowIfNull(values);
             var normalizedValues = NormalizeRequestedItems(values);
 
-            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+            return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
-                var checkBoxes = ReadCheckBoxesCore();
-                if (checkBoxes.Length > 0)
+                string[] available;
+                if (FindListBoxCore() is { } listBox)
                 {
-                    ValidateAvailableItems(checkBoxes.Select(static item => item.Text), normalizedValues);
+                    available = SetListBoxSelectedItems(listBox, normalizedValues);
+                }
+                else if (ReadCheckBoxesCore() is { Length: > 0 } checkBoxes)
+                {
+                    available = checkBoxes.Select(item => item.Text).ToArray();
+                    ValidateAvailableItems(available, normalizedValues);
                     foreach (var item in checkBoxes)
                     {
                         item.Control.IsChecked = normalizedValues.Contains(item.Text);
                     }
                 }
-                else if (FindListBoxCore() is { } listBox)
-                {
-                    SetListBoxSelectedItems(listBox, normalizedValues);
-                }
                 else if (FindComboBoxCore() is { } comboBox)
                 {
-                    SetComboBoxSelectedItem(comboBox, normalizedValues);
+                    available = SetComboBoxSelectedItem(comboBox, normalizedValues);
                 }
                 else
                 {
@@ -1237,7 +1267,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                 }
 
                 Inner.Control.Dispatcher.RunJobs();
-                return true;
+                return available;
             });
         }
 
@@ -1248,15 +1278,15 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private string[] ReadItemsCore()
         {
+            if (FindListBoxCore() is { } listBox)
+            {
+                return ReadListBoxItemTexts(listBox);
+            }
+
             var checkBoxes = ReadCheckBoxesCore();
             if (checkBoxes.Length > 0)
             {
                 return checkBoxes.Select(static item => item.Text).ToArray();
-            }
-
-            if (FindListBoxCore() is { } listBox)
-            {
-                return ReadListBoxItemTexts(listBox);
             }
 
             if (FindComboBoxCore() is { } comboBox)
@@ -1269,19 +1299,22 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private string[] ReadSelectedItemsCore()
         {
-            var checkBoxes = ReadCheckBoxesCore();
-            if (checkBoxes.Length > 0)
-            {
-                return checkBoxes
-                    .Where(static item => item.Control.IsChecked == true)
-                    .Select(static item => item.Text)
-                    .ToArray();
-            }
-
             if (FindListBoxCore() is { } listBox)
             {
                 return ListItemCaptionReader.ReadSnapshot(listBox, read =>
                 {
+                    if (listBox.Items.Count > 0)
+                    {
+                        _ = read(0);
+                        if (FindRowCheckBox(listBox, 0) is not null)
+                        {
+                            return Enumerable.Range(0, listBox.Items.Count)
+                                .Select(index => (Text: read(index)?.Trim() ?? string.Empty,
+                                    Checked: (FindRowCheckBox(listBox, index)
+                                        ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.")).IsChecked == true))
+                                .Where(item => item.Checked).Select(item => item.Text).ToArray();
+                        }
+                    }
                     if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
                     {
                         return listBox.SelectedIndex < 0
@@ -1302,6 +1335,10 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                 });
             }
 
+            var checkBoxes = ReadCheckBoxesCore();
+            if (checkBoxes.Length > 0)
+                return checkBoxes.Where(item => item.Control.IsChecked == true).Select(item => item.Text).ToArray();
+
             if (FindComboBoxCore() is { } comboBox)
             {
                 return comboBox.SelectedItem is null ? [] : [ReadItemText(comboBox.SelectedItem)];
@@ -1321,10 +1358,31 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         private global::Avalonia.Controls.ListBox? FindListBoxCore()
         {
-            return Inner.Control as global::Avalonia.Controls.ListBox
-                ?? ControlTree.EnumerateDescendants(Inner.Control)
-                    .OfType<global::Avalonia.Controls.ListBox>()
-                    .FirstOrDefault();
+            if (Inner.Control is global::Avalonia.Controls.ListBox list)
+                return list;
+            var candidates = ControlTree.EnumerateDescendants(Inner.Control)
+                .OfType<global::Avalonia.Controls.ListBox>().Take(2).ToArray();
+            return candidates.Length switch
+            {
+                0 => null,
+                1 => candidates[0],
+                _ => throw new InvalidOperationException(
+                    "Multi-select items contain multiple lists. Configure the real selectable-items container locator.")
+            };
+        }
+
+        private static global::Avalonia.Controls.CheckBox? FindRowCheckBox(global::Avalonia.Controls.ListBox list, int index)
+        {
+            var container = list.ContainerFromIndex(index);
+            if (container is null)
+                return null;
+            var checkBoxes = container.GetVisualDescendants().OfType<global::Avalonia.Controls.CheckBox>().Take(2).ToArray();
+            return checkBoxes.Length switch
+            {
+                0 => null,
+                1 => checkBoxes[0],
+                _ => throw new InvalidOperationException("A multi-select item exposes multiple checkbox targets.")
+            };
         }
 
         private global::Avalonia.Controls.ComboBox? FindComboBoxCore()
@@ -1335,46 +1393,66 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                     .FirstOrDefault();
         }
 
-        private static void SetListBoxSelectedItems(
+        private static string[] SetListBoxSelectedItems(
             global::Avalonia.Controls.ListBox listBox,
             HashSet<string> requestedValues)
         {
-            var snapshot = ListItemCaptionReader.ReadSnapshot(listBox, read =>
+            return ListItemCaptionReader.ReadSnapshot(listBox, read =>
             {
                 var currentItems = listBox.Items.Cast<object?>().ToArray();
                 var captions = Enumerable.Range(0, currentItems.Length)
                     .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
-                return (Items: currentItems, Captions: captions);
+                ApplySelection(currentItems, captions, read);
+                return captions;
             });
-            var (items, available) = snapshot;
-            ValidateAvailableItems(available, requestedValues);
 
-            if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
+            void ApplySelection(object?[] items, string[] available, Func<int, string?> read)
             {
-                if (requestedValues.Count > 1)
+                ValidateAvailableItems(available, requestedValues);
+
+                if (items.Length > 0)
                 {
-                    throw new InvalidOperationException("The physical ListBox allows at most one selected item.");
+                    _ = read(0);
+                    if (FindRowCheckBox(listBox, 0) is not null)
+                    {
+                        for (var index = 0; index < items.Length; index++)
+                        {
+                            _ = read(index);
+                            var checkBox = FindRowCheckBox(listBox, index)
+                                ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.");
+                            checkBox.IsChecked = requestedValues.Contains(available[index]);
+                        }
+                        return;
+                    }
                 }
 
-                if (requestedValues.Count == 0)
+                if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
                 {
-                    listBox.SelectedIndex = -1;
-                }
-                else
-                {
-                    ClickListBoxItem(listBox, Array.FindIndex(available, requestedValues.Contains));
-                }
-                return;
-            }
+                    if (requestedValues.Count > 1)
+                    {
+                        throw new InvalidOperationException("The physical ListBox allows at most one selected item.");
+                    }
 
-            var selectedItems = listBox.SelectedItems
-                ?? throw new InvalidOperationException("The physical ListBox does not expose a selected-items collection.");
-            selectedItems.Clear();
-            for (var index = 0; index < items.Length; index++)
-            {
-                if (requestedValues.Contains(available[index]))
+                    if (requestedValues.Count == 0)
+                    {
+                        listBox.SelectedIndex = -1;
+                    }
+                    else
+                    {
+                        ClickListBoxItem(listBox, Array.FindIndex(available, requestedValues.Contains));
+                    }
+                    return;
+                }
+
+                var selectedItems = listBox.SelectedItems
+                    ?? throw new InvalidOperationException("The physical ListBox does not expose a selected-items collection.");
+                selectedItems.Clear();
+                for (var index = 0; index < items.Length; index++)
                 {
-                    selectedItems.Add(items[index]);
+                    if (requestedValues.Contains(available[index]))
+                    {
+                        selectedItems.Add(items[index]);
+                    }
                 }
             }
         }
@@ -1391,7 +1469,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             HeadlessPointerInput.ClickItem(listBox, index);
         }
 
-        private static void SetComboBoxSelectedItem(
+        private static string[] SetComboBoxSelectedItem(
             global::Avalonia.Controls.ComboBox comboBox,
             HashSet<string> requestedValues)
         {
@@ -1401,10 +1479,12 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             }
 
             var items = comboBox.Items.Cast<object?>().ToArray();
-            ValidateAvailableItems(items.Select(ReadItemText), requestedValues);
+            var available = items.Select(ReadItemText).ToArray();
+            ValidateAvailableItems(available, requestedValues);
             comboBox.SelectedItem = requestedValues.Count == 0
                 ? null
                 : items.Single(item => requestedValues.Contains(ReadItemText(item)));
+            return available;
         }
 
         private static string ReadItemText(object? item)

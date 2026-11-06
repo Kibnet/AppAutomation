@@ -404,6 +404,8 @@ public sealed class FlaUiControlResolverTests
         {
             await Assert.That(preferListItems).IsTrue();
             await Assert.That(preferCheckBoxes).IsFalse();
+            await Assert.That(FlaUiMultiSelectItemProjections.PreferSelectableItems(
+                ["Customer A"], ["Customer A", "Customer B"])).IsFalse();
         }
     }
 
@@ -446,7 +448,12 @@ public sealed class FlaUiControlResolverTests
 
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions());
         var desktop = session.MainWindow.Automation.GetDesktop();
-        var page = MainWindowFlaUiPageFactory.Create(session);
+        var observed = new MultiSelectOpenObserver();
+        var page = new MainWindowPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory)
+            .WithAdapters(observed)
+            .WithMultiSelect("MultiSelection", MultiSelectParts.ByAutomationIds(
+                "MultiSelection", "MultiSelection_OpenButton", "MultiSelection_Results",
+                "MultiSelection_ApplyButton", "MultiSelection_CancelButton")));
         page.SelectTabItem(static candidate => candidate.ControlMixTabItem);
         page.MultiSelection.Open();
         var popup = FindInstrumentedMultiSelectPopup(session, desktop);
@@ -460,6 +467,46 @@ public sealed class FlaUiControlResolverTests
         }
 
         global::AppAutomation.FlaUI.Input.DesktopPointer.Click(popup.CancelButton);
+        page.SelectMultiItems(candidate => candidate.MultiSelection, ["Alpha", "Omega"]);
+        var opensAfterSelection = observed.Opens;
+        var lookupsAfterSelection = observed.ItemLookups;
+        page.WaitUntilSelectedItemsEqual(candidate => candidate.MultiSelection, ["Alpha", "Omega"]);
+        page.WaitUntilSelectedItemsEqual(candidate => candidate.MultiSelection, ["Omega", "Alpha"]);
+        await Assert.That(observed.Opens).IsEqualTo(opensAfterSelection);
+        await Assert.That(observed.ItemLookups).IsEqualTo(lookupsAfterSelection);
+        page.CancelMultiSelection(candidate => candidate.MultiSelection, ["Beta"]);
+        await Assert.That(observed.Opens).IsEqualTo(opensAfterSelection + 1);
+        page.ClickButton(candidate => candidate.MultiSelectionResetButton)
+            .WaitUntilSelectedItemsEqual(candidate => candidate.MultiSelection, []);
+        await Assert.That(observed.Opens).IsEqualTo(opensAfterSelection + 1);
+    }
+
+    private sealed class MultiSelectOpenObserver : IUiControlAdapter
+    {
+        public int Opens { get; private set; }
+        public int ItemLookups { get; private set; }
+
+        public bool CanResolve(Type requestedType, UiControlDefinition definition) =>
+            requestedType == typeof(IButtonControl) && definition.LocatorValue == "MultiSelection_OpenButton"
+            || requestedType == typeof(IMultiSelectItemsControl) && definition.LocatorValue == "MultiSelection_Results";
+
+        public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
+        {
+            if (requestedType == typeof(IMultiSelectItemsControl))
+            {
+                ItemLookups++;
+                return innerResolver.Resolve<IMultiSelectItemsControl>(definition);
+            }
+            return new ObservedOpenButton(innerResolver.Resolve<IButtonControl>(definition), () => Opens++);
+        }
+
+        private sealed class ObservedOpenButton(IButtonControl inner, Action invoked) : IButtonControl
+        {
+            public string AutomationId => inner.AutomationId;
+            public string Name => inner.Name;
+            public bool IsEnabled => inner.IsEnabled;
+            public void Invoke() { invoked(); inner.Invoke(); }
+        }
     }
 
     [Test]

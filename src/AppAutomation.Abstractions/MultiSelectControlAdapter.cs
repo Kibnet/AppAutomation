@@ -2,9 +2,9 @@ namespace AppAutomation.Abstractions;
 
 internal interface IMultiSelectCommittedStateControl
 {
-    bool TryGetCommittedItems(out IReadOnlyList<string> items);
+    IReadOnlyList<string> RefreshCommittedItems(bool refreshLegacy = true);
 
-    IReadOnlyList<string> RefreshCommittedItems();
+    string DescribeLastObservation();
 }
 
 /// <summary>
@@ -28,6 +28,9 @@ public sealed record MultiSelectParts(
     bool FallbackToName = true,
     MultiSelectItemsKind ItemsKind = MultiSelectItemsKind.ListBox)
 {
+    /// <summary>Optional locator of the visible committed-value part; defaults to the editor root.</summary>
+    public string? DisplayValueLocator { get; init; }
+
     /// <summary>
     /// Creates a multi-select parts configuration that uses automation IDs.
     /// </summary>
@@ -136,6 +139,8 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.RootLocator);
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.OpenButtonLocator);
         ArgumentException.ThrowIfNullOrWhiteSpace(parts.ItemsContainerLocator);
+        if (parts.DisplayValueLocator is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(parts.DisplayValueLocator);
         if (!allowMissingApplyButton)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(parts.ApplyButtonLocator);
@@ -151,11 +156,13 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         }
     }
 
-    private sealed class MultiSelectControl : IMultiSelectControl, IMultiSelectCommittedStateControl
+    private sealed class MultiSelectControl : IMultiSelectControl, IReadableTextControl, IMultiSelectCommittedStateControl
     {
         private readonly MultiSelectParts _parts;
         private readonly IUiControlResolver _innerResolver;
         private readonly MultiSelectState _state;
+        private IMultiSelectItemsControl? _items;
+        private bool? _lastIsOpen;
 
         public MultiSelectControl(
             string automationId,
@@ -174,6 +181,10 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         public string Name => ResolveRoot().Name;
 
         public bool IsEnabled => ResolveRoot().IsEnabled;
+
+        public string Text => ReadDisplaySnapshot().Text?.Trim()
+            ?? throw new InvalidOperationException(
+                $"Multi-select '{AutomationId}' does not expose readable displayed value text. Configure DisplayValueLocator.");
 
         public IReadOnlyList<string> Items
         {
@@ -209,11 +220,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                     return ReadCurrentSelection(items);
                 }
 
-                return _state.TryGetCommittedItems(out var committedItems)
-                    ? committedItems
-                    : throw new InvalidOperationException(
-                        $"Multi-select popup '{AutomationId}' has no committed selection snapshot. "
-                        + "Refresh its selection explicitly before reading it while closed.");
+                return RefreshCommittedItems(refreshLegacy: false);
             }
         }
 
@@ -221,25 +228,97 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             get
             {
-                if (!TryResolveItems(out var items))
+                var items = _items;
+                if (items is null && !TryResolveItems(out items))
                 {
+                    _lastIsOpen = false;
+                    _state.ObservePopupState(false);
                     return false;
                 }
 
-                return items is IUiControlAvailability availability
+                var isOpen = items is IUiControlAvailability availability
                     ? availability.IsAvailable
                     : throw new NotSupportedException(
                         $"Multi-select popup '{AutomationId}' requires an availability-aware items container.");
+                _lastIsOpen = isOpen;
+                _state.ObservePopupState(isOpen);
+                if (!isOpen)
+                    _items = null;
+                return isOpen;
             }
         }
 
-        public bool TryGetCommittedItems(out IReadOnlyList<string> items)
+        public IReadOnlyList<string> RefreshCommittedItems(bool refreshLegacy = true)
         {
-            return _state.TryGetCommittedItems(out items);
+            // The operation state only gates a live read; it never proves the current selection.
+            if (_state.HasOpenPopup && IsOpen)
+                return ReadCurrentSelection(ResolveItems());
+            if (TryReadDisplayedItems(out var displayedItems))
+            {
+                _state.ObserveCommitted(displayedItems);
+                return displayedItems;
+            }
+            if (refreshLegacy)
+                return IsOpen ? ReadCurrentSelection(ResolveItems()) : ReadInitialCommittedItems();
+            return _state.TryGetCommittedItems(out var committedItems)
+                ? committedItems
+                : throw new InvalidOperationException(
+                    $"Multi-select popup '{AutomationId}' has no committed selection snapshot. "
+                    + "Refresh its selection explicitly before reading it while closed.");
         }
 
-        public IReadOnlyList<string> RefreshCommittedItems() =>
-            IsOpen ? ReadCurrentSelection(ResolveItems()) : ReadInitialCommittedItems();
+        public string DescribeLastObservation() => $"IsOpen={_lastIsOpen?.ToString() ?? "<unobserved>"}; {_state.Describe()}";
+
+        private UiDisplayedValueSnapshot ReadDisplaySnapshot()
+        {
+            var definition = CreateDisplayDefinition();
+            if (_innerResolver is IComboBoxFilterDisplayValueReader reader)
+                return reader.ReadDisplayedValueSnapshot(definition);
+            return new(_innerResolver.Resolve<IUiControl>(definition) switch
+            {
+                IReadableTextControl readable => readable.Text,
+                ILabelControl label => label.Text,
+                ITextBoxControl input => input.Text,
+                _ => null
+            });
+        }
+
+        private UiControlDefinition CreateDisplayDefinition() =>
+            CreateDefinition("DisplayValue", UiControlType.AutomationElement,
+                _parts.DisplayValueLocator ?? _parts.RootLocator);
+
+        private bool TryReadDisplayedItems(out string[] items)
+        {
+            items = [];
+            var snapshot = ReadDisplaySnapshot();
+            _state.ObserveDisplaySource(snapshot.SourceIdentity);
+            var text = snapshot.Text?.Trim();
+            if (text is null)
+                return false;
+            if (text.Length == 0)
+                return true;
+            if (!string.IsNullOrWhiteSpace(snapshot.PlaceholderText)
+                && string.Equals(text, snapshot.PlaceholderText.Trim(), StringComparison.Ordinal))
+            {
+                // A real item may have the same caption as the hint. That case requires an explicit selection read.
+                return snapshot.SourceIdentity is not null
+                    && _state.TryGetAvailableItems(out var candidates)
+                    && !candidates.Contains(text, StringComparer.OrdinalIgnoreCase);
+            }
+            char[] separators = [',', ';'];
+            if (text.IndexOfAny(separators) < 0)
+            {
+                items = [text];
+                return true;
+            }
+            // A caption containing delimiters is not proof of an item boundary.
+            if (!_state.TryGetAvailableItems(out var available)
+                || available.Any(item => item.IndexOfAny(separators) >= 0))
+                return false;
+            items = text.Split(separators, StringSplitOptions.TrimEntries);
+            return items.All(item => available.Contains(item, StringComparer.OrdinalIgnoreCase))
+                && items.Distinct(StringComparer.OrdinalIgnoreCase).Count() == items.Length;
+        }
 
         public void Open()
         {
@@ -257,16 +336,20 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             ArgumentNullException.ThrowIfNull(values);
 
             var items = ResolveItems();
+            if (_innerResolver is IComboBoxFilterDisplayValueReader reader)
+                _state.ObserveDisplaySource(reader.ReadDisplayedValueSourceIdentity(CreateDisplayDefinition()));
             var availableItems = items.SetSelectedItemsAndGetAvailableItems(values);
             _state.SetPending(availableItems, values);
             if (string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
             {
                 _state.CommitPending();
+                _items = null;
             }
         }
 
         public void Apply()
         {
+            _items = null;
             if (!string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
             {
                 ResolveButton("ApplyButton", _parts.ApplyButtonLocator).Invoke();
@@ -281,6 +364,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
 
         public void Cancel()
         {
+            _items = null;
             if (string.IsNullOrWhiteSpace(_parts.CancelButtonLocator))
             {
                 throw new NotSupportedException(
@@ -343,7 +427,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
 
         private IMultiSelectItemsControl ResolveItems()
         {
-            return _innerResolver.Resolve<IMultiSelectItemsControl>(
+            return _items ??= _innerResolver.Resolve<IMultiSelectItemsControl>(
                 CreateDefinition(
                     "Items",
                     _parts.ItemsKind == MultiSelectItemsKind.ComboBox
@@ -393,6 +477,28 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         private bool _hasAvailableItems;
         private bool _hasCommittedItems;
         private bool _refreshCommittedOnNextObservation;
+        private bool _hasOpenPopup;
+        private string[]? _observedSelection;
+        private string? _displaySourceIdentity;
+
+        public bool HasOpenPopup
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _hasOpenPopup;
+                }
+            }
+        }
+
+        public void ObservePopupState(bool isOpen)
+        {
+            lock (_sync)
+            {
+                _hasOpenPopup = isOpen;
+            }
+        }
 
         public IReadOnlyList<string> AvailableItems
         {
@@ -438,8 +544,10 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             lock (_sync)
             {
+                _hasOpenPopup = true;
                 _hasAvailableItems = false;
                 _pendingItems = [];
+                _observedSelection = null;
                 _refreshCommittedOnNextObservation = true;
             }
         }
@@ -451,6 +559,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
                 _availableItems = availableItems.ToArray();
                 _hasAvailableItems = true;
                 var observedSelection = selectedItems.ToArray();
+                _observedSelection = observedSelection;
                 if (!_hasCommittedItems || _refreshCommittedOnNextObservation)
                 {
                     _committedItems = observedSelection;
@@ -466,6 +575,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             lock (_sync)
             {
+                _hasOpenPopup = true;
                 _availableItems = availableItems.ToArray();
                 _hasAvailableItems = true;
                 _pendingItems = selectedItems.ToArray();
@@ -473,10 +583,49 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             }
         }
 
+        public void ObserveCommitted(string[] items)
+        {
+            lock (_sync)
+            {
+                var observed = items.ToArray();
+                _observedSelection = observed;
+                _committedItems = observed;
+                _pendingItems = observed;
+                _hasCommittedItems = true;
+            }
+        }
+
+        public void ObserveDisplaySource(string? identity)
+        {
+            lock (_sync)
+            {
+                if (identity is null)
+                    return;
+                if (_displaySourceIdentity is not null && _displaySourceIdentity != identity)
+                {
+                    _hasAvailableItems = false;
+                    _hasCommittedItems = false;
+                    _observedSelection = null;
+                }
+                _displaySourceIdentity = identity;
+            }
+        }
+
+        public string Describe()
+        {
+            lock (_sync)
+            {
+                static string Format(string[]? values) => values is null
+                    ? "<unobserved>" : $"[{string.Join(", ", values.Select(value => $"'{value}'"))}]";
+                return $"Available={Format(_hasAvailableItems ? _availableItems : null)}; Selected={Format(_observedSelection)}";
+            }
+        }
+
         public void CommitPending()
         {
             lock (_sync)
             {
+                _hasOpenPopup = false;
                 _committedItems = _pendingItems.ToArray();
                 _hasCommittedItems = true;
                 _refreshCommittedOnNextObservation = false;
@@ -487,6 +636,7 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         {
             lock (_sync)
             {
+                _hasOpenPopup = false;
                 _pendingItems = _committedItems.ToArray();
                 _refreshCommittedOnNextObservation = false;
             }

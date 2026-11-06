@@ -52,22 +52,46 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         SupportsPointerInput = true
     };
 
-    public string? ReadDisplayedValue(UiControlDefinition definition)
+    public string? ReadDisplayedValue(UiControlDefinition definition) => ReadDisplayedValueSnapshot(definition).Text;
+
+    public string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return GetDisplaySourceIdentity(FindElement(definition));
+    }
+
+    private static string? GetDisplaySourceIdentity(AutomationElement source)
+    {
+        var runtimeId = TryRead(() => source.Properties.RuntimeId.ValueOrDefault);
+        return runtimeId is { Length: > 0 }
+            ? $"{TryRead(() => source.Properties.ProcessId.ValueOrDefault)}:{string.Join(".", runtimeId)}" : null;
+    }
+
+    public UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
         var source = FindElement(definition);
+        var identity = GetDisplaySourceIdentity(source);
+        var placeholder = TryRead(() => source.Properties.HelpText.ValueOrDefault);
+        UiDisplayedValueSnapshot Snapshot(string? text) => new(text, placeholder, identity);
         if (TryRead(() => source.IsOffscreen) == true)
         {
-            return null;
+            return Snapshot(null);
         }
 
+        var value = TryRead(() => source.Patterns.Value.PatternOrDefault?.Value.Value);
         var controlType = TryRead(() => source.ControlType);
         if (controlType == ControlType.Text)
         {
-            return TryRead(() => source.Name);
+            return Snapshot(TryRead(() => source.Name));
         }
 
-        var visibleTexts = FindAutomationDescendants(source)
+        var descendants = FindAutomationDescendants(source);
+        var inputs = descendants.Where(candidate => TryRead(() => candidate.IsOffscreen) != true)
+            .Select(candidate => TryRead(() => candidate.Patterns.Value.PatternOrDefault?.Value.Value))
+            .Where(text => text is not null).Distinct(StringComparer.Ordinal).Take(2).ToArray();
+
+        var visibleTexts = descendants
             .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Text
                 && TryRead(() => candidate.IsOffscreen) != true)
             .Select(static candidate => TryRead(() => candidate.Name))
@@ -83,9 +107,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 + "Configure DisplayValueLocator for the committed value.");
         }
 
-        return visibleTexts.FirstOrDefault()
-            ?? TryRead(() => source.Patterns.Value.PatternOrDefault?.Value.Value)
-            ?? TryRead(() => source.Name);
+        if (visibleTexts.Length == 0 && inputs.Length > 1)
+            throw new InvalidOperationException("The multi-select display exposes multiple input values. Configure DisplayValueLocator.");
+        var text = visibleTexts.FirstOrDefault() ?? inputs.FirstOrDefault() ?? value ?? TryRead(() => source.Name);
+        return Snapshot(string.Equals(text, TryRead(() => source.AutomationId), StringComparison.Ordinal) ? null : text);
     }
 
     public Task PointerClickAsync(UiControlDefinition target, PointerClickOptions? options = null,
@@ -1442,17 +1467,22 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             set => Inner.IsChecked = value == true;
         }
 
-        public void SetChecked(bool value, string itemText)
+        public void SetChecked(bool value, string itemText, AutomationElement viewport)
         {
             if (IsChecked == value)
             {
                 return;
             }
 
-            var toggle = Inner.Patterns.Toggle.PatternOrDefault
-                ?? throw new InvalidOperationException(
-                    $"Multi-select checkbox '{itemText}' does not expose a Toggle pattern.");
-            toggle.Toggle();
+            System.Drawing.Point clickPoint = default;
+            DesktopPointer.ClickPrepared(() => Inner, element =>
+            {
+                var visible = System.Drawing.Rectangle.Intersect(element.BoundingRectangle, viewport.BoundingRectangle);
+                if (visible.Width <= 0 || visible.Height <= 0)
+                    throw new InvalidOperationException($"Multi-select checkbox '{itemText}' is outside its items viewport.");
+                clickPoint = new(visible.Left + visible.Width / 2, visible.Top + visible.Height / 2);
+            }, _ => clickPoint,
+                reason: $"multi-select checkbox '{itemText}' requires a user click to update its item selection");
 
             var timeout = Stopwatch.StartNew();
             while (timeout.Elapsed < TimeSpan.FromSeconds(1))
@@ -1466,7 +1496,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             throw new InvalidOperationException(
-                $"Multi-select checkbox '{itemText}' did not change to '{value}' after Toggle.");
+                $"Multi-select checkbox '{itemText}' did not change to '{value}' after a user click.");
         }
     }
 
@@ -1502,7 +1532,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 var descendants = FindAutomationDescendants(Inner);
                 var visibleCheckBoxes = ReadCurrentItems(descendants);
-                var checkBoxItems = TryReadCompleteVisibleSelection(visibleCheckBoxes, out _)
+                var checkBoxItems = _lastItems is null && TryReadCompleteVisibleSelection(visibleCheckBoxes, out _)
                     ? visibleCheckBoxes.Select(static item => new MultiSelectItemSnapshot(
                         item.Text, item.Control.IsChecked == true)).ToArray()
                     : GetItems(visibleCheckBoxes);
@@ -1880,7 +1910,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             foreach (var item in ReadCurrentItems())
             {
                 var shouldBeChecked = requestedValues.Contains(item.Text);
-                item.Control.SetChecked(shouldBeChecked, item.Text);
+                item.Control.SetChecked(shouldBeChecked, item.Text, Inner);
                 items[item.Text] = new MultiSelectItemSnapshot(item.Text, shouldBeChecked);
             }
         }
@@ -1948,7 +1978,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             out string[] selectedTexts)
         {
             selectedTexts = [];
-            if (!Inner.Patterns.Selection.IsSupported)
+            if (!Inner.Patterns.Selection.IsSupported
+                || !Inner.Patterns.Selection.Pattern.CanSelectMultiple.ValueOrDefault)
             {
                 return false;
             }
@@ -1963,6 +1994,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 .Select(static text => text?.Trim() ?? string.Empty)
                 .ToArray();
             return selectedTexts.All(static text => !string.IsNullOrWhiteSpace(text))
+                && selectedTexts.OrderBy(text => text, StringComparer.OrdinalIgnoreCase).SequenceEqual(
+                    visible.Where(item => item.Control.IsChecked == true).Select(item => item.Text)
+                        .OrderBy(text => text, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase)
                 && FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
                     [], visible.Select(static item => item.Text).ToArray(), selectedTexts);
         }

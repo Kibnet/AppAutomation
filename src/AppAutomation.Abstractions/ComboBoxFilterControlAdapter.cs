@@ -55,7 +55,8 @@ public sealed record ComboBoxFilterParts(
             CancelButtonLocator,
             LocatorKind,
             FallbackToName,
-            ItemsKind);
+            ItemsKind)
+        { DisplayValueLocator = DisplayValueLocator };
     }
 }
 
@@ -78,14 +79,24 @@ public static partial class UiControlResolverExtensions
 }
 
 /// <summary>
-/// Reads the visible committed-value caption of a configured filter part without
+/// Reads the visible committed-value caption of a configured composite-editor part without
 /// changing the text semantics of ordinary automation elements.
 /// </summary>
 public interface IComboBoxFilterDisplayValueReader
 {
     /// <summary>Reads the unique visible value exposed by the configured part.</summary>
     string? ReadDisplayedValue(UiControlDefinition definition);
+
+    /// <summary>Reads the caption with its published input hint and live UI-source identity.</summary>
+    UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition) =>
+        new(ReadDisplayedValue(definition));
+
+    /// <summary>Reads only the live UI-source identity, without inspecting its caption or popup contents.</summary>
+    string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition) => null;
 }
+
+/// <summary>UI-only display evidence. A hint is not an item; identity invalidates observations after source replacement.</summary>
+public sealed record UiDisplayedValueSnapshot(string? Text, string? PlaceholderText = null, string? SourceIdentity = null);
 
 /// <summary>
 /// Composes an <see cref="IComboBoxFilterControl"/> while reusing the exact-set popup lifecycle.
@@ -94,7 +105,6 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
 {
     private readonly string _propertyName;
     private readonly MultiSelectControlAdapter _innerAdapter;
-    private readonly ComboBoxFilterParts _parts;
 
     /// <summary>
     /// Initializes a logical ComboBoxEditor-style filter adapter.
@@ -105,7 +115,6 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(parts);
 
         _propertyName = propertyName.Trim();
-        _parts = parts;
         _innerAdapter = new MultiSelectControlAdapter(
             _propertyName,
             parts.ToMultiSelectParts(),
@@ -133,61 +142,23 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
             typeof(IMultiSelectControl),
             definition,
             innerResolver);
-        return new ComboBoxFilterControl(inner, innerResolver, _parts);
+        return new ComboBoxFilterControl(inner);
     }
 
     private sealed class ComboBoxFilterControl : IComboBoxFilterControl, IReadableTextControl, IMultiSelectCommittedStateControl
     {
         private readonly IMultiSelectControl _inner;
-        private readonly IUiControlResolver _resolver;
-        private readonly ComboBoxFilterParts _parts;
 
-        public ComboBoxFilterControl(
-            IMultiSelectControl inner,
-            IUiControlResolver resolver,
-            ComboBoxFilterParts parts)
+        public ComboBoxFilterControl(IMultiSelectControl inner)
         {
             _inner = inner;
-            _resolver = resolver;
-            _parts = parts;
         }
 
         public string AutomationId => _inner.AutomationId;
 
         public string Name => _inner.Name;
 
-        public string Text
-        {
-            get
-            {
-                var locator = _parts.DisplayValueLocator ?? _parts.RootLocator;
-                var definition = new UiControlDefinition(
-                    $"{AutomationId}.DisplayValue",
-                    UiControlType.AutomationElement,
-                    locator,
-                    _parts.LocatorKind,
-                    _parts.FallbackToName);
-                var text = _resolver is IComboBoxFilterDisplayValueReader displayReader
-                    ? displayReader.ReadDisplayedValue(definition)
-                    : ReadControlText(_resolver.Resolve<IUiControl>(definition), locator);
-                text = text?.Trim();
-                return !string.IsNullOrWhiteSpace(text)
-                    ? text
-                    : throw new InvalidOperationException(
-                        $"Combo-box filter '{AutomationId}' does not expose readable displayed value text. "
-                        + "Configure DisplayValueLocator for its visible value part.");
-            }
-        }
-
-        private string ReadControlText(IUiControl display, string locator) => display switch
-        {
-            IReadableTextControl readable => readable.Text,
-            ILabelControl label => label.Text,
-            ITextBoxControl input => input.Text,
-            _ => throw new InvalidOperationException(
-                $"Combo-box filter '{AutomationId}' display part '{locator}' "
-                + "does not expose readable visible text in adapter contract.")
-        };
+        public string Text => ((IReadableTextControl)_inner).Text;
 
         public bool IsEnabled => _inner.IsEnabled;
 
@@ -197,21 +168,12 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
 
         public bool IsOpen => _inner.IsOpen;
 
-        public bool TryGetCommittedItems(out IReadOnlyList<string> items)
-        {
-            if (_inner is IMultiSelectCommittedStateControl committedState)
-            {
-                return committedState.TryGetCommittedItems(out items);
-            }
-
-            items = [];
-            return false;
-        }
-
-        public IReadOnlyList<string> RefreshCommittedItems() =>
+        public IReadOnlyList<string> RefreshCommittedItems(bool refreshLegacy = true) =>
             _inner is IMultiSelectCommittedStateControl committedState
-                ? committedState.RefreshCommittedItems()
+                ? committedState.RefreshCommittedItems(refreshLegacy)
                 : _inner.SelectedItems;
+
+        public string DescribeLastObservation() => ((IMultiSelectCommittedStateControl)_inner).DescribeLastObservation();
 
         public void Open() => _inner.Open();
 
