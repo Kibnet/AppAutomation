@@ -305,13 +305,15 @@ public sealed partial class HeadlessControlResolver
         public GridCellValueSnapshot ReadCell(GridCellAddress address, int timeoutMs)
         {
             ArgumentNullException.ThrowIfNull(address);
-            return ReadCell(MapRow(address.Row), ResolveRuntimeColumn(address.ColumnName), timeoutMs);
+            return ReadCell(MapRow(address.Row),
+                ResolveRuntimeColumn(address.ColumnName, address.Row.FindColumnDefinition(address.ColumnName)), timeoutMs);
         }
 
         public string CopyCell(GridCellAddress address, int timeoutMs)
         {
             ArgumentNullException.ThrowIfNull(address);
-            return CopyCell(MapRow(address.Row), ResolveRuntimeColumn(address.ColumnName), timeoutMs);
+            return CopyCell(MapRow(address.Row),
+                ResolveRuntimeColumn(address.ColumnName, address.Row.FindColumnDefinition(address.ColumnName)), timeoutMs);
         }
 
         public void EditCell(
@@ -321,7 +323,8 @@ public sealed partial class HeadlessControlResolver
         {
             ArgumentNullException.ThrowIfNull(address);
             ArgumentNullException.ThrowIfNull(request);
-            EditCell(MapRow(address.Row), ResolveRuntimeColumn(address.ColumnName), request, timeoutMs);
+            EditCell(MapRow(address.Row),
+                ResolveRuntimeColumn(address.ColumnName, address.Row.FindColumnDefinition(address.ColumnName)), request, timeoutMs);
         }
 
         public void OpenRow(GridRowSelector row, int timeoutMs) =>
@@ -1706,13 +1709,14 @@ public sealed partial class HeadlessControlResolver
         private GridIndexedRowSelector MapRow(GridRowSelector row)
         {
             ArgumentNullException.ThrowIfNull(row);
-            return new GridIndexedRowSelector(row.Conditions.Select(condition =>
+            var mapped = new GridIndexedRowSelector(row.Conditions.Select(condition =>
                 new GridIndexedCellCondition(
-                    ResolveRuntimeColumn(condition.ColumnName),
+                    ResolveRuntimeColumn(condition.ColumnName, row.FindColumnDefinition(condition.ColumnName)),
                     condition.Value)));
+            return row.HasDeclaredUniqueIdentity ? mapped.WithDeclaredUniqueIdentity() : mapped;
         }
 
-        private GridRuntimeColumn ResolveRuntimeColumn(string columnName)
+        private GridRuntimeColumn ResolveRuntimeColumn(string columnName, GridColumnDefinition? configuration)
         {
             if (!TryGetColumnIndex(columnName, out var columnIndex))
             {
@@ -1723,15 +1727,19 @@ public sealed partial class HeadlessControlResolver
 
             return new GridRuntimeColumn(
                 columnIndex,
-                columnName.Trim(),
-                displayValuePath: null,
-                formatString: null,
-                cultureName: null,
-                GridCellValueKind.Text,
-                editorKind: null,
-                editorParts: null)
+                configuration?.SourceFieldName ?? columnName.Trim(),
+                configuration?.DisplayValuePath,
+                configuration?.FormatString,
+                configuration?.CultureName,
+                configuration?.ValueKind ?? GridCellValueNormalizer.InferValueKind(configuration?.EditorKind),
+                configuration?.EditorKind,
+                configuration?.EditorParts)
             {
-                RuntimeColumnIndex = columnIndex
+                RuntimeColumnIndex = columnIndex,
+                RuntimeColumnName = configuration?.RuntimeColumnName ?? columnName.Trim(),
+                RowIdentityAutomationProperty = configuration?.RowIdentityAutomationProperty,
+                BooleanTrueDisplayText = configuration?.BooleanTrueDisplayText,
+                BooleanFalseDisplayText = configuration?.BooleanFalseDisplayText
             };
         }
 

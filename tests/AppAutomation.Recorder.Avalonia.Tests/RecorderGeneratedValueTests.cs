@@ -42,7 +42,7 @@ public sealed class RecorderGeneratedValueTests
             await Assert.That(first.Text).IsNotEmpty();
             await Assert.That(generatedValue.Kind).IsEqualTo(kind);
             if (kind == RecorderGeneratedValueKind.Text)
-                await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{4}_[A-Za-z0-9]{6}_1$");
+                await Assert.That(first.Text).Matches("^Recorded_[0-9]{8}_[A-Za-z0-9]{6}_1$");
             await Assert.That(session.StepCount).IsEqualTo(1);
             await Assert.That(session.PersistableStepCount).IsEqualTo(1);
         }

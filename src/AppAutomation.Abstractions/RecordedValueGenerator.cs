@@ -43,12 +43,14 @@ public sealed class RecordedValueSeries
     }
 
     /// <summary>
-    /// Creates the value for a positive one-based ordinal in this series.
+    /// Creates a short text value for a positive one-based ordinal in this series.
     /// </summary>
     public string Create(int ordinal)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(ordinal, 1);
-        return $"Recorded_{_identifier}_{ordinal.ToString(CultureInfo.InvariantCulture)}";
+        var date = _identifier[.._identifier.IndexOf('_')];
+        var suffix = _identifier[(_identifier.LastIndexOf('_') + 1)..];
+        return $"Recorded_{date}_{suffix}_{ordinal.ToString(CultureInfo.InvariantCulture)}";
     }
 
     /// <summary>Creates a synthetic ten-digit INN with a valid check digit. Ordinals are limited to 100,000.</summary>
