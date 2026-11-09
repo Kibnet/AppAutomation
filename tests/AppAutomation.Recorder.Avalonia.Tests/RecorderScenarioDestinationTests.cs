@@ -1,9 +1,18 @@
 using System.Text.RegularExpressions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.UI;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Styling;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -83,11 +92,25 @@ public sealed class RecorderScenarioDestinationTests
         await Assert.That(recorder.Selection.CanStartRecording).IsFalse();
 
         var destination = recorder.Selection.ScenarioDestinations.Single();
-        await Assert.That(recorder.Selection.TrySelectScenarioDestination(destination)).IsTrue();
+        await Assert.That(recorder.Selection.TrySelectScenarioDestination(destination, "CreateCustomer")).IsTrue();
+        await Assert.That(recorder.Selection.ScenarioName).IsEqualTo("CreateCustomer");
         await Assert.That(recorder.Selection.TrySetScenarioName("../unsafe")).IsTrue();
         await Assert.That(recorder.Selection.CanStartRecording).IsFalse();
         await Assert.That(recorder.Selection.ScenarioSelectionError).Contains("cannot be used safely");
 
+        await Assert.That(recorder.Selection.TrySelectScenarioDestination(null, string.Empty)).IsTrue();
+        await Assert.That(recorder.Selection.CanStartRecording).IsFalse();
+        await Assert.That(recorder.Selection.TrySetScenarioName("  Customer flow  ")).IsTrue();
+        await Assert.That(recorder.Selection.TrySelectScenarioDestination(destination, "OtherSuggestion")).IsTrue();
+        await Assert.That(recorder.Selection.ScenarioName).IsEqualTo("  Customer flow  ");
+        await Assert.That(recorder.Selection.TryResetScenarioTarget()).IsTrue();
+        await Assert.That(recorder.Selection.SelectedScenarioDestination).IsNull();
+        await Assert.That(recorder.Selection.ScenarioName).IsEmpty();
+        await Assert.That(recorder.Selection.ScenarioSelectionError).IsNull();
+        await Assert.That(recorder.Selection.CanStartRecording).IsFalse();
+        await Assert.That(recorder.Selection.CanRestoreAutosave).IsFalse();
+        await Assert.That(recorder.Selection.TrySelectScenarioDestination(destination, "CreateCustomer")).IsTrue();
+        await Assert.That(recorder.Selection.ScenarioName).IsEqualTo("CreateCustomer");
         await Assert.That(recorder.Selection.TrySetScenarioName("  Customer flow  ")).IsTrue();
         await Assert.That(recorder.Selection.CanStartRecording).IsTrue();
         await Assert.That(recorder.Selection.CurrentPathForTesting())
@@ -99,6 +122,7 @@ public sealed class RecorderScenarioDestinationTests
         {
             await Assert.That(recorder.Session.State).IsEqualTo(RecorderSessionState.Recording);
             await Assert.That(recorder.Selection.CanChangeScenarioTarget).IsFalse();
+            await Assert.That(recorder.Selection.TryResetScenarioTarget()).IsFalse();
             await Assert.That(recorder.Selection.ScenarioName).IsEqualTo("Customer flow");
         }
     }
@@ -519,6 +543,196 @@ public sealed class RecorderScenarioDestinationTests
         await Assert.That(session.RestoreAutosaveCallCount).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task Overlay_SearchesEntitiesAndSelectsOnlyTheConfirmedOperation()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.DiscoveryScenarios,
+            new RecorderSourceFile("OrderScenarios.cs", """
+                namespace Sample.Authoring.Tests
+                {
+                    namespace Order
+                    {
+                        public partial class CreateOrderTest;
+                        public partial class DeleteOrderTests;
+                        namespace History { public partial class CreateOrderTests; }
+                    }
+
+                    namespace Общее { public partial class CancelOrderTest; }
+                }
+                """));
+        var destinations = project.Discover().Destinations;
+        var initial = destinations.Single(destination => destination.DisplayName == "Customers.CreateCustomerTests");
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderScenarioDestinationTests).Assembly);
+        var result = await headless.Dispatch(() =>
+        {
+            var session = new FakeScenarioSelectionSession
+            {
+                CanChangeScenarioTarget = true,
+                CanStartRecording = true,
+                ScenarioDestinations = destinations,
+                SelectedScenarioDestination = initial,
+                ScenarioName = "RecordedSmoke"
+            };
+            var overlay = new RecorderOverlay();
+            overlay.Attach(session, new AppAutomationRecorderOptions());
+            var window = new Window { Width = 760, Height = 620, Content = overlay };
+            window.Styles.Add(new Style(selector => selector.OfType<TextBox>())
+            {
+                Setters =
+                {
+                    new Setter(TextBox.UseFloatingPlaceholderProperty, true),
+                    new Setter(TextBox.VerticalContentAlignmentProperty, VerticalAlignment.Top)
+                }
+            });
+            window.Show();
+            window.UpdateLayout();
+            try
+            {
+                var entity = FindRequired<TextBox>(overlay, "ScenarioEntityTextBox");
+                var popup = FindRequired<Popup>(overlay, "ScenarioEntityPopup");
+                var results = FindRequired<ListBox>(overlay, "ScenarioEntityList");
+                var noResults = FindRequired<TextBlock>(overlay, "ScenarioEntityNoResults");
+                var operation = FindRequired<ComboBox>(overlay, "ScenarioDestinationComboBox");
+                var name = FindRequired<TextBox>(overlay, "ScenarioNameTextBox");
+                entity.Focus();
+                entity.Text = "Order";
+                var typingKeptDestination = popup.IsOpen && session.SelectedScenarioDestination == initial;
+                Press(Key.Escape, PhysicalKey.Escape);
+                var escapeRestoredSelection = !popup.IsOpen && entity.Text == "Customers";
+
+                entity.Text = string.Empty;
+                var allLabels = ResultLabels();
+                entity.Text = "no-match";
+                var emptyState = results.ItemCount == 0 && noResults.IsVisible;
+                entity.Text = "rDe";
+                var filteredLabels = ResultLabels();
+                Press(Key.Down, PhysicalKey.ArrowDown);
+                var highlightKeptDestination = session.SelectedScenarioDestination == initial;
+                Press(Key.Enter, PhysicalKey.Enter);
+
+                var destinationCleared = entity.Text == "Order"
+                    && session.SelectedScenarioDestination is null && operation.SelectedItem is null;
+                var operations = operation.Items.OfType<RecorderScenarioOperation>().ToArray();
+                operation.SelectedItem = operations.Single(item => item.Destination.DisplayName == "Order.History.CreateOrderTests");
+                var createName = name.Text;
+                var exactNamespace = session.SelectedScenarioDestination?.ScenarioNamespace;
+                Dispatcher.UIThread.RunJobs();
+                operation.SelectedItem = operations.Single(item => item.Name == "DeleteOrder");
+                var deleteName = name.Text;
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var floatingPlaceholderDisabled = !entity.UseFloatingPlaceholder && !name.UseFloatingPlaceholder;
+                var entityHasNoPlaceholder = string.IsNullOrEmpty(entity.PlaceholderText);
+                var textCenters = new[]
+                {
+                    CenterY(entity.GetVisualDescendants().OfType<TextPresenter>().Single()),
+                    CenterY(operation.GetVisualDescendants().OfType<TextBlock>()
+                        .Single(text => text.IsEffectivelyVisible && text.Text == "DeleteOrder")),
+                    CenterY(name.GetVisualDescendants().OfType<TextPresenter>().Single())
+                };
+                var textCenterSpread = textCenters.Max() - textCenters.Min();
+                var textOffsetFromFieldCenter = textCenters.Max(center => Math.Abs(center - CenterY(operation)));
+
+                name.Text = "MyScenario";
+                Dispatcher.UIThread.RunJobs();
+                operation.SelectedItem = operations[0];
+                var manualName = name.Text;
+
+                entity.Focus();
+                entity.Text = "stOM";
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var item = results.GetVisualDescendants().OfType<Button>()
+                    .Single(button => button.DataContext is RecorderScenarioEntity { Label: "Customers" });
+                var popupRoot = TopLevel.GetTopLevel(item)!;
+                var point = item.TranslatePoint(new Point(item.Bounds.Width / 2, item.Bounds.Height / 2), popupRoot)!.Value;
+                popupRoot.MouseDown(point, MouseButton.Left);
+                popupRoot.MouseUp(point, MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                var mouseConfirmedEntity = entity.Text == "Customers" && !popup.IsOpen
+                    && session.SelectedScenarioDestination is null
+                    && operation.Items.OfType<RecorderScenarioOperation>()
+                        .All(candidate => candidate.Destination.DisplayName.StartsWith("Customers.", StringComparison.Ordinal));
+
+                operation.SelectedItem = operation.Items.OfType<RecorderScenarioOperation>()
+                    .Single(candidate => candidate.Name == "CreateCustomer");
+                var resetButton = FindRequired<Button>(overlay, "ResetScenarioTargetButton");
+                resetButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                var clearedAllFields = string.IsNullOrEmpty(entity.Text)
+                    && operation.SelectedItem is null && !operation.IsEnabled
+                    && string.IsNullOrEmpty(name.Text) && session.SelectedScenarioDestination is null;
+
+                session.CanChangeScenarioTarget = false;
+                overlay.RefreshForTesting();
+                return new
+                {
+                    typingKeptDestination,
+                    escapeRestoredSelection,
+                    allLabels,
+                    emptyState,
+                    filteredLabels,
+                    highlightKeptDestination,
+                    destinationCleared,
+                    operations,
+                    createName,
+                    exactNamespace,
+                    deleteName,
+                    floatingPlaceholderDisabled,
+                    entityHasNoPlaceholder,
+                    textCenterSpread,
+                    textOffsetFromFieldCenter,
+                    manualName,
+                    mouseConfirmedEntity,
+                    clearedAllFields,
+                    Locked = !entity.IsEnabled && !operation.IsEnabled && !resetButton.IsEnabled
+                };
+
+                string[] ResultLabels() => results.Items.OfType<RecorderScenarioEntity>().Select(static item => item.Label).ToArray();
+                double CenterY(Control control) =>
+                    control.TranslatePoint(new Point(0, control.Bounds.Height / 2), window)!.Value.Y;
+
+                void Press(Key key, PhysicalKey physicalKey)
+                {
+                    window.KeyPress(key, RawInputModifiers.None, physicalKey, null);
+                    window.KeyRelease(key, RawInputModifiers.None, physicalKey, null);
+                    Dispatcher.UIThread.RunJobs();
+                }
+            }
+            finally
+            {
+                window.Close();
+            }
+        }, CancellationToken.None);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.typingKeptDestination).IsTrue();
+            await Assert.That(result.escapeRestoredSelection).IsTrue();
+            await Assert.That(result.allLabels).IsEquivalentTo(["Customers", "Order", "Общее", "Общее (корень)"]);
+            await Assert.That(result.emptyState).IsTrue();
+            await Assert.That(result.filteredLabels).IsEquivalentTo(["Order"]);
+            await Assert.That(result.highlightKeptDestination).IsTrue();
+            await Assert.That(result.destinationCleared).IsTrue();
+            await Assert.That(result.operations.Select(static item => item.Label)).IsEquivalentTo([
+                "CreateOrder (Order.CreateOrderTest)",
+                "CreateOrder (Order.History.CreateOrderTests)",
+                "DeleteOrder"
+            ]);
+            await Assert.That(result.createName).IsEqualTo("CreateOrder");
+            await Assert.That(result.exactNamespace).IsEqualTo("Sample.Authoring.Tests.Order.History");
+            await Assert.That(result.deleteName).IsEqualTo("DeleteOrder");
+            await Assert.That(result.floatingPlaceholderDisabled).IsTrue();
+            await Assert.That(result.entityHasNoPlaceholder).IsTrue();
+            await Assert.That(result.textCenterSpread).IsLessThanOrEqualTo(1d);
+            await Assert.That(result.textOffsetFromFieldCenter).IsLessThanOrEqualTo(1d);
+            await Assert.That(result.manualName).IsEqualTo("MyScenario");
+            await Assert.That(result.mouseConfirmedEntity).IsTrue();
+            await Assert.That(result.clearedAllFields).IsTrue();
+            await Assert.That(result.Locked).IsTrue();
+        }
+    }
+
     private static RecorderScenarioDestinationProject CreateGenericScenarioProject()
     {
         return RecorderScenarioDestinationProject.Create(
@@ -576,7 +790,8 @@ public sealed class RecorderScenarioDestinationTests
         {
             await Assert.That(progress.IsVisible).IsFalse();
             await Assert.That(status.IsVisible).IsFalse();
-            await Assert.That(destinationBox.SelectedItem).IsEqualTo(destination);
+            await Assert.That((destinationBox.SelectedItem as RecorderScenarioOperation)?.Destination).IsEqualTo(destination);
+            await Assert.That(FindRequired<TextBox>(overlay, "ScenarioEntityTextBox").Text).IsEqualTo("Customers");
             await Assert.That(nameBox.Text).IsEqualTo("RecordedSmoke");
             await Assert.That(recordButton.IsEnabled).IsTrue();
             await Assert.That(restoreButton.IsEnabled).IsTrue();
@@ -600,8 +815,8 @@ public sealed class RecorderScenarioDestinationTests
     {
         return Regex.Count(
             source,
-            "public void Recorded_[^\\(]+\\(",
-            RegexOptions.CultureInvariant);
+            @"^[ \t]*\[Test\][ \t]*\r?$",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
     }
 }
 

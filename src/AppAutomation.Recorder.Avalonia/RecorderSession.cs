@@ -117,6 +117,7 @@ internal sealed partial class RecorderSession :
     private string? _lastScenarioFilePath;
     private IReadOnlyList<RecordedScenarioDestination> _scenarioDestinations = Array.Empty<RecordedScenarioDestination>();
     private RecordedScenarioDestination? _selectedScenarioDestination;
+    private bool _hasExplicitScenarioName;
     private string _scenarioName;
     private string? _scenarioDiscoveryError;
     private bool _isScanning;
@@ -350,7 +351,8 @@ internal sealed partial class RecorderSession :
 
     public bool IsScanning => _isScanning;
 
-    public string? ScenarioSelectionError => _scenarioDiscoveryError ?? ValidateScenarioName(_scenarioName);
+    public string? ScenarioSelectionError => _scenarioDiscoveryError
+        ?? (_selectedScenarioDestination is null ? null : ValidateScenarioName(_scenarioName));
 
     public IReadOnlyList<RecordedScenarioDestination> ScenarioDestinations => _scenarioDestinations;
 
@@ -478,7 +480,7 @@ internal sealed partial class RecorderSession :
         SetStatus("Recorded steps cleared.", RecorderValidationStatus.Valid);
     }
 
-    public bool TrySelectScenarioDestination(RecordedScenarioDestination? destination)
+    public bool TrySelectScenarioDestination(RecordedScenarioDestination? destination, string? suggestedName = null)
     {
         if (!CanChangeScenarioTarget)
         {
@@ -493,9 +495,11 @@ internal sealed partial class RecorderSession :
         }
 
         _selectedScenarioDestination = destination;
-        _stepMoveHistory.Clear();
-        _lastScenarioFilePath = null;
-        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+        if (!_hasExplicitScenarioName && suggestedName is not null)
+        {
+            _scenarioName = suggestedName;
+        }
+        InvalidateScenarioSaveTarget();
         SetStatus(
             destination is null ? "Scenario destination cleared." : $"Scenario destination: {destination.DisplayName}",
             RecorderValidationStatus.Valid);
@@ -511,14 +515,35 @@ internal sealed partial class RecorderSession :
         }
 
         _scenarioName = scenarioName ?? string.Empty;
-        _stepMoveHistory.Clear();
-        _lastScenarioFilePath = null;
-        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+        _hasExplicitScenarioName = true;
+        InvalidateScenarioSaveTarget();
         var validationError = ValidateScenarioName(_scenarioName);
         SetStatus(
             validationError ?? "Scenario name updated.",
             validationError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Warning);
         return true;
+    }
+
+    public bool TryResetScenarioTarget()
+    {
+        if (!CanChangeScenarioTarget)
+        {
+            return false;
+        }
+
+        _selectedScenarioDestination = null;
+        _scenarioName = string.Empty;
+        _hasExplicitScenarioName = false;
+        InvalidateScenarioSaveTarget();
+        SetStatus("Scenario fields reset.", RecorderValidationStatus.Valid);
+        return true;
+    }
+
+    private void InvalidateScenarioSaveTarget()
+    {
+        _stepMoveHistory.Clear();
+        _lastScenarioFilePath = null;
+        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
     }
 
     public void SetDiagnosticLogFileEnabled(bool isEnabled)
@@ -6376,6 +6401,7 @@ internal sealed partial class RecorderSession :
             _selectedScenarioDestination = result.Destinations.SingleOrDefault(destination =>
                 string.Equals(destination.ScenarioNamespace, _options.ScenarioNamespace, StringComparison.Ordinal)
                 && string.Equals(destination.ScenarioClassName, _options.ScenarioClassName, StringComparison.Ordinal));
+            _hasExplicitScenarioName |= _selectedScenarioDestination is not null && !string.IsNullOrWhiteSpace(_scenarioName);
             if (_selectedScenarioDestination is null)
             {
                 _scenarioDiscoveryError =

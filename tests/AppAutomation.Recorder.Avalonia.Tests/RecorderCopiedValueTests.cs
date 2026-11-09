@@ -322,7 +322,7 @@ public sealed class RecorderCopiedValueTests
             await Assert.That(autosaveState.Steps[1].InputCopiedValueId).IsEqualTo(copiedValueId);
             await Assert.That(autosaveState.Steps[2].InputCopiedValueId).IsEqualTo(copiedValueId);
             await Assert.That(save.Success).IsTrue();
-            await Assert.That(source).Contains("public async Task Recorded_CopyValueFlow_");
+            await Assert.That(source).Matches(@"\bpublic async Task CopyValueFlow_\d{8}_\d{6}\(");
             await Assert.That(source).Contains(
                 "var copiedSourceValue = Page.SourceValue.Text ?? string.Empty;");
             await Assert.That(source).Contains(

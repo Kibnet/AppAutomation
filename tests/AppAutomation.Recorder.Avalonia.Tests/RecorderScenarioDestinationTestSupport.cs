@@ -390,6 +390,8 @@ internal sealed class FakeScenarioSelectionSession :
     IRecorderScenarioSelectionDetails,
     IRecorderScenarioPathDetails
 {
+    private bool _hasExplicitScenarioName;
+
     public RecorderSessionState State { get; private set; }
 
     public int StepCount => 0;
@@ -446,15 +448,29 @@ internal sealed class FakeScenarioSelectionSession :
         return Task.FromResult(RecorderSaveResult.Failed("Not used."));
     }
 
-    public bool TrySelectScenarioDestination(RecordedScenarioDestination? destination)
+    public bool TrySelectScenarioDestination(RecordedScenarioDestination? destination, string? suggestedName = null)
     {
         SelectedScenarioDestination = destination;
+        if (!_hasExplicitScenarioName && suggestedName is not null)
+        {
+            ScenarioName = suggestedName;
+        }
         return true;
     }
 
     public bool TrySetScenarioName(string? scenarioName)
     {
         ScenarioName = scenarioName ?? string.Empty;
+        _hasExplicitScenarioName = true;
+        return true;
+    }
+
+    public bool TryResetScenarioTarget()
+    {
+        if (!CanChangeScenarioTarget) return false;
+        SelectedScenarioDestination = null;
+        ScenarioName = string.Empty;
+        _hasExplicitScenarioName = false;
         return true;
     }
 

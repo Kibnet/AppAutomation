@@ -3589,7 +3589,7 @@ public sealed class RecorderTests
             await Assert.That(File.Exists(autosaveResult.ScenarioFilePath!)).IsFalse();
             await Assert.That(pageSource).Contains("[UiControl(\"RunButton\", UiControlType.Button, \"RunButton\", FallbackToName = false)]");
             await Assert.That(scenarioSource).DoesNotContain("autosave recovery file");
-            await Assert.That(scenarioSource).Contains("public void Recorded_RecoveryFlow_");
+            await Assert.That(scenarioSource).Matches(@"\bpublic void RecoveryFlow_\d{8}_\d{6}\(");
             await Assert.That(scenarioSource).Contains("Page.ClickButton(static page => page.RunButton);");
         }
     }

@@ -1,11 +1,12 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
-             xmlns:recorder="clr-namespace:AppAutomation.Recorder.Avalonia"
+             xmlns:ui="clr-namespace:AppAutomation.Recorder.Avalonia.UI"
              x:Class="AppAutomation.Recorder.Avalonia.UI.RecorderOverlay">
     <UserControl.Resources>
         <SolidColorBrush x:Key="RecorderOverlayBackground">#F4F6F8</SolidColorBrush>
         <SolidColorBrush x:Key="RecorderSurfaceBackground">#FFFFFF</SolidColorBrush>
+        <SolidColorBrush x:Key="RecorderScenarioFieldBackground">#FFFFFF</SolidColorBrush>
         <SolidColorBrush x:Key="RecorderOverlayBorder">#CBD5E1</SolidColorBrush>
         <SolidColorBrush x:Key="RecorderText">#0F172A</SolidColorBrush>
         <SolidColorBrush x:Key="RecorderAccent">#0F766E</SolidColorBrush>
@@ -44,40 +45,147 @@
                                    Text="Идет сканирование…"
                                    automation:AutomationProperties.AutomationId="RecorderScenarioScanStatus" />
                         <Grid Grid.Row="2"
-                              ColumnDefinitions="2*,*"
+                              ColumnDefinitions="*,*,*"
                               ColumnSpacing="8">
+                            <Grid.Styles>
+                                <Style Selector=":is(TemplatedControl).scenario-field">
+                                    <Setter Property="Height" Value="32" />
+                                    <Setter Property="MinHeight" Value="32" />
+                                    <Setter Property="Padding" Value="8,0" />
+                                    <Setter Property="FontSize" Value="12" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Setter Property="CornerRadius" Value="3" />
+                                    <Setter Property="Background" Value="{DynamicResource RecorderScenarioFieldBackground}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource RecorderOverlayBorder}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource RecorderText}" />
+                                </Style>
+                                <Style Selector="TextBox.scenario-field">
+                                    <Setter Property="UseFloatingPlaceholder" Value="False" />
+                                    <Setter Property="VerticalContentAlignment" Value="Center" />
+                                </Style>
+                            </Grid.Styles>
                             <StackPanel Grid.Column="0"
                                         Spacing="3">
-                                <TextBlock Text="Scenario destination"
+                                <TextBlock Text="Сущность"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource RecorderText}" />
+                                <Grid x:Name="ScenarioEntityField">
+                                    <TextBox x:Name="ScenarioEntityTextBox"
+                                             Classes="scenario-field"
+                                             Padding="8,0,32,0"
+                                             automation:AutomationProperties.Name="Сущность"
+                                             automation:AutomationProperties.AutomationId="RecorderScenarioEntity" />
+                                    <Button x:Name="ScenarioEntityOpenButton"
+                                            Width="30"
+                                            Height="30"
+                                            MinHeight="0"
+                                            MinWidth="0"
+                                            Margin="0,1,1,1"
+                                            HorizontalAlignment="Right"
+                                            HorizontalContentAlignment="Center"
+                                            VerticalContentAlignment="Center"
+                                            Padding="0"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            CornerRadius="2"
+                                            IsEnabled="{Binding #ScenarioEntityTextBox.IsEnabled}"
+                                            Focusable="False"
+                                            automation:AutomationProperties.Name="Показать сущности"
+                                            automation:AutomationProperties.AutomationId="RecorderScenarioEntityOpen">
+                                        <Border Width="8"
+                                                Height="8"
+                                                Margin="0,0,0,5"
+                                                BorderBrush="{DynamicResource RecorderMuted}"
+                                                BorderThickness="0,0,1,1"
+                                                IsHitTestVisible="False">
+                                            <Border.RenderTransform>
+                                                <RotateTransform Angle="45" />
+                                            </Border.RenderTransform>
+                                        </Border>
+                                    </Button>
+                                    <Popup x:Name="ScenarioEntityPopup"
+                                           Placement="BottomEdgeAlignedLeft"
+                                           ShouldUseOverlayLayer="True"
+                                           IsLightDismissEnabled="True"
+                                           OverlayDismissEventPassThrough="True">
+                                        <Border x:Name="ScenarioEntityResults"
+                                                Padding="4"
+                                                BorderThickness="1"
+                                                CornerRadius="4"
+                                                BorderBrush="{DynamicResource RecorderOverlayBorder}"
+                                                Background="{DynamicResource RecorderSurfaceBackground}">
+                                            <Grid>
+                                                <TextBlock x:Name="ScenarioEntityNoResults"
+                                                           Margin="6"
+                                                           Text="Нет совпадений"
+                                                           Foreground="{DynamicResource RecorderMuted}" />
+                                                <ListBox x:Name="ScenarioEntityList"
+                                                         MaxHeight="240"
+                                                         Focusable="False"
+                                                         Background="Transparent"
+                                                         BorderThickness="0">
+                                                    <ListBox.Styles>
+                                                        <Style Selector="ListBoxItem">
+                                                            <Setter Property="Padding" Value="0" />
+                                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                        </Style>
+                                                    </ListBox.Styles>
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate x:DataType="ui:RecorderScenarioEntity">
+                                                            <Button Content="{Binding Label}"
+                                                                    Focusable="False"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    HorizontalContentAlignment="Left"
+                                                                    Padding="8,4"
+                                                                    Background="Transparent"
+                                                                    BorderThickness="0"
+                                                                    Click="OnScenarioEntityItemClick"
+                                                                    automation:AutomationProperties.Name="{Binding Label}" />
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+                                            </Grid>
+                                        </Border>
+                                    </Popup>
+                                </Grid>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        Spacing="3">
+                                <TextBlock Text="Операция"
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource RecorderText}" />
                                 <ComboBox x:Name="ScenarioDestinationComboBox"
-                                          MinWidth="280"
+                                          Classes="scenario-field"
+                                          HorizontalAlignment="Stretch"
+                                          VerticalContentAlignment="Center"
+                                          PlaceholderText="Выберите операцию"
+                                          automation:AutomationProperties.Name="Операция"
                                           automation:AutomationProperties.AutomationId="RecorderScenarioDestination">
                                     <ComboBox.ItemTemplate>
-                                        <DataTemplate x:DataType="recorder:RecordedScenarioDestination">
-                                            <TextBlock Text="{Binding DisplayName}" />
+                                        <DataTemplate x:DataType="ui:RecorderScenarioOperation">
+                                            <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
                             </StackPanel>
-                            <StackPanel Grid.Column="1"
+                            <StackPanel Grid.Column="2"
                                         Spacing="3">
                                 <TextBlock Text="Scenario name"
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource RecorderText}" />
                                 <TextBox x:Name="ScenarioNameTextBox"
+                                         Classes="scenario-field"
                                          automation:AutomationProperties.AutomationId="RecorderScenarioName" />
                             </StackPanel>
                         </Grid>
                         <Grid Grid.Row="3"
                               ColumnDefinitions="Auto,*"
                               ColumnSpacing="8">
-                            <Button x:Name="RestoreAutosaveButton"
+                            <Button x:Name="ResetScenarioTargetButton"
                                     Grid.Column="0"
                                     Padding="8,3"
-                                    Content="Restore draft"
-                                    automation:AutomationProperties.AutomationId="RecorderRestoreAutosave" />
+                                    Content="Reset fields"
+                                    automation:AutomationProperties.AutomationId="RecorderResetScenarioTarget" />
                             <TextBlock x:Name="ScenarioSelectionErrorText"
                                        Grid.Column="1"
                                        VerticalAlignment="Center"
@@ -156,9 +264,18 @@
                     <TextBlock x:Name="SessionSummaryText"
                                Foreground="{DynamicResource RecorderMuted}"
                                TextWrapping="Wrap" />
-                    <TextBlock Text="Scenario file"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource RecorderText}" />
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8">
+                        <TextBlock Text="Scenario file"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource RecorderText}" />
+                        <Button x:Name="RestoreAutosaveButton"
+                                Padding="8,3"
+                                Content="Restore draft"
+                                IsVisible="False"
+                                automation:AutomationProperties.AutomationId="RecorderRestoreAutosave" />
+                    </StackPanel>
                     <TextBlock x:Name="ScenarioPathText"
                                FontFamily="Cascadia Mono, Consolas"
                                Foreground="{DynamicResource RecorderText}"
