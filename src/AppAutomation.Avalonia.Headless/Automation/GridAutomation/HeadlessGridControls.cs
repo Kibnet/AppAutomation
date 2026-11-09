@@ -852,184 +852,26 @@ public sealed partial class HeadlessControlResolver
                 return false;
             }
 
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var waitMilliseconds = request.TimeoutMs;
-            var opened = false;
-            var resultsObserved = false;
-            var availableItems = Array.Empty<string>();
-            do
-            {
-                var results = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    ResolveEditorPart(cell, request.EditorParts.Results, activeEditor));
-                if (results is global::Avalonia.Controls.ListBox listBox
-                    && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                        TopLevel.GetTopLevel(listBox) is not null && listBox.IsEffectivelyVisible))
+            var parts = request.EditorParts;
+            HeadlessLocalComboBox.Select(
+                $"grid '{AutomationId}'",
+                activeEditor,
+                request.Value,
+                request.CommitMode == GridCellEditCommitMode.Commit,
+                UiOperationTimeoutBudget.Start(request.TimeoutMs, "grid ComboBox selection"),
+                () => Session.HeadlessRuntime.Dispatch(() => ResolveEditorPart(cell, parts.Input, activeEditor)),
+                () => Session.HeadlessRuntime.Dispatch(() => ResolveEditorPart(cell, parts.Results, activeEditor)) is { } results
+                    ? new(results)
+                    : null,
+                () =>
                 {
-                    resultsObserved = true;
-                    var list = AutomationElement.WrapControl(listBox).AsListBox();
-                    availableItems = list.Items
-                        .Select(static item => item.Text ?? string.Empty)
-                        .ToArray();
-                    var matches = availableItems
-                        .Where(item => GridSelectionText.Equals(item, request.Value))
-                        .Take(2)
-                        .ToArray();
-                    if (matches.Length > 1)
-                    {
-                        throw new InvalidOperationException(
-                            $"Grid '{AutomationId}' ComboBox results contain multiple exact items "
-                            + $"matching '{request.Value}'.");
-                    }
-
-                    if (matches.Length == 1)
-                    {
-                        if (AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                            TrySelectComboBoxWithKeyboard(cell, activeEditor, listBox, request,
-                                Array.IndexOf(availableItems, matches[0]), stopwatch)))
-                        {
-                            return true;
-                        }
-                        CheckComboBoxBudget(stopwatch, request.TimeoutMs);
-                        list.ClickItemExact(matches[0]);
-                        return true;
-                    }
-                }
-
-                if (results is not null and not global::Avalonia.Controls.ListBox)
-                {
-                    throw new InvalidOperationException(
-                        $"Grid '{AutomationId}' ComboBox results expected ListBox but found "
-                        + $"'{results.GetType().FullName}'.");
-                }
-
-                if (!opened)
-                {
-                    opened = true;
-                    if (request.EditorParts.OpenButton is null
-                        || !InvokeEditorButton(cell, request.EditorParts.OpenButton))
+                    if (!InvokeEditorButton(cell, parts.OpenButton))
                     {
                         throw new InvalidOperationException(
                             $"Grid '{AutomationId}' ComboBox open button was not found in the active cell.");
                     }
-                }
-
-                var remaining = waitMilliseconds - (int)stopwatch.ElapsedMilliseconds;
-                if (remaining <= 0)
-                {
-                    throw new InvalidOperationException(resultsObserved
-                        ? $"Grid '{AutomationId}' ComboBox results did not expose exact item "
-                          + $"'{request.Value}' within {waitMilliseconds}ms; available items: "
-                          + string.Join(", ", availableItems.Select(static item => $"'{item}'")) + "."
-                        : $"Grid '{AutomationId}' ComboBox results did not appear within {waitMilliseconds}ms.");
-                }
-
-                Thread.Sleep(Math.Min(20, remaining));
-            }
-            while (true);
-        }
-
-        private bool TrySelectComboBoxWithKeyboard(
-            Control cell,
-            Control? activeEditor,
-            global::Avalonia.Controls.ListBox results,
-            GridCellEditRequest request,
-            int targetIndex,
-            System.Diagnostics.Stopwatch stopwatch)
-        {
-            var input = ResolveEditorPart(cell, request.EditorParts?.Input, activeEditor);
-            if (input is null || !input.IsEnabled || !input.IsEffectivelyVisible
-                || TopLevel.GetTopLevel(input) is not { } owner
-                || !input.IsKeyboardFocusWithin)
-            {
-                return false;
-            }
-
-            // Keep focus inside the editor: focusing a detached list may commit the old value.
-            // A highlighted results index alone is not an applied editor value.
-            var requestedItem = results.Items[targetIndex];
-            var hasEditorValue = activeEditor is not null
-                && GridPropertyValueReader.TryReadProperty(activeEditor, "EditorValue", out _);
-            object? originalValue = null;
-            object? originalSelection = null;
-            if (hasEditorValue)
-            {
-                GridPropertyValueReader.TryReadProperty(activeEditor!, "EditorValue", out originalValue);
-                GridPropertyValueReader.TryReadProperty(activeEditor!, "SelectedItem", out originalSelection);
-            }
-            if (request.CommitMode == GridCellEditCommitMode.Commit && hasEditorValue
-                && global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(input)
-                    ?.GetProvider<global::Avalonia.Automation.Provider.IValueProvider>() is { IsReadOnly: false } valueInput)
-            {
-                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
-                var previousText = valueInput.Value;
-                valueInput.SetValue(request.Value);
-                input.Dispatcher.RunJobs();
-                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
-                if (SelectionApplied()) return true;
-                if (!input.IsAttachedToVisualTree() || !input.IsKeyboardFocusWithin) return false;
-                valueInput.SetValue(previousText);
-                input.Dispatcher.RunJobs();
-                targetIndex = Enumerable.Range(0, results.ItemCount)
-                    .FirstOrDefault(index => Equals(results.Items[index], requestedItem), -1);
-                if (targetIndex < 0) return false;
-            }
-            var currentIndex = results.SelectedIndex;
-            for (var step = 0; currentIndex != targetIndex && step < results.ItemCount; step++)
-            {
-                var nextIndex = currentIndex < targetIndex ? currentIndex + 1 : currentIndex - 1;
-                Press(currentIndex < targetIndex ? Key.Down : Key.Up);
-                if (results.SelectedIndex != nextIndex || !input.IsKeyboardFocusWithin)
-                {
-                    return false;
-                }
-                currentIndex = nextIndex;
-            }
-            if (currentIndex != targetIndex)
-            {
-                return false;
-            }
-            CheckComboBoxBudget(stopwatch, request.TimeoutMs);
-            if (request.CommitMode == GridCellEditCommitMode.Commit && input.IsAttachedToVisualTree())
-            {
-                Press(Key.Enter);
-            }
-            if (request.CommitMode == GridCellEditCommitMode.Cancel) return true;
-            return SelectionApplied();
-
-            bool SelectionApplied()
-            {
-                if (activeEditor is null
-                    || !GridPropertyValueReader.TryReadProperty(activeEditor, "SelectedItem", out var appliedSelection)
-                    || !Equals(appliedSelection, requestedItem)) return false;
-                if (!hasEditorValue) return true;
-                GridPropertyValueReader.TryReadProperty(activeEditor, "EditorValue", out var appliedValue);
-                if (GridPropertyValueReader.TryReadProperty(activeEditor, "ValueMember", out var valueMember)
-                    && valueMember is string { Length: > 0 } member)
-                    return GridPropertyValueReader.TryReadPath(requestedItem, member, out var expectedValue)
-                        && Equals(appliedValue, expectedValue);
-                return Equals(appliedValue, requestedItem) || !Equals(appliedValue, originalValue)
-                    || Equals(originalSelection, requestedItem) && Equals(appliedValue, originalValue);
-            }
-
-            void Press(Key key)
-            {
-                CheckComboBoxBudget(stopwatch, request.TimeoutMs);
-                try
-                {
-                    owner.KeyPress(key, RawInputModifiers.None, PhysicalKey.None, keySymbol: null);
-                }
-                finally
-                {
-                    owner.KeyRelease(key, RawInputModifiers.None, PhysicalKey.None, keySymbol: null);
-                }
-                input.Dispatcher.RunJobs();
-            }
-        }
-
-        private static void CheckComboBoxBudget(System.Diagnostics.Stopwatch stopwatch, int timeoutMs)
-        {
-            if (stopwatch.ElapsedMilliseconds >= timeoutMs)
-                throw new TimeoutException("The Headless grid ComboBox selection exceeded its timeout.");
+                });
+            return true;
         }
 
         private static List<global::Avalonia.Controls.Control> MaterializeSearchPickerControls(

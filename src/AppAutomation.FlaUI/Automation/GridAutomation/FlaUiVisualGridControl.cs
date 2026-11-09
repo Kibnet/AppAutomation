@@ -2892,46 +2892,19 @@ public sealed partial class FlaUiControlResolver
                 return;
             }
 
-            var results = ResolveEditorPart(cell, request.EditorParts?.Results);
-            if (results is null || !HasVisibleBounds(results))
-            {
-                var open = ResolveEditorPart(cell, request.EditorParts?.OpenButton);
-                if (open is null)
+            SelectLocalComboBox($"grid '{AutomationId}'", request.Value,
+                request.CommitMode == GridCellEditCommitMode.Commit,
+                UiOperationTimeoutBudget.Start(RemainingGridMilliseconds(stopwatch, request.TimeoutMs), "grid ComboBox selection"),
+                static () => null,
+                () =>
                 {
-                    throw new InvalidOperationException(
-                        $"Combo-box editor in grid '{AutomationId}' requires a visible configured Results surface "
-                        + $"or OpenButton. Input type: {TryRead(() => editor.ControlType)}; parts: {request.EditorParts}.");
-                }
-                new FlaUiButtonControl(open.AsButton()).Invoke();
-            }
-            results = UiWait.Until(
-                () => ResolveEditorPart(cell, request.EditorParts?.Results),
-                candidate => candidate is not null && HasVisibleBounds(candidate),
-                new UiWaitOptions
-                {
-                    Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs)),
-                    PollInterval = TimeSpan.FromMilliseconds(25)
+                    var open = ResolveEditorPart(cell, request.EditorParts?.OpenButton)
+                        ?? throw new InvalidOperationException(
+                            $"Combo-box editor in grid '{AutomationId}' requires a visible configured Results surface "
+                            + $"or OpenButton. Input type: {TryRead(() => editor.ControlType)}; parts: {request.EditorParts}.");
+                    new FlaUiButtonControl(open.AsButton()).Invoke();
                 },
-                $"Configured combo-box Results in grid '{AutomationId}' did not appear.");
-            var remaining = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, request.TimeoutMs));
-            if (TryRead(() => results!.ControlType) == ControlType.List)
-            {
-                var list = new FlaUiListBoxControl(results!.AsListBox(),
-                    () => ResolveEditorPart(cell, request.EditorParts?.Results));
-                if (request.CommitMode == GridCellEditCommitMode.Commit)
-                    list.ActivateItem(request.Value, remaining);
-                else
-                    list.SelectItem(request.Value, remaining);
-            }
-            else if (TryRead(() => results!.ControlType) == ControlType.ComboBox)
-            {
-                new FlaUiComboBoxControl(results!.AsComboBox()).SelectItem(request.Value, remaining);
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Configured combo-box Results in grid '{AutomationId}' expose '{TryRead(() => results!.ControlType)}', not ListBox or ComboBox.");
-            }
+                () => ResolveEditorPart(cell, request.EditorParts?.Results) is { } results ? new(results) : null);
         }
 
         private static string DescribeGridComboElement(string role, AutomationElement element) =>

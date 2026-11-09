@@ -804,6 +804,8 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         protected TControl Inner { get; }
 
+        public AvaloniaControl NativeControl => Inner.Control;
+
         public string AutomationId => Inner.AutomationId ?? string.Empty;
 
         public string Name => Inner.Name ?? string.Empty;
@@ -819,7 +821,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         }
     }
 
-    private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>, IReadableTextControl
+    private sealed class HeadlessUiControl : HeadlessControlBase<AutomationElement>, IReadableTextControl, ILocalComboBoxEditor
     {
         public HeadlessUiControl(AutomationElement inner) : base(inner)
         {
@@ -829,6 +831,25 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             () => ReadControlVisibleText(Inner.Control)
                 ?? global::Avalonia.Automation.AutomationProperties.GetName(Inner.Control)
                 ?? string.Empty);
+
+        public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts)
+        {
+            var editor = AutomationId;
+            var input = (parts.ResolveInput() as HeadlessUiControl)?.NativeControl;
+            return HeadlessLocalComboBox.Select(editor, NativeControl, itemText, commit: true, budget, () => input,
+                () => parts.ResolveSurface(static results => (results as HeadlessListBoxControl)?.NativeControl),
+                () =>
+                {
+                    var button = LocalComboBoxSelection.WaitForOpenButton(editor, parts.ResolveOpenButton, budget);
+                    if (input is not null)
+                    {
+                        _ = budget.Remaining;
+                        HeadlessRuntime.Dispatch(() => input.Focus());
+                    }
+                    _ = budget.Remaining;
+                    button.Invoke();
+                }, parts.IsPopupOpen, parts.ReadCommittedText);
+        }
     }
 
     private sealed class HeadlessShellNavigationControl : HeadlessControlBase<AutomationElement>, IShellNavigationControl, IReadableTextControl

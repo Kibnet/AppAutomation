@@ -50,6 +50,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (Environment.GetEnvironmentVariable(LocalComboBoxFixture.EnvironmentVariable) == "1")
+        {
+            Content = LocalComboBoxFixture.CreateContent();
+            return;
+        }
         DataContext = _viewModel;
         InitializeNativeGridRuntimeFixture();
 

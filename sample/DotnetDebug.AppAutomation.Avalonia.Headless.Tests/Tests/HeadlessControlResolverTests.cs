@@ -18,6 +18,69 @@ public sealed class HeadlessControlResolverTests
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("DesktopUi")]
+    public async Task StandaloneComboAppliesTypedValueAndCloses(bool alreadyOpen)
+    {
+        using var session = DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = static () => new Window
+            {
+                Width = 520,
+                Height = 360,
+                Content = global::DotnetDebug.Avalonia.LocalComboBoxFixture.CreateContent()
+            }
+        });
+        var lookups = new List<string>();
+        var page = new LocalComboBoxPage(new HeadlessControlResolver(session.MainWindow), lookups.Add);
+        var opened = 0;
+        var lookupsBeforeOpen = 0;
+        var editor = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            session.MainWindow.Dispatcher.RunJobs();
+            var combo = session.MainWindow.GetVisualDescendants()
+                .OfType<Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor>().Single();
+            if (alreadyOpen)
+            {
+                (combo.RealEditor as Control)?.Focus();
+                combo.IsPopupOpen = true;
+                session.MainWindow.Dispatcher.RunJobs();
+            }
+            combo.PropertyChanged += (_, change) =>
+            {
+                if (change.Property == Eremex.AvaloniaUI.Controls.Editors.PopupEditor.IsPopupOpenProperty && combo.IsPopupOpen)
+                {
+                    opened++;
+                    lookupsBeforeOpen = lookups.Count(static id => id == "LocalChoice_Results");
+                }
+            };
+            return combo;
+        });
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            page.SelectComboItem(static candidate => candidate.Choice, "Вариант B");
+        }
+        finally
+        {
+            Console.WriteLine($"Standalone ComboBox: {watch.ElapsedMilliseconds}ms; {string.Join(", ", lookups)}; " +
+                HeadlessRuntime.Dispatch(() => $"selected={editor.SelectedItem}; value={editor.EditorValue}; open={editor.IsPopupOpen}"));
+        }
+        await Assert.That(HeadlessRuntime.Dispatch(() => editor.EditorValue)).IsEqualTo(
+            global::DotnetDebug.Avalonia.LocalComboBoxFixture.Choice.Second);
+        await Assert.That(HeadlessRuntime.Dispatch(() => editor.SelectedItem is
+            global::DotnetDebug.Avalonia.LocalComboBoxFixture.Option { Value: global::DotnetDebug.Avalonia.LocalComboBoxFixture.Choice.Second }))
+            .IsTrue();
+        await Assert.That(HeadlessRuntime.Dispatch(() => editor.IsPopupOpen)).IsFalse();
+        await Assert.That(page.Applied.Text).IsEqualTo("Second");
+        await Assert.That(opened).IsEqualTo(alreadyOpen ? 0 : 1);
+        await Assert.That(lookupsBeforeOpen).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
     public async Task GroupedNativeHeadersReadFullParentPathThroughTheConfiguredResolver(bool avaloniaGrid)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
