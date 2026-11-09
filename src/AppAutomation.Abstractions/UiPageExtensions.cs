@@ -426,7 +426,7 @@ public static partial class UiPageExtensions
         var comboBox = Resolve(selector, page);
         if (comboBox is ISingleSelectOperationControl operationControl)
         {
-            operationControl.SelectItem(itemText, budget.RemainingMilliseconds);
+            operationControl.SelectLocalItem(itemText, budget);
             return page;
         }
 

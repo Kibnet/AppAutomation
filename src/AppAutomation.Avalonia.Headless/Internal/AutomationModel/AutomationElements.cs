@@ -481,17 +481,6 @@ internal class ListBox : AutomationElement
         SelectMatchingItem(itemText, exact: true);
     }
 
-    public void ClickItemExact(string itemText)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
-
-        Ui(() =>
-        {
-            HeadlessPointerInput.ClickItem(Native, FindMatchingItemIndex(itemText, exact: true));
-            return true;
-        });
-    }
-
     private void SelectMatchingItem(string itemText, bool exact, int timeoutMs = 5000)
     {
         Ui(() =>
@@ -534,7 +523,7 @@ internal class ListBox : AutomationElement
 
 internal static class HeadlessPointerInput
 {
-    public static void ClickItem(global::Avalonia.Controls.ListBox listBox, int index)
+    public static void ClickItem(global::Avalonia.Controls.ListBox listBox, int index, Action? validateTarget = null)
     {
         listBox.ScrollIntoView(index);
         listBox.UpdateLayout();
@@ -542,6 +531,7 @@ internal static class HeadlessPointerInput
         var container = listBox.ContainerFromIndex(index)
             ?? throw new InvalidOperationException(
                 $"ListBox item at index {index} did not materialize a clickable container.");
+        validateTarget?.Invoke();
         ClickControl(container);
     }
 

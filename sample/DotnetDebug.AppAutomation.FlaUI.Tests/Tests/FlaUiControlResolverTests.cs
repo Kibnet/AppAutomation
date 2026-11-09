@@ -19,6 +19,58 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 public sealed class FlaUiControlResolverTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task StandaloneComboAppliesTypedValueWithoutLookingForClosedResults(bool alreadyOpen)
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildBeforeLaunch: false);
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement,
+            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+            { ["APPAUTOMATION_LOCAL_COMBO_FIXTURE"] = "1" }
+        });
+        var open = session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId("LocalChoice_OpenButton"))
+            ?? throw new InvalidOperationException("The fixture does not expose its open button.");
+        var toggle = open.Patterns.Toggle.Pattern;
+        var lookups = new List<string>();
+        var closedResultsLookups = 0;
+        var page = new LocalComboBoxPage(new FlaUiControlResolver(session.MainWindow, session.ConditionFactory), id =>
+        {
+            lookups.Add(id);
+            if (id == "LocalChoice_Results" && toggle.ToggleState.Value == ToggleState.Off)
+                closedResultsLookups++;
+        });
+        await Assert.That(page.Applied.Text).IsEqualTo("First");
+        if (alreadyOpen) toggle.Toggle();
+        await Assert.That(toggle.ToggleState.Value).IsEqualTo(alreadyOpen ? ToggleState.On : ToggleState.Off);
+        var artifacts = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+        Capture.Element(session.MainWindow).ToFile(Path.Combine(artifacts.FullName, $"local-combo-{alreadyOpen}-before.png"));
+        lookups.Clear();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            page.SelectComboItem(static candidate => candidate.Choice, "Вариант B");
+        }
+        finally
+        {
+            Console.WriteLine($"Standalone ComboBox: {watch.ElapsedMilliseconds}ms; {string.Join(", ", lookups)}");
+        }
+        await Assert.That(page.Applied.Text).IsEqualTo("Second");
+        await Assert.That(closedResultsLookups).IsEqualTo(0);
+        await Assert.That(toggle.ToggleState.Value).IsEqualTo(ToggleState.Off);
+        Capture.Element(session.MainWindow).ToFile(Path.Combine(artifacts.FullName, $"local-combo-{alreadyOpen}-after.png"));
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task ShellNavigationActivatesHiddenPaneThroughRealMenuFlyout()
     {

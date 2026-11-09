@@ -9,6 +9,58 @@ public sealed class SingleSelectControlTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
+    public async Task LocalSelectionDoesNotRepeatActivationWhenCommittedValueIsUnchanged(bool initiallyOpen)
+    {
+        var open = initiallyOpen;
+        var opens = 0;
+        var openLookups = 0;
+        var activations = 0;
+        const string input = "Target";
+        const string committed = "Original";
+        var budget = UiOperationTimeoutBudget.Start(300, "local selection");
+        var button = new FakeButton("Open", () => { opens++; open = true; });
+        var exception = Assert.Throws<TimeoutException>(() => LocalComboBoxSelection.Select(
+            "local editor", input, budget,
+            () => open,
+            () => LocalComboBoxSelection.WaitForOpenButton("local editor",
+                () => ++openLookups == 1 ? null : button, budget).Invoke(),
+            () => open ? new LocalComboBoxSurface<string>(input) : throw new InvalidOperationException("Looked up a closed popup."),
+            _ => { activations++; open = false; return []; },
+            _ => !open && string.Equals(committed, input, StringComparison.Ordinal)));
+
+        await Assert.That(exception.Message).Contains("did not apply");
+        await Assert.That(opens).IsEqualTo(initiallyOpen ? 0 : 1);
+        await Assert.That(openLookups).IsEqualTo(initiallyOpen ? 0 : 2);
+        await Assert.That(activations).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task LocalSelectionUsesWrappedResultsWithoutOpeningAgain()
+    {
+        var actions = new List<string>();
+        var results = new FakeListBox(["Target"], actions);
+        var open = false;
+        var parts = new LocalComboBoxParts(
+            static () => null, static () => null, () => open ? results : null, () => open, static () => null,
+            list =>
+            {
+                list.SelectItem("Target");
+                return list.Items.Select(item => item.Text ?? string.Empty).ToArray();
+            });
+
+        var captions = LocalComboBoxSelection.Select<object>("local editor", "Target",
+            UiOperationTimeoutBudget.Start(1000, "local selection"), () => open,
+            () => { actions.Add("Open"); open = true; },
+            () => parts.ResolveSurface<object>(static _ => null),
+            _ => throw new InvalidOperationException("The wrapper is not a native list."));
+
+        await Assert.That(string.Join(" > ", actions)).IsEqualTo("Open > Select:Target");
+        await Assert.That(captions).IsEquivalentTo(["Target"]);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     public async Task ConfirmedListSelection_UsesConfiguredPrimitiveParts(bool useSearchPicker)
     {
         var fixture = new SingleSelectFixture("Item 42", "Search result");
@@ -56,8 +108,7 @@ public sealed class SingleSelectControlTests
     {
         var fixture = new SingleSelectFixture(
             SingleSelectResultsKind.ComboBox,
-            "Item 42",
-            "Search result");
+            ["Item 42", "Search result"]);
 
         fixture.Page.SelectComboItem(static page => page.CategorySelector, "Search result");
 
@@ -67,6 +118,18 @@ public sealed class SingleSelectControlTests
                 .IsEqualTo("Open > Expand > Select:Search result > Confirm");
             await Assert.That(fixture.Page.CategorySelector.SelectedItem?.Text).IsEqualTo("Search result");
         }
+    }
+
+    [Test]
+    public async Task ImmediateListSelection_WithoutSelectedValueLocator_UsesResultsSelection()
+    {
+        var fixture = new SingleSelectFixture(
+            SingleSelectResultsKind.ListBox, ["Item 42", "Search result"], SingleSelectCommitMode.Immediate);
+
+        fixture.Page.SelectComboItem(static page => page.CategorySelector, "Item 42");
+
+        await Assert.That(string.Join(" > ", fixture.Actions)).IsEqualTo("Open > Select:Item 42");
+        await Assert.That(fixture.Page.CategorySelector.SelectedItem?.Text).IsEqualTo("Item 42");
     }
 
     [Test]
@@ -143,9 +206,10 @@ public sealed class SingleSelectControlTests
         {
         }
 
-        public SingleSelectFixture(SingleSelectResultsKind resultsKind, params string[] items)
+        public SingleSelectFixture(
+            SingleSelectResultsKind resultsKind, string[] items, SingleSelectCommitMode commitMode = SingleSelectCommitMode.Confirm)
         {
-            Root = new FakeAvailability("CategorySelector") { IsAvailable = true };
+            Root = new FakeLocalComboBoxRoot("CategorySelector") { IsAvailable = true };
             Results = resultsKind == SingleSelectResultsKind.ComboBox
                 ? new FakeComboBox(items, Actions)
                 : new FakeListBox(items, Actions);
@@ -170,16 +234,17 @@ public sealed class SingleSelectControlTests
                 }
                 PopupRoot.IsAvailable = false;
             });
+            var requiresConfirmation = commitMode == SingleSelectCommitMode.Confirm;
             var parts = SingleSelectParts.ByAutomationIds(
                     "CategorySelector",
                     "CategorySelectorResults",
                     inputAutomationId: "CategorySelectorInput",
-                    selectedValueAutomationId: "CategorySelectorValue",
+                    selectedValueAutomationId: requiresConfirmation ? "CategorySelectorValue" : null,
                     openButtonAutomationId: "CategorySelectorOpen",
-                    popupRootAutomationId: "CategorySelectorPopup",
-                    confirmButtonAutomationId: "CategorySelectorConfirm",
+                    popupRootAutomationId: requiresConfirmation ? "CategorySelectorPopup" : null,
+                    confirmButtonAutomationId: requiresConfirmation ? "CategorySelectorConfirm" : null,
                     resultsKind: resultsKind,
-                    commitMode: SingleSelectCommitMode.Confirm);
+                    commitMode: commitMode);
             _resolver = this.WithSingleSelect("CategorySelector", parts)
                 .WithSingleSelect("ItemPickerResults", parts)
                 .WithSearchPicker("ItemPicker", new SearchPickerParts(
@@ -361,7 +426,13 @@ public sealed class SingleSelectControlTests
         public void Expand() => _actions.Add("Expand");
     }
 
-    private sealed class FakeAvailability : IUiControlAvailability
+    private sealed class FakeLocalComboBoxRoot(string automationId) : FakeAvailability(automationId), ILocalComboBoxEditor
+    {
+        public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts) =>
+            throw new InvalidOperationException("The editor does not expose a committed value for provider-specific selection.");
+    }
+
+    private class FakeAvailability : IUiControlAvailability
     {
         public FakeAvailability(string automationId)
         {

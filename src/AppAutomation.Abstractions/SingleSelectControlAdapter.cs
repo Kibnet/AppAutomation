@@ -188,13 +188,44 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             OpenAndResolveSurface(5000);
         }
 
+        public void SelectLocalItem(string itemText, UiOperationTimeoutBudget budget)
+        {
+            var selectedValueLocator = _parts.SelectedValueLocator;
+            if (_parts is { CommitMode: SingleSelectCommitMode.Immediate, ResultsKind: SingleSelectResultsKind.ListBox }
+                && !string.IsNullOrWhiteSpace(selectedValueLocator)
+                && (_parts.OpenButtonLocator is not null || _parts.PopupRootLocator is not null)
+                && WaitForRoot(budget) is ILocalComboBoxEditor editor)
+            {
+                var items = editor.SelectLocalItem(itemText, budget, new LocalComboBoxParts(
+                    () => _parts.InputLocator is { } input
+                        ? TryResolvePart<IUiControl>("Input", UiControlType.AutomationElement, input)
+                        : null,
+                    () => TryResolveButton(_parts.OpenButtonLocator, "Open"),
+                    () => TryResolvePart<ISelectableListBoxControl>("Results", UiControlType.ListBox, _parts.ResultsLocator),
+                    _parts.PopupRootLocator is not null ? IsPopupAvailable : null,
+                    () => ReadSelectedValueText(selectedValueLocator),
+                    results => SelectOnSurface(new ListSurface(results), itemText, budget)));
+                SetItems(items);
+                return;
+            }
+
+            SelectItem(itemText, budget);
+        }
+
         public void SelectItem(string itemText, int timeoutMs)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            SelectItem(itemText, UiOperationTimeoutBudget.Start(timeoutMs, "single-selection"));
+        }
 
-            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "single-selection");
+        private void SelectItem(string itemText, UiOperationTimeoutBudget budget)
+        {
             var surface = OpenAndResolveSurface(budget);
+            SetItems(SelectOnSurface(surface, itemText, budget));
+        }
+
+        private IReadOnlyList<string> SelectOnSurface(ISingleSelectSurface surface, string itemText, UiOperationTimeoutBudget budget)
+        {
             var selection = WaitForSingleMatch(surface, itemText, budget.Remaining);
 
             surface.Select(selection.Match!);
@@ -209,13 +240,16 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             }
 
             WaitForCommittedSelection(selection.Match!, budget.Remaining);
-            _items = selection.AvailableItems.Select(static text => (IComboBoxItem)new SingleSelectItem(text)).ToArray();
+            return selection.AvailableItems;
         }
+
+        private void SetItems(IReadOnlyList<string> items) =>
+            _items = items.Select(static text => (IComboBoxItem)new SingleSelectItem(text)).ToArray();
 
         private ISingleSelectSurface OpenAndResolveSurface(int timeoutMs) =>
             OpenAndResolveSurface(UiOperationTimeoutBudget.Start(timeoutMs, "single-selection"));
 
-        private ISingleSelectSurface OpenAndResolveSurface(UiOperationTimeoutBudget budget)
+        private IUiControl WaitForRoot(UiOperationTimeoutBudget budget)
         {
             IUiControl? root = null;
             UiWait.Until(
@@ -233,6 +267,12 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                     PollInterval = TimeSpan.FromMilliseconds(50)
                 },
                 $"Single-selection editor '{_parts.RootLocator}' did not become available.");
+            return root!;
+        }
+
+        private ISingleSelectSurface OpenAndResolveSurface(UiOperationTimeoutBudget budget)
+        {
+            WaitForRoot(budget);
 
             var isOpen = !string.IsNullOrWhiteSpace(_parts.PopupRootLocator)
                 ? IsPopupAvailable()
@@ -260,11 +300,14 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             return surface;
         }
 
-        private IUiControl? TryResolveRoot()
+        private IUiControl? TryResolveRoot() =>
+            TryResolvePart<IUiControl>("Root", UiControlType.AutomationElement, _parts.RootLocator);
+
+        private T? TryResolvePart<T>(string suffix, UiControlType type, string locator) where T : class
         {
             try
             {
-                return _resolver.Resolve<IUiControl>(Definition("Root", UiControlType.AutomationElement, _parts.RootLocator));
+                return _resolver.Resolve<T>(Definition(suffix, type, locator));
             }
             catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
@@ -388,14 +431,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                 return null;
             }
 
-            try
-            {
-                return _resolver.Resolve<IButtonControl>(Definition(suffix, UiControlType.Button, locator));
-            }
-            catch (UiControlResolutionException exception) when (exception.IsTransient)
-            {
-                return null;
-            }
+            return TryResolvePart<IButtonControl>(suffix, UiControlType.Button, locator);
         }
 
         private void WaitForPopupClosure(TimeSpan timeout)
@@ -532,4 +568,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 internal interface ISingleSelectOperationControl
 {
     void SelectItem(string itemText, int timeoutMs);
+
+    void SelectLocalItem(string itemText, UiOperationTimeoutBudget budget) =>
+        SelectItem(itemText, budget.RemainingMilliseconds);
 }

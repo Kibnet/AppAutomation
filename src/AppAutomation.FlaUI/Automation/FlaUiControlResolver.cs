@@ -957,6 +957,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         protected TControl Inner { get; }
 
+        public TControl NativeElement => Inner;
+
         public string AutomationId => TryRead(() => Inner.AutomationId) ?? string.Empty;
 
         public string Name => TryRead(() => Inner.Name) ?? string.Empty;
@@ -983,10 +985,28 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiControl : FlaUiControlBase<AutomationElement>, IReadableTextControl
+    private sealed class FlaUiControl : FlaUiControlBase<AutomationElement>, IReadableTextControl, ILocalComboBoxEditor
     {
         public FlaUiControl(AutomationElement inner) : base(inner)
         {
+        }
+
+        public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts)
+        {
+            var editor = AutomationId;
+            IButtonControl? button = null;
+            IButtonControl? ResolveOpenButton() => button ??= parts.ResolveOpenButton();
+            return SelectLocalComboBox(editor, itemText, commit: true, budget,
+                () => parts.IsPopupOpen?.Invoke() ?? (ResolveOpenButton() as FlaUiButtonControl)?.IsToggledOn,
+                () =>
+                {
+                    var open = LocalComboBoxSelection.WaitForOpenButton(editor, parts.ResolveOpenButton, budget, button);
+                    button = open;
+                    _ = budget.Remaining;
+                    open.Invoke();
+                },
+                () => parts.ResolveSurface<AutomationElement>(static results => (results as FlaUiListBoxControl)?.NativeElement),
+                parts.ReadCommittedText);
         }
 
         public string Text
@@ -1087,6 +1107,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
 
         public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
+
+        public bool? IsToggledOn => TryRead<bool?>(() => Inner.Patterns.Toggle.TryGetPattern(out var toggle)
+            ? toggle.ToggleState.Value switch { ToggleState.On => true, ToggleState.Off => false, _ => null }
+            : null);
 
         public void Invoke()
         {
@@ -1193,20 +1217,25 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             SelectItem(itemText, timeout, exact: false);
         }
 
-        internal void ActivateItem(string itemText, TimeSpan timeout) =>
-            SelectItem(itemText, timeout, exact: false, activate: true);
+        internal IReadOnlyList<string> ActivateItem(string itemText, TimeSpan timeout, bool verifyListSelection) =>
+            SelectItem(itemText, timeout, exact: false, activate: true, verifyListSelection: verifyListSelection);
 
-        private void SelectItem(string itemText, TimeSpan timeout, bool exact, bool activate = false)
+        private IReadOnlyList<string> SelectItem(string itemText, TimeSpan timeout, bool exact, bool activate = false,
+            bool verifyListSelection = true)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
             var normalizedTarget = NormalizeLookupText(itemText);
             var stopwatch = Stopwatch.StartNew();
+            // Immediate composite editors need the captions after their popup has closed.
+            List<string>? captions = verifyListSelection ? null : [];
             AutomationElement? ResolveCandidate()
             {
+                captions?.Clear();
                 var matches = ReadSelectableItems().Where(element =>
                 {
                     var text = ReadAutomationElementText(element);
+                    if (!string.IsNullOrWhiteSpace(text)) captions?.Add(text);
                     return exact
                         ? string.Equals(text, itemText, StringComparison.Ordinal)
                         : string.Equals(NormalizeLookupText(text), normalizedTarget,
@@ -1249,7 +1278,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             // confirms the committed value outside the results list.
             if (!activate && TrySelect(candidate))
             {
-                return;
+                return [];
             }
 
             var remaining = timeout - stopwatch.Elapsed;
@@ -1257,22 +1286,27 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             {
                 throw new TimeoutException($"ListBox item '{itemText}' lookup exhausted the selection timeout.");
             }
-            AutomationElement ResolveCurrentCandidate() => ResolveCandidate()
-                ?? throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection.");
+            AutomationElement ResolveCurrentCandidate()
+            {
+                var current = ResolveCandidate();
+                if (current is null || activate && !verifyListSelection && !candidate.Equals(current))
+                    throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection.");
+                return current;
+            }
             if (activate)
             {
                 // A composite editor needs the item's real activation/release lifecycle,
                 // not just its selected bit. The caller verifies the committed grid value.
-                DesktopPointer.ClickFallback(ResolveCurrentCandidate, "activate single-select grid result",
+                DesktopPointer.ClickFallback(ResolveCurrentCandidate, "activate single-select result",
                     new PointerClickOptions { Timeout = remaining });
             }
             else
             {
                 TryClick(ResolveCurrentCandidate, remaining);
             }
-            if (SelectionStateUnavailable() || SelectionMatchesTarget())
+            if (!verifyListSelection || SelectionStateUnavailable() || SelectionMatchesTarget())
             {
-                return;
+                return captions ?? [];
             }
 
             throw new InvalidOperationException($"ListBox item '{itemText}' could not be selected.");
