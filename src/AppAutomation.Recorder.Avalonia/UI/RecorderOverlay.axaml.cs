@@ -42,7 +42,6 @@ internal sealed partial class RecorderOverlay : UserControl
     private Control? _scenarioSelectionPanel;
     private ProgressBar? _scenarioScanProgress;
     private TextBlock? _scenarioScanStatus;
-    private ComboBox? _scenarioDestinationComboBox;
     private TextBox? _scenarioNameTextBox;
     private Button? _restoreAutosaveButton;
     private TextBlock? _scenarioSelectionErrorText;
@@ -194,7 +193,7 @@ internal sealed partial class RecorderOverlay : UserControl
         _scenarioSelectionPanel = this.FindControl<Control>("ScenarioSelectionPanel");
         _scenarioScanProgress = this.FindControl<ProgressBar>("ScenarioScanProgress");
         _scenarioScanStatus = this.FindControl<TextBlock>("ScenarioScanStatus");
-        _scenarioDestinationComboBox = this.FindControl<ComboBox>("ScenarioDestinationComboBox");
+        InitializeScenarioTargetPickers();
         _scenarioNameTextBox = this.FindControl<TextBox>("ScenarioNameTextBox");
         _restoreAutosaveButton = this.FindControl<Button>("RestoreAutosaveButton");
         _scenarioSelectionErrorText = this.FindControl<TextBlock>("ScenarioSelectionErrorText");
@@ -246,11 +245,6 @@ internal sealed partial class RecorderOverlay : UserControl
             _copyDiagnosticLogPathButton.Click += OnCopyDiagnosticLogPathClick;
         }
 
-        if (_scenarioDestinationComboBox is not null)
-        {
-            _scenarioDestinationComboBox.SelectionChanged += OnScenarioDestinationSelectionChanged;
-        }
-
         if (_scenarioNameTextBox is not null)
         {
             _scenarioNameTextBox.TextChanged += OnScenarioNameTextChanged;
@@ -297,26 +291,15 @@ internal sealed partial class RecorderOverlay : UserControl
         }
     }
 
-    private void OnScenarioDestinationSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
-        {
-            return;
-        }
-
-        _scenarioSelectionDetails.TrySelectScenarioDestination(
-            _scenarioDestinationComboBox?.SelectedItem as RecordedScenarioDestination);
-        Refresh();
-    }
-
     private void OnScenarioNameTextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is null)
+        if (_isRefreshingScenarioSelection || _scenarioSelectionDetails is not { } selection
+            || string.Equals(_scenarioNameTextBox?.Text ?? string.Empty, selection.ScenarioName, StringComparison.Ordinal))
         {
             return;
         }
 
-        _scenarioSelectionDetails.TrySetScenarioName(_scenarioNameTextBox?.Text);
+        selection.TrySetScenarioName(_scenarioNameTextBox?.Text);
         Refresh();
     }
 
@@ -1743,6 +1726,10 @@ internal sealed partial class RecorderOverlay : UserControl
         var selection = _scenarioSelectionDetails;
         var isVisible = selection?.IsScenarioSelectionEnabled == true;
         _scenarioSelectionPanel.IsVisible = isVisible;
+        if (_restoreAutosaveButton is not null)
+        {
+            _restoreAutosaveButton.IsVisible = isVisible;
+        }
         if (!isVisible || selection is null)
         {
             return;
@@ -1761,12 +1748,7 @@ internal sealed partial class RecorderOverlay : UserControl
                 _scenarioScanStatus.IsVisible = selection.IsScanning;
             }
 
-            if (_scenarioDestinationComboBox is not null)
-            {
-                _scenarioDestinationComboBox.ItemsSource = selection.ScenarioDestinations;
-                _scenarioDestinationComboBox.SelectedItem = selection.SelectedScenarioDestination;
-                _scenarioDestinationComboBox.IsEnabled = selection.CanChangeScenarioTarget;
-            }
+            RefreshScenarioTargetPickers(selection);
 
             if (_scenarioNameTextBox is not null)
             {
@@ -2218,6 +2200,9 @@ internal sealed partial class RecorderOverlay : UserControl
         var palette = GetPalette(theme);
         Resources["RecorderOverlayBackground"] = new SolidColorBrush(palette.OverlayBackground);
         Resources["RecorderSurfaceBackground"] = new SolidColorBrush(palette.SurfaceBackground);
+        Resources["RecorderScenarioFieldBackground"] = new SolidColorBrush(theme == RecorderOverlayTheme.Dark
+            ? Color.Parse("#303849")
+            : palette.SurfaceBackground);
         Resources["RecorderOverlayBorder"] = new SolidColorBrush(palette.Border);
         Resources["RecorderText"] = new SolidColorBrush(palette.Text);
         Resources["RecorderAccent"] = new SolidColorBrush(palette.Accent);

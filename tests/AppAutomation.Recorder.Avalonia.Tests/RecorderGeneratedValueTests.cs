@@ -367,7 +367,10 @@ public sealed class RecorderGeneratedValueTests
         using var restoredSession = CreateSession(root, options);
         restoredSession.ScenarioDiscoveryTaskForTesting.GetAwaiter().GetResult();
         var scenarioSelection = (IRecorderScenarioSelectionDetails)restoredSession;
-        scenarioSelection.TrySelectScenarioDestination(scenarioSelection.ScenarioDestinations.Single());
+        var destination = scenarioSelection.ScenarioDestinations.Single();
+        scenarioSelection.TrySelectScenarioDestination(destination);
+        await Assert.That(scenarioSelection.TryResetScenarioTarget()).IsTrue();
+        scenarioSelection.TrySelectScenarioDestination(destination);
         scenarioSelection.TrySetScenarioName("Generated value flow");
 
         var restored = await scenarioSelection.RestoreAutosaveAsync();

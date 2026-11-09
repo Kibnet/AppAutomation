@@ -13,6 +13,7 @@ using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 using TUnit.Assertions;
 using TUnit.Core;
+using Regex = System.Text.RegularExpressions.Regex;
 
 namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 
@@ -108,7 +109,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
 
-        var scenarioName = CreateScenarioName("Interactive");
+        const string scenarioName = "MainWindowScenariosBase";
         using var outputDirectory = TemporaryDirectory.Create("DotnetDebugRecorderInteractive");
         using var session = DesktopAppSession.Launch(CreateInteractiveRecorderLaunchOptions(outputDirectory.FullPath));
         using var automation = new UIA3Automation();
@@ -132,24 +133,56 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
             "DotnetDebug application window was not found.")!;
+        var entityInput = FindElement(overlayWindow, session, "RecorderScenarioEntity").AsTextBox();
+        var entityOpen = FindElement(overlayWindow, session, "RecorderScenarioEntityOpen");
         var destinationCombo = FindElement(overlayWindow, session, "RecorderScenarioDestination").AsComboBox();
         var nameTextBox = FindElement(overlayWindow, session, "RecorderScenarioName").AsTextBox();
+        var resetFields = FindElement(overlayWindow, session, "RecorderResetScenarioTarget");
+        var restoreDraft = FindElement(overlayWindow, session, "RecorderRestoreAutosave");
         var recordButton = FindElement(overlayWindow, session, "RecordButton").AsButton();
         var saveButton = FindElement(overlayWindow, session, "SaveButton").AsButton();
 
-        UiWait.Until(
-            () => destinationCombo.Items,
-            static items => items.Any(item => string.Equals(
-                item.Text,
-                "UIAutomationTests.MainWindowScenariosBase",
-                StringComparison.Ordinal)),
+        UiWait.Until(() => entityInput.IsEnabled, static enabled => enabled,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
-            "Recorder scenario destinations were not loaded.");
-        destinationCombo.Select("UIAutomationTests.MainWindowScenariosBase");
-        destinationCombo.Collapse();
-        nameTextBox.Focus();
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-        Keyboard.Type(scenarioName);
+            "Recorder scenario entities were not loaded.");
+        entityInput.Focus();
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(resetFields);
+        await Assert.That(nameTextBox.Text ?? string.Empty).IsEmpty();
+        await Assert.That(restoreDraft.IsEnabled).IsFalse();
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(entityOpen);
+        AutomationElement? FindEntityItem() => overlayWindow
+            .FindAllDescendants(session.ConditionFactory.ByName("UIAutomationTests"))
+            .FirstOrDefault(element => element.ControlType == ControlType.Button && !element.IsOffscreen);
+        UiWait.Until(FindEntityItem, static item => item is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "The selector did not open from its arrow.");
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(entityInput);
+        Keyboard.Type("Automation");
+        var query = UiWait.TryUntil(() => entityInput.Text, static text => text == "Automation",
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval });
+        await Assert.That(query.Value).IsEqualTo("Automation");
+        await Assert.That(recordButton.IsEnabled).IsFalse();
+        TryCaptureDesktopElement(overlayWindow, "recorder-entity-search.png");
+        UiWait.Until(
+            FindEntityItem,
+            static item => item is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "The matching entity was not visible in the Recorder selector.");
+        await global::AppAutomation.FlaUI.Input.DesktopPointer.ClickAsync(() => FindEntityItem()
+            ?? throw new InvalidOperationException("The matching entity disappeared before the click."));
+        UiWait.Until(() => entityInput.Text, static text => text == "UIAutomationTests",
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "A pointer click on the entity did not confirm the selection.");
+        UiWait.Until(() => destinationCombo.IsEnabled, static enabled => enabled,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(10), PollInterval = PollInterval },
+            "Recorder scenario operations were not enabled after choosing an entity.");
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(destinationCombo);
+        var operationItem = UiWait.Until(
+            () => destinationCombo.Items.FirstOrDefault(item => item.Text == scenarioName && !item.IsOffscreen),
+            static item => item is not null,
+            new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
+            "The scenario operation was not visible in its selector.")!;
+        global::AppAutomation.FlaUI.Input.DesktopPointer.Click(operationItem);
         UiWait.Until(
             () => nameTextBox.Text,
             text => string.Equals(text, scenarioName, StringComparison.Ordinal),
@@ -161,6 +194,16 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             "Recorder Record button did not become enabled.");
 
+        var fieldBounds = new[] { entityInput.BoundingRectangle, destinationCombo.BoundingRectangle, nameTextBox.BoundingRectangle };
+        await Assert.That(fieldBounds.Max(bounds => bounds.Height) - fieldBounds.Min(bounds => bounds.Height))
+            .IsLessThanOrEqualTo(1);
+        await Assert.That(fieldBounds.Max(bounds => bounds.Width) - fieldBounds.Min(bounds => bounds.Width))
+            .IsLessThanOrEqualTo(1);
+        await Assert.That(fieldBounds.Max(bounds => bounds.Top) - fieldBounds.Min(bounds => bounds.Top))
+            .IsLessThanOrEqualTo(1);
+        await Assert.That(resetFields.BoundingRectangle.Bottom).IsLessThanOrEqualTo(saveButton.BoundingRectangle.Top);
+        await Assert.That(restoreDraft.BoundingRectangle.Top).IsGreaterThan(saveButton.BoundingRectangle.Bottom);
+        await Assert.That(restoreDraft.IsEnabled).IsTrue();
         TryCaptureDesktopElement(overlayWindow, "recorder-destination-selection.png");
         recordButton.Invoke();
         var numbersInput = FindElement(appWindow, session, "NumbersInput");
@@ -188,6 +231,8 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "namespace DotnetDebug.AppAutomation.Authoring.Tests.UIAutomationTests;");
             await Assert.That(scenarioSource).Contains(
                 "partial class MainWindowScenariosBase<TSession>");
+            await Assert.That(Regex.IsMatch(scenarioSource,
+                @"\bMainWindowScenariosBase_\d{8}_\d{6}\(")).IsTrue();
             await Assert.That(scenarioSource).Contains(
                 "Page.EnterText(static page => page.NumbersInput, \"4 2\");");
         }

@@ -15,7 +15,7 @@ internal static class RecorderNaming
 
     public static string CreateRecordedMethodBaseName(string scenarioName, DateTimeOffset now)
     {
-        return $"Recorded_{SanitizeIdentifier(scenarioName, "Scenario")}_{now:yyyyMMdd_HHmmss}";
+        return $"{SanitizeIdentifier(scenarioName, "Scenario")}_{now:yyyyMMdd_HHmmss}";
     }
 
     public static string CreateAutosaveMethodBaseName(string scenarioName, DateTimeOffset now)

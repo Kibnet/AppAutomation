@@ -20,9 +20,11 @@ internal interface IRecorderScenarioSelectionDetails
 
     bool CanRestoreAutosave { get; }
 
-    bool TrySelectScenarioDestination(RecordedScenarioDestination? destination);
+    bool TrySelectScenarioDestination(RecordedScenarioDestination? destination, string? suggestedName = null);
 
     bool TrySetScenarioName(string? scenarioName);
+
+    bool TryResetScenarioTarget();
 
     Task<bool> RestoreAutosaveAsync(CancellationToken cancellationToken = default);
 }
