@@ -78,7 +78,7 @@ public sealed partial class FlaUiControlResolver
                     var address = GridHeaderSelector.FromAutomationValue(serialized);
                     if (address is not null)
                     {
-                        if (BelongsToHeaderGrid(element, root))
+                        if (BelongsToGrid(element, root))
                             candidates.Add(new(element, address, TryRead(() => element.Name), null));
                         continue;
                     }
@@ -88,7 +88,7 @@ public sealed partial class FlaUiControlResolver
                 var field = selector.Path[0].Name;
                 var name = TryRead(() => element.Name);
                 var caption = context.RuntimeColumnNames?.GetValueOrDefault(field) ?? field;
-                if (!BelongsToHeaderGrid(element, root)) continue;
+                if (!BelongsToGrid(element, root)) continue;
                 if (string.Equals(TryRead(() => element.AutomationId), field, StringComparison.Ordinal))
                     candidates.Add(new(element, selector, name, null));
                 else if (string.Equals(name, caption, StringComparison.Ordinal))
@@ -100,7 +100,7 @@ public sealed partial class FlaUiControlResolver
             return candidates;
         }
 
-        private static bool BelongsToHeaderGrid(AutomationElement element, AutomationElement root)
+        private static bool BelongsToGrid(AutomationElement element, AutomationElement root)
         {
             for (var parent = TryRead(() => element.Parent); parent is not null; parent = TryRead(() => parent.Parent))
             {

@@ -1313,27 +1313,38 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task ShellNavigationAdapter_OpenOrActivatePrefersExistingPaneTab()
+    [Arguments(false, ShellPaneNavigationMode.OpenOrActivate)]
+    [Arguments(true, ShellPaneNavigationMode.Activate)]
+    [Arguments(true, ShellPaneNavigationMode.OpenOrActivate)]
+    public async Task ShellNavigationAdapter_ActivatesExistingPaneTab(bool interactive, ShellPaneNavigationMode mode)
     {
         var customersNode = new FakeTreeItemControl("ShellNodeCustomers", "Customers", "Customers");
         var navigationTree = new FakeTreeControl("MainNavigation", customersNode);
-        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers");
-        var homeTab = new FakeTabItemControl("HomePaneTab", "Home") { IsSelected = true };
-        var paneTabs = new FakeTabControl("DockPaneTabs", homeTab, customersTab);
+        var customersTab = new FakeTabItemControl("CustomersPaneTab", "Customers") { IsSelected = interactive };
+        var homeTab = new FakeTabItemControl("HomePaneTab", "Home") { IsSelected = !interactive };
+        var activeLabel = new FakeLabelControl("ActivePaneTitle", "Home");
+        var activations = 0;
+        FakeTabControl paneTabs = interactive
+            ? new FakeActivatingTabControl("DockPaneTabs", mode == ShellPaneNavigationMode.Activate,
+                () => { activations++; activeLabel.Text = "Customers"; }, homeTab, customersTab)
+            : new FakeTabControl("DockPaneTabs", homeTab, customersTab);
         var resolver = new FakeResolver(
             ("MainNavigation", navigationTree),
-            ("DockPaneTabs", paneTabs))
+            ("DockPaneTabs", paneTabs),
+            ("ActivePaneTitle", activeLabel))
             .WithShellNavigation(
                 "Shell",
                 ShellNavigationParts.ByAutomationIds(
                     "MainNavigation",
-                    paneTabsAutomationId: "DockPaneTabs"));
+                    paneTabsAutomationId: "DockPaneTabs",
+                    activePaneLabelAutomationId: interactive ? "ActivePaneTitle" : null));
         var page = new WorkflowPage(resolver);
 
-        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers"));
+        page.Shell.OpenOrActivate(new ShellPaneNavigationRequest("Customers", mode) { TimeoutMs = 500 });
 
         using (Assert.Multiple())
         {
+            await Assert.That(activations).IsEqualTo(interactive ? 1 : 0);
             await Assert.That(customersNode.SelectCount).IsEqualTo(0);
             await Assert.That(customersTab.IsSelected).IsEqualTo(true);
             await Assert.That(page.Shell.ActivePaneName).IsEqualTo("Customers");
@@ -2394,7 +2405,7 @@ public sealed class UiControlAdapterTests
         public void Invoke(int timeoutMs) { Invocations++; _invoke(); }
     }
 
-    private sealed class FakeTabControl : FakeControlBase, ITabControl
+    private class FakeTabControl : FakeControlBase, ITabControl
     {
         private readonly IReadOnlyList<FakeTabItemControl> _items;
 
@@ -2421,6 +2432,13 @@ public sealed class UiControlAdapterTests
 
             item.SelectTab();
         }
+    }
+
+    private sealed class FakeActivatingTabControl(string automationId, bool isVisible, Action activate, params FakeTabItemControl[] items)
+        : FakeTabControl(automationId, items), IShellPaneTabActivation
+    {
+        public ShellPaneTabActivation? FindPaneActivation(Predicate<ITabItemControl> matches) =>
+            Items.Any(item => matches(item)) ? new ShellPaneTabActivation(isVisible, _ => activate()) : null;
     }
 
     private sealed class FakeTabItemControl : FakeControlBase, ITabItemControl

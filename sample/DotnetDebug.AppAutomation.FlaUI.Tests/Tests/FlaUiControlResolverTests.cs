@@ -283,6 +283,45 @@ public sealed class FlaUiControlResolverTests
     }
 
     [Test]
+    public async Task GridColumnReveal_DoesNotTreatCatalogGapsAsFrozenBoundaries()
+    {
+        // A later catalog column is visible before an earlier one; the target is not materialized.
+        await Assert.That(NativeGridHorizontalReveal.DirectionFromCatalog(6, [1, 2, 4, 3, 13, 5])).IsNull();
+        await Assert.That(NativeGridHorizontalReveal.DirectionFromCatalog(6, [1, 2, 3, 4, 5, 13])).IsNull();
+        await Assert.That(NativeGridHorizontalReveal.DirectionFromCatalog(3, [4, 5, 6])).IsEqualTo(false);
+        await Assert.That(NativeGridHorizontalReveal.DirectionFromCatalog(7, [4, 5, 6])).IsEqualTo(true);
+    }
+
+    [Test]
+    [Arguments(0, 2, false, true, "RR", true)]
+    [Arguments(2, 0, true, true, "LL", true)]
+    [Arguments(1, 0, true, true, "RLL", true)]
+    [Arguments(1, 0, true, false, "RL", true)]
+    [Arguments(1, 1, true, true, "", true)]
+    [Arguments(0, -1, false, true, "RR", false)]
+    public async Task GridColumnReveal_SearchesReachablePagesWithoutOscillating(
+        int initialPage, int targetPage, bool hint, bool canMoveRight, string expectedMoves, bool expectedFound)
+    {
+        var page = initialPage;
+        var moves = new List<char>();
+        var found = NativeGridHorizontalReveal.TryReveal(
+            () => new HorizontalGridViewport(page, 0, 2),
+            () => hint,
+            () => page == targetPage,
+            forward =>
+            {
+                moves.Add(forward ? 'R' : 'L');
+                if (forward && !canMoveRight) return false;
+                page += forward ? 1 : -1;
+                return true;
+            },
+            () => true);
+
+        await Assert.That(found).IsEqualTo(expectedFound);
+        await Assert.That(new string(moves.ToArray())).IsEqualTo(expectedMoves);
+    }
+
+    [Test]
     public async Task GridCommitTarget_RevealsAndReacquiresTheCurrentPartWithoutUsingTheOldProjection()
     {
         var oldTarget = new object();

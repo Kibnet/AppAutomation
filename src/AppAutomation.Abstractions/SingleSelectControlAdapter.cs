@@ -108,7 +108,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
         private readonly string _propertyName;
         private readonly SingleSelectParts _parts;
         private readonly IUiControlResolver _resolver;
-        private IReadOnlyList<IComboBoxItem> _items = Array.Empty<IComboBoxItem>();
+        private IReadOnlyList<IComboBoxItem>? _items = Array.Empty<IComboBoxItem>();
 
         public CompositeSingleSelectControl(
             string automationId,
@@ -137,10 +137,11 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
             {
                 if (TryResolveSurface() is { } surface)
                 {
-                    _items = surface.Items.Select(static text => (IComboBoxItem)new SingleSelectItem(text)).ToArray();
+                    SetItems(surface.Items);
                 }
 
-                return _items;
+                return _items ?? throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                    $"Single-selection results '{_parts.ResultsLocator}' are no longer available after opening.");
             }
         }
 
@@ -175,17 +176,20 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         public void SelectByIndex(int index)
         {
-            if (index < 0 || index >= Items.Count)
+            var items = Items;
+            if (index < 0 || index >= items.Count)
             {
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
 
-            SelectItem(Items[index].Text, 5000);
+            SelectItem(items[index].Text, UiOperationTimeoutBudget.EditorDefaultMilliseconds);
         }
 
         public void Expand()
         {
-            OpenAndResolveSurface(5000);
+            OpenAndResolveSurface(UiOperationTimeoutBudget.EditorDefaultMilliseconds);
+            // The previous popup's captions cannot stand in for this opening's results.
+            _items = null;
         }
 
         public void SelectLocalItem(string itemText, UiOperationTimeoutBudget budget)
@@ -201,10 +205,11 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                         ? TryResolvePart<IUiControl>("Input", UiControlType.AutomationElement, input)
                         : null,
                     () => TryResolveButton(_parts.OpenButtonLocator, "Open"),
-                    () => TryResolvePart<ISelectableListBoxControl>("Results", UiControlType.ListBox, _parts.ResultsLocator),
+                    () => TryResolvePart<ISelectableListBoxControl>("Results", UiControlType.ListBox, _parts.ResultsLocator,
+                        requireVisibleExactMatch: true),
                     _parts.PopupRootLocator is not null ? IsPopupAvailable : null,
                     () => ReadSelectedValueText(selectedValueLocator),
-                    results => SelectOnSurface(new ListSurface(results), itemText, budget)));
+                    results => SelectOnSurface(new ListSurface(results), itemText, budget)) { Registration = _parts });
                 SetItems(items);
                 return;
             }
@@ -228,7 +233,7 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
         {
             var selection = WaitForSingleMatch(surface, itemText, budget.Remaining);
 
-            surface.Select(selection.Match!);
+            surface.Select(selection.Match!, budget);
             if (_parts.CommitMode == SingleSelectCommitMode.Confirm)
             {
                 InvokeButton(_parts.ConfirmButtonLocator!, "Confirm", budget.Remaining);
@@ -272,42 +277,38 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         private ISingleSelectSurface OpenAndResolveSurface(UiOperationTimeoutBudget budget)
         {
-            WaitForRoot(budget);
-
-            var isOpen = !string.IsNullOrWhiteSpace(_parts.PopupRootLocator)
+            var root = WaitForRoot(budget);
+            IButtonControl? button = null;
+            IButtonControl? ResolveOpenButton() => button ??= TryResolveButton(_parts.OpenButtonLocator, "Open");
+            bool? ReadOpen() => !string.IsNullOrWhiteSpace(_parts.PopupRootLocator)
                 ? IsPopupAvailable()
-                : TryResolveSurface() is { IsEnabled: true };
-            if (!isOpen && !string.IsNullOrWhiteSpace(_parts.OpenButtonLocator))
-            {
-                InvokeButton(_parts.OpenButtonLocator, "Open", budget.Remaining);
-            }
+                : _parts.ResultsKind == SingleSelectResultsKind.ListBox
+                    ? (root as ILocalComboBoxEditor)?.ReadPopupOpen(ResolveOpenButton)
+                    : null;
 
-            ISingleSelectSurface? surface = null;
-            UiWait.Until(
-                () =>
+            var surface = LocalComboBoxSelection.OpenAndResolve(budget, ReadOpen,
+                string.IsNullOrWhiteSpace(_parts.OpenButtonLocator) ? null : () =>
                 {
-                    surface = TryResolveSurface();
-                    return surface is not null && surface.IsEnabled;
+                    button = LocalComboBoxSelection.WaitForOpenButton(_parts.RootLocator,
+                        () => TryResolveButton(_parts.OpenButtonLocator, "Open"), budget, button);
+                    _ = budget.Remaining;
+                    button.Invoke();
                 },
-                static ready => ready,
-                new UiWaitOptions
-                {
-                    Timeout = budget.Remaining,
-                    PollInterval = TimeSpan.FromMilliseconds(50)
-                },
+                () => TryResolveSurface() is { IsEnabled: true } available ? available : null,
                 $"Single-selection results '{_parts.ResultsLocator}' did not become available.");
-            surface!.Expand();
+            surface.Expand();
             return surface;
         }
 
         private IUiControl? TryResolveRoot() =>
             TryResolvePart<IUiControl>("Root", UiControlType.AutomationElement, _parts.RootLocator);
 
-        private T? TryResolvePart<T>(string suffix, UiControlType type, string locator) where T : class
+        private T? TryResolvePart<T>(string suffix, UiControlType type, string locator,
+            bool requireVisibleExactMatch = false) where T : class
         {
             try
             {
-                return _resolver.Resolve<T>(Definition(suffix, type, locator));
+                return _resolver.Resolve<T>(Definition(suffix, type, locator, requireVisibleExactMatch));
             }
             catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
@@ -319,14 +320,16 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
         {
             try
             {
-                return _parts.ResultsKind switch
+                ISingleSelectSurface surface = _parts.ResultsKind switch
                 {
                     SingleSelectResultsKind.ComboBox => new ComboSurface(
                         _resolver.Resolve<IComboBoxControl>(Definition("Results", UiControlType.ComboBox, _parts.ResultsLocator))),
                     SingleSelectResultsKind.ListBox => new ListSurface(
-                        _resolver.Resolve<ISelectableListBoxControl>(Definition("Results", UiControlType.ListBox, _parts.ResultsLocator))),
+                        _resolver.Resolve<ISelectableListBoxControl>(Definition("Results", UiControlType.ListBox, _parts.ResultsLocator,
+                            requireVisibleExactMatch: true))),
                     _ => throw new NotSupportedException($"Unsupported single-selection results kind '{_parts.ResultsKind}'.")
                 };
+                return surface.IsAvailable ? surface : null;
             }
             catch (UiControlResolutionException exception) when (exception.IsTransient)
             {
@@ -497,10 +500,12 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
                     $"Single-selection popup '{_parts.PopupRootLocator}' must expose {nameof(IUiControlAvailability)}.");
         }
 
-        private UiControlDefinition Definition(string suffix, UiControlType type, string locator)
-        {
-            return new UiControlDefinition($"{_propertyName}{suffix}", type, locator, _parts.LocatorKind, _parts.FallbackToName);
-        }
+        private UiControlDefinition Definition(string suffix, UiControlType type, string locator,
+            bool requireVisibleExactMatch = false) =>
+            new($"{_propertyName}{suffix}", type, locator, _parts.LocatorKind, _parts.FallbackToName)
+            {
+                RequireVisibleExactMatch = requireVisibleExactMatch
+            };
 
         private static bool Matches(IComboBoxItem item, string value)
         {
@@ -515,18 +520,22 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
     {
         bool IsEnabled { get; }
 
+        bool IsAvailable { get; }
+
         IReadOnlyList<string> Items { get; }
 
         string? SelectedText { get; }
 
         void Expand();
 
-        void Select(string text);
+        void Select(string text, UiOperationTimeoutBudget budget);
     }
 
     private sealed class ComboSurface(IComboBoxControl inner) : ISingleSelectSurface
     {
         public bool IsEnabled => inner.IsEnabled;
+
+        public bool IsAvailable => inner is not IUiControlAvailability { IsAvailable: false };
 
         public IReadOnlyList<string> Items => inner.Items.Select(static item => item.Text ?? item.Name).ToArray();
 
@@ -534,19 +543,21 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
 
         public void Expand() => inner.Expand();
 
-        public void Select(string text)
+        public void Select(string text, UiOperationTimeoutBudget budget)
         {
             var index = Items
                 .Select((item, candidateIndex) => (item, candidateIndex))
                 .Single(candidate => string.Equals(candidate.item.Trim(), text.Trim(), StringComparison.OrdinalIgnoreCase))
                 .candidateIndex;
-            inner.SelectByIndex(index);
+            UiPageExtensions.SelectComboBoxIndex(inner, index, budget);
         }
     }
 
     private sealed class ListSurface(ISelectableListBoxControl inner) : ISingleSelectSurface
     {
         public bool IsEnabled => inner.IsEnabled;
+
+        public bool IsAvailable => inner is not IUiControlAvailability { IsAvailable: false };
 
         public IReadOnlyList<string> Items => inner.Items.Select(static item => item.Text ?? item.Name ?? string.Empty).ToArray();
 
@@ -556,7 +567,16 @@ public sealed class SingleSelectControlAdapter : IUiControlAdapter
         {
         }
 
-        public void Select(string text) => inner.SelectItem(text);
+        public void Select(string text, UiOperationTimeoutBudget budget)
+        {
+            if (inner is ITimedSelectableListBoxControl timed)
+                timed.SelectItem(text, budget.RemainingMilliseconds);
+            else
+            {
+                _ = budget.Remaining;
+                inner.SelectItem(text);
+            }
+        }
     }
 
     private sealed record SingleSelectItem(string Text) : IComboBoxItem

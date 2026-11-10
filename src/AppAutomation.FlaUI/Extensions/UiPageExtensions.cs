@@ -5,6 +5,8 @@ using System.Linq;
 using System.Linq.Expressions;
 using UiWait = AppAutomation.Abstractions.UiWait;
 using UiWaitOptions = AppAutomation.Abstractions.UiWaitOptions;
+using PointerClickOptions = AppAutomation.Abstractions.PointerClickOptions;
+using UiOperationTimeoutBudget = AppAutomation.Abstractions.UiOperationTimeoutBudget;
 using FlaUICalendar = FlaUI.Core.AutomationElements.Calendar;
 using FlaUI.Core;
 using FlaUI.Core.Definitions;
@@ -162,7 +164,7 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf SelectComboItem<TSelf>(this TSelf page, Expression<Func<TSelf, ComboBox>> selector, string itemText, int timeoutMs = 5000)
+    public static TSelf SelectComboItem<TSelf>(this TSelf page, Expression<Func<TSelf, ComboBox>> selector, string itemText, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
@@ -172,13 +174,14 @@ public static class UiPageExtensions
             throw new ArgumentNullException(nameof(itemText));
         }
 
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "combo-box selection");
         var combo = Resolve(selector, page);
-        if (!combo.WaitUntilEnabled(timeoutMs))
+        if (!combo.WaitUntilEnabled(budget.RemainingMilliseconds))
         {
             throw new TimeoutException($"ComboBox [{combo.AutomationId}] is not enabled.");
         }
 
-        if (!TrySelectComboItem(combo, itemText, timeoutMs))
+        if (!TrySelectComboItem(combo, itemText, budget))
         {
             throw new InvalidOperationException($"ComboBox item '{itemText}' was not found.");
         }
@@ -186,7 +189,7 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf SelectComboItem<TSelf>(this TSelf page, Expression<Func<TSelf, AutomationElement>> selector, string itemText, int timeoutMs = 5000)
+    public static TSelf SelectComboItem<TSelf>(this TSelf page, Expression<Func<TSelf, AutomationElement>> selector, string itemText, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
@@ -196,6 +199,7 @@ public static class UiPageExtensions
             throw new ArgumentNullException(nameof(itemText));
         }
 
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "combo-box selection");
         var comboElement = Resolve(selector, page);
         var combo = comboElement.AsComboBox();
         if (combo is null)
@@ -203,12 +207,12 @@ public static class UiPageExtensions
             throw new InvalidOperationException("Selector does not point to a ComboBox.");
         }
 
-        if (!combo.WaitUntilEnabled(timeoutMs))
+        if (!combo.WaitUntilEnabled(budget.RemainingMilliseconds))
         {
             throw new TimeoutException($"ComboBox [{combo.AutomationId}] is not enabled.");
         }
 
-        if (!TrySelectComboItem(combo, itemText, timeoutMs))
+        if (!TrySelectComboItem(combo, itemText, budget))
         {
             throw new InvalidOperationException($"ComboBox item '{itemText}' was not found.");
         }
@@ -237,19 +241,20 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf SetSpinnerValue<TSelf>(this TSelf page, Expression<Func<TSelf, Spinner>> selector, double value, int timeoutMs = 5000)
+    public static TSelf SetSpinnerValue<TSelf>(this TSelf page, Expression<Func<TSelf, Spinner>> selector, double value, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(selector);
 
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
         var spinner = Resolve(selector, page);
-        if (!spinner.WaitUntilEnabled(timeoutMs))
+        if (!spinner.WaitUntilEnabled(budget.RemainingMilliseconds))
         {
             throw new TimeoutException($"Spinner [{spinner.AutomationId}] is not enabled.");
         }
 
-        if (!TrySetSpinnerValue(spinner, value))
+        if (!TrySetSpinnerValue(spinner, value, budget))
         {
             throw new TimeoutException($"Spinner [{spinner.AutomationId}] value '{value}' was not reached.");
         }
@@ -257,19 +262,20 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf SetSpinnerValue<TSelf>(this TSelf page, Expression<Func<TSelf, TextBox>> selector, double value, int timeoutMs = 5000)
+    public static TSelf SetSpinnerValue<TSelf>(this TSelf page, Expression<Func<TSelf, TextBox>> selector, double value, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(selector);
 
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
         var textBox = Resolve(selector, page);
-        if (!textBox.WaitUntilEnabled(timeoutMs))
+        if (!textBox.WaitUntilEnabled(budget.RemainingMilliseconds))
         {
             throw new TimeoutException($"Spinner-like textbox [{textBox.AutomationId}] is not enabled.");
         }
 
-        if (!TrySetSpinnerValue(textBox, value))
+        if (!TrySetSpinnerValue(textBox, value, budget))
         {
             throw new TimeoutException($"Spinner-like textbox [{textBox.AutomationId}] value '{value}' was not reached.");
         }
@@ -426,7 +432,7 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf WaitUntilValueEquals<TSelf>(this TSelf page, Expression<Func<TSelf, Spinner>> selector, double expected, int timeoutMs = 5000)
+    public static TSelf WaitUntilValueEquals<TSelf>(this TSelf page, Expression<Func<TSelf, Spinner>> selector, double expected, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
@@ -441,7 +447,7 @@ public static class UiPageExtensions
         return page;
     }
 
-    public static TSelf WaitUntilValueEquals<TSelf>(this TSelf page, Expression<Func<TSelf, TextBox>> selector, double expected, int timeoutMs = 5000)
+    public static TSelf WaitUntilValueEquals<TSelf>(this TSelf page, Expression<Func<TSelf, TextBox>> selector, double expected, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentNullException.ThrowIfNull(page);
@@ -940,32 +946,29 @@ public static class UiPageExtensions
         }
     }
 
-    private static bool TrySetSpinnerValue(Spinner spinner, double value, int timeoutMs = 5000)
+    private static bool TrySetSpinnerValue(Spinner spinner, double value, UiOperationTimeoutBudget budget)
     {
+        _ = budget.Remaining;
         try
         {
             spinner.Value = value;
-            return spinner.WaitUntilValueEquals(value, timeoutMs);
         }
-        catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException))
+        catch (Exception error) when (error is not (TimeoutException or OperationCanceledException)
+            && !DesktopPointer.IsTerminalFailure(error))
         {
-            // Fallback through nested text editor.
+            var textInput = FindTextInputForSpinner(spinner);
+            if (textInput is null) return false;
+
+            var expected = value.ToString(CultureInfo.InvariantCulture);
+            _ = budget.Remaining;
+            textInput.Text = expected;
+            return UiWait.TryUntil(
+                () => textInput.Text,
+                actual => string.Equals(actual?.Trim(), expected, StringComparison.Ordinal),
+                new UiWaitOptions { Timeout = budget.Remaining }).Success;
         }
 
-        var textInput = FindTextInputForSpinner(spinner);
-        if (textInput is null)
-        {
-            return false;
-        }
-
-        var expected = value.ToString(CultureInfo.InvariantCulture);
-        textInput.Text = expected;
-
-        var waitResult = UiWait.TryUntil(
-            () => textInput.Text,
-            actual => string.Equals(actual?.Trim(), expected, StringComparison.Ordinal));
-
-        return waitResult.Success;
+        return spinner.WaitUntilValueEquals(value, budget.RemainingMilliseconds);
     }
 
     private static TextBox? FindTextInputForSpinner(Spinner spinner)
@@ -1005,7 +1008,7 @@ public static class UiPageExtensions
         return waitResult.Success;
     }
 
-    private static bool TrySetSpinnerValue(TextBox textBox, double value)
+    private static bool TrySetSpinnerValue(TextBox textBox, double value, UiOperationTimeoutBudget budget)
     {
         var expected = value.ToString(CultureInfo.InvariantCulture);
         try
@@ -1023,7 +1026,7 @@ public static class UiPageExtensions
         var waitResult = UiWait.TryUntil(
             () => textBox.Text,
             actual => string.Equals(actual?.Trim(), expected, StringComparison.Ordinal),
-            new UiWaitOptions { Timeout = TimeSpan.FromMilliseconds(5000) });
+            new UiWaitOptions { Timeout = budget.Remaining });
 
         return waitResult.Success;
     }
@@ -1327,7 +1330,7 @@ public static class UiPageExtensions
         return false;
     }
 
-    private static bool TrySelectComboItem(ComboBox combo, string itemText, int timeoutMs)
+    private static bool TrySelectComboItem(ComboBox combo, string itemText, UiOperationTimeoutBudget budget)
     {
         var target = NormalizeTextForLookup(itemText);
         if (target.Length == 0)
@@ -1346,7 +1349,7 @@ public static class UiPageExtensions
                 try
                 {
                     combo.Select(directCandidateIndex);
-                    if (WaitUntilComboSelectionMatches(combo, target, timeoutMs))
+                    if (WaitUntilComboSelectionMatches(combo, target, budget.RemainingMilliseconds))
                     {
                         return true;
                     }
@@ -1357,9 +1360,9 @@ public static class UiPageExtensions
                 }
             }
 
-            if (TryClickComboItem(directCandidate))
+            if (TryClickComboItem(directCandidate, budget.Remaining))
             {
-                return WaitUntilComboSelectionMatches(combo, target, timeoutMs);
+                return WaitUntilComboSelectionMatches(combo, target, budget.RemainingMilliseconds);
             }
         }
 
@@ -1404,7 +1407,7 @@ public static class UiPageExtensions
             || candidate.ControlType == ControlType.DataItem;
     }
 
-    private static bool TryClickComboItem(AutomationElement candidate)
+    private static bool TryClickComboItem(AutomationElement candidate, TimeSpan timeout)
     {
         if (candidate.Patterns.Invoke.IsSupported)
         {
@@ -1412,7 +1415,8 @@ public static class UiPageExtensions
             return true;
         }
 
-        DesktopPointer.ClickFallback(candidate, "legacy tree candidate fallback");
+        DesktopPointer.ClickFallback(candidate, "legacy combo-box candidate fallback",
+            new PointerClickOptions { Timeout = timeout });
         return true;
     }
 

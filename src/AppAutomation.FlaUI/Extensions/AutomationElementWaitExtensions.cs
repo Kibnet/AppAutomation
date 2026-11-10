@@ -185,7 +185,8 @@ public static class AutomationElementWaitExtensions
         return waitResult.Success;
     }
 
-    public static bool WaitUntilValueEquals(this Spinner spinner, double expected, int timeoutMs = 5000)
+    public static bool WaitUntilValueEquals(this Spinner spinner, double expected,
+        int timeoutMs = AppAutomation.Abstractions.UiOperationTimeoutBudget.EditorDefaultMilliseconds)
     {
         var waitResult = UiWait.TryUntil(
             () => spinner.Value,

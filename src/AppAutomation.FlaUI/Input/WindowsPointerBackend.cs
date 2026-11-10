@@ -154,6 +154,16 @@ internal sealed class WindowsPointerBackend : IPointerBackend
         if (handle != IntPtr.Zero) _ = SetForegroundWindow(GetAncestor(handle, 2));
     }
 
+    internal static string DescribeForeground(IntPtr target, int expectedProcessId) =>
+        $"expectedPid={expectedProcessId}; target={DescribeWindow(target)}; foreground={DescribeWindow(GetForegroundWindow())}";
+
+    private static string DescribeWindow(IntPtr handle)
+    {
+        var state = handle == IntPtr.Zero ? "unavailable" : IsIconic(handle) ? "minimized"
+            : !IsWindowVisible(handle) ? "hidden" : IsZoomed(handle) ? "maximized" : "normal";
+        return $"hwnd=0x{handle.ToInt64():X}, pid={WindowProcess(handle)}, state={state}";
+    }
+
     private static bool Pressed(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
     private static PointerButton SwapButtonIfNeeded(PointerButton button) => GetSystemMetrics(23) == 0 ? button : button switch
     {
@@ -217,6 +227,9 @@ internal sealed class WindowsPointerBackend : IPointerBackend
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint point);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
 }

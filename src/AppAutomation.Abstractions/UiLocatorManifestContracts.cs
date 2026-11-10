@@ -19,6 +19,9 @@ public sealed record UiControlDefinition(
     /// Optional ancestor scope used when repeated child locators belong to a composite control.
     /// </summary>
     public UiControlScope? Scope { get; init; }
+
+    // A popup lookup polls for a registered visible part, not an approximate match elsewhere in the window.
+    internal bool RequireVisibleExactMatch { get; init; }
 }
 
 /// <summary>

@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.Runtime.ExceptionServices;
+using System.Text;
 using System.Text.Json;
 using AppAutomation.Abstractions;
 
@@ -16,6 +18,32 @@ public sealed class PointerCleanupException(string message, Exception? inner = n
 /// <summary>A content-free record of a physical pointer operation.</summary>
 public sealed record PointerTraceEntry(Guid OperationId, DateTimeOffset Timestamp, int ProcessId,
     string Kind, string Stage, int? X, int? Y, string? Detail);
+
+internal sealed class PointerPhaseTrace(Stopwatch stopwatch)
+{
+    private readonly List<(string Stage, string? Detail, long Ticks)> _steps = [];
+
+    internal void Mark(string stage, string? detail = null) => _steps.Add((stage, detail, stopwatch.ElapsedTicks));
+
+    internal string Drain()
+    {
+        var profile = new StringBuilder();
+        for (var index = 0; index < _steps.Count; index++)
+        {
+            var (stage, detail, ticks) = _steps[index];
+            if (index > 0) profile.Append(' ');
+            profile.Append(stage).Append('@').Append(FormatMilliseconds(ticks)).Append("ms");
+            if (index + 1 < _steps.Count)
+                profile.Append('+').Append(FormatMilliseconds(_steps[index + 1].Ticks - ticks)).Append("ms");
+            if (detail is not null) profile.Append('(').Append(detail).Append(')');
+        }
+        _steps.Clear();
+        return profile.ToString();
+
+        static string FormatMilliseconds(long ticks) =>
+            (ticks * 1000d / Stopwatch.Frequency).ToString("0.###", CultureInfo.InvariantCulture);
+    }
+}
 
 internal sealed class PointerSession : IDisposable
 {
@@ -51,9 +79,11 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
 {
     internal const string OperationKey = "AppAutomation.Pointer.OperationId";
     internal const string CleanupKey = "AppAutomation.Pointer.CleanupErrors";
+    private const string TraceFileVariable = "APPAUTOMATION_POINTER_TRACE_FILE";
     private static readonly AsyncLocal<CallbackContext?> Callback = new();
     private static readonly ConcurrentQueue<PointerTraceEntry> Trace = new();
     private static readonly object TraceFileLock = new();
+    internal static bool IsFileTraceEnabled => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(TraceFileVariable));
     internal static string GetTraceSnapshot() => string.Join(Environment.NewLine, Trace.Select(entry => JsonSerializer.Serialize(entry))) + Environment.NewLine;
     internal static bool IsTerminalFailure(Exception error) => error.Data.Contains(OperationKey)
         || error is PointerInterferenceException or PointerCleanupException
@@ -71,7 +101,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
     /// <remarks>Acquisition, preparation and target resolution run synchronously on the calling thread.
     /// Only primitive pointer actions and bounded waits continue asynchronously.</remarks>
     internal async Task RunAsync(string kind, TimeSpan timeout, Func<PointerOperation, Task> action,
-        CancellationToken cancellationToken = default, PointerSession? session = null)
+        CancellationToken cancellationToken = default, PointerSession? session = null, PointerPhaseTrace? profile = null)
     {
         RejectNestedOperation();
         if (timeout <= TimeSpan.Zero || timeout.TotalMilliseconds > uint.MaxValue - 1)
@@ -88,6 +118,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         {
             session?.Begin(id);
             registered = session != null;
+            profile?.Mark("pointer-queued", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
             operation.Log("queued", detail: typeof(DesktopPointerController).Assembly.GetName().Version?.ToString());
             ownership = coordinator.Acquire(backend.DesktopKey, deadline.Token);
             if (ownership is IDesktopClickTimeline timeline)
@@ -104,7 +135,9 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             backend.EnsureDesktopAvailable();
             operation.WaitForNeutralInput();
             operation.SavePosition();
+            profile?.Mark("pointer-desktop-ready", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
             await action(operation).ConfigureAwait(false);
+            profile?.Mark("pointer-action-returned", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
             operation.Check();
         }
         catch (Exception error)
@@ -114,6 +147,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 ? new TimeoutException($"Desktop pointer operation '{kind}' exceeded its {timeout.TotalMilliseconds:0}ms timeout.", error)
                 : error;
             primary.Data[OperationKey] = id.ToString();
+            profile?.Mark("pointer-failed", $"{primary.GetType().Name}, remaining={operation.Remaining.TotalMilliseconds:0}ms");
             operation.Log("failed", detail: ErrorCode(primary));
         }
         finally
@@ -157,7 +191,8 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                     }
                 }
             }
-            operation.Log("released");
+            profile?.Mark("pointer-released", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
+            operation.Log("released", detail: profile?.Drain());
             if (registered) session!.End(id);
         }
         if (primary != null)
@@ -172,7 +207,17 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         }
     }
 
-    private static string ErrorCode(Exception error) => $"{error.GetType().Name}; HResult=0x{error.HResult:X8}";
+    private static string ErrorCode(Exception error)
+    {
+        var code = $"{error.GetType().Name}; HResult=0x{error.HResult:X8}";
+        if (error is not PointerTargetRecheckException recheck) return code;
+
+        return $"{code}; check={recheck.Check}; afterPreparation={recheck.AfterPreparation}; "
+            + $"activationRequested={recheck.ActivationRequested}; scrollIntoViewRequested={recheck.ScrollIntoViewRequested}"
+            + (recheck.InnerException is { } observationError
+                ? $"; observationError={observationError.GetType().Name}/0x{observationError.HResult:X8}"
+                : string.Empty);
+    }
 
     internal sealed class PointerOperation(IPointerBackend backend, Guid id, string kind, CancellationToken token, TimeSpan timeout)
     {
@@ -195,7 +240,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             _entries.Add(entry);
             Trace.Enqueue(entry);
             while (Trace.Count > 1024) Trace.TryDequeue(out _);
-            var path = Environment.GetEnvironmentVariable("APPAUTOMATION_POINTER_TRACE_FILE");
+            var path = Environment.GetEnvironmentVariable(TraceFileVariable);
             if (!string.IsNullOrWhiteSpace(path))
             {
                 try { lock (TraceFileLock) File.AppendAllText(path, JsonSerializer.Serialize(entry) + Environment.NewLine); }

@@ -24,6 +24,9 @@ public sealed record PointerClickOptions
     private PointerButton _button;
     private int _clickCount = 1;
 
+    // A tab header can contain its own commands, for example a close button.
+    internal bool RejectInteractiveDescendantHit { get; init; }
+
     /// <summary>Maximum time for queueing, target lookup and the gesture, excluding bounded cleanup.</summary>
     public TimeSpan Timeout
     {

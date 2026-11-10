@@ -8,7 +8,7 @@ namespace AppAutomation.Abstractions;
 public interface IMultiItemControlCollection : IUiControlAvailability
 {
     /// <summary>Resolves a Spinner in the uniquely identified collection item.</summary>
-    ISpinnerControl ResolveSpinner(string itemKey, int timeoutMs);
+    ISpinnerControl ResolveSpinner(string itemKey, int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds);
 }
 
 /// <summary>Provider contract used by the shared multi-item adapter.</summary>

@@ -11,7 +11,7 @@ public static partial class UiPageExtensions
         Expression<Func<TSelf, IMultiItemControlCollection>> selector,
         string itemKey,
         double value,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemKey);
@@ -42,7 +42,7 @@ public static partial class UiPageExtensions
                 lastObservedValueFactory: () => $"IsEnabled={spinner.IsEnabled}");
         }
 
-        spinner!.Value = value;
+        SetSpinnerControlValue(spinner!, value, budget);
 
         WaitUntil(
             page,

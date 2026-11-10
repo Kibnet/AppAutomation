@@ -75,6 +75,22 @@ public sealed class HeadlessControlResolverTests
         await Assert.That(page.Applied.Text).IsEqualTo("Second");
         await Assert.That(opened).IsEqualTo(alreadyOpen ? 0 : 1);
         await Assert.That(lookupsBeforeOpen).IsEqualTo(0);
+
+        page.Choice.Expand();
+        await Assert.That(HeadlessRuntime.Dispatch(() => editor.IsPopupOpen)).IsTrue();
+        await Assert.That(page.Choice.Items.Select(item => item.Text).ToArray()).IsEquivalentTo(["Вариант A", "Вариант B"]);
+
+        HeadlessRuntime.Dispatch(() =>
+        {
+            editor.IsPopupOpen = false;
+            editor.Dispatcher.RunJobs();
+            editor.ItemsSource = new[] { new global::DotnetDebug.Avalonia.LocalComboBoxFixture.Option(
+                "Вариант A", global::DotnetDebug.Avalonia.LocalComboBoxFixture.Choice.First) };
+            editor.Dispatcher.RunJobs();
+        });
+        page.Choice.Expand();
+        await Assert.That(HeadlessRuntime.Dispatch(() => editor.IsPopupOpen)).IsTrue();
+        await Assert.That(page.Choice.Items.Select(item => item.Text).ToArray()).IsEquivalentTo(["Вариант A"]);
     }
 
     [Test]
