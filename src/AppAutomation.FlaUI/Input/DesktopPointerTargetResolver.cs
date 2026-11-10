@@ -1,10 +1,43 @@
 using System.Drawing;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Definitions;
 using FlaUI.UIA3;
 
 namespace AppAutomation.FlaUI.Input;
 
-internal readonly record struct DesktopPointerTarget(Point Point, int ProcessId, IntPtr Window, string Locator, int[] RuntimeId, bool RequireEnabled)
+internal enum PointerTargetRecheck
+{
+    Passed,
+    ListMissing,
+    ListChanged,
+    ListUnavailable,
+    ListOffscreen,
+    ListDisabled,
+    ListBoundsEmpty,
+    ItemUnavailable,
+    RawParentChain,
+    CaptionMissing,
+    CaptionMismatch
+}
+
+internal sealed class PointerTargetRecheckException(string message, PointerTargetRecheck check, Exception? inner)
+    : InvalidOperationException(message, inner)
+{
+    internal PointerTargetRecheck Check { get; } = check;
+    internal bool AfterPreparation { get; private set; }
+    internal bool ActivationRequested { get; private set; }
+    internal bool ScrollIntoViewRequested { get; private set; }
+
+    internal void RecordPreparation(bool activationRequested, bool scrollIntoViewRequested)
+    {
+        AfterPreparation = true;
+        ActivationRequested = activationRequested;
+        ScrollIntoViewRequested = scrollIntoViewRequested;
+    }
+}
+
+internal readonly record struct DesktopPointerTarget(Point Point, int ProcessId, IntPtr Window, string Locator, int[] RuntimeId,
+    bool RequireEnabled, bool RejectInteractiveDescendantHit = false)
 {
     internal void ValidateOwner() => ValidateOwner(Point);
     internal void ValidateOwner(Point point)
@@ -21,17 +54,16 @@ internal readonly record struct DesktopPointerTarget(Point Point, int ProcessId,
         // Async continuations carry only physical coordinates, process/window IDs and runtime IDs.
         // Every late UIA hit test gets a local COM lifetime on the thread that performs it.
         using var automation = new UIA3Automation();
-        for (var current = automation.FromPoint(Point); current != null; current = current.Parent)
+        var runtimeId = RuntimeId;
+        var hit = DesktopPointerTargetResolver.FindHitTarget(automation.FromPoint(Point), candidate =>
         {
-            var currentId = current.FrameworkAutomationElement.RuntimeId.ValueOrDefault;
-            if (currentId != null && RuntimeId.AsSpan().SequenceEqual(currentId))
-            {
-                if (current.IsOffscreen || !current.BoundingRectangle.Contains(Point) || RequireEnabled && !current.IsEnabled)
-                    throw new PointerInterferenceException("The target moved or became hidden before input was sent.");
-                return;
-            }
-        }
-        throw new PointerInterferenceException("The exact pointer target was replaced or covered before input was sent.");
+            var candidateId = candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault;
+            return candidateId != null && runtimeId.AsSpan().SequenceEqual(candidateId);
+        }, RejectInteractiveDescendantHit);
+        if (hit is null)
+            throw new PointerInterferenceException("The exact pointer target was replaced or covered before input was sent.");
+        if (hit.IsOffscreen || !hit.BoundingRectangle.Contains(Point) || RequireEnabled && !hit.IsEnabled)
+            throw new PointerInterferenceException("The target moved or became hidden before input was sent.");
     }
 }
 
@@ -39,40 +71,92 @@ internal static class DesktopPointerTargetResolver
 {
     internal static DesktopPointerTarget Resolve(Func<AutomationElement> resolve, bool requireEnabled,
         Action<AutomationElement>? prepare = null, Func<AutomationElement, Point>? pointFactory = null,
-        int? expectedProcessId = null, bool allowPreparation = true)
+        int? expectedProcessId = null, bool allowPreparation = true, bool activateWindow = true,
+        PointerPhaseTrace? profile = null, bool rejectInteractiveDescendantHit = false)
     {
+        profile?.Mark("resolve-first");
         var element = resolve() ?? throw new InvalidOperationException("The pointer target resolver returned null.");
+        profile?.Mark("check-process-first");
         CheckProcess(element, expectedProcessId);
+        profile?.Mark("find-window-first");
         var window = FindWindow(element);
         if (allowPreparation)
         {
             // Activating an already visible owned popup can dismiss its Flyout. Keep the existing
             // foreground when this application already owns it; exact hit-testing still rejects
             // a covered target or another window in the same process.
-            if (!WindowsPointerBackend.ForegroundBelongsTo(element.Properties.ProcessId.Value))
+            profile?.Mark("foreground-check");
+            var activationRequested = !WindowsPointerBackend.ForegroundBelongsTo(element.Properties.ProcessId.Value);
+            if (activationRequested)
+            {
+                if (!activateWindow)
+                    throw new PointerInterferenceException("The popup owner lost the foreground before the click.");
+                profile?.Mark("foreground-activate");
                 WindowsPointerBackend.Activate(window);
-            if (element.IsOffscreen && element.Patterns.ScrollItem.IsSupported)
+            }
+            profile?.Mark("scroll-check");
+            var scrollIntoViewRequested = element.IsOffscreen && element.Patterns.ScrollItem.IsSupported;
+            if (scrollIntoViewRequested)
+            {
+                profile?.Mark("scroll-into-view");
                 element.Patterns.ScrollItem.Pattern.ScrollIntoView();
+            }
+            profile?.Mark("prepare");
             prepare?.Invoke(element);
-            element = resolve() ?? throw new InvalidOperationException("The pointer target disappeared after preparation.");
+            profile?.Mark("resolve-second", $"activated={activationRequested}, scrolled={scrollIntoViewRequested}");
+            try
+            {
+                element = resolve() ?? throw new InvalidOperationException("The pointer target disappeared after preparation.");
+            }
+            catch (PointerTargetRecheckException exception)
+            {
+                exception.RecordPreparation(activationRequested, scrollIntoViewRequested);
+                throw;
+            }
         }
+        profile?.Mark("check-process-final");
         CheckProcess(element, expectedProcessId);
+        profile?.Mark("target-point");
         using var dpi = WindowsPointerBackend.PhysicalDpiScope.Enter();
         var bounds = element.BoundingRectangle;
         var point = ChoosePoint(bounds, element.IsOffscreen, element.IsEnabled, requireEnabled,
             element.TryGetClickablePoint(out var clickable) ? clickable : null,
             pointFactory?.Invoke(element));
+        profile?.Mark("target-runtime-id");
         var process = element.Properties.ProcessId.Value;
         var runtimeId = element.FrameworkAutomationElement.RuntimeId.ValueOrDefault;
         if (runtimeId == null || runtimeId.Length == 0) throw new InvalidOperationException("The pointer target has no stable native runtime ID.");
-        var target = new DesktopPointerTarget(point, process, FindWindow(element), element.Properties.AutomationId.ValueOrDefault ?? "", runtimeId.ToArray(), requireEnabled);
+        profile?.Mark("find-window-final");
+        var finalWindow = FindWindow(element);
+        profile?.Mark("target-metadata");
+        var target = new DesktopPointerTarget(point, process, finalWindow, element.Properties.AutomationId.ValueOrDefault ?? "",
+            runtimeId.ToArray(), requireEnabled, rejectInteractiveDescendantHit);
+        profile?.Mark("hit-test");
         target.ValidateOwner();
-        var hit = element.Automation.FromPoint(point);
-        for (var current = hit; current != null; current = current.Parent)
-        {
-            if (current.Equals(element)) return target;
-        }
+        if (FindHitTarget(element.Automation.FromPoint(point), element.Equals, rejectInteractiveDescendantHit) is not null)
+            return target;
         throw new InvalidOperationException("The physical hit test did not reach the target or one of its descendants.");
+    }
+
+    internal static AutomationElement? FindHitTarget(AutomationElement? hit, Predicate<AutomationElement> matches,
+        bool rejectInteractiveDescendantHit)
+    {
+        var interactiveDescendant = false;
+        for (var current = hit; current is not null; current = current.Parent)
+        {
+            if (matches(current))
+            {
+                if (interactiveDescendant)
+                    throw new PointerInterferenceException("The pointer would activate a command inside the target instead of the target itself.");
+                return current;
+            }
+
+            if (rejectInteractiveDescendantHit && current.ControlType is ControlType.Button or ControlType.SplitButton
+                or ControlType.MenuItem or ControlType.Hyperlink or ControlType.CheckBox or ControlType.RadioButton
+                or ControlType.ComboBox or ControlType.Edit or ControlType.TabItem or ControlType.ScrollBar)
+                interactiveDescendant = true;
+        }
+        return null;
     }
 
     internal static Point ChoosePoint(Rectangle bounds, bool offscreen, bool enabled, bool requireEnabled,
@@ -91,6 +175,14 @@ internal static class DesktopPointerTargetResolver
     {
         if (expected.HasValue && element.Properties.ProcessId.Value != expected.Value)
             throw new InvalidOperationException("The pointer target changed application after session registration.");
+    }
+
+    internal static string DescribeForeground(AutomationElement target, int expectedProcessId)
+    {
+        var targetWindow = IntPtr.Zero;
+        try { targetWindow = FindWindow(target); }
+        catch (Exception error) when (!DesktopPointer.IsTerminalFailure(error)) { }
+        return WindowsPointerBackend.DescribeForeground(targetWindow, expectedProcessId);
     }
 
     private static IntPtr FindWindow(AutomationElement element)

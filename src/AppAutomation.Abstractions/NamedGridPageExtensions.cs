@@ -196,7 +196,24 @@ public static partial class UiPageExtensions
         GridCellEditorKind editorKind = GridCellEditorKind.Text,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
         string? searchText = null,
-        int timeoutMs = 5000)
+        int? timeoutMs = null)
+        where TSelf : UiPage
+    {
+        return EditGridCell(page, selector, rowSelector, columnName, value, editorKind, commitMode,
+            searchText, timeoutMs ?? GridCellEditRequest.DefaultTimeoutFor(editorKind));
+    }
+
+    /// <summary>Edits a grid cell with an explicit timeout.</summary>
+    public static TSelf EditGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        GridRowSelector rowSelector,
+        string columnName,
+        string value,
+        GridCellEditorKind editorKind,
+        GridCellEditCommitMode commitMode,
+        string? searchText,
+        int timeoutMs)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -299,7 +316,7 @@ public static partial class UiPageExtensions
         string columnName,
         double value,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -327,7 +344,7 @@ public static partial class UiPageExtensions
         double value,
         string numericInputText,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -356,7 +373,7 @@ public static partial class UiPageExtensions
         string numericInputText,
         string numericInputCultureName,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -460,7 +477,7 @@ public static partial class UiPageExtensions
         string columnName,
         string itemText,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);

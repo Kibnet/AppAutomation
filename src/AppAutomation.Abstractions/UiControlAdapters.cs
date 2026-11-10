@@ -2145,6 +2145,13 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
     }
 }
 
+internal interface IShellPaneTabActivation
+{
+    ShellPaneTabActivation? FindPaneActivation(Predicate<ITabItemControl> matches);
+}
+
+internal sealed record ShellPaneTabActivation(bool IsVisible, Action<UiOperationTimeoutBudget> Activate);
+
 /// <summary>
 /// An adapter that creates composite <see cref="IShellNavigationControl"/> instances from primitive controls.
 /// </summary>
@@ -2282,14 +2289,33 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private bool TryActivateOpenPane(string paneName, UiOperationTimeoutBudget budget)
         {
-            var matchingPaneName = FindOpenPaneName(paneName);
+            var paneTabs = ResolvePaneTabsOrDefault();
+            var normalizedPaneName = NormalizeLookupText(paneName);
+            if (paneTabs is IShellPaneTabActivation interactive)
+            {
+                var activation = interactive.FindPaneActivation(item => NameMatches(GetDisplayText(item)));
+                if (activation is null)
+                    return TryActivateOverflowPane(paneName, budget);
+                if (!activation.IsVisible && TryActivateOverflowPane(paneName, budget))
+                    return true;
+
+                activation.Activate(budget);
+                UiWait.Until(() => ActivePaneName, NameMatches, new UiWaitOptions { Timeout = budget.Remaining },
+                    $"Shell pane '{paneName}' did not become active after activating its tab.");
+                return true;
+            }
+
+            var matchingPaneName = paneTabs?.Items.Select(GetDisplayText).FirstOrDefault(NameMatches);
             if (matchingPaneName is null)
             {
                 return TryActivateOverflowPane(paneName, budget);
             }
 
-            ResolvePaneTabsOrDefault()!.SelectTabItem(matchingPaneName);
+            paneTabs!.SelectTabItem(matchingPaneName);
             return true;
+
+            bool NameMatches(string? candidate) => !string.IsNullOrWhiteSpace(candidate)
+                && string.Equals(NormalizeLookupText(candidate), normalizedPaneName, StringComparison.OrdinalIgnoreCase);
         }
 
         private bool TryActivateOverflowPane(string paneName, UiOperationTimeoutBudget budget)
@@ -2326,13 +2352,6 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
             finally { menu.Dismiss(); }
         }
 
-        private string? FindOpenPaneName(string paneName)
-        {
-            var normalizedPaneName = NormalizeLookupText(paneName);
-            return OpenPaneNames.FirstOrDefault(candidate =>
-                string.Equals(NormalizeLookupText(candidate), normalizedPaneName, StringComparison.OrdinalIgnoreCase));
-        }
-
         private void OpenPane(string paneName)
         {
             if (string.IsNullOrWhiteSpace(_parts.NavigationLocator))
@@ -2361,7 +2380,7 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private void ActivatePane(string paneName, UiOperationTimeoutBudget budget)
         {
-            if (ResolvePaneTabsOrDefault() is null && string.IsNullOrWhiteSpace(_parts.OverflowButtonLocator))
+            if (string.IsNullOrWhiteSpace(_parts.PaneTabsLocator) && string.IsNullOrWhiteSpace(_parts.OverflowButtonLocator))
                 throw new NotSupportedException(
                     $"Shell navigation '{AutomationId}' cannot activate pane '{paneName}' because pane tabs are not configured.");
             if (!TryActivateOpenPane(paneName, budget))

@@ -11,7 +11,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IComboBoxFilterControl>> selector,
         IReadOnlyCollection<string> values,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return page.SelectMultiItems(AsMultiSelectSelector(selector), values, timeoutMs);
@@ -24,7 +24,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IComboBoxFilterControl>> selector,
         IReadOnlyCollection<string> pendingValues,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return page.CancelMultiSelection(AsMultiSelectSelector(selector), pendingValues, timeoutMs);

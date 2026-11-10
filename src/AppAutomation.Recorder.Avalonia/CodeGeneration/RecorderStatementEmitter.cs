@@ -923,7 +923,7 @@ internal static class RecorderStatementEmitter
             throw new InvalidOperationException("A multi-item Spinner check requires a stable item key.");
         }
 
-        return $"{control}.ResolveSpinner({spinnerKeyVariables.FormatKey(control, itemKey)}, 5000)";
+        return $"{control}.ResolveSpinner({spinnerKeyVariables.FormatKey(control, itemKey)})";
     }
 
     private static string GenerateGridCellExpression(

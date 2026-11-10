@@ -625,6 +625,16 @@ public interface ISpinnerControl : IUiControl
     double Value { get; set; }
 }
 
+internal interface ISpinnerValueOperationControl
+{
+    void SetValue(double value, UiOperationTimeoutBudget budget);
+}
+
+internal interface IComboBoxIndexOperationControl
+{
+    void SelectByIndex(int index, UiOperationTimeoutBudget budget);
+}
+
 /// <summary>
 /// Describes how a popup filter operation should be finished.
 /// </summary>
@@ -1189,7 +1199,12 @@ public sealed record GridCellEditRequest(
     /// <summary>
     /// Maximum time available to provider-specific editor discovery and selection.
     /// </summary>
-    public int TimeoutMs { get; init; } = 5000;
+    public int TimeoutMs { get; init; } = DefaultTimeoutFor(EditorKind);
+
+    internal static int DefaultTimeoutFor(GridCellEditorKind editorKind) =>
+        editorKind is GridCellEditorKind.Number or GridCellEditorKind.ComboBox
+            ? UiOperationTimeoutBudget.EditorDefaultMilliseconds
+            : 5000;
 
     /// <summary>
     /// Optional cell-scoped parts for composite or templated editors.

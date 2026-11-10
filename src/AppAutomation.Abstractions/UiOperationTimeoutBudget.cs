@@ -4,6 +4,8 @@ namespace AppAutomation.Abstractions;
 
 internal sealed class UiOperationTimeoutBudget
 {
+    internal const int EditorDefaultMilliseconds = 10_000;
+
     private readonly TimeSpan _timeout;
     private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
     private readonly string _operation;

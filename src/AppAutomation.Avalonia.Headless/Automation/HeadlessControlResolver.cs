@@ -14,6 +14,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using AvaloniaControl = Avalonia.Controls.Control;
+using AvaloniaListBox = Avalonia.Controls.ListBox;
 using AvaloniaTemplatedControl = Avalonia.Controls.Primitives.TemplatedControl;
 using AvaloniaWindow = Avalonia.Controls.Window;
 
@@ -342,6 +343,13 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
     private AutomationElement FindElement(UiControlDefinition definition)
     {
+        if (definition.RequireVisibleExactMatch)
+        {
+            return FindVisibleComboBoxResults(definition)
+                ?? throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                    $"Visible combo-box results [{definition.LocatorKind}:{definition.LocatorValue}] were not found.");
+        }
+
         if (definition.Scope is not null)
         {
             return FindScopedElement(definition)
@@ -381,15 +389,44 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             $"Element with locator [{definition.LocatorKind}:{definition.LocatorValue}] was not found.");
     }
 
+    private static bool IsAttachedAndVisible(AvaloniaControl candidate) =>
+        candidate.IsAttachedToVisualTree() && candidate.IsEffectivelyVisible;
+
+    private AutomationElement? FindVisibleComboBoxResults(UiControlDefinition definition) => HeadlessRuntime.Dispatch(() =>
+    {
+        var descendants = definition.Scope is { } scope
+            ? FindScopedDescendants(scope)
+            : ControlTree.EnumerateDescendants(_window.Native);
+        var candidates = descendants.OfType<AvaloniaListBox>()
+            .Distinct().Where(IsAttachedAndVisible).ToArray();
+        var matches = FindMatches(definition.LocatorKind);
+        if (matches.Length == 0 && definition.FallbackToName && definition.LocatorKind != UiLocatorKind.Name)
+            matches = FindMatches(UiLocatorKind.Name);
+
+        if (matches.Length > 1)
+            throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
+                $"More than one visible combo-box result matches [{definition.LocatorKind}:{definition.LocatorValue}].");
+
+        return matches.Length == 1 ? AutomationElement.WrapControl(matches[0]) : null;
+
+        AvaloniaListBox[] FindMatches(UiLocatorKind kind)
+        {
+            var condition = CreateCondition(definition.LocatorValue, kind);
+            return candidates.Where(condition.Match).Take(2).ToArray();
+        }
+    });
+
+    private IEnumerable<AvaloniaControl> FindScopedDescendants(UiControlScope scope) =>
+        ControlTree.EnumerateDescendants(_window.Native)
+            .Where(candidate => MatchesLocator(candidate, scope))
+            .SelectMany(ControlTree.EnumerateDescendants);
+
     private AutomationElement? FindScopedElement(UiControlDefinition definition)
     {
         return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
         {
             var scope = definition.Scope!;
-            var roots = ControlTree.EnumerateDescendants(_window.Native)
-                .Where(candidate => MatchesLocator(candidate, scope));
-            var matches = roots
-                .SelectMany(ControlTree.EnumerateDescendants)
+            var matches = FindScopedDescendants(scope)
                 .Where(candidate => MatchesLocator(
                     candidate,
                     new UiControlScope(
@@ -812,8 +849,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         public bool IsEnabled => Inner.IsEnabled;
 
-        public bool IsAvailable => Inner.IsAvailable
-            && AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => Inner.Control.IsEffectivelyVisible);
+        public bool IsAvailable => Inner.IsAvailable && HeadlessRuntime.Dispatch(() => NativeControl.IsEffectivelyVisible);
 
         public void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs)
         {
@@ -831,6 +867,8 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             () => ReadControlVisibleText(Inner.Control)
                 ?? global::Avalonia.Automation.AutomationProperties.GetName(Inner.Control)
                 ?? string.Empty);
+
+        public bool? ReadPopupOpen(Func<IButtonControl?> resolveOpenButton) => HeadlessLocalComboBox.ReadPopupOpen(NativeControl);
 
         public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts)
         {

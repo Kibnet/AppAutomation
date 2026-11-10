@@ -105,10 +105,11 @@ public static class DesktopPointer
 
     internal static void ClickPrepared(Func<AutomationElement> target, Action<AutomationElement> prepare,
         Func<AutomationElement, Point>? pointFactory = null, PointerClickOptions? options = null,
-        string reason = "grid physical fallback")
+        string reason = "grid physical fallback", AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null)
     {
         ArgumentNullException.ThrowIfNull(prepare);
-        ClickCore(target, options ?? new PointerClickOptions(), prepare, pointFactory, default, reason).GetAwaiter().GetResult();
+        ClickCore(target, options ?? new PointerClickOptions(), prepare, pointFactory, default, reason, initialTarget, profile)
+            .GetAwaiter().GetResult();
     }
 
     internal static void ClickFallback(AutomationElement target, string reason, PointerClickOptions? options = null)
@@ -117,11 +118,57 @@ public static class DesktopPointer
         ClickFallback(() => target, reason, options);
     }
 
-    internal static void ClickFallback(Func<AutomationElement> target, string reason, PointerClickOptions? options = null)
+    internal static void ClickFallback(Func<AutomationElement> target, string reason, PointerClickOptions? options = null,
+        AutomationElement? initialTarget = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason).GetAwaiter().GetResult();
+        ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason, initialTarget).GetAwaiter().GetResult();
+    }
+
+    internal static T WithForegroundClick<T>(AutomationElement owner, TimeSpan timeout, string reason,
+        Action prepareForeground, Func<Action<Func<AutomationElement>>, T> execute)
+    {
+        var (session, remaining, processId) = PrepareCall(() => owner, timeout, default);
+        T result = default!;
+        Controller.RunAsync("click", remaining, operation =>
+        {
+            operation.Check();
+            if (!WindowsPointerBackend.ForegroundBelongsTo(processId))
+            {
+                prepareForeground();
+                RequireForeground("The popup owner could not acquire the foreground before opening.");
+                operation.Log("foreground-ready", detail: "activated before opening popup");
+            }
+            operation.Check();
+
+            var canClick = true;
+            try
+            {
+                result = execute(target =>
+                {
+                    if (!canClick) throw new InvalidOperationException("A popup operation may send only one click.");
+                    canClick = false;
+                    operation.Check();
+                    RequireForeground("The popup owner lost the foreground before the click.");
+                    ClickInOperation(operation, target, new PointerClickOptions(), null, null, processId, reason,
+                        activateWindow: false).GetAwaiter().GetResult();
+                });
+            }
+            finally
+            {
+                canClick = false;
+            }
+            return Task.CompletedTask;
+
+            void RequireForeground(string message)
+            {
+                if (WindowsPointerBackend.ForegroundBelongsTo(processId)) return;
+                operation.Log("foreground-refused", detail: DesktopPointerTargetResolver.DescribeForeground(owner, processId));
+                throw new PointerInterferenceException(message);
+            }
+        }, session: session).GetAwaiter().GetResult();
+        return result;
     }
 
     internal static void Scroll(AutomationElement target, Func<AutomationElement, Point> pointFactory,
@@ -165,20 +212,32 @@ public static class DesktopPointer
 
     private static Task ClickCore(Func<AutomationElement> target, PointerClickOptions options,
         Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory, CancellationToken token,
-        string? reason = null)
+        string? reason = null, AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null)
     {
-        var (session, remaining, processId) = PrepareCall(target, options.Timeout, token);
-        return Controller.RunAsync(options.ClickCount == 2 ? "double-click" : "click", remaining, operation =>
-        {
-            if (reason != null) operation.Log("physical-fallback", detail: reason);
-            var resolved = DesktopPointerTargetResolver.Resolve(target, true, prepare, pointFactory, processId);
-            operation.Check();
-            operation.Log("target", resolved.Point, $"pid={resolved.ProcessId}; hwnd={resolved.Window}; locator={resolved.Locator}");
-            return operation.ClickAsync(resolved.Point, options, resolved.ValidateExact);
-        }, token, session);
+        profile?.Mark("pointer-register-session");
+        var (session, remaining, processId) = PrepareCall(target, options.Timeout, token, initialTarget);
+        return Controller.RunAsync(options.ClickCount == 2 ? "double-click" : "click", remaining,
+            operation => ClickInOperation(operation, target, options, prepare, pointFactory, processId, reason, profile: profile),
+            token, session, profile);
     }
 
-    private static (PointerSession Session, TimeSpan Remaining, int ProcessId) PrepareCall(Func<AutomationElement> target, TimeSpan timeout, CancellationToken token)
+    private static Task ClickInOperation(DesktopPointerController.PointerOperation operation, Func<AutomationElement> target,
+        PointerClickOptions options, Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory,
+        int processId, string? reason, bool activateWindow = true, PointerPhaseTrace? profile = null)
+    {
+        if (reason != null) operation.Log("physical-fallback", detail: reason);
+        var resolved = DesktopPointerTargetResolver.Resolve(target, true, prepare, pointFactory, processId,
+            activateWindow: activateWindow, profile: profile,
+            rejectInteractiveDescendantHit: options.RejectInteractiveDescendantHit);
+        profile?.Mark("pointer-check-before-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
+        operation.Check();
+        operation.Log("target", resolved.Point, $"pid={resolved.ProcessId}; hwnd={resolved.Window}; locator={resolved.Locator}");
+        profile?.Mark("pointer-send-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
+        return operation.ClickAsync(resolved.Point, options, resolved.ValidateExact);
+    }
+
+    private static (PointerSession Session, TimeSpan Remaining, int ProcessId) PrepareCall(
+        Func<AutomationElement> target, TimeSpan timeout, CancellationToken token, AutomationElement? initialTarget = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         DesktopPointerController.RejectNestedOperation();
@@ -187,7 +246,7 @@ public static class DesktopPointer
         var timer = Stopwatch.StartNew();
         // Read identity only, without focus, scrolling, cursor reads or physical preparation. Fresh
         // target geometry is resolved under ownership on this same caller thread before the first await.
-        var element = target() ?? throw new InvalidOperationException("The pointer target resolver returned null.");
+        var element = initialTarget ?? target() ?? throw new InvalidOperationException("The pointer target resolver returned null.");
         var processId = element.Properties.ProcessId.Value;
         var session = Sessions.GetOrAdd(processId, _ => new PointerSession());
         var remaining = timeout - timer.Elapsed;

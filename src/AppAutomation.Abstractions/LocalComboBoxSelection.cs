@@ -2,6 +2,8 @@ namespace AppAutomation.Abstractions;
 
 internal interface ILocalComboBoxEditor
 {
+    bool? ReadPopupOpen(Func<IButtonControl?> resolveOpenButton);
+
     IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts);
 }
 
@@ -13,6 +15,8 @@ internal sealed record LocalComboBoxParts(
     Func<string?> ReadCommittedText,
     Func<ISelectableListBoxControl, IReadOnlyList<string>> SelectFallback)
 {
+    public SingleSelectParts? Registration { get; init; }
+
     public LocalComboBoxSurface<TNative>? ResolveSurface<TNative>(Func<ISelectableListBoxControl, TNative?> unwrap)
         where TNative : class
     {
@@ -64,18 +68,20 @@ internal static class LocalComboBoxSelection
         Func<TNative, bool>? isCommitted = null)
         where TNative : class
     {
-        _ = budget.Remaining;
-        var isOpen = readOpen();
-        var surface = isOpen == false ? null : resolveVisibleResults();
-        if (isOpen != true && surface is null)
-        {
-            _ = budget.Remaining;
-            open();
-        }
+        var surface = OpenAndResolve(budget, readOpen, open, resolveVisibleResults,
+            $"ComboBox '{editor}' results did not appear.");
+        return SelectResolved(editor, itemText, budget, surface, activate, isCommitted);
+    }
 
-        surface ??= Wait(() => readOpen() == false ? null : resolveVisibleResults(),
-            static value => value is not null, budget,
-            $"ComboBox '{editor}' results did not appear.")!;
+    public static IReadOnlyList<string> SelectResolved<TNative>(
+        string editor,
+        string itemText,
+        UiOperationTimeoutBudget budget,
+        LocalComboBoxSurface<TNative> surface,
+        Func<TNative, IReadOnlyList<string>> activate,
+        Func<TNative, bool>? isCommitted)
+        where TNative : class
+    {
         _ = budget.Remaining;
         if (surface.SelectFallback is { } select)
             return select();
@@ -91,6 +97,29 @@ internal static class LocalComboBoxSelection
         }
         _ = budget.Remaining;
         return captions;
+    }
+
+    public static TSurface OpenAndResolve<TSurface>(
+        UiOperationTimeoutBudget budget,
+        Func<bool?> readOpen,
+        Action? open,
+        Func<TSurface?> resolveAvailableResults,
+        string error)
+        where TSurface : class
+    {
+        _ = budget.Remaining;
+        var isOpen = readOpen();
+        if (isOpen != false && resolveAvailableResults() is { } available)
+            return available;
+
+        if (isOpen != true && open is not null)
+        {
+            _ = budget.Remaining;
+            open();
+        }
+
+        return Wait(() => readOpen() == false ? null : resolveAvailableResults(),
+            static value => value is not null, budget, error)!;
     }
 
     private static T Wait<T>(Func<T> read, Predicate<T> ready, UiOperationTimeoutBudget budget, string error) =>

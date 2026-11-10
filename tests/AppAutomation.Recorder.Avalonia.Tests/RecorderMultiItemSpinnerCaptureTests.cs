@@ -47,9 +47,9 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
             await Assert.That(assertExpected.IsEnabled).IsTrue();
             await Assert.That(fixture.Session.PersistableStepCount).IsEqualTo(3).Because(fixture.Session.LatestStatus);
             await Assert.That(preview).Contains($"var unitQuantityEditorsItemKey = \"{itemKey}\";");
-            await Assert.That(preview).Contains("Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey, 5000).Value");
+            await Assert.That(preview).Contains("Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey).Value");
             await Assert.That(preview).Contains("IsEqualTo(42)");
-            await Assert.That(preview).Contains("Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey, 5000).IsEnabled");
+            await Assert.That(preview).Contains("Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey).IsEnabled");
             await Assert.That(preview).DoesNotContain("QuantityEditor_Input");
         }
     }
@@ -97,7 +97,7 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
         {
             await Assert.That(preview).Contains("var unitQuantityEditorsItemKey = \"шт\";");
             await Assert.That(selection!.ValueSnapshot?.Prototype.RepeatedItemKey).IsEqualTo("шт");
-            await Assert.That(preview).Contains("ResolveSpinner(unitQuantityEditorsItemKey, 5000)");
+            await Assert.That(preview).Contains("ResolveSpinner(unitQuantityEditorsItemKey)");
             await Assert.That(preview).DoesNotContain("ResolveSpinner(\"шт\"");
             await Assert.That(preview.Split("var unitQuantityEditorsItemKey =", StringSplitOptions.None).Length)
                 .IsEqualTo(2);
@@ -176,7 +176,7 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
             await Assert.That(preview).Contains("var unitQuantityEditorsItemKey2 = \"кг\";");
             await Assert.That(preview).Contains("SetMultiItemSpinnerValue(static page => page.UnitQuantityEditors, unitQuantityEditorsItemKey, 10)");
             await Assert.That(preview).Contains("SetMultiItemSpinnerValue(static page => page.UnitQuantityEditors, unitQuantityEditorsItemKey2, 20)");
-            await Assert.That(preview).Contains("ResolveSpinner(unitQuantityEditorsItemKey2, 5000).Value");
+            await Assert.That(preview).Contains("ResolveSpinner(unitQuantityEditorsItemKey2).Value");
             await Assert.That(fixture.Session.StepJournal[1].Preview)
                 .Contains("var unitQuantityEditorsItemKey2 = \"кг\";");
             await Assert.That(preview.Split("var unitQuantityEditorsItemKey2 =", StringSplitOptions.None).Length)
@@ -202,7 +202,7 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
         using (Assert.Multiple())
         {
             await Assert.That(preview).Contains("var unitQuantityEditorsItemKey2 = \"шт\";");
-            await Assert.That(preview).Contains("var unitQuantityEditorsItemKey = Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey2, 5000).Value;");
+            await Assert.That(preview).Contains("var unitQuantityEditorsItemKey = Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey2).Value;");
         }
     }
 
@@ -224,7 +224,7 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
             await Assert.That(selection!.ValueDescription?.CurrentValueText).IsEqualTo("1000");
             await Assert.That(fixture.Session.PersistableStepCount).IsEqualTo(1).Because(fixture.Session.LatestStatus);
             await Assert.That(fixture.Session.ExportPreview()).Contains(
-                "Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey, 5000).Value).IsEqualTo(1000)");
+                "Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey).Value).IsEqualTo(1000)");
         }
     }
 
@@ -292,7 +292,7 @@ public sealed class RecorderMultiItemSpinnerCaptureTests
             await Assert.That(operandResolved).IsTrue().Because(error);
             await Assert.That(fixture.Session.PersistableStepCount).IsEqualTo(1).Because(fixture.Session.LatestStatus);
             await Assert.That(fixture.Session.ExportPreview()).Contains(
-                "Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey, 5000).Value + 1");
+                "Page.UnitQuantityEditors.ResolveSpinner(unitQuantityEditorsItemKey).Value + 1");
         }
     }
 

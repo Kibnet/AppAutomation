@@ -133,6 +133,38 @@ public sealed class SingleSelectControlTests
     }
 
     [Test]
+    public async Task Expand_RejectsDetachedResultsAndReadsReplacedItems()
+    {
+        var fixture = new SingleSelectFixture(
+            SingleSelectResultsKind.ListBox, ["First", "Removed"], SingleSelectCommitMode.Immediate);
+        var detached = (FakeListBox)fixture.Results;
+        detached.IsAvailable = false;
+        fixture.DetachedResults = detached;
+        fixture.Results = new FakeListBox(["First"], fixture.Actions);
+        var combo = fixture.Page.CategorySelector;
+
+        await Assert.That(combo.Items).IsEmpty();
+        combo.Expand();
+        await Assert.That(fixture.PopupRoot.IsAvailable).IsTrue();
+        await Assert.That(combo.Items.Select(item => item.Text).ToArray()).IsEquivalentTo(["First"]);
+
+        fixture.PopupRoot.IsAvailable = false;
+        fixture.Results = new FakeListBox(["Replacement"], fixture.Actions);
+        combo.Expand();
+        combo.Expand();
+
+        await Assert.That(fixture.PopupRoot.IsAvailable).IsTrue();
+        await Assert.That(combo.Items.Select(item => item.Text).ToArray()).IsEquivalentTo(["Replacement"]);
+        await Assert.That(fixture.Actions).IsEquivalentTo(["Open", "Open"]);
+        await Assert.That(detached.ItemsReadCount).IsEqualTo(0);
+
+        combo.Expand();
+        fixture.PopupRoot.IsAvailable = false;
+        var missing = Assert.Throws<UiControlResolutionException>(() => { _ = combo.Items; });
+        await Assert.That(missing.Failure).IsEqualTo(UiControlResolutionFailure.Detached);
+    }
+
+    [Test]
     public async Task MissingItem_FailsBeforeChangingSelection()
     {
         var fixture = new SingleSelectFixture("Item 42", "Search result");
@@ -266,11 +298,13 @@ public sealed class SingleSelectControlTests
 
         public FakeButton ConfirmButton { get; }
 
-        public object Results { get; }
+        public object Results { get; set; }
+
+        public FakeListBox? DetachedResults { get; set; }
 
         public FakeAvailability PopupRoot { get; }
 
-        public FakeAvailability Root { get; }
+        public FakeLocalComboBoxRoot Root { get; }
 
         public SingleSelectPage Page { get; }
 
@@ -280,7 +314,7 @@ public sealed class SingleSelectControlTests
             where TControl : class
         {
             if ((definition.LocatorValue == "CategorySelectorValue" && !ValueAvailable)
-                || (definition.LocatorValue == "CategorySelectorResults" && !PopupRoot.IsAvailable))
+                || (definition.LocatorValue == "CategorySelectorResults" && !PopupRoot.IsAvailable && DetachedResults is null))
             {
                 throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
                     $"Part '{definition.LocatorValue}' is unavailable.");
@@ -295,7 +329,7 @@ public sealed class SingleSelectControlTests
                 "CategorySelectorValue" when typeof(TControl) == typeof(ITextBoxControl)
                     || typeof(TControl) == typeof(IUiControl) => CommittedValue,
                 "CategorySelectorResults" when typeof(TControl) == typeof(ISelectableListBoxControl)
-                    && Results is FakeListBox listBox => listBox,
+                    && Results is FakeListBox listBox => PopupRoot.IsAvailable ? listBox : DetachedResults!,
                 "CategorySelectorResults" when typeof(TControl) == typeof(IComboBoxControl)
                     && Results is FakeComboBox comboBox => comboBox,
                 "CategorySelectorPopup" when typeof(TControl) == typeof(IUiControl) => PopupRoot,
@@ -358,7 +392,7 @@ public sealed class SingleSelectControlTests
         public void Enter(string value) => Text = value;
     }
 
-    private sealed class FakeListBox : ISelectableListBoxControl
+    private sealed class FakeListBox : ISelectableListBoxControl, IUiControlAvailability
     {
         private readonly List<string> _actions;
         private readonly IReadOnlyList<IListBoxItem> _items;
@@ -374,6 +408,8 @@ public sealed class SingleSelectControlTests
         public string Name => AutomationId;
 
         public bool IsEnabled => true;
+
+        public bool IsAvailable { get; set; } = true;
 
         public int ItemsReadCount { get; private set; }
 
@@ -428,6 +464,8 @@ public sealed class SingleSelectControlTests
 
     private sealed class FakeLocalComboBoxRoot(string automationId) : FakeAvailability(automationId), ILocalComboBoxEditor
     {
+        public bool? ReadPopupOpen(Func<IButtonControl?> resolveOpenButton) => null;
+
         public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts) =>
             throw new InvalidOperationException("The editor does not expose a committed value for provider-specific selection.");
     }

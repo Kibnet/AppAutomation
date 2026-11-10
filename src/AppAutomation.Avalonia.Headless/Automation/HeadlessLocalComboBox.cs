@@ -13,6 +13,10 @@ namespace AppAutomation.Avalonia.Headless.Automation;
 
 internal static class HeadlessLocalComboBox
 {
+    public static bool? ReadPopupOpen(Control? editor) => editor is null ? null : HeadlessRuntime.Dispatch<bool?>(() =>
+        GridPropertyValueReader.TryReadProperty(editor, "IsPopupOpen", out var state)
+            && state is bool openState ? openState : null);
+
     public static IReadOnlyList<string> Select(
         string editorName,
         Control? editor,
@@ -27,9 +31,7 @@ internal static class HeadlessLocalComboBox
     {
         var standalone = readCommittedText is not null;
         Func<bool>? selectionApplied = null;
-        bool? ReadOpen() => (editor is null ? null : HeadlessRuntime.Dispatch<bool?>(() =>
-            GridPropertyValueReader.TryReadProperty(editor, "IsPopupOpen", out var state)
-                && state is bool openState ? openState : null)) ?? isPopupOpen?.Invoke();
+        bool? ReadOpen() => ReadPopupOpen(editor) ?? isPopupOpen?.Invoke();
 
         return LocalComboBoxSelection.Select(editorName, itemText, budget, ReadOpen, open, ResolveVisibleList, Activate,
             standalone ? IsCommitted : null);

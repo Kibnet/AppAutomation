@@ -417,7 +417,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IComboBoxControl>> selector,
         string itemText,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
@@ -454,7 +454,7 @@ public static partial class UiPageExtensions
             throw new InvalidOperationException($"ComboBox '{comboBox.AutomationId}' item '{itemText}' was not found. Available items: [{string.Join(", ", comboBox.Items.Select(i => i.Text ?? i.Name))}].");
         }
 
-        comboBox.SelectByIndex(index.Value);
+        SelectComboBoxIndex(comboBox, index.Value, budget);
         WaitUntil(
             page,
             selector,
@@ -466,6 +466,24 @@ public static partial class UiPageExtensions
             expectedValue: itemText,
             lastObservedValueFactory: () => comboBox.SelectedItem?.Text ?? comboBox.SelectedItem?.Name ?? $"SelectedIndex={comboBox.SelectedIndex}");
         return page;
+    }
+
+    internal static void SelectComboBoxIndex(IComboBoxControl comboBox, int index, UiOperationTimeoutBudget budget)
+    {
+        _ = budget.Remaining;
+        if (comboBox is IComboBoxIndexOperationControl timed)
+            timed.SelectByIndex(index, budget);
+        else
+            comboBox.SelectByIndex(index);
+    }
+
+    private static void SetSpinnerControlValue(ISpinnerControl spinner, double value, UiOperationTimeoutBudget budget)
+    {
+        _ = budget.Remaining;
+        if (spinner is ISpinnerValueOperationControl timed)
+            timed.SetValue(value, budget);
+        else
+            spinner.Value = value;
     }
 
     /// <summary>
@@ -520,7 +538,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, ISpinnerControl>> selector,
         double value,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         if (!double.IsFinite(value))
@@ -538,7 +556,7 @@ public static partial class UiPageExtensions
             $"Spinner '{spinner.AutomationId}' is not enabled.",
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={spinner.IsEnabled}");
-        spinner.Value = value;
+        SetSpinnerControlValue(spinner, value, budget);
         WaitUntil(
             page,
             selector,
@@ -557,7 +575,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, ITextBoxControl>> selector,
         double value,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         var budget = UiOperationTimeoutBudget.Start(timeoutMs, "spinner");
@@ -582,7 +600,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, ISpinnerControl>> selector,
         double expected,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         if (!double.IsFinite(expected))
@@ -2133,7 +2151,24 @@ public static partial class UiPageExtensions
         GridCellEditorKind editorKind = GridCellEditorKind.Text,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
         string? searchText = null,
-        int timeoutMs = 5000)
+        int? timeoutMs = null)
+        where TSelf : UiPage
+    {
+        return EditGridCell(page, selector, rowIndex, columnIndex, value, editorKind, commitMode,
+            searchText, timeoutMs ?? GridCellEditRequest.DefaultTimeoutFor(editorKind));
+    }
+
+    /// <summary>Edits a grid cell with an explicit timeout.</summary>
+    public static TSelf EditGridCell<TSelf>(
+        this TSelf page,
+        Expression<Func<TSelf, IGridControl>> selector,
+        int rowIndex,
+        int columnIndex,
+        string value,
+        GridCellEditorKind editorKind,
+        GridCellEditCommitMode commitMode,
+        string? searchText,
+        int timeoutMs)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -2217,7 +2252,7 @@ public static partial class UiPageExtensions
         int columnIndex,
         double value,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -2245,7 +2280,7 @@ public static partial class UiPageExtensions
         double value,
         string numericInputText,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -2274,7 +2309,7 @@ public static partial class UiPageExtensions
         string numericInputText,
         string numericInputCultureName,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         return EditGridCellCore(
@@ -2374,7 +2409,7 @@ public static partial class UiPageExtensions
         int columnIndex,
         string itemText,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit,
-        int timeoutMs = 5000)
+        int timeoutMs = UiOperationTimeoutBudget.EditorDefaultMilliseconds)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemText);

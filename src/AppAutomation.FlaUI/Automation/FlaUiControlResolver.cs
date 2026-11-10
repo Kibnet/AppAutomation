@@ -323,7 +323,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             UiControlType.Grid => ResolveGrid(definition),
             UiControlType.DataGridViewRow or UiControlType.GridRow => new FlaUiGridRowControl(FindGridRow(definition)),
             UiControlType.DataGridViewCell or UiControlType.GridCell => new FlaUiGridCellControl(FindGridCell(definition)),
-            _ => new FlaUiControl(FindElement(definition))
+            _ => new FlaUiControl(FindElement(definition), _window)
         };
 
         return resolved as TControl
@@ -396,6 +396,13 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement FindElement(UiControlDefinition definition)
     {
+        if (definition.RequireVisibleExactMatch)
+        {
+            return FindExactVisibleComboBoxResults(definition)
+                ?? throw new UiControlResolutionException(UiControlResolutionFailure.NotFound,
+                    $"Visible combo-box results [{definition.LocatorKind}:{definition.LocatorValue}] were not found.");
+        }
+
         if (definition.Scope is not null)
         {
             return FindScopedElement(definition)
@@ -439,9 +446,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement? FindScopedElement(UiControlDefinition definition)
     {
-        var matches = DistinctElements(FindScopedCandidates(definition)
-            .Where(IsAttachedAndAvailable))
-            .ToArray();
+        var matches = DistinctElements(FindScopedCandidates(definition)).ToArray();
         if (matches.Length > 1)
         {
             throw new UiControlResolutionException(UiControlResolutionFailure.Ambiguous,
@@ -477,17 +482,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement[] FindCandidates(AutomationElement root, UiControlDefinition definition)
     {
-        var candidates = TryRead(() => root.FindAllDescendants(CreateCondition(
-            definition.LocatorValue,
-            definition.LocatorKind))) ?? Array.Empty<AutomationElement>();
-        if (!definition.FallbackToName || definition.LocatorKind == UiLocatorKind.Name)
-        {
-            return candidates;
-        }
-
-        var fallback = TryRead(() => root.FindAllDescendants(
-            _conditionFactory.ByName(definition.LocatorValue))) ?? Array.Empty<AutomationElement>();
-        return candidates.Concat(fallback).ToArray();
+        var condition = CreateLocatorCondition(_conditionFactory, definition.LocatorValue,
+            definition.LocatorKind, definition.FallbackToName);
+        return TryRead(() => root.FindAllDescendants(condition)) ?? [];
     }
 
     private AutomationElement[] GetProcessSearchRoots()
@@ -500,8 +497,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     private AutomationElement[] FindScopeRoots(UiControlScope scope)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope.LocatorValue);
+        var condition = CreateLocatorCondition(_conditionFactory, scope.LocatorValue, scope.LocatorKind, scope.FallbackToName);
         return DistinctElements(GetProcessSearchRoots()
-            .SelectMany(root => new[] { root }.Concat(FindAutomationDescendants(root)))
+            .SelectMany(root => TryRead(() => root.FindAll(TreeScope.Subtree, condition)) ?? [])
             .Where(candidate => MatchesLocator(candidate, scope))
             .Where(candidate => TryRead(() => candidate.IsAvailable)))
             .ToArray();
@@ -574,11 +572,21 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     }
 
     private PropertyCondition CreateCondition(string locatorValue, UiLocatorKind locatorKind)
+        => CreatePropertyCondition(_conditionFactory, locatorValue, locatorKind);
+
+    private static ConditionBase CreateLocatorCondition(
+        ConditionFactory factory, string locatorValue, UiLocatorKind locatorKind, bool fallbackToName)
+    {
+        var primary = CreatePropertyCondition(factory, locatorValue, locatorKind);
+        return fallbackToName && locatorKind != UiLocatorKind.Name ? primary.Or(factory.ByName(locatorValue)) : primary;
+    }
+
+    private static PropertyCondition CreatePropertyCondition(ConditionFactory factory, string locatorValue, UiLocatorKind locatorKind)
     {
         return locatorKind switch
         {
-            UiLocatorKind.AutomationId => _conditionFactory.ByAutomationId(locatorValue),
-            UiLocatorKind.Name => _conditionFactory.ByName(locatorValue),
+            UiLocatorKind.AutomationId => factory.ByAutomationId(locatorValue),
+            UiLocatorKind.Name => factory.ByName(locatorValue),
             _ => throw new ArgumentOutOfRangeException(nameof(locatorKind), locatorKind, "Unsupported locator kind.")
         };
     }
@@ -987,26 +995,68 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private sealed class FlaUiControl : FlaUiControlBase<AutomationElement>, IReadableTextControl, ILocalComboBoxEditor
     {
-        public FlaUiControl(AutomationElement inner) : base(inner)
+        private readonly Window? _ownerWindow;
+
+        public FlaUiControl(AutomationElement inner, Window? ownerWindow = null) : base(inner)
         {
+            _ownerWindow = ownerWindow;
         }
+
+        public bool? ReadPopupOpen(Func<IButtonControl?> resolveOpenButton) =>
+            (resolveOpenButton() as FlaUiButtonControl)?.IsToggledOn;
 
         public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts)
         {
             var editor = AutomationId;
+            var registration = parts.Registration;
             IButtonControl? button = null;
-            IButtonControl? ResolveOpenButton() => button ??= parts.ResolveOpenButton();
+            FlaUiControl? committedValue = null;
+            IButtonControl? ResolveOpenButton() => button ??= FindOpenButton();
             return SelectLocalComboBox(editor, itemText, commit: true, budget,
-                () => parts.IsPopupOpen?.Invoke() ?? (ResolveOpenButton() as FlaUiButtonControl)?.IsToggledOn,
+                () => parts.IsPopupOpen?.Invoke() ?? ReadPopupOpen(ResolveOpenButton),
                 () =>
                 {
-                    var open = LocalComboBoxSelection.WaitForOpenButton(editor, parts.ResolveOpenButton, budget, button);
+                    var open = LocalComboBoxSelection.WaitForOpenButton(editor, FindOpenButton, budget, button);
                     button = open;
                     _ = budget.Remaining;
                     open.Invoke();
                 },
-                () => parts.ResolveSurface<AutomationElement>(static results => (results as FlaUiListBoxControl)?.NativeElement),
-                parts.ReadCommittedText);
+                FindResults,
+                ReadCommittedText,
+                foregroundOwner: Inner,
+                prepareForeground: () => PrepareForPhysicalInput(
+                    FindEditorComboBoxPart(Inner, registration, registration?.InputLocator, IsVisibleEditorComboBoxPart) ?? Inner,
+                    _ownerWindow));
+
+            IButtonControl? FindOpenButton() =>
+                FindEditorComboBoxPart(Inner, registration, registration?.OpenButtonLocator, IsVisibleEditorComboBoxPart) is { } part
+                    ? new FlaUiButtonControl(part.AsButton())
+                    : parts.ResolveOpenButton();
+
+            LocalComboBoxSurface<AutomationElement>? FindResults() =>
+                FindEditorComboBoxPart(Inner, registration, registration?.ResultsLocator, IsVisibleComboBoxResults) is { } part
+                    ? new(part)
+                    : parts.ResolveSurface<AutomationElement>(static results => (results as FlaUiListBoxControl)?.NativeElement);
+
+            string? ReadCommittedText()
+            {
+                if (committedValue is null && FindEditorComboBoxPart(Inner, registration, registration?.SelectedValueLocator,
+                        IsVisibleEditorComboBoxPart, includeEditor: true) is { } part)
+                {
+                    committedValue = new FlaUiControl(part);
+                }
+
+                try
+                {
+                    return committedValue is not null ? committedValue.Text : parts.ReadCommittedText();
+                }
+                catch (Exception exception) when (committedValue is not null
+                    && exception is ElementNotAvailableException or UiControlResolutionException { IsTransient: true })
+                {
+                    committedValue = null;
+                    return null;
+                }
+            }
         }
 
         public string Text
@@ -1217,11 +1267,12 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             SelectItem(itemText, timeout, exact: false);
         }
 
-        internal IReadOnlyList<string> ActivateItem(string itemText, TimeSpan timeout, bool verifyListSelection) =>
-            SelectItem(itemText, timeout, exact: false, activate: true, verifyListSelection: verifyListSelection);
+        internal IReadOnlyList<string> ActivateItem(string itemText, TimeSpan timeout, bool verifyListSelection,
+            Action<Func<AutomationElement>>? click = null) =>
+            SelectItem(itemText, timeout, exact: false, activate: true, verifyListSelection: verifyListSelection, click);
 
         private IReadOnlyList<string> SelectItem(string itemText, TimeSpan timeout, bool exact, bool activate = false,
-            bool verifyListSelection = true)
+            bool verifyListSelection = true, Action<Func<AutomationElement>>? click = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
@@ -1229,17 +1280,20 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             var stopwatch = Stopwatch.StartNew();
             // Immediate composite editors need the captions after their popup has closed.
             List<string>? captions = verifyListSelection ? null : [];
-            AutomationElement? ResolveCandidate()
+            AutomationElement? candidateList = null;
+            bool MatchesCaption(string? text) => exact
+                ? string.Equals(text, itemText, StringComparison.Ordinal)
+                : string.Equals(NormalizeLookupText(text), normalizedTarget, StringComparison.OrdinalIgnoreCase);
+
+            AutomationElement? ResolveCandidate(AutomationElement? list)
             {
+                candidateList = list;
                 captions?.Clear();
-                var matches = ReadSelectableItems().Where(element =>
+                var matches = ReadSelectableItems(list).Where(element =>
                 {
                     var text = ReadAutomationElementText(element);
                     if (!string.IsNullOrWhiteSpace(text)) captions?.Add(text);
-                    return exact
-                        ? string.Equals(text, itemText, StringComparison.Ordinal)
-                        : string.Equals(NormalizeLookupText(text), normalizedTarget,
-                            StringComparison.OrdinalIgnoreCase);
+                    return MatchesCaption(text);
                 }).Take(2).ToArray();
                 if (matches.Length > 1)
                 {
@@ -1251,7 +1305,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             AutomationElement? candidate;
             do
             {
-                candidate = ResolveCandidate();
+                candidate = ResolveCandidate(ResolveCurrentList());
                 if (candidate is not null)
                 {
                     break;
@@ -1288,17 +1342,66 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
             AutomationElement ResolveCurrentCandidate()
             {
-                var current = ResolveCandidate();
-                if (current is null || activate && !verifyListSelection && !candidate.Equals(current))
-                    throw new InvalidOperationException($"ListBox item '{itemText}' is no longer available for selection.");
-                return current;
+                var canRebind = !activate || verifyListSelection;
+                var list = canRebind ? ResolveCurrentList() : candidateList;
+                var check = PointerTargetRecheck.ListMissing;
+                Exception? observationError = null;
+                if (activate && candidate is { } item && list is not null)
+                {
+                    (check, observationError) = RecheckItem(item, list);
+                    if (check == PointerTargetRecheck.Passed) return item;
+                }
+
+                // A grid may recreate its results while preparing the pointer target. A standalone
+                // editor must not substitute a different item after matching its open popup.
+                if (canRebind && ResolveCandidate(list) is { } rebound) return candidate = rebound;
+
+                var message = $"ListBox item '{itemText}' is no longer available for selection.";
+                if (activate) throw new PointerTargetRecheckException(message, check, observationError);
+                throw new InvalidOperationException(message);
+            }
+
+            (PointerTargetRecheck Check, Exception? ObservationError) RecheckItem(AutomationElement item, AutomationElement list)
+            {
+                var check = PointerTargetRecheck.ListChanged;
+                try
+                {
+                    if (!ReferenceEquals(candidateList, list) && !list.Equals(candidateList)) return (check, null);
+                    check = PointerTargetRecheck.ListUnavailable;
+                    if (!list.IsAvailable) return (check, null);
+                    check = PointerTargetRecheck.ListOffscreen;
+                    if (list.IsOffscreen) return (check, null);
+                    check = PointerTargetRecheck.ListDisabled;
+                    if (!list.IsEnabled) return (check, null);
+                    check = PointerTargetRecheck.ListBoundsEmpty;
+                    if (list.BoundingRectangle is not { Width: > 0, Height: > 0 }) return (check, null);
+                    check = PointerTargetRecheck.ItemUnavailable;
+                    if (!item.IsAvailable) return (check, null);
+                    check = PointerTargetRecheck.RawParentChain;
+                    for (var parent = item.Parent; parent is not null; parent = parent.Parent)
+                    {
+                        if (!parent.Equals(list)) continue;
+                        check = PointerTargetRecheck.CaptionMissing;
+                        var caption = ReadAutomationElementText(item);
+                        if (MatchesCaption(caption)) return (PointerTargetRecheck.Passed, null);
+                        return (string.IsNullOrWhiteSpace(caption) ? check : PointerTargetRecheck.CaptionMismatch, null);
+                    }
+                    return (check, null);
+                }
+                catch (Exception exception) when (!DesktopPointer.IsTerminalFailure(exception))
+                {
+                    return (check, exception);
+                }
             }
             if (activate)
             {
                 // A composite editor needs the item's real activation/release lifecycle,
                 // not just its selected bit. The caller verifies the committed grid value.
-                DesktopPointer.ClickFallback(ResolveCurrentCandidate, "activate single-select result",
-                    new PointerClickOptions { Timeout = remaining });
+                if (click is not null)
+                    click(ResolveCurrentCandidate);
+                else
+                    DesktopPointer.ClickFallback(ResolveCurrentCandidate, "activate single-select result",
+                        new PointerClickOptions { Timeout = remaining }, initialTarget: candidate);
             }
             else
             {
@@ -1331,10 +1434,13 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return items;
         }
 
-        private List<AutomationElement> ReadSelectableItems()
+        private AutomationElement? ResolveCurrentList() => _resolveCurrentList is null ? Inner : _resolveCurrentList();
+
+        private List<AutomationElement> ReadSelectableItems() => ReadSelectableItems(ResolveCurrentList());
+
+        private static List<AutomationElement> ReadSelectableItems(AutomationElement? currentList)
         {
             var items = new List<AutomationElement>();
-            var currentList = _resolveCurrentList is null ? Inner : _resolveCurrentList();
             if (currentList is null) return items;
 
             try
@@ -2344,7 +2450,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiComboBoxControl : FlaUiControlBase<ComboBox>, IComboBoxControl, IReadableTextControl
+    private sealed class FlaUiComboBoxControl : FlaUiControlBase<ComboBox>, IComboBoxControl, IReadableTextControl,
+        IComboBoxIndexOperationControl
     {
         public FlaUiComboBoxControl(ComboBox inner) : base(inner)
         {
@@ -2395,9 +2502,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             set => SelectByIndex(value);
         }
 
-        public void SelectByIndex(int index) => Select(index);
+        public void SelectByIndex(int index) => SelectByIndex(index,
+            UiOperationTimeoutBudget.Start(UiOperationTimeoutBudget.EditorDefaultMilliseconds, "combo-box selection"));
 
-        public void Select(int index)
+        public void SelectByIndex(int index, UiOperationTimeoutBudget budget)
         {
             var items = GetSelectableItems();
             if (index < 0 || index >= items.Count)
@@ -2423,7 +2531,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 // Fall back to direct item interaction below.
             }
 
-            TryClick(candidate);
+            TryClick(candidate, budget);
         }
 
         public void Expand()
@@ -2448,6 +2556,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
             var normalizedTarget = NormalizeLookupText(itemText);
             var stopwatch = Stopwatch.StartNew();
+            var budget = UiOperationTimeoutBudget.Start((int)Math.Ceiling(timeout.TotalMilliseconds), "combo-box selection");
             string[] observedItems = [];
 
             Expand();
@@ -2473,7 +2582,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 var index = matches.Length == 1 ? matches[0].index : -1;
                 if (index >= 0)
                 {
-                    Select(index);
+                    SelectByIndex(index, budget);
                     if (SelectionMatches(normalizedTarget))
                     {
                         Inner.Collapse();
@@ -2619,8 +2728,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 || candidate.ControlType == ControlType.DataItem;
         }
 
-        private static bool TryClick(AutomationElement candidate)
+        private static bool TryClick(AutomationElement candidate, UiOperationTimeoutBudget budget)
         {
+            var remaining = budget.Remaining;
             if (candidate.Patterns.Invoke.IsSupported)
             {
                 // Do not replay an Invoke whose delivery failed ambiguously.
@@ -2628,7 +2738,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return true;
             }
 
-            DesktopPointer.ClickFallback(candidate, "combo candidate lacks Invoke");
+            DesktopPointer.ClickFallback(candidate, "combo candidate lacks Invoke",
+                new PointerClickOptions { Timeout = remaining });
             return true;
         }
     }
@@ -3560,7 +3671,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     }
 
-    private sealed class FlaUiSpinnerControl : FlaUiControlBase<Spinner>, ISpinnerControl
+    private sealed class FlaUiSpinnerControl : FlaUiControlBase<Spinner>, ISpinnerControl, ISpinnerValueOperationControl
     {
         public FlaUiSpinnerControl(Spinner inner) : base(inner)
         {
@@ -3569,22 +3680,24 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         public double Value
         {
             get => TryRead(() => Inner.Value);
-            set
+            set => SetValue(value, UiOperationTimeoutBudget.Start(UiOperationTimeoutBudget.EditorDefaultMilliseconds, "spinner"));
+        }
+
+        public void SetValue(double value, UiOperationTimeoutBudget budget)
+        {
+            try
             {
-                try
-                {
-                    Inner.Value = value;
-                }
-                catch (ArgumentException) when (TryEnterValue(value))
-                {
-                    // Avalonia NumericUpDown can expose a RangeValue pattern that rejects
-                    // values accepted by its visible editor. Use that real editor as the
-                    // provider fallback and let the Page postcondition verify the result.
-                }
+                Inner.Value = value;
+            }
+            catch (ArgumentException) when (TryEnterValue(value, budget))
+            {
+                // Avalonia NumericUpDown can expose a RangeValue pattern that rejects
+                // values accepted by its visible editor. Use that real editor as the
+                // provider fallback and let the Page postcondition verify the result.
             }
         }
 
-        private bool TryEnterValue(double value)
+        private bool TryEnterValue(double value, UiOperationTimeoutBudget budget)
         {
             var input = TryRead(() => Inner.FindAllDescendants()
                 .FirstOrDefault(static candidate => candidate.ControlType == ControlType.Edit)
@@ -3598,7 +3711,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             Inner.Focus();
-            DesktopPointer.ClickFallback(Inner, "spinner editor requires pointer activation");
+            DesktopPointer.ClickFallback(Inner, "spinner editor requires pointer activation",
+                new PointerClickOptions { Timeout = budget.Remaining });
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
             Keyboard.Type(text);
             Keyboard.Type(VirtualKeyShort.RETURN);
@@ -3606,7 +3720,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiTabControl : FlaUiControlBase<Tab>, ITabControl
+    private sealed class FlaUiTabControl : FlaUiControlBase<Tab>, ITabControl, IShellPaneTabActivation
     {
         public FlaUiTabControl(Tab inner) : base(inner)
         {
@@ -3621,6 +3735,48 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 string.Equals(candidate.Name, itemText, StringComparison.Ordinal))
                 ?? throw new InvalidOperationException($"Tab item '{itemText}' was not found.");
             new FlaUiTabItemControl(item).SelectTab();
+        }
+
+        public ShellPaneTabActivation? FindPaneActivation(Predicate<ITabItemControl> matches)
+        {
+            var panes = Inner.TabItems.Where(IsMatchingPane).ToArray();
+            if (UniquePane(panes.Where(static item => !item.IsOffscreen)) is { } visible)
+                return new ShellPaneTabActivation(true, budget => ClickPane(visible, budget));
+            return UniquePane(panes) is { } hidden
+                ? new ShellPaneTabActivation(false, budget => SelectHiddenPane(hidden, budget))
+                : null;
+
+            bool IsMatchingPane(TabItem item) => matches(new FlaUiTabItemControl(item)) && item.IsAvailable;
+
+            static TabItem? UniquePane(IEnumerable<TabItem> candidates)
+            {
+                var matching = candidates.Take(2).ToArray();
+                if (matching.Length > 1)
+                    throw new InvalidOperationException("More than one shell pane tab matches the requested name.");
+                return matching.SingleOrDefault();
+            }
+
+            void ClickPane(TabItem pane, UiOperationTimeoutBudget budget)
+            {
+                // A visible docking tab can require real activation, not just SelectionItem.Select.
+                DesktopPointer.ClickFallback(
+                    () => UniquePane(Inner.TabItems.Where(item => IsMatchingPane(item) && !item.IsOffscreen))
+                        ?? throw new InvalidOperationException("The shell pane tab is no longer visible."),
+                    "shell pane activation", new PointerClickOptions
+                    {
+                        Timeout = budget.Remaining,
+                        RejectInteractiveDescendantHit = true
+                    },
+                    initialTarget: pane);
+            }
+
+            void SelectHiddenPane(TabItem pane, UiOperationTimeoutBudget budget)
+            {
+                if (!IsMatchingPane(pane) || !pane.Patterns.SelectionItem.IsSupported)
+                    throw new InvalidOperationException("The existing offscreen shell pane tab cannot be activated.");
+                _ = budget.Remaining;
+                pane.Patterns.SelectionItem.Pattern.Select();
+            }
         }
     }
 
