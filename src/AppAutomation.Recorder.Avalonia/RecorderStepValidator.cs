@@ -103,6 +103,7 @@ internal sealed class RecorderStepValidator
                 or RecordedActionKind.CancelFilterSelection => true,
             RecordedActionKind.OpenGridRow
                 or RecordedActionKind.SelectGridRow
+                or RecordedActionKind.SelectGridRows
                 or RecordedActionKind.SortGridByColumn
                 or RecordedActionKind.ScrollGridToEnd
                 or RecordedActionKind.CopyGridCell

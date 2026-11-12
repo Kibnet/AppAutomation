@@ -222,6 +222,8 @@ internal sealed class RecorderCommandRuntimeValidator
             RecordedActionKind.SelectGridRow => ValidateGridUserAction(step, target)
                 .Concat(RequireNamedGridRow(step, target))
                 .Concat(RequireNoGridTargetColumn(step, target)),
+            RecordedActionKind.SelectGridRows => ValidateGridUserAction(step, target)
+                .Concat(RequireGridRowSet(step, target)),
             RecordedActionKind.SortGridByColumn => ValidateGridUserAction(step, target)
                 .Concat(RequireString(step, target, allowEmpty: false, "grid column name")),
             RecordedActionKind.ScrollGridToEnd => ValidateGridUserAction(step, target),
@@ -886,6 +888,20 @@ internal sealed class RecorderCommandRuntimeValidator
         }
 
         return findings;
+    }
+
+    private IEnumerable<RecorderRuntimeValidationFinding> RequireGridRowSet(RecordedStep step, RecorderRuntimeValidationTarget target)
+    {
+        if (step.GridSelectedRows is not { } rows)
+            return [Invalid(target, "payload-missing-grid-row-set", "Grid selection requires a complete set of stable row selectors.")];
+        if (rows.Any(row => row?.Conditions is not { Count: > 0 } conditions
+            || conditions.Any(part => part is null || string.IsNullOrWhiteSpace(part.ColumnName) || part.Value is null)
+            || conditions.Select(static part => part.ColumnName).Distinct(StringComparer.Ordinal).Count() != conditions.Count))
+            return [Invalid(target, "payload-invalid-grid-row-set", "Every selected row requires valid conditions on distinct stable columns.")];
+        if (rows.Select(row => GridRowSelectionSet.Key(row.Conditions.Select(part =>
+                new GridRowCondition(part.ColumnName, part.Value)))).Distinct(StringComparer.Ordinal).Count() != rows.Count)
+            return [Invalid(target, "payload-duplicate-grid-row-set", "The same stable row cannot be selected twice.")];
+        return RequireNoGridTargetColumn(step, target);
     }
 
     private IEnumerable<RecorderRuntimeValidationFinding> RequireNamedGridRow(

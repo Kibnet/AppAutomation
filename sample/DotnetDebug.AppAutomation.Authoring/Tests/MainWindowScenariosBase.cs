@@ -530,7 +530,9 @@ public abstract partial class MainWindowScenariosBase<TSession> : UiTestBase<TSe
 
         Page
             .SelectTabItem(p => p.ArmDesktopTabItem)
+            .WaitUntilSelectedItemsEqual(p => p.ArmStatusFilter, ["Open"])
             .ApplyFilterSelection(p => p.ArmStatusFilter, severalValues)
+            .CancelFilterSelection(p => p.ArmStatusFilter, ["Archived"])
             .WaitUntilTextEquals(p => p.ArmStatusFilterStatusLabel, "Filter: Closed, Pending");
 
         using (Assert.Multiple())

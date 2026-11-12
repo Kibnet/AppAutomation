@@ -12,6 +12,9 @@ public sealed class GridRowSelectorTests
     {
         var order = GridRowSelector.ByCell("OrderId", "ORD-42");
         var line = order.AndCell("Item", "Pump");
+        var identity = new GridRowSetIdentity(["OrderId", "Item"],
+            [new GridRuntimeColumn(0, "OrderId", null, null, null, GridCellValueKind.Text, null, null),
+             new GridRuntimeColumn(1, "Item", null, null, null, GridCellValueKind.Text, null, null)], string.Empty);
 
         using (Assert.Multiple())
         {
@@ -19,6 +22,11 @@ public sealed class GridRowSelectorTests
             await Assert.That(line.Conditions.Count).IsEqualTo(2);
             await Assert.That(line.Conditions[0].ColumnName).IsEqualTo("OrderId");
             await Assert.That(line.Conditions[1].Value).IsEqualTo("Pump");
+            await Assert.That(identity.Read(column => column.ColumnIndex == 0 ? "ORD-42" : string.Empty)
+                .Conditions[1].Value).IsEqualTo(string.Empty);
+            await Assert.That(identity.TryRead(column => column.ColumnIndex == 0 ? "ORD-42" : null)).IsNull();
+            await Assert.That(() => identity.Read(column => column.ColumnIndex == 0 ? "ORD-42" : null))
+                .Throws<InvalidOperationException>();
         }
     }
 
@@ -55,6 +63,50 @@ public sealed class GridRowSelectorTests
             await Assert.That(fixture.Grid.OpenedOrderId).IsEqualTo("ORD-2");
             await Assert.That(fixture.Grid.CopiedValue).IsEqualTo("20");
             await Assert.That(fixture.Rows.Single(row => row.Cells[0].Value == "ORD-2").Cells[1].Value).IsEqualTo("Done");
+        }
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task GridCellTextWait_OnlyTreatsAnExistingNullCellAsEmpty(bool addressable)
+    {
+        var emptyCell = new GridCellValueSnapshot(null) { IsDisplayOnly = true };
+        var row = Row("ORD-1", string.Empty, "10");
+        ((MutableCell)row.Cells[1]).SemanticSnapshot = emptyCell;
+        var nativeGrid = new NativeAddressableGrid(row, ["OrderId", "Status", "Amount"])
+        {
+            ReadCellOverride = () => emptyCell
+        };
+        var page = addressable
+            ? new GridPage(new GridResolver(nativeGrid))
+            : new GridFixture(row).CreatePage();
+        var key = GridRowSelector.ByCell("OrderId", "ORD-1");
+        var missingKey = GridRowSelector.ByCell("OrderId", "ORD-2");
+
+        GridPage WaitForText(GridRowSelector selector, string column, string expected) =>
+            page.WaitUntilGridCellEquals(static p => p.Orders, selector, column, expected, timeoutMs: 250);
+
+        await Assert.That(GridValueReader.ReadCellText(page.Orders, key, "Status")).IsEqualTo(string.Empty);
+        await Assert.That(GridValueReader.ReadCellValue(page.Orders, key, "Status").IsNull).IsTrue();
+        await Assert.That(GridValueReader.ReadCellNumber(page.Orders, key, "Status")).IsNull();
+        await Assert.That(GridValueReader.ReadCellDate(page.Orders, key, "Status")).IsNull();
+        await Assert.That(ReferenceEquals(WaitForText(key, "Status", string.Empty), page)).IsTrue();
+        await Assert.That(() => WaitForText(key, "Status", "Ready")).Throws<UiOperationException>();
+        await Assert.That(() => WaitForText(missingKey, "Status", string.Empty)).Throws<UiOperationException>();
+
+        if (addressable)
+        {
+            await Assert.That(() => WaitForText(key, "Missing", string.Empty)).Throws<UiOperationException>();
+            nativeGrid.ReadCellOverride = () => throw new TimeoutException("The provider did not read the cell.");
+            await Assert.That(() => WaitForText(key, "Status", string.Empty)).Throws<UiOperationException>();
+        }
+        else
+        {
+            await Assert.That(ReferenceEquals(page.WaitUntilGridCellEquals(
+                static p => p.Orders, 0, 1, string.Empty, timeoutMs: 250), page)).IsTrue();
+            await Assert.That(() => page.WaitUntilGridCellEquals(
+                static p => p.Orders, 0, 3, string.Empty, timeoutMs: 250)).Throws<UiOperationException>();
         }
     }
 
@@ -1345,6 +1397,8 @@ public sealed class GridRowSelectorTests
 
         public int ResolveRowCallCount { get; private set; }
 
+        public Func<GridCellValueSnapshot>? ReadCellOverride { get; set; }
+
         public GridRowResolution ResolveRow(GridRowSelector selector, int timeoutMs)
         {
             ResolveRowCallCount++;
@@ -1373,6 +1427,11 @@ public sealed class GridRowSelectorTests
             if (!TryGetColumnIndex(address.ColumnName, out var columnIndex))
             {
                 throw new InvalidOperationException("Column was not found.");
+            }
+
+            if (ReadCellOverride is { } readCell)
+            {
+                return readCell();
             }
 
             var value = row.Cells[columnIndex].Value;

@@ -27,14 +27,25 @@ public sealed partial class FlaUiControlResolver
         IIndexedAddressableGridControl,
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
+        IGridRowSetRuntime,
         IGridColumnMetadataControl
     {
-        private readonly AutomationElement _searchRoot;
+        private readonly Window _searchRoot;
+        private readonly string _gridLocator;
 
-        public FlaUiGridControl(AutomationElement searchRoot, Grid inner) : base(inner)
+        public FlaUiGridControl(Window searchRoot, Grid inner, string gridLocator) : base(inner)
         {
             _searchRoot = searchRoot ?? throw new ArgumentNullException(nameof(searchRoot));
+            _gridLocator = gridLocator;
         }
+
+        private FlaUiVisualGridControl CreateRowSetRuntime() => new(_searchRoot, _gridLocator, gridRoot: Inner);
+
+        public void SetSelectedRows(GridRowSetIdentity identity, IReadOnlyDictionary<string, GridRowSelector> expected,
+            UiOperationTimeoutBudget budget) => CreateRowSetRuntime().SetSelectedRows(identity, expected, budget);
+
+        public IReadOnlyList<GridRowSelector> ReadSelectedRows(GridRowSetIdentity identity, UiOperationTimeoutBudget budget) =>
+            CreateRowSetRuntime().ReadSelectedRows(identity, budget);
 
         public IReadOnlyList<IGridRowControl> Rows =>
             Inner.Rows.Select(row => (IGridRowControl)new FlaUiGridRowControl(row)).ToArray();

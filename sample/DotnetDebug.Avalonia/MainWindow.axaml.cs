@@ -55,6 +55,16 @@ public partial class MainWindow : Window
             Content = LocalComboBoxFixture.CreateContent();
             return;
         }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE") == "row-set")
+        {
+            Content = GridRowSetFixture.CreateContent();
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE") == "closed-filter")
+        {
+            Content = ClosedFilterSelectionFixture.CreateContent();
+            return;
+        }
         DataContext = _viewModel;
         InitializeNativeGridRuntimeFixture();
 

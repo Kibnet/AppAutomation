@@ -241,7 +241,7 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task ComboBoxFilterAdapter_RechecksAmbiguousClosedDisplay()
+    public async Task ComboBoxFilterAdapter_UsesCommittedItemsDespiteAmbiguousClosedDisplay()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
         context.Items.SetAvailableItems(["Open", "Pending", "Closed", "Pending, Closed"]);
@@ -250,15 +250,15 @@ public sealed class UiControlAdapterTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(2);
-            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(0);
         }
     }
 
     [Test]
-    public async Task ComboBoxFilterAdapter_RechecksSelectionWhenClosedDisplayIsStale()
+    public async Task ComboBoxFilterAdapter_RejectsUnappliedSelectionEvenWhenCaptionMatches()
     {
-        var context = CreateComboBoxFilterContext(hasApplyButton: true, updateDisplayOnApply: false);
+        var context = CreateComboBoxFilterContext(hasApplyButton: true, rejectApply: true);
 
         await Assert.That(() => context.Page.ApplyFilterSelection(
                 static page => page.StatusFilter, ["Pending"], timeoutMs: 50))
@@ -266,7 +266,7 @@ public sealed class UiControlAdapterTests
 
         using (Assert.Multiple())
         {
-            await Assert.That(context.Root.Text).IsEqualTo("Open");
+            await Assert.That(context.Root.Text).IsEqualTo("Pending");
             await Assert.That(context.Items.IsAvailable).IsFalse();
             await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
             await Assert.That(context.ApplyButton.InvokeCount).IsEqualTo(1);
@@ -302,9 +302,10 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task MultiSelectAdapter_AppliesExactSelectionAndCancelRestoresCommittedItems(bool readableDisplay)
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [Arguments(false, false)]
+    public async Task MultiSelectAdapter_AppliesExactSelectionAndCancelRestoresCommittedItems(bool readableDisplay, bool canCancel)
     {
         var editorRoot = new FakeControl("CategoriesEditor");
         var display = new FakeLabelControl("CategoriesDisplay", "Alpha");
@@ -349,10 +350,20 @@ public sealed class UiControlAdapterTests
                     "CategoriesOpenButton",
                     "CategoriesItems",
                     "CategoriesApplyButton",
-                    "CategoriesCancelButton")
+                    canCancel ? "CategoriesCancelButton" : null)
                 with
                 { DisplayValueLocator = readableDisplay ? "CategoriesDisplay" : null });
         var page = new MultiSelectPage(resolver);
+
+        if (!canCancel)
+        {
+            await Assert.That(() => page.SelectMultiItems(static candidate => candidate.Categories,
+                ["Gamma", "Alpha"], timeoutMs: 100)).Throws<UiOperationException>();
+            await Assert.That(openButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(applyButton.InvokeCount).IsEqualTo(1);
+            await Assert.That(page.Categories.IsOpen).IsFalse();
+            return;
+        }
 
         page
             .SelectMultiItems(static candidate => candidate.Categories, ["Gamma", "Alpha"])
@@ -407,6 +418,23 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
+    public async Task MultiSelectAdapter_DoesNotUseRequestedItemsAsACommittedSnapshot()
+    {
+        var context = CreateComboBoxFilterContext(hasApplyButton: true, readableDisplay: false);
+        var filter = context.Page.StatusFilter;
+        filter.Open();
+        filter.SetSelectedItems(["Closed"]);
+        filter.Apply();
+        context.WithholdCommittedItems();
+        context.ReplaceRoot(string.Empty);
+
+        await Assert.That(() => filter.SelectedItems).Throws<NotSupportedException>();
+        await Assert.That(() => context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, []))
+            .Throws<UiOperationException>();
+        await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task MultiSelectAdapter_RefreshesInitialCommittedSelectionExplicitly()
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
@@ -428,7 +456,7 @@ public sealed class UiControlAdapterTests
     [Test]
     [Arguments(null)]
     [Arguments("Choose statuses")]
-    public async Task ComboBoxFilterCheckReadsFreshClosedDisplayWithoutTrustingPreviousSelection(string? placeholder)
+    public async Task ComboBoxFilterCheckReadsFreshCommittedSelectionIndependentlyOfTheCaption(string? placeholder)
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true, placeholder: placeholder);
         context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending"]);
@@ -440,10 +468,7 @@ public sealed class UiControlAdapterTests
         await Assert.That(() => context.Page.WaitUntilTextEquals(
                 static page => page.StatusFilter, "Pending", timeoutMs: 50))
             .Throws<UiOperationException>();
-        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Old value"]);
-        await Assert.That(() => context.Page.WaitUntilSelectedItemsEqual(
-                static page => page.StatusFilter, ["Pending"], timeoutMs: 50))
-            .Throws<UiOperationException>();
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending"]);
 
         context.SetCommittedItems(["Pending", "Closed"]);
         await Assert.That(() => context.Page.WaitUntilSelectedItemsEqual(
@@ -452,7 +477,7 @@ public sealed class UiControlAdapterTests
         context.SetCommittedItems([]);
         context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, []);
         context.ReplaceRoot("Closed");
-        context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, ["Closed"]);
+        context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, []);
         await Assert.That(context.OpenButton.InvokeCount).IsEqualTo(1);
         await Assert.That(context.CancelButton.InvokeCount).IsEqualTo(0);
         if (placeholder is not null)
@@ -474,10 +499,15 @@ public sealed class UiControlAdapterTests
     public async Task MultiSelectAdapter_ReadsSelectionWhenPopupClosesDuringObservation(bool closesAfterRead)
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true, closesOnCancel: !closesAfterRead, readableDisplay: false);
+        var filter = context.Page.StatusFilter;
+        filter.Open();
         if (closesAfterRead)
         {
             context.Items.OnSelectedItemsRead = () => context.Items.IsAvailable = false;
+            _ = filter.SelectedItems;
         }
+        else
+            await Assert.That(filter.Cancel).Throws<UiControlResolutionException>();
 
         context.Page.WaitUntilSelectedItemsEqual(static page => page.StatusFilter, ["Open"]);
         await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Open"]);
@@ -1569,7 +1599,7 @@ public sealed class UiControlAdapterTests
     private static ComboBoxFilterTestContext CreateComboBoxFilterContext(
         bool hasApplyButton,
         bool closesOnCancel = false,
-        bool updateDisplayOnApply = true,
+        bool rejectApply = false,
         bool readableDisplay = true,
         string? placeholder = null)
     {
@@ -1579,6 +1609,7 @@ public sealed class UiControlAdapterTests
             ["Open", "Pending", "Closed"],
             ["Open"]);
         var committedItems = new[] { "Open" };
+        var publishCommitted = hasApplyButton;
         if (!hasApplyButton)
             items.OnSetSelectedItems = values => root.Text = string.Join(", ", values);
         var openButton = new FakeButtonControl("StatusFilterOpenButton")
@@ -1589,11 +1620,9 @@ public sealed class UiControlAdapterTests
         {
             OnInvoke = () =>
             {
-                committedItems = items.SelectedItems.ToArray();
-                if (updateDisplayOnApply)
-                {
-                    root.Text = string.Join(", ", committedItems);
-                }
+                var requested = items.SelectedItems.ToArray();
+                if (!rejectApply) committedItems = requested;
+                root.Text = string.Join(", ", requested);
                 items.IsAvailable = false;
             }
         };
@@ -1617,7 +1646,7 @@ public sealed class UiControlAdapterTests
                 ("StatusFilterItems", items),
                 ("StatusFilterApplyButton", applyButton),
                 ("StatusFilterCancelButton", cancelButton))
-        { PlaceholderText = placeholder };
+        { PlaceholderText = placeholder, ReadCommittedItems = () => publishCommitted ? committedItems : null };
         var resolver = inner.WithComboBoxFilter(
                 "StatusFilter",
                 ComboBoxFilterParts.ByAutomationIds(
@@ -1640,7 +1669,8 @@ public sealed class UiControlAdapterTests
                 root.Text = committedItems.Length == 0 && placeholder is not null ? placeholder : string.Join(", ", committedItems);
                 items.SetSelectedItems(values);
             },
-            text => inner.ReplaceControl("StatusFilterRoot", new FakeLabelControl("StatusFilterRoot", text)));
+            text => inner.ReplaceControl("StatusFilterRoot", new FakeLabelControl("StatusFilterRoot", text)),
+            () => publishCommitted = false);
     }
 
     private sealed record ComboBoxFilterTestContext(
@@ -1651,7 +1681,8 @@ public sealed class UiControlAdapterTests
         FakeButtonControl ApplyButton,
         FakeButtonControl CancelButton,
         Action<string[]> SetCommittedItems,
-        Action<string> ReplaceRoot);
+        Action<string> ReplaceRoot,
+        Action WithholdCommittedItems);
 
     public static class SearchPickerPageDefinitions
     {
@@ -1930,6 +1961,7 @@ public sealed class UiControlAdapterTests
         public void ReplaceControl(string locator, object control) => _controls[locator] = control;
 
         public string? PlaceholderText { get; init; }
+        public Func<string[]?>? ReadCommittedItems { get; init; }
 
         public string? ReadDisplayedValue(UiControlDefinition definition) => ReadDisplayedValueSnapshot(definition).Text;
 
@@ -1946,7 +1978,10 @@ public sealed class UiControlAdapterTests
                 ITextBoxControl input => input.Text,
                 _ => null
             };
-            return new(text, PlaceholderText, (control as FakeControlBase)?.RuntimeIdentity);
+            return new(text, PlaceholderText, (control as FakeControlBase)?.RuntimeIdentity)
+            {
+                CommittedItems = definition.ValueReadKind == UiValueReadKind.Display ? null : ReadCommittedItems?.Invoke()
+            };
         }
 
         public TControl Resolve<TControl>(UiControlDefinition definition)

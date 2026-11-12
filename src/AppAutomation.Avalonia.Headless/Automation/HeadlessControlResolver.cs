@@ -83,6 +83,14 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         return HeadlessRuntime.Dispatch(() =>
         {
             var identity = GetDisplaySourceIdentity(source);
+            if (definition.ValueReadKind != UiValueReadKind.Display)
+            {
+                var selection = HeadlessMultiSelectSelection.ReadClosed(source);
+                if (selection is null && definition.ValueReadKind == UiValueReadKind.ConfirmedFilterSelection)
+                    throw new NotSupportedException($"Filter '{definition.LocatorValue}' does not expose its complete committed selection.");
+                if (selection is not null || definition.ValueReadKind == UiValueReadKind.CommittedSelection)
+                    return new UiDisplayedValueSnapshot(null, SourceIdentity: identity) { CommittedItems = selection };
+            }
             string? placeholder = null;
             UiDisplayedValueSnapshot Snapshot(string? text) => new(text, placeholder, identity);
             if (!source.IsEffectivelyVisible)
@@ -1697,12 +1705,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public IReadOnlyList<IComboBoxItem> Items =>
             Inner.Items.Select(item => (IComboBoxItem)new HeadlessComboBoxItem(item)).ToArray();
 
-        public IComboBoxItem? SelectedItem => Inner.SelectedItem switch
-        {
-            ComboBoxItem comboBoxItem => new HeadlessComboBoxItem(comboBoxItem),
-            null => null,
-            _ => new HeadlessComboBoxTextItem(Inner.SelectedItem?.ToString() ?? string.Empty, Inner.SelectedItem?.ToString() ?? string.Empty)
-        };
+        public IComboBoxItem? SelectedItem => Inner.SelectedItem is { } item ? new HeadlessComboBoxItem(item) : null;
 
         public string Text => SelectedItem?.Text ?? string.Empty;
 
@@ -1736,8 +1739,6 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
         public string Name => _inner.Name ?? Text;
     }
-
-    private sealed record HeadlessComboBoxTextItem(string Text, string Name) : IComboBoxItem;
 
     private sealed class HeadlessRadioButtonControl : HeadlessControlBase<RadioButton>, IRadioButtonControl, IReadableTextControl
     {

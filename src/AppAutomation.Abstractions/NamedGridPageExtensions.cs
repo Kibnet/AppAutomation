@@ -47,7 +47,8 @@ public static partial class UiPageExtensions
     }
 
     /// <summary>
-    /// Waits until a named cell in the uniquely selected row equals the expected value.
+    /// Waits until a named cell in the uniquely selected row displays the expected text.
+    /// An existing cell with no displayed text matches an empty string.
     /// </summary>
     public static TSelf WaitUntilGridCellEquals<TSelf>(
         this TSelf page,
@@ -77,7 +78,7 @@ public static partial class UiPageExtensions
                         budget,
                         out var snapshot,
                         out lastObserved)
-                    && string.Equals(snapshot!.DisplayText, expectedValue, StringComparison.Ordinal),
+                    && string.Equals(snapshot!.DisplayText ?? string.Empty, expectedValue, StringComparison.Ordinal),
                 budget.RemainingMilliseconds,
                 $"Grid '{grid.AutomationId}' named cell '{columnName}' did not reach expected value.",
                 expectedValue: expectedValue,
@@ -91,7 +92,8 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => GridRuntimeResolver.TryResolveUniqueRowIndex(grid, rowSelector, out var rowIndex)
-                && string.Equals(TryReadGridCellValue(grid, rowIndex, columnIndex), expectedValue, StringComparison.Ordinal),
+                && string.Equals(TryReadGridCellValue(grid, rowIndex, columnIndex) ?? string.Empty,
+                    expectedValue, StringComparison.Ordinal),
             timeoutMs,
             $"Grid '{grid.AutomationId}' named cell '{columnName}' did not reach expected value.",
             expectedValue: expectedValue,

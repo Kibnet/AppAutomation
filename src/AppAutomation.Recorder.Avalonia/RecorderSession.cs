@@ -400,6 +400,7 @@ internal sealed partial class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        ResetGridSelectionGesture();
         _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
         _pendingGridComboSelectionContext = null;
@@ -425,6 +426,7 @@ internal sealed partial class RecorderSession :
 
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
+        ResetGridSelectionGesture();
         FlushPendingState();
         _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
@@ -460,6 +462,7 @@ internal sealed partial class RecorderSession :
 
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
+        ResetGridSelectionGesture();
         FlushPendingState();
         _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
@@ -622,6 +625,7 @@ internal sealed partial class RecorderSession :
         _lifetimeCancellation.Cancel();
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
+        ResetGridSelectionGesture();
         _activeCopiedValue = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
@@ -1626,6 +1630,7 @@ internal sealed partial class RecorderSession :
             OnKeyUp,
             RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        root.AddHandler(InputElement.KeyUpEvent, OnGridSelectionKeyCompleted, RoutingStrategies.Bubble, handledEventsToo: true);
         root.AddHandler(Button.ClickEvent, OnButtonClick, RoutingStrategies.Bubble);
     }
 
@@ -1645,6 +1650,7 @@ internal sealed partial class RecorderSession :
         root.RemoveHandler(InputElement.TextInputEvent, OnTextInput);
         root.RemoveHandler(InputElement.KeyDownEvent, OnKeyDown);
         root.RemoveHandler(InputElement.KeyUpEvent, OnKeyUp);
+        root.RemoveHandler(InputElement.KeyUpEvent, OnGridSelectionKeyCompleted);
         root.RemoveHandler(Button.ClickEvent, OnButtonClick);
     }
 
@@ -1841,6 +1847,11 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        var previousGridSelection = _lastGridSelectionGestureStepId;
+        var precedingGridCollapse = _plainPointerCollapseStepId;
+        _lastGridSelectionGestureStepId = null;
+        _plainPointerCollapseStepId = null;
+        _pendingGridSelection = null;
         BeginPointerGesture();
         var source = e.Source as Control;
         if (FindAncestorOrSelf<ListBox>(source) is { } listBox
@@ -1893,9 +1904,21 @@ internal sealed partial class RecorderSession :
         if (FindAncestorOrSelf<Button>(source) is null)
         {
             var gestureSource = source ?? control;
-            if (!TryRecordCatalogGridRowGesture(gestureSource, e.ClickCount))
+            var point = e.GetCurrentPoint(GetPointerPositionRoot(source));
+            if (e.ClickCount == 1 && point.Properties.IsLeftButtonPressed
+                && TryBeginGridSelectionGesture(gestureSource,
+                    (e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Shift | KeyModifiers.Meta)) != 0,
+                    previousGridSelection, pointer: e.Pointer))
+                return;
+
+            var before = _steps.Count;
+            if (!TryRecordCatalogGridRowGesture(gestureSource, e.ClickCount, precedingGridCollapse))
             {
                 TryRecordGridAction(gestureSource);
+            }
+            else if (e.ClickCount == 1 && _steps.Count > before && _steps[^1].ActionKind == RecordedActionKind.SelectGridRow)
+            {
+                _lastGridSelectionGestureStepId = _steps[^1].StepId;
             }
         }
     }
@@ -1931,6 +1954,8 @@ internal sealed partial class RecorderSession :
 
     private void OnPointerGestureCompleted(object? sender, PointerReleasedEventArgs e)
     {
+        if (_pendingGridSelection is { Pointer: { } pointer } pending && ReferenceEquals(pointer, e.Pointer))
+            CompleteGridSelectionGesture(pending);
         ResetPointerGesture();
     }
 
@@ -2039,6 +2064,14 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        var previousGridSelection = _lastGridSelectionGestureStepId;
+        if (!IsGridSelectionModifier(e.Key) && _pendingGridSelection?.Key != e.Key)
+        {
+            _lastGridSelectionGestureStepId = null;
+            _plainPointerCollapseStepId = null;
+            _pendingGridSelection = null;
+        }
+
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
@@ -2078,6 +2111,9 @@ internal sealed partial class RecorderSession :
             }
 
             RegisterKeyboardInput(ResolveInteractionOwner(focused) ?? focused);
+            if (_targetSelectionMode == RecorderTargetSelectionMode.None && IsGridSelectionKey(e)
+                && _pendingGridSelection?.Key != e.Key)
+                _ = TryBeginGridSelectionGesture(focused, modified: true, previousGridSelection, key: e.Key);
             if (focused is TextBox && e.Key is Key.Enter or Key.Tab)
             {
                 FlushPendingText();
@@ -4672,7 +4708,8 @@ internal sealed partial class RecorderSession :
         StepCreationResult result,
         Control? source = null,
         string captureAction = "Unknown",
-        bool suppressRecentDuplicate = true)
+        bool suppressRecentDuplicate = true,
+        Guid? replaceAdjacent = null)
     {
         if (!result.Success || result.Step is null)
         {
@@ -4685,9 +4722,11 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var recordedStep = LinkTableRowCheckpoint(RevalidateStep(result.Step), _steps);
+        var replaceTail = replaceAdjacent.HasValue && _steps.LastOrDefault()?.StepId == replaceAdjacent.Value;
+        var precedingSteps = replaceTail ? _steps.Take(_steps.Count - 1) : _steps;
+        var recordedStep = LinkGridRowAnchors(RevalidateStep(result.Step), precedingSteps);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
-        var tentativeSteps = _steps
+        var tentativeSteps = precedingSteps
             .Where(static step => !step.IsIgnored)
             .Append(recordedStep)
             .ToArray();
@@ -4716,6 +4755,7 @@ internal sealed partial class RecorderSession :
 
         RemovePointerLinkedGridSelection(recordedStep);
 
+        if (replaceTail) _steps.RemoveAt(_steps.Count - 1);
         _steps.Add(recordedStep);
         var graphValidation = ApplyScenarioGraphValidation();
         _lastFingerprint = fingerprint;
@@ -4735,10 +4775,7 @@ internal sealed partial class RecorderSession :
     private static void RebindEditedGridRowAnchors(IList<RecordedStep> steps, int editedIndex)
     {
         var edited = steps[editedIndex];
-        if (edited.GridRowAnchorCheckpointId is null)
-        {
-            steps[editedIndex] = LinkTableRowCheckpoint(edited, steps.Take(editedIndex));
-        }
+        steps[editedIndex] = LinkGridRowAnchors(edited, steps.Take(editedIndex));
 
         if (edited.CheckpointId is not { } checkpointId)
         {
@@ -4747,15 +4784,12 @@ internal sealed partial class RecorderSession :
 
         for (var index = editedIndex + 1; index < steps.Count; index++)
         {
-            var dependent = steps[index].GridRowAnchorCheckpointId == checkpointId;
-            if (dependent)
+            var step = steps[index];
+            if (edited.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+                || step.GridRowAnchorCheckpointId == checkpointId
+                || step.GridSelectedRows?.Any(row => row?.AnchorCheckpointId == checkpointId) == true)
             {
-                steps[index] = steps[index] with { GridRowAnchorCheckpointId = null };
-            }
-
-            if (dependent || edited.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow)
-            {
-                steps[index] = LinkTableRowCheckpoint(steps[index], steps.Take(index));
+                steps[index] = LinkGridRowAnchors(step, steps.Take(index), checkpointId);
             }
         }
     }
@@ -4804,7 +4838,7 @@ internal sealed partial class RecorderSession :
         return true;
     }
 
-    private bool TryRecordCatalogGridRowGesture(Control? source, int clickCount)
+    private bool TryRecordCatalogGridRowGesture(Control? source, int clickCount, Guid? precedingGridCollapse = null)
     {
         var capture = _stepFactory.TryCreateCatalogGridRowGestureStep(
             source,
@@ -4816,7 +4850,7 @@ internal sealed partial class RecorderSession :
 
         if (clickCount >= 2 && capture.StepResult.Step is { } openStep)
         {
-            RemoveImmediatelyPrecedingGridSelection(openStep);
+            RemoveImmediatelyPrecedingGridSelection(openStep, precedingGridCollapse);
         }
 
         var stepCount = _steps.Count;
@@ -4847,7 +4881,7 @@ internal sealed partial class RecorderSession :
         RemoveImmediatelyPrecedingGridSelection(recordedStep);
     }
 
-    private void RemoveImmediatelyPrecedingGridSelection(RecordedStep openStep)
+    private void RemoveImmediatelyPrecedingGridSelection(RecordedStep openStep, Guid? precedingGridCollapse = null)
     {
         if (_steps.Count == 0)
         {
@@ -4855,12 +4889,19 @@ internal sealed partial class RecorderSession :
         }
 
         var previous = _steps[^1];
-        if (previous.ActionKind != RecordedActionKind.SelectGridRow
+        var previousRow = previous.ActionKind switch
+        {
+            RecordedActionKind.SelectGridRow => previous.GridRowConditions,
+            RecordedActionKind.SelectGridRows when previous.StepId == precedingGridCollapse
+                && previous.GridSelectedRows is [var row] => row.Conditions,
+            _ => null
+        };
+        if (previousRow is null
             || !string.Equals(
                 previous.Control.ProposedPropertyName,
                 openStep.Control.ProposedPropertyName,
                 StringComparison.Ordinal)
-            || !GridRowConditionsEqual(previous.GridRowConditions, openStep.GridRowConditions))
+            || !GridRowConditionsEqual(previousRow, openStep.GridRowConditions))
         {
             return;
         }

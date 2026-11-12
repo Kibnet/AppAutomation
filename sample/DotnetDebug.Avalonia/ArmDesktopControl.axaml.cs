@@ -2,8 +2,10 @@ using System;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
+using AppAutomation.Abstractions;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -184,7 +186,10 @@ public partial class ArmDesktopControl : UserControl
     {
         if (sender is PopupEditor popupEditor)
         {
+            AutomationProperties.SetAccessibilityView(popupEditor, AccessibilityView.Control);
+            AutomationProperties.SetControlTypeOverride(popupEditor, AutomationControlType.ComboBox);
             MultiSelectEditorAutomation.Apply(popupEditor, "ArmStatusFilter");
+            UpdateArmStatusFilterLabel();
         }
     }
 
@@ -197,6 +202,7 @@ public partial class ArmDesktopControl : UserControl
         ArmStatusFilterStatusLabel.Content = selected.Length == 0
             ? "Filter: none"
             : $"Filter: {string.Join(", ", selected)}";
+        AutomationProperties.SetItemStatus(ArmStatusFilterEditor, MultiSelectSelectionValue.ToAutomationValue(selected));
     }
 
     private void OnArmDateRangeOpenClick(object? sender, RoutedEventArgs e)

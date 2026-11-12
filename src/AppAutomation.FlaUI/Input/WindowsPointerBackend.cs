@@ -9,6 +9,7 @@ namespace AppAutomation.FlaUI.Input;
 
 [Flags]
 internal enum PointerButtons { None = 0, Left = 1, Right = 2, Middle = 4, X1 = 8, X2 = 16 }
+internal enum PointerModifier { None, Control, Shift }
 
 // The guard includes Escape as well as modifiers: Escape cancels an OLE drag even when all mouse
 // coordinates and buttons match. These are observed user keys; the pointer runtime never releases them.
@@ -18,6 +19,7 @@ internal interface IPointerBackend
 {
     string DesktopKey { get; }
     TimeSpan DoubleClickTime { get; }
+    Size DoubleClickSize => new(4, 4);
     TimeSpan ClickPressDuration => TimeSpan.Zero;
     Size DragThreshold { get; }
     void EnsureDesktopAvailable();
@@ -27,6 +29,8 @@ internal interface IPointerBackend
     void MoveWithInput(Point point) => SetPosition(point);
     void Down(PointerButton button);
     void Up(PointerButton button);
+    void ClickWithModifier(Point expectedPosition, PointerModifier modifier, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This backend cannot deliver a modified click.");
     void Wheel(double amount, bool horizontal);
 }
 
@@ -39,6 +43,10 @@ internal sealed class WindowsPointerBackend : IPointerBackend
     private static readonly int CurrentSessionId = Process.GetCurrentProcess().SessionId;
     public string DesktopKey => $"{CurrentSessionId}:{ObjectName(GetProcessWindowStation())}:{ObjectName(GetThreadDesktop(GetCurrentThreadId()))}";
     public TimeSpan DoubleClickTime => TimeSpan.FromMilliseconds(GetDoubleClickTime());
+    public Size DoubleClickSize
+    {
+        get { using var dpi = PhysicalDpiScope.Enter(); return new Size(GetSystemMetrics(36), GetSystemMetrics(37)); }
+    }
     // A click includes a real button-down phase, rather than two adjacent input packets.
     // Keep it below the native double-click interval, including on faster user settings.
     public TimeSpan ClickPressDuration => TimeSpan.FromMilliseconds(
@@ -121,6 +129,71 @@ internal sealed class WindowsPointerBackend : IPointerBackend
 
     public void Down(PointerButton button) => Send(ButtonFlag(SwapButtonIfNeeded(button), false));
     public void Up(PointerButton button) => Send(ButtonFlag(SwapButtonIfNeeded(button), true));
+
+    public void ClickWithModifier(Point expectedPosition, PointerModifier modifier, CancellationToken cancellationToken)
+    {
+        var key = modifier switch
+        {
+            PointerModifier.Control => (ushort)0xA2, // VK_LCONTROL; never release the opposite physical key.
+            PointerModifier.Shift => (ushort)0xA0, // VK_LSHIFT
+            _ => throw new ArgumentOutOfRangeException(nameof(modifier))
+        };
+        cancellationToken.ThrowIfCancellationRequested();
+        using var observation = new ModifiedClickObservation(key);
+        var button = SwapButtonIfNeeded(PointerButton.Left);
+        NativeInput Key(uint flags) => new()
+        {
+            Type = 1,
+            Keyboard = new NativeKeyboardInput { VirtualKey = key, Flags = flags, Extra = observation.Tag }
+        };
+        NativeInput Mouse(bool up) => new() { Mouse = new NativeMouseInput { Flags = ButtonFlag(button, up) } };
+        NativeInput[] inputs = [Key(0), Mouse(false), Mouse(true), Key(2)];
+        var size = Marshal.SizeOf<NativeInput>();
+        observation.Pump();
+        var state = ReadState();
+        if (observation.Input.ForeignKey || state.Position != expectedPosition || state.Modifiers != 0 || state.Buttons != PointerButtons.None)
+            throw new PointerInterferenceException("A user key or button was pressed before the modified click.");
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // SendInput serializes this batch against other hardware/SendInput packets. There is no
+        // managed wait or cancellation point while the modifier is down.
+        var sent = SendInput(4, inputs, size);
+        if (sent == inputs.Length)
+        {
+            observation.ConfirmRelease(() => Pressed(key));
+            if (!observation.Input.PressAccepted || observation.Input.ForeignKey)
+                throw new PointerInterferenceException("Keyboard input interfered with the modified click.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+        var failure = NativeError($"SendInput delivered {sent} of 4 modified click events");
+        // Only clean up downs inserted by the accepted prefix. Do not retry the click.
+        var cleanup = GetModifiedClickCleanup(sent);
+        for (var remaining = cleanup; remaining.Length != 0;)
+        {
+            var released = SendInput((uint)remaining.Length, remaining.Select(index => inputs[index]).ToArray(), size);
+            if (released == 0)
+                throw new PointerCleanupException("Could not release the accepted prefix of a modified click.", failure);
+            remaining = remaining[(int)released..];
+        }
+        if (sent != 0)
+        {
+            try { observation.ConfirmRelease(() => Pressed(key)); }
+            catch (PointerCleanupException cleanupError)
+            {
+                throw new PointerCleanupException("Could not confirm release of the accepted prefix of a modified click.",
+                    new AggregateException(failure, cleanupError));
+            }
+        }
+        throw failure;
+    }
+
+    internal static int[] GetModifiedClickCleanup(uint inserted) => inserted switch
+    {
+        1 or 3 => [3], // own key down, but no corresponding up
+        2 => [2, 3], // also own mouse down
+        _ => []
+    };
     public void Wheel(double amount, bool horizontal)
     {
         if (!double.IsFinite(amount) || amount > int.MaxValue / 120d || amount < int.MinValue / 120d)
@@ -208,7 +281,22 @@ internal sealed class WindowsPointerBackend : IPointerBackend
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X; public int Y; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeMouseInput { public int X; public int Y; public uint Data; public uint Flags; public uint Time; public UIntPtr Extra; }
-    [StructLayout(LayoutKind.Sequential)] private struct NativeInput { public uint Type; public NativeMouseInput Mouse; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeKeyboardInput { public ushort VirtualKey; public ushort ScanCode; public uint Flags; public uint Time; public UIntPtr Extra; }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct NativeInputPayload
+    {
+        [FieldOffset(0)] public NativeMouseInput Mouse;
+        [FieldOffset(0)] public NativeKeyboardInput Keyboard;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeInput
+    {
+        public uint Type;
+        public NativeInputPayload Payload;
+        public NativeMouseInput Mouse { set => Payload.Mouse = value; }
+        public NativeKeyboardInput Keyboard { set => Payload.Keyboard = value; }
+    }
     private delegate bool MonitorEnum(IntPtr monitor, IntPtr hdc, ref NativeRect rect, IntPtr data);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetPhysicalCursorPos(out NativePoint point);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetPhysicalCursorPos(int x, int y);

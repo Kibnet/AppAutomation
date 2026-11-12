@@ -126,6 +126,38 @@ public static class DesktopPointer
         ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason, initialTarget).GetAwaiter().GetResult();
     }
 
+    internal delegate void SelectionClick(Func<AutomationElement> target, Func<AutomationElement, Point> point,
+        PointerModifier modifier, Action verifyBeforeClick, bool validateOnly = false);
+
+    internal static void WithSelectionClicks(AutomationElement owner, TimeSpan timeout, Action<SelectionClick> select)
+    {
+        var (session, remaining, processId) = PrepareCall(() => owner, timeout, default, owner);
+        Controller.RunAsync("grid-row-set", remaining, operation =>
+        {
+            select((target, point, modifier, verifyBeforeClick, validateOnly) =>
+            {
+                operation.Check();
+                // Activate before resolving a row: activation can rebuild its UIA projection.
+                DesktopPointerTargetResolver.EnsureForeground(owner, processId);
+                operation.Check();
+                var resolved = DesktopPointerTargetResolver.Resolve(target, true,
+                    pointFactory: point, expectedProcessId: processId, allowPreparation: false,
+                    rejectInteractiveDescendantHit: true);
+                if (validateOnly)
+                {
+                    operation.Check();
+                    return;
+                }
+                operation.ClickForSelection(resolved.Point, modifier, () =>
+                {
+                    verifyBeforeClick();
+                    resolved.ValidateExact();
+                });
+            });
+            return Task.CompletedTask;
+        }, session: session).GetAwaiter().GetResult();
+    }
+
     internal static T WithForegroundClick<T>(AutomationElement owner, TimeSpan timeout, string reason,
         Action prepareForeground, Func<Action<Func<AutomationElement>>, T> execute)
     {

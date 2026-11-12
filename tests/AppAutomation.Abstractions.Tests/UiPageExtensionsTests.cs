@@ -459,6 +459,49 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CheckedStateUsesTheReplacementControlWithoutRepeatingTheAction(bool setChecked)
+    {
+        var writes = 0;
+        var reads = 0;
+        var replaced = false;
+        var missingOnce = false;
+        var stale = new ObservedCheckBox(false, () => { writes++; replaced = true; });
+        var fresh = new ObservedCheckBox(true, () => writes++);
+        var page = new StatePage(new CallbackResolver(() =>
+        {
+            if (!replaced && (setChecked || reads++ == 0)) return stale;
+            if (!missingOnce)
+            {
+                missingOnce = true;
+                throw new UiControlResolutionException(UiControlResolutionFailure.Detached, "The check box is being replaced.");
+            }
+            return fresh;
+        }));
+
+        if (setChecked)
+            page.SetChecked(static candidate => candidate.AgreeCheck, true, timeoutMs: 1_000);
+        else
+            page.WaitUntilIsChecked(static candidate => candidate.AgreeCheck, timeoutMs: 1_000);
+
+        await Assert.That(stale.IsChecked).IsFalse();
+        await Assert.That(page.AgreeCheck.IsChecked).IsTrue();
+        await Assert.That(writes).IsEqualTo(setChecked ? 1 : 0);
+    }
+
+    private sealed class ObservedCheckBox(bool isChecked, Action write) : FakeControlBase("AgreeCheck", "AgreeCheck"), ICheckBoxControl
+    {
+        public bool? IsChecked { get => isChecked; set => write(); }
+    }
+
+    private sealed class CallbackResolver(Func<ICheckBoxControl> resolve) : IUiControlResolver
+    {
+        public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
+        public TControl Resolve<TControl>(UiControlDefinition definition) where TControl : class => (TControl)resolve();
+    }
+
+    [Test]
     public async Task WaitUntilIsChecked_ThrowsUiOperationException_WithFailureContext()
     {
         var checkBox = new FakeCheckBoxControl("AgreeCheck") { IsChecked = false };

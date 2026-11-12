@@ -22,6 +22,17 @@ public sealed record UiControlDefinition(
 
     // A popup lookup polls for a registered visible part, not an approximate match elsewhere in the window.
     internal bool RequireVisibleExactMatch { get; init; }
+
+    // Carries the read intent through scoped resolver wrappers without changing locator resolution.
+    internal UiValueReadKind ValueReadKind { get; init; }
+}
+
+internal enum UiValueReadKind
+{
+    Display,
+    CommittedSelection,
+    CommittedSelectionOrDisplay,
+    ConfirmedFilterSelection
 }
 
 /// <summary>

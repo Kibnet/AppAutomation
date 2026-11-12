@@ -4,6 +4,9 @@ using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
@@ -14,6 +17,293 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [Arguments("template")]
+    [Arguments("binding")]
+    [Arguments("strings")]
+    [Arguments("content-template")]
+    [NotInParallel("DesktopUi")]
+    public async Task StandardComboBoxSelectsAndReadsTheDisplayedCaption(string presentation)
+    {
+        const string target = "Second visible choice";
+        Window? window = null;
+        using var session = DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () =>
+            {
+                var combo = new ComboBox { SelectedIndex = 0 };
+                global::Avalonia.Automation.AutomationProperties.SetAutomationId(combo, "CaptionCombo");
+                var choices = new[] { new CaptionChoice(1, "First visible choice"), new CaptionChoice(2, target) };
+                combo.ItemsSource = presentation == "strings" ? choices.Select(choice => choice.Label).ToArray() : choices;
+                var binding = new global::Avalonia.Data.Binding(nameof(CaptionChoice.Label));
+                if (presentation == "binding")
+                    combo.DisplayMemberBinding = binding;
+                if (presentation == "template")
+                    combo.ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                        new TextBlock { [!TextBlock.TextProperty] = binding });
+                if (presentation == "content-template")
+                    combo.ItemsSource = choices.Select(value => new ComboBoxItem
+                    {
+                        Content = value,
+                        ContentTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                            new TextBlock { [!TextBlock.TextProperty] = binding })
+                    }).ToArray();
+                return window = new Window { Width = 420, Height = 280, Content = combo };
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+        var comboBox = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return (ComboBox)session.MainWindow.Content!;
+        });
+        var page = new CaptionComboPage(new HeadlessControlResolver(session.MainWindow));
+        page.SelectComboItem(static page => page.Choice, target);
+        await Assert.That(page.Choice.SelectedItem?.Text).IsEqualTo(target);
+        await Assert.That(HeadlessRuntime.Dispatch(() => comboBox.SelectedItem is CaptionChoice { Code: 2 }
+            || comboBox.SelectedItem is ComboBoxItem { Content: CaptionChoice { Code: 2 } }
+            || comboBox.SelectedItem is string label && label == target)).IsTrue();
+    }
+
+    private sealed record CaptionChoice(int Code, string Label);
+
+    private sealed class CaptionComboPage(IUiControlResolver resolver) : UiPage(resolver)
+    {
+        public IComboBoxControl Choice => Resolve<IComboBoxControl>(new UiControlDefinition("Choice", UiControlType.ComboBox, "CaptionCombo"));
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task ClosedMultiSelectReadsNativeSelectionWithoutOpeningThePopup(bool filter)
+    {
+        const string root = "ClosedChoices";
+        var values = new[] { new CaptionChoice(1, "Alpha"), new CaptionChoice(2, "Beta; extra"), new CaptionChoice(3, "Gamma") };
+        var opened = 0;
+        Window? window = null;
+        using var session = DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () =>
+            {
+                window = new Window
+                {
+                    Width = 420, Height = 280, Content = new StackPanel { Children = { CreateEditor(values[..2]) } }
+                };
+                window.DataTemplates.Add(new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((choice, _) =>
+                    new StackPanel
+                    {
+                        Children =
+                        {
+                            new TextBlock { Text = choice?.Label },
+                            new StackPanel { IsVisible = false, Children = { new TextBlock { Text = "Hidden label" } } }
+                        }
+                    }));
+                return window;
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+        var panel = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return (StackPanel)session.MainWindow.Content!;
+        });
+        IUiControlResolver resolver = new HeadlessControlResolver(session.MainWindow);
+        resolver = filter
+            ? resolver.WithComboBoxFilter("Choices", ComboBoxFilterParts.ByAutomationIds(root, "ClosedOpen", "ClosedItems", "ClosedApply"))
+            : resolver.WithMultiSelect("Choices", MultiSelectParts.ByAutomationIds(root, "ClosedOpen", "ClosedItems", "ClosedApply")
+                with { DisplayValueLocator = "ClosedDisplay" });
+
+        IMultiSelectControl Resolve() => filter
+            ? resolver.Resolve<IComboBoxFilterControl>(new UiControlDefinition("Choices", UiControlType.ComboBoxFilter, root))
+            : resolver.Resolve<IMultiSelectControl>(new UiControlDefinition("Choices", UiControlType.MultiSelect, root));
+
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Alpha", "Beta; extra"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            panel.Children[0] = CreateEditor([values[2]]);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Gamma"]);
+        HeadlessRuntime.Dispatch(() =>
+            ((Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor)panel.Children[0]).SelectedItems = Array.Empty<CaptionChoice>());
+        await Assert.That(Resolve().SelectedItems).IsEmpty();
+        HeadlessRuntime.Dispatch(() =>
+        {
+            object[] content =
+            [
+                new ComboBoxItem { Content = "Plain content" },
+                new ComboBoxItem
+                {
+                    Content = values[1],
+                    ContentTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                        new TextBlock { Text = "Templated content" })
+                }
+            ];
+            panel.Children[0] = CreateEditor(content, content);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Plain content", "Templated content"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            panel.Children[0] = CreateEditor([values[0]], values);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Alpha"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            object[] content = [new object()];
+            panel.Children[0] = CreateEditor(content, content);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(() => Resolve().SelectedItems).Throws<NotSupportedException>();
+        await Assert.That(opened).IsEqualTo(0);
+
+        Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor CreateEditor(object[] selected, object[]? source = null)
+        {
+            var editor = new Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor
+            {
+                ItemsSource = source ?? values, DisplayMember = source is null ? nameof(CaptionChoice.Label) : string.Empty,
+                SelectionMode = Eremex.AvaloniaUI.Controls.Editors.ItemSelectionMode.Multiple,
+                Watermark = "Choose values", IsTextEditable = !filter, SelectedItems = selected.ToList()
+            };
+            if (filter) editor.DisplayTextConverter = new FilterCaptionConverter();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(editor, root);
+            editor.PropertyChanged += (_, change) =>
+            {
+                if (change.Property == Eremex.AvaloniaUI.Controls.Editors.PopupEditor.IsPopupOpenProperty && editor.IsPopupOpen)
+                    opened++;
+            };
+            return editor;
+        }
+    }
+
+    private sealed class FilterCaptionConverter : global::Avalonia.Data.Converters.IValueConverter
+    {
+        public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) => "Filter title";
+        public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) =>
+            throw new NotSupportedException();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task RecorderCapturesEffectiveGridRowSelectionAfterControlAndShiftClicks()
+    {
+        using var session = LaunchGridRowSetFixture(includeFilteredDuplicate: true);
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key")).IdentifyRowsBy("Key"));
+
+        var captured = HeadlessRuntime.Dispatch(() =>
+        {
+            var window = session.MainWindow;
+            window.Show();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            var grid = ((Panel)window.Content!).Children.OfType<DataGrid>().Single();
+            using var recorder = new RecorderSession(window, new AppAutomationRecorderOptions
+            { ShowOverlay = false, GridAutomation = catalog });
+            recorder.Start();
+            Click("ROW-01", RawInputModifiers.None);
+            var single = recorder.StepJournal.Single().Preview;
+            Click("ROW-03", RawInputModifiers.Control, captureDuringPress: true);
+            var control = recorder.StepJournal.Single().Preview;
+            Click("ROW-04", RawInputModifiers.Shift);
+            var shift = recorder.StepJournal.Single().Preview;
+            var actual = grid.SelectedItems.Cast<object>().Select(static item => item.ToString()!).ToArray();
+            Click("ROW-02", RawInputModifiers.None);
+            var collapse = recorder.StepJournal.Single().Preview;
+            Click("ROW-02", RawInputModifiers.None);
+            var open = recorder.StepJournal.Single().Preview;
+            return (single, control, shift, actual, collapse, open);
+
+            void Click(string key, RawInputModifiers modifiers, bool captureDuringPress = false)
+            {
+                var row = grid.GetVisualDescendants().OfType<DataGridRow>()
+                    .Single(candidate => candidate.DataContext?.ToString() == key);
+                var point = row.TranslatePoint(new Point(30, row.Bounds.Height / 2), window)!.Value;
+                window.MouseDown(point, MouseButton.Left, modifiers);
+                if (captureDuringPress) _ = recorder.ExportPreview();
+                window.MouseUp(point, MouseButton.Left, modifiers);
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+
+        await Assert.That(captured.single).Contains("Page.SelectGridRow(");
+        await Assert.That(captured.control).Contains("Page.SelectGridRows(");
+        await Assert.That(captured.control).Contains("ROW-01");
+        await Assert.That(captured.control).Contains("ROW-03");
+        await Assert.That(captured.control).DoesNotContain("ROW-02");
+        await Assert.That(captured.shift).Contains("Page.SelectGridRows(");
+        foreach (var key in captured.actual) await Assert.That(captured.shift).Contains(key);
+        await Assert.That(System.Text.RegularExpressions.Regex.Matches(captured.shift, "GridRowSelector.ByCell").Count)
+            .IsEqualTo(captured.actual.Length);
+        await Assert.That(captured.collapse).Contains("Page.SelectGridRows(");
+        await Assert.That(captured.open).Contains("Page.OpenGridRow(");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task GridRowSetUsesTheCompleteNativeSelection()
+    {
+        using var session = LaunchGridRowSetFixture();
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.Name))
+            .IdentifyRowsBy("Key"));
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog));
+        var a = GridRowSelector.ByCell("Key", "ROW-02");
+        var b = GridRowSelector.ByCell("Key", "ROW-12");
+        var c = GridRowSelector.ByCell("Key", "ROW-14");
+        var native = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return ((Panel)session.MainWindow.Content!).Children.OfType<DataGrid>().Single();
+        });
+
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, b]);
+        page.WaitUntilSelectedGridRowsEqual(static candidate => candidate.ArmComplexDataGridControl, [b, a]);
+        await Assert.That(Selection()).IsEqualTo("ROW-02,ROW-12");
+        var mismatch = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
+            static candidate => candidate.ArmComplexDataGridControl, [b, c], timeoutMs: 250));
+        await Assert.That(mismatch!.Message).Contains("Missing: [Key='ROW-14']");
+        await Assert.That(mismatch.Message).Contains("extra: [Key='ROW-02']");
+        Assert.Throws<InvalidOperationException>(() => page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, a]));
+        Assert.Throws<InvalidOperationException>(() => page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl,
+            [c, GridRowSelector.ByCell("Key", "MISSING")]));
+        await Assert.That(Selection()).IsEqualTo("ROW-02,ROW-12");
+        HeadlessRuntime.Dispatch(() => native.CollectionView.Filter = static item => item?.ToString() != "ROW-14");
+        var beforeFilteredRequest = Selection();
+        Assert.Throws<InvalidOperationException>(() =>
+            page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [b, c]));
+        await Assert.That(Selection()).IsEqualTo(beforeFilteredRequest);
+        HeadlessRuntime.Dispatch(() => native.CollectionView.Filter = null);
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [c, b]);
+        await Assert.That(Selection()).IsEqualTo("ROW-12,ROW-14");
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, []);
+        await Assert.That(Selection()).IsEmpty();
+
+        string Selection() => HeadlessRuntime.Dispatch(() =>
+            string.Join(",", native.SelectedItems.Cast<object>().Select(static item => item.ToString()).Order()));
+    }
+
+    private static DesktopAppSession LaunchGridRowSetFixture(bool includeFilteredDuplicate = false)
+    {
+        Window? window = null;
+        return DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () => window = new Window
+            {
+                Width = 520, Height = 360,
+                Content = global::DotnetDebug.Avalonia.GridRowSetFixture.CreateContent(includeFilteredDuplicate)
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]

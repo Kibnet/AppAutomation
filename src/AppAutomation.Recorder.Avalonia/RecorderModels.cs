@@ -74,7 +74,8 @@ public enum RecordedActionKind
     SetMultiItemSpinnerValue = 66,
     CaptureCopiedValue = 67,
     SelectGridRow = 68,
-    InvokeDialogButton = 69
+    InvokeDialogButton = 69,
+    SelectGridRows = 70
 }
 
 public enum RecorderAssertionMode
@@ -570,6 +571,8 @@ internal sealed record RecordedStep(
 {
     public IReadOnlyList<RecordedGridRowCondition>? GridRowConditions { get; init; }
 
+    public IReadOnlyList<RecordedGridSelectionRow>? GridSelectedRows { get; init; }
+
     public RecorderGridRowSourceMode GridRowSourceMode { get; init; }
 
     public int? GridCapturedRowPosition { get; init; }
@@ -616,6 +619,8 @@ internal enum RecorderGridRowValueSourceKind
 internal sealed record RecorderGridRowValueReference(
     RecorderGridRowValueSourceKind Kind,
     Guid ValueId);
+
+internal sealed record RecordedGridSelectionRow(IReadOnlyList<RecordedGridRowCondition> Conditions, Guid? AnchorCheckpointId = null);
 
 internal sealed record RecordedGridRowCondition(string ColumnName, string Value)
 {

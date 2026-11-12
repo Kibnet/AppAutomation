@@ -185,6 +185,15 @@ internal static class DesktopPointerTargetResolver
         return WindowsPointerBackend.DescribeForeground(targetWindow, expectedProcessId);
     }
 
+    internal static void EnsureForeground(AutomationElement owner, int processId)
+    {
+        if (WindowsPointerBackend.ForegroundBelongsTo(processId)) return;
+        CheckProcess(owner, processId);
+        WindowsPointerBackend.Activate(FindWindow(owner));
+        if (!WindowsPointerBackend.ForegroundBelongsTo(processId))
+            throw new PointerInterferenceException("The selection owner could not acquire the foreground.");
+    }
+
     private static IntPtr FindWindow(AutomationElement element)
     {
         for (var current = element; current != null; current = current.Parent)

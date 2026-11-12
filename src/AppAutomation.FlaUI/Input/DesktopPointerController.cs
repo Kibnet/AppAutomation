@@ -142,6 +142,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         }
         catch (Exception error)
         {
+            if (error is PointerCleanupException) session?.Fault();
             primary = error is OperationCanceledException && deadline.IsCancellationRequested
                 && !cancellationToken.IsCancellationRequested && session?.Token.IsCancellationRequested != true
                 ? new TimeoutException($"Desktop pointer operation '{kind}' exceeded its {timeout.TotalMilliseconds:0}ms timeout.", error)
@@ -229,6 +230,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         private PointerButtons _expectedButtons;
         private long? _lastButtonTimestamp;
         private long _lastDownTimestamp;
+        private Point? _lastSelectionPoint;
         internal long? LastButtonTimestamp => _lastButtonTimestamp;
         internal IReadOnlyList<PointerTraceEntry> Entries => _entries;
         internal CancellationToken Token => token;
@@ -348,6 +350,36 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 _lastButtonTimestamp = Stopwatch.GetTimestamp();
             }
             return Task.CompletedTask;
+        }
+
+        internal void ClickForSelection(Point point, PointerModifier modifier, Action validateTarget)
+        {
+            Check();
+            if (_lastSelectionPoint is { } previous && _lastButtonTimestamp is { } timestamp)
+            {
+                var size = backend.DoubleClickSize;
+                if (Math.Abs((long)point.X - previous.X) <= size.Width
+                    && Math.Abs((long)point.Y - previous.Y) <= size.Height)
+                {
+                    var remaining = backend.DoubleClickTime - Stopwatch.GetElapsedTime(timestamp);
+                    if (remaining > TimeSpan.Zero && token.WaitHandle.WaitOne(remaining)) token.ThrowIfCancellationRequested();
+                }
+            }
+
+            _lastSelectionPoint = point;
+            if (modifier == PointerModifier.None)
+            {
+                ClickAsync(point, new PointerClickOptions(), validateTarget).GetAwaiter().GetResult();
+                return;
+            }
+
+            Move(point);
+            validateTarget();
+            Check();
+            Log("modified-click", point, modifier.ToString());
+            try { backend.ClickWithModifier(point, modifier, token); }
+            finally { _lastButtonTimestamp = Stopwatch.GetTimestamp(); }
+            Check();
         }
 
         private void HoldClickPress(TimeSpan duration)

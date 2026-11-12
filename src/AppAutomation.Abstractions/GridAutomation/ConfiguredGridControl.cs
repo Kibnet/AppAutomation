@@ -3,6 +3,7 @@ namespace AppAutomation.Abstractions;
 internal class ConfiguredGridControl :
     IAddressableGridControl,
     IGridRowSelectionControl,
+    IGridRowSetSelectionControl,
     IGridColumnMetadataControl,
     IGridLogicalColumnMetadataControl,
     IGridAutomationCatalogControl,
@@ -547,6 +548,39 @@ internal class ConfiguredGridControl :
 
         throw new NotSupportedException(
             $"Grid '{AutomationId}' does not expose provider-neutral row selection.");
+    }
+
+    public void SetSelectedRows(IReadOnlyList<GridRowSelector> rows, int timeoutMs)
+    {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "replace grid row selection");
+        ValidateRowSetSelectors(rows);
+        var expected = GridRowSelectionSet.Index(rows, "Requested grid selection");
+        RequireRowSetRuntime().SetSelectedRows(CreateRowSetIdentity(), expected, budget);
+    }
+
+    public IReadOnlyList<GridRowSelector> ReadSelectedRows(int timeoutMs)
+    {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "read complete grid row selection");
+        return RequireRowSetRuntime().ReadSelectedRows(CreateRowSetIdentity(), budget);
+    }
+
+    internal void ValidateRowSetSelectors(IReadOnlyList<GridRowSelector> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (Definition.RowIdentityColumns.Count == 0 || rows.Any(row => !IsDeclaredIdentitySelector(row)))
+            throw new InvalidOperationException($"Grid '{AutomationId}' requires the exact stable columns declared by IdentifyRowsBy(...) for every selected row.");
+    }
+
+    private IGridRowSetRuntime RequireRowSetRuntime() => Inner as IGridRowSetRuntime
+        ?? throw new NotSupportedException($"Grid '{AutomationId}' does not expose complete row selection.");
+
+    private GridRowSetIdentity CreateRowSetIdentity()
+    {
+        if (Definition.RowIdentityColumns.Count == 0)
+            throw new NotSupportedException($"Grid '{AutomationId}' needs IdentifyRowsBy(...) to read the complete selection.");
+        var names = RuntimeMetadataNames;
+        var columns = Definition.RowIdentityColumns.Select(name => MapColumn(ResolveColumnIndex(name), names)).ToArray();
+        return new GridRowSetIdentity(Definition.RowIdentityColumns, columns, Definition.CellContext.RowPath);
     }
 
     private bool ShouldUseAddressableGrid(IReadOnlyList<string>? runtimeNames = null)
