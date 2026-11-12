@@ -26,36 +26,9 @@ internal static class HeadlessGridRuntimeAccess
             : Array.Empty<object?>();
     }
 
-    public static (object?[] Items, bool IsAuthoritative) ReadCurrentViewItems(Control grid)
-    {
-        ArgumentNullException.ThrowIfNull(grid);
-        if (grid is DataGrid { CollectionView: { } collectionView })
-        {
-            return (collectionView.Cast<object?>().ToArray(), true);
-        }
-
-        if (grid is ItemsControl itemsControl)
-        {
-            return (itemsControl.ItemsView.Cast<object?>().ToArray(), true);
-        }
-
-        if (GridPropertyValueReader.TryReadProperty(grid, "CollectionView", out var currentView)
-            && currentView is IEnumerable values and not string)
-        {
-            return (values.Cast<object?>().ToArray(), true);
-        }
-
-        if (GridPropertyValueReader.TryReadProperty(grid, "VisibleRowCount", out var visibleCount)
-            && visibleCount is int count && count >= 0
-            && grid.GetType().GetMethod("GetSourceItemByVisibleRowIndex", PublicInstance,
-                binder: null, types: [typeof(int)], modifiers: null) is { } getVisibleItem)
-        {
-            return (Enumerable.Range(0, count).Select(index => getVisibleItem.Invoke(grid, [index]))
-                .Where(static item => item is not null).ToArray(), true);
-        }
-
-        return (ReadSourceItems(grid), false);
-    }
+    public static (object?[] Items, bool IsAuthoritative) ReadCurrentViewItems(Control grid) =>
+        NativeGridSelectionAccess.TryReadCurrentView(grid, out var items)
+            ? (items, true) : (ReadSourceItems(grid), false);
 
     public static string[] ReadColumnNames(Control grid) => ReadColumnMetadata(grid).Names;
 

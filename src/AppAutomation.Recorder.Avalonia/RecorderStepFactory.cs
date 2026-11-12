@@ -1717,8 +1717,10 @@ internal sealed partial class RecorderStepFactory
                     + "Configure IdentifyRowsBy(...); visual row indexes are not persisted."));
         }
 
-        if (!TryReadItemsSource(gridSource, out var items)
-            || !TryResolveGridRow(source, gridSource, items, out var rowIndex, out _))
+        IReadOnlyList<object?> items;
+        if (NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var view)) items = view;
+        else _ = TryReadItemsSource(gridSource, out items);
+        if (!TryResolveGridRow(source, gridSource, items, out var rowIndex, out _))
         {
             return new GridRowGestureCaptureResult(
                 true,
@@ -1746,7 +1748,8 @@ internal sealed partial class RecorderStepFactory
             definition,
             rowIndex,
             columnIndex: null,
-            excludeTargetColumnFromIdentity: false);
+            excludeTargetColumnFromIdentity: false,
+            captureItems: items);
         return new GridRowGestureCaptureResult(true, result);
     }
 
@@ -6760,10 +6763,12 @@ internal sealed partial class RecorderStepFactory
         GridAutomationDefinition definition,
         int rowIndex,
         int? columnIndex,
-        bool excludeTargetColumnFromIdentity)
+        bool excludeTargetColumnFromIdentity,
+        IReadOnlyList<object?>? captureItems = null)
     {
+        var items = captureItems;
         if (!TryFindControl(hint.SourceLocatorValue, hint.SourceLocatorKind, out var gridSource)
-            || !TryReadItemsSource(gridSource, out var items))
+            || items is null && !TryReadItemsSource(gridSource, out items))
         {
             return StepCreationResult.Unsupported(
                 $"Grid '{definition.PagePropertyName}' does not expose the configured ItemsSource for stable row capture.");

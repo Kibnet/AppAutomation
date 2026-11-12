@@ -12,13 +12,14 @@ namespace AppAutomation.Avalonia.Headless.Automation;
 
 public sealed partial class HeadlessControlResolver
 {
-    private sealed class HeadlessVisualGridControl :
+    private sealed partial class HeadlessVisualGridControl :
         HeadlessControlBase<AutomationElement>,
         IEditableGridControl,
         IIndexedAddressableGridControl,
         IAddressableGridControl,
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
+        IGridRowSetRuntime,
         IGridColumnMetadataControl,
         IGridRowPositionIdentityControl,
         IGridHeaderValueControl

@@ -260,7 +260,7 @@ internal static class RecorderScenarioGraphValidator
         var rowConditions = new[] { step.GridRowConditions }.Concat(
             step.NumericExpectedExpression?.Operands()
                 .Select(static operand => operand.GridValueReference?.RowConditions)
-            ?? []);
+            ?? []).Concat(step.GridSelectedRows?.Select(static row => row?.Conditions) ?? []);
         foreach (var conditions in rowConditions)
         {
             if (conditions is null)
@@ -325,27 +325,38 @@ internal static class RecorderScenarioGraphValidator
             }
         }
 
-        if (step.GridRowAnchorCheckpointId is not { } anchorId)
+        foreach (var row in step.GridSelectedRows ?? [])
         {
+            if (row?.AnchorCheckpointId is { } rowAnchor)
+            {
+                var result = ValidateRowAnchor(rowAnchor, row.Conditions);
+                if (!result.IsValid) return result;
+            }
+        }
+
+        return step.GridRowAnchorCheckpointId is { } anchorId
+            ? ValidateRowAnchor(anchorId, step.GridRowConditions)
+            : RecorderGraphStepValidationResult.Valid;
+
+        RecorderGraphStepValidationResult ValidateRowAnchor(Guid anchor, IReadOnlyList<RecordedGridRowCondition>? conditions)
+        {
+            if (!anchors.TryGetValue(anchor, out var source)
+                || conditions is not { Count: > 0 }
+                || source.GridRowConditions is not { Count: > 0 } sourceConditions
+                || !string.Equals(step.Control.LocatorValue, source.Control.LocatorValue, StringComparison.Ordinal)
+                || step.Control.LocatorKind != source.Control.LocatorKind
+                || conditions.Count != sourceConditions.Count
+                || conditions.Where((condition, conditionIndex) =>
+                    !string.Equals(condition.ColumnName, sourceConditions[conditionIndex].ColumnName, StringComparison.Ordinal)
+                    || !string.Equals(condition.Value, sourceConditions[conditionIndex].Value, StringComparison.Ordinal)
+                    || condition.ValueReference is not null).Any())
+            {
+                return RecorderGraphStepValidationResult.Invalid(
+                    $"Grid step {index + 1} references a missing, later or different table-row checkpoint.");
+            }
+
             return RecorderGraphStepValidationResult.Valid;
         }
-
-        if (!anchors.TryGetValue(anchorId, out var source)
-            || step.GridRowConditions is not { Count: > 0 } conditions
-            || source.GridRowConditions is not { Count: > 0 } sourceConditions
-            || !string.Equals(step.Control.LocatorValue, source.Control.LocatorValue, StringComparison.Ordinal)
-            || step.Control.LocatorKind != source.Control.LocatorKind
-            || conditions.Count != sourceConditions.Count
-            || conditions.Where((condition, conditionIndex) =>
-                !string.Equals(condition.ColumnName, sourceConditions[conditionIndex].ColumnName, StringComparison.Ordinal)
-                || !string.Equals(condition.Value, sourceConditions[conditionIndex].Value, StringComparison.Ordinal)
-                || condition.ValueReference is not null).Any())
-        {
-            return RecorderGraphStepValidationResult.Invalid(
-                $"Grid step {index + 1} references a missing, later or different table-row checkpoint.");
-        }
-
-        return RecorderGraphStepValidationResult.Valid;
     }
 
     private static RecorderGraphStepValidationResult ValidateDynamicGridKeyCheckpoint(

@@ -67,6 +67,7 @@ public sealed partial class FlaUiControlResolver
         IAddressableGridControl,
         IGridRowSelectionControl,
         IIndexedGridRowSelectionControl,
+        IGridRowSetRuntime,
         IGridColumnMetadataControl,
         IGridRowPositionIdentityControl,
         IGridHeaderValueControl
@@ -81,10 +82,12 @@ public sealed partial class FlaUiControlResolver
         public FlaUiVisualGridControl(
             Window searchRoot,
             string automationId,
-            IGridControl? fallback = null)
+            IGridControl? fallback = null,
+            AutomationElement? gridRoot = null)
         {
             _searchRoot = searchRoot ?? throw new ArgumentNullException(nameof(searchRoot));
             _fallback = fallback;
+            _gridRoot = gridRoot;
             AutomationId = string.IsNullOrWhiteSpace(automationId)
                 ? throw new ArgumentException("Automation id cannot be empty.", nameof(automationId))
                 : automationId;
@@ -1087,9 +1090,10 @@ public sealed partial class FlaUiControlResolver
         private NativeFlaUiRow ResolveUniqueNativeRow(
             GridIndexedRowSelector selector,
             Stopwatch stopwatch,
-            int timeoutMs)
+            int timeoutMs,
+            bool allowUserInput = true)
         {
-            var scan = ScanNativeRows(selector, stopwatch, timeoutMs);
+            var scan = ScanNativeRows(selector, stopwatch, timeoutMs, allowUserInput);
             if (scan.MatchingRows.Count != 1)
             {
                 throw new InvalidOperationException(
@@ -1106,7 +1110,7 @@ public sealed partial class FlaUiControlResolver
 
             var target = scan.MatchingRows[0];
             var scroll = FindGridScrollState();
-            if (TryRestoreGridScrollPosition(scroll, target.ScrollPosition, stopwatch, timeoutMs))
+            if (TryRestoreGridScrollPosition(scroll, target.ScrollPosition, stopwatch, timeoutMs, allowUserInput))
             {
                 var restoredMatch = TakePrefetchedNativeRows()
                     .FirstOrDefault(row => row.IsVisible && NativeRowMatches(row, selector));
@@ -1116,7 +1120,7 @@ public sealed partial class FlaUiControlResolver
                 }
             }
 
-            MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
+            MoveGridScrollToStart(scroll, stopwatch, timeoutMs, allowUserInput);
             do
             {
                 var visibleRows = TakePrefetchedNativeRows();
@@ -1132,7 +1136,8 @@ public sealed partial class FlaUiControlResolver
                         stopwatch,
                         timeoutMs,
                         previousSignature,
-                        EstimateNativeScrollIncrement(visibleRows)))
+                        EstimateNativeScrollIncrement(visibleRows),
+                        allowUserInput))
                 {
                     break;
                 }
@@ -1289,7 +1294,8 @@ public sealed partial class FlaUiControlResolver
             (System.Drawing.Rectangle Bounds, int? Index, int[]? RuntimeId) originalAnchor,
             GridScrollPosition originalScroll,
             IReadOnlyList<NativeFlaUiRow>? observedRows = null,
-            GridScrollPosition? observedScroll = null)
+            GridScrollPosition? observedScroll = null,
+            bool requireUnique = false)
         {
             var visibleRows = observedRows ?? ReadNativeDataRows();
             var currentScroll = observedScroll ?? ReadGridScrollPosition(FindGridScrollState(includeNavigationControls: false));
@@ -1308,16 +1314,17 @@ public sealed partial class FlaUiControlResolver
             var (originalBounds, originalIndex, originalRuntimeId) = originalAnchor;
             if (originalRuntimeId is { Length: > 0 })
             {
-                var sameRuntime = visibleRows.FirstOrDefault(candidate =>
+                var sameRuntime = visibleRows.Where(candidate =>
                     originalRuntimeId.SequenceEqual(
                         TryRead(() => candidate.Element.FrameworkAutomationElement.RuntimeId.ValueOrDefault)
                         ?? [])
                     && (originalIndex is null
                         || ReadNativeGridRowIndex(candidate) is not { } candidateIndex
                         || originalIndex == candidateIndex));
-                if (sameRuntime is not null)
+                var runtimeMatch = requireUnique ? sameRuntime.SingleOrDefault() : sameRuntime.FirstOrDefault();
+                if (runtimeMatch is not null)
                 {
-                    return sameRuntime;
+                    return runtimeMatch;
                 }
             }
 
@@ -1330,7 +1337,7 @@ public sealed partial class FlaUiControlResolver
                     && Math.Abs(bounds.Bottom - originalBounds.Bottom) <= 3
                     && (originalIndex is null || candidateIndex is null || originalIndex == candidateIndex);
             }).ToArray();
-            if (sameRowArea.Length == 0)
+            if (sameRowArea.Length == 0 || requireUnique && sameRowArea.Length != 1)
             {
                 throw new InvalidOperationException(
                     $"Grid '{AutomationId}' could not rebind the identified row after horizontal column navigation.");
@@ -1361,7 +1368,8 @@ public sealed partial class FlaUiControlResolver
         private NativeGridScan ScanNativeRows(
             GridIndexedRowSelector selector,
             Stopwatch stopwatch,
-            int timeoutMs)
+            int timeoutMs,
+            bool allowUserInput = true)
         {
             var selectorColumnIndexes = selector.Conditions
                 .Where(static condition => condition.Column.RowIdentityAutomationProperty is null)
@@ -1382,7 +1390,8 @@ public sealed partial class FlaUiControlResolver
                 stopwatch,
                 timeoutMs,
                 selector.HasDeclaredUniqueIdentity,
-                requiredCellIndexes: selectorColumnIndexes);
+                requiredCellIndexes: selectorColumnIndexes,
+                allowUserInput: allowUserInput);
         }
 
         private NativeGridScan ScanNativeRows(
@@ -1394,7 +1403,8 @@ public sealed partial class FlaUiControlResolver
             int timeoutMs,
             bool hasDeclaredUniqueIdentity,
             bool provePositionOrder = false,
-            IReadOnlyCollection<int>? requiredCellIndexes = null)
+            IReadOnlyCollection<int>? requiredCellIndexes = null,
+            bool allowUserInput = true)
         {
             if (requiredCellIndexes is not null) _prefetchedNativeRows = null;
             var rows = new List<NativeGridRowSnapshot>();
@@ -1435,7 +1445,7 @@ public sealed partial class FlaUiControlResolver
                 return new NativeGridScan(rows, Array.Empty<NativeGridRowSnapshot>(), null);
             }
 
-            MoveGridScrollToStart(scroll, stopwatch, timeoutMs);
+            MoveGridScrollToStart(scroll, stopwatch, timeoutMs, allowUserInput);
             scroll = FindGridScrollState();
             var startedAtBoundary = IsGridScrollAtBoundary(scroll, forward: false);
             var contiguousObservations = true;
@@ -1487,7 +1497,8 @@ public sealed partial class FlaUiControlResolver
                     stopwatch,
                     timeoutMs,
                     previousSignature,
-                    EstimateNativeScrollIncrement(CompleteRows(observed))));
+                    EstimateNativeScrollIncrement(CompleteRows(observed)),
+                    allowUserInput));
 
             var matchingRows = rows.Where(snapshotMatches).ToArray();
             return new NativeGridScan(
@@ -1549,6 +1560,12 @@ public sealed partial class FlaUiControlResolver
                         .ToArray()
                 };
             }).ToArray();
+            return AppendNativeObservation(accumulated, rawSnapshots);
+        }
+
+        private NativeGridRowSnapshot[] AppendNativeObservation(List<NativeGridRowSnapshot> accumulated,
+            NativeGridRowSnapshot[] rawSnapshots)
+        {
             var viewportSignature = CreateNativeSnapshotSignature(rawSnapshots);
             rawSnapshots = rawSnapshots
                 .Select(snapshot => snapshot with { ViewportSignature = viewportSignature })
@@ -3719,7 +3736,8 @@ public sealed partial class FlaUiControlResolver
             return IsUsefulAutomationText(name) ? name : ReadVisualGridCellText(header);
         }
 
-        private void EnsureNativeColumnVisible(GridRuntimeColumn column, Stopwatch stopwatch, int timeoutMs)
+        private void EnsureNativeColumnVisible(GridRuntimeColumn column, Stopwatch stopwatch, int timeoutMs,
+            bool allowUserInput = true)
         {
             if (column.RuntimeColumnName is { } caption)
             {
@@ -3733,7 +3751,8 @@ public sealed partial class FlaUiControlResolver
                     stopwatch,
                     timeoutMs,
                     declaredIndexes.Length == 1 ? declaredIndexes[0].index : null,
-                    column.DeclaredRuntimeColumnNames);
+                    column.DeclaredRuntimeColumnNames,
+                    allowUserInput: allowUserInput);
             }
         }
 
@@ -3753,7 +3772,8 @@ public sealed partial class FlaUiControlResolver
             int? configuredColumnIndex = null,
             IReadOnlyList<string>? declaredRuntimeColumnNames = null,
             Func<bool>? targetIsVisible = null,
-            Func<System.Drawing.Rectangle>? targetBounds = null)
+            Func<System.Drawing.Rectangle>? targetBounds = null,
+            bool allowUserInput = true)
         {
             bool ContainsTargetHeader(IEnumerable<NativeGridColumnHeader> headers) => headers.Any(header =>
                 string.Equals(header.Name, caption, StringComparison.Ordinal));
@@ -3863,7 +3883,12 @@ public sealed partial class FlaUiControlResolver
                 }
 
                 var button = forward ? buttons[^1] : buttons[0];
-                new FlaUiButtonControl(button.AsButton()).Invoke();
+                if (allowUserInput)
+                    new FlaUiButtonControl(button.AsButton()).Invoke();
+                else if (button.Patterns.Invoke.PatternOrDefault is { } invoke)
+                    invoke.Invoke();
+                else
+                    return false;
                 return true;
             });
             bool PageScrollBar(bool forward) => TryRead(() =>
@@ -3910,6 +3935,7 @@ public sealed partial class FlaUiControlResolver
                     return true;
                 }
 
+                if (!allowUserInput) return false;
                 DesktopPointer.ClickPrepared(
                     () => FindCurrentHorizontalScrollBar() ?? scrollBar,
                     element => PrepareForPhysicalGridInput(element),
@@ -4026,26 +4052,8 @@ public sealed partial class FlaUiControlResolver
                 return Array.Empty<NativeFlaUiRow>();
             }
 
-            ConditionBase dataItemCondition = root.Automation.ConditionFactory.ByControlType(ControlType.DataItem);
-            if (metadataSelector is not null)
-            {
-                var properties = root.Automation.PropertyLibrary.Element;
-                foreach (var condition in metadataSelector.Conditions)
-                {
-                    if (condition.Column.RowIdentityAutomationProperty is not { } property) continue;
-                    var propertyId = property switch
-                    {
-                        GridRowAutomationProperty.AutomationId => properties.AutomationId,
-                        GridRowAutomationProperty.Name => properties.Name,
-                        GridRowAutomationProperty.HelpText => properties.HelpText,
-                        GridRowAutomationProperty.ItemStatus => properties.ItemStatus,
-                        _ => throw new InvalidOperationException($"Unsupported grid row automation property '{property}'.")
-                    };
-                    dataItemCondition = dataItemCondition.And(new PropertyCondition(propertyId, condition.ExpectedText));
-                }
-            }
             var rootBounds = TryRead(() => root.BoundingRectangle);
-            var rowElements = TryRead(() => root.FindAllDescendants(dataItemCondition))
+            var rowElements = TryRead(() => root.FindAllDescendants(CreateNativeRowCondition(root, metadataSelector)))
                 ?? Array.Empty<AutomationElement>();
             return rowElements
                 .Select(candidate => new
@@ -4077,6 +4085,29 @@ public sealed partial class FlaUiControlResolver
                         ? row.Cells.Count == headers.Length
                         : requiredCellIndexes.All(row.HasCell)))
                 .ToArray();
+        }
+
+        private static ConditionBase CreateNativeRowCondition(AutomationElement root, GridIndexedRowSelector? selector)
+        {
+            var condition = root.Automation.ConditionFactory.ByControlType(ControlType.DataItem);
+            if (selector is null) return condition;
+
+            ConditionBase result = condition;
+            var properties = root.Automation.PropertyLibrary.Element;
+            foreach (var part in selector.Conditions)
+            {
+                if (part.Column.RowIdentityAutomationProperty is not { } property) continue;
+                var propertyId = property switch
+                {
+                    GridRowAutomationProperty.AutomationId => properties.AutomationId,
+                    GridRowAutomationProperty.Name => properties.Name,
+                    GridRowAutomationProperty.HelpText => properties.HelpText,
+                    GridRowAutomationProperty.ItemStatus => properties.ItemStatus,
+                    _ => throw new InvalidOperationException($"Unsupported grid row automation property '{property}'.")
+                };
+                result = result.And(new PropertyCondition(propertyId, part.ExpectedText));
+            }
+            return result;
         }
 
         private static IReadOnlyList<AutomationElement> ResolveNativeRowCells(
@@ -4336,7 +4367,8 @@ public sealed partial class FlaUiControlResolver
         private void MoveGridScrollToStart(
             GridScrollState scroll,
             Stopwatch stopwatch,
-            int timeoutMs)
+            int timeoutMs,
+            bool allowUserInput = true)
         {
             if (IsGridScrollAtBoundary(scroll, forward: false))
             {
@@ -4430,6 +4462,8 @@ public sealed partial class FlaUiControlResolver
                     }
                 }
             }
+
+            if (!allowUserInput) return;
 
             var beforeKeyboardReset = ReadVisibleNativeRowSignature();
             var beforeKeyboardPosition = ReadGridScrollPosition(FindGridScrollState());
@@ -4607,7 +4641,8 @@ public sealed partial class FlaUiControlResolver
             Stopwatch stopwatch,
             int timeoutMs,
             string? previousSignature = null,
-            double? rangeIncrement = null)
+            double? rangeIncrement = null,
+            bool allowUserInput = true)
         {
             if (stopwatch.ElapsedMilliseconds >= timeoutMs || IsGridScrollAtBoundary(scroll, forward: true))
             {
@@ -4630,6 +4665,8 @@ public sealed partial class FlaUiControlResolver
             {
                 return true;
             }
+
+            if (!allowUserInput) return false;
 
             if (scroll.ForwardButton is not null
                 && TryClickGridScrollButton(scroll.ForwardButton)
@@ -4774,7 +4811,8 @@ public sealed partial class FlaUiControlResolver
             GridScrollState scroll,
             GridScrollPosition position,
             Stopwatch stopwatch,
-            int timeoutMs)
+            int timeoutMs,
+            bool allowUserInput = true)
         {
             if (stopwatch.ElapsedMilliseconds >= timeoutMs)
             {
@@ -4782,7 +4820,7 @@ public sealed partial class FlaUiControlResolver
             }
 
             var previous = ReadVisibleNativeRowSignature();
-            if (position.RangeValue is { } targetRange
+            if (allowUserInput && position.RangeValue is { } targetRange
                 && scroll.RangeValuePattern is not null)
             {
                 var minimum = TryRead(() => scroll.RangeValuePattern.Minimum.ValueOrDefault);

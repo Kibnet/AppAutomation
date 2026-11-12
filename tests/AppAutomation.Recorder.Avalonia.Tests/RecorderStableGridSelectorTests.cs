@@ -14,6 +14,33 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderStableGridSelectorTests
 {
     [Test]
+    public async Task GridRowSetRestoresAndCompilesCompositeKeysAndAnEmptySelection()
+    {
+        var selection = new RecordedStep(RecordedActionKind.SelectGridRows, GridDescriptor(), StepId: Guid.NewGuid())
+        {
+            GridSelectedRows =
+            [
+                new([new("Number", "ORDER-03"), new("Customer", "A")]),
+                new([new("Number", "ORDER-08"), new("Customer", "B")])
+            ]
+        };
+        var clear = selection with { StepId = Guid.NewGuid(), GridSelectedRows = [] };
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage, RecorderScenarioDestinationSources.CompilableScenario);
+        var state = new RecorderAutosaveState("Rows", "row-set", "Rows", DateTimeOffset.UtcNow, [selection, clear]);
+        var autosave = Path.Combine(project.RootPath, "selection.autosave.cs");
+        await File.WriteAllTextAsync(autosave, RecorderAutosaveStateSerializer.CreateMarker(state));
+        await Assert.That(RecorderAutosaveStateSerializer.TryRead(autosave, out var restored, out var error))
+            .IsTrue().Because(error);
+        var saved = await project.SaveAsync(project.CreateSaveContext("Rows", "row-set"), restored!.Steps);
+        var code = await File.ReadAllTextAsync(saved.ScenarioFilePath!);
+        await Assert.That(code).Contains("GridRowSelector.ByCell(\"Number\", \"ORDER-03\").AndCell(\"Customer\", \"A\")");
+        await Assert.That(code).Contains("GridRowSelector.ByCell(\"Number\", \"ORDER-08\").AndCell(\"Customer\", \"B\")");
+        await Assert.That(code).Contains("Page.SelectGridRows(static page => page.OrdersGrid, []);");
+        await Assert.That(RecorderGeneratedSourceCompiler.Compile(project.RootPath)).IsEmpty();
+    }
+
+    [Test]
     public async Task Generator_UsesEarlierTextCheckpointAsGridRowValue()
     {
         var checkpointId = Guid.NewGuid();

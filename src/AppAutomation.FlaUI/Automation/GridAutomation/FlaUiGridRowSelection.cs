@@ -215,9 +215,10 @@ public sealed partial class FlaUiControlResolver
                     .Select(selected => $"{TryRead(() => selected.ItemStatus)}/{TryRead(() => selected.Name)}"))}.";
         }
 
-        private static System.Drawing.Point GetVisibleGridRowPoint(
+        internal static System.Drawing.Point GetVisibleGridRowPoint(
             AutomationElement row,
-            AutomationElement? selectionContainer)
+            AutomationElement? selectionContainer,
+            bool requireExactHit = false)
         {
             var rowBounds = TryRead(() => row.BoundingRectangle);
             var visibleBounds = selectionContainer is null
@@ -239,16 +240,16 @@ public sealed partial class FlaUiControlResolver
                 throw new System.NotSupportedException("The grid row exposes no cell bounds for a safe selection-only click.");
             var content = cells.Aggregate(System.Drawing.Rectangle.Union);
             // Click row background/selector space, never a cell's text or editor.
-            var background = new[]
+            var backgrounds = new[]
             {
                 System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, visibleBounds.Top, content.Left, visibleBounds.Bottom),
                 System.Drawing.Rectangle.FromLTRB(content.Right, visibleBounds.Top, visibleBounds.Right, visibleBounds.Bottom),
                 System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, visibleBounds.Top, visibleBounds.Right, content.Top),
                 System.Drawing.Rectangle.FromLTRB(visibleBounds.Left, content.Bottom, visibleBounds.Right, visibleBounds.Bottom)
             }.Where(static bounds => bounds.Width > 0 && bounds.Height > 0)
-                .OrderByDescending(static bounds => (long)bounds.Width * bounds.Height).FirstOrDefault();
-            if (background.Width > 0 && background.Height > 0)
-                return new System.Drawing.Point(background.Left + background.Width / 2, background.Top + background.Height / 2);
+                .OrderByDescending(static bounds => (long)bounds.Width * bounds.Height);
+            foreach (var background in backgrounds)
+                if (FindBackgroundPoint(background) is { } point) return point;
 
             // Some providers expose a trailing filler as a cell-shaped Custom peer.
             // Column headers prove where real columns end, even when that filler has row-sized bounds.
@@ -264,13 +265,33 @@ public sealed partial class FlaUiControlResolver
                 if (columnBounds.Length > 0)
                 {
                     var columnsRight = columnBounds.Max(static bounds => bounds.Right);
-                    if (columnsRight < visibleBounds.Right)
-                        return new System.Drawing.Point(columnsRight + (visibleBounds.Right - columnsRight) / 2,
-                            visibleBounds.Top + visibleBounds.Height / 2);
+                    if (columnsRight < visibleBounds.Right && FindBackgroundPoint(System.Drawing.Rectangle.FromLTRB(
+                            columnsRight, visibleBounds.Top, visibleBounds.Right, visibleBounds.Bottom)) is { } point)
+                        return point;
                 }
             }
             throw new System.NotSupportedException(
                 "The grid row exposes no background selection area; a SelectionItem pattern or row selector is required.");
+
+            System.Drawing.Point? FindBackgroundPoint(System.Drawing.Rectangle bounds)
+            {
+                var center = new System.Drawing.Point(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+                if (!requireExactHit) return center;
+                // Bounds can include the clipped end of a virtual row. Resolve a real hit on the
+                // neutral background, rather than moving or clicking until a neighboring row reacts.
+                foreach (var y in new[] { center.Y, bounds.Top + bounds.Height / 4, bounds.Bottom - 1 - bounds.Height / 4 }.Distinct())
+                foreach (var x in new[] { center.X, bounds.Left + bounds.Width / 4, bounds.Right - 1 - bounds.Width / 4 }.Distinct())
+                {
+                    var point = new System.Drawing.Point(x, y);
+                    try
+                    {
+                        if (DesktopPointerTargetResolver.FindHitTarget(row.Automation.FromPoint(point), row.Equals,
+                                rejectInteractiveDescendantHit: true) is not null) return point;
+                    }
+                    catch (PointerInterferenceException) { /* Reject this point without delivering any input. */ }
+                }
+                return null;
+            }
         }
 
         private static bool TryConfirmGridRowSelection(

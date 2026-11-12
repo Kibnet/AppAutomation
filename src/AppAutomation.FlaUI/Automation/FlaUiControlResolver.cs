@@ -388,10 +388,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return new FlaUiVisualGridControl(
                 _window,
                 definition.LocatorValue,
-                fallbackGrid is null ? null : new FlaUiGridControl(_window, fallbackGrid));
+                fallbackGrid is null ? null : new FlaUiGridControl(_window, fallbackGrid, definition.LocatorValue));
         }
 
-        return new FlaUiGridControl(_window, element.AsGrid());
+        return new FlaUiGridControl(_window, element.AsGrid(), definition.LocatorValue);
     }
 
     private AutomationElement FindElement(UiControlDefinition definition)
@@ -4432,37 +4432,44 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         return ReadAutomationElementVisibleText(element, preferValue: false, skipButtonDescendants: false);
     }
 
-    private static string? ReadGridCellText(AutomationElement element)
+    private static string? ReadGridCellText(AutomationElement element, bool preserveEmpty = false)
     {
-        return ReadAutomationElementVisibleText(element, preferValue: true, skipButtonDescendants: true);
+        return ReadAutomationElementVisibleText(element, preferValue: true, skipButtonDescendants: true,
+            preserveEmpty: preserveEmpty);
     }
 
     private static string? ReadAutomationElementVisibleText(
         AutomationElement element,
         bool preferValue,
-        bool skipButtonDescendants)
+        bool skipButtonDescendants,
+        bool preserveEmpty = false)
     {
         if (element is null)
         {
             return null;
         }
 
-        var name = TryRead(() => element.Name);
-        var value = TryRead(() => element.Patterns.Value.PatternOrDefault?.Value.Value);
-        if (!preferValue && IsUsefulAutomationText(name))
+        // Empty text on a text surface is evidence, unlike an unnamed container or a failed read.
+        var name = ReadName(element);
+        var value = ReadValue(element);
+        if (SelectPrimaryAutomationText(name, value, preferValue, preserveEmpty) is { } primaryText)
         {
-            return name;
+            return primaryText;
         }
 
-        if (IsUsefulAutomationText(value))
-        {
-            return value;
-        }
-
-        var descendants = FindAutomationDescendants(element);
+        var descendants = preserveEmpty
+            ? TryRead(() => element.FindAllDescendants())
+            : FindAutomationDescendants(element);
+        if (descendants is null) return null;
+        var observedEmpty = false;
         var textChildName = descendants
             .Where(candidate => TryRead(() => candidate.ControlType) == ControlType.Text)
-            .Select(static candidate => TryRead(() => candidate.Name))
+            .Select(candidate =>
+            {
+                var text = ReadName(candidate);
+                observedEmpty |= preserveEmpty && text == string.Empty;
+                return text;
+            })
             .FirstOrDefault(IsUsefulAutomationText);
         if (textChildName is not null)
         {
@@ -4479,7 +4486,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
             if (preferValue)
             {
-                value = TryRead(() => candidate.Patterns.Value.PatternOrDefault?.Value.Value);
+                value = ReadValue(candidate);
+                observedEmpty |= preserveEmpty && value == string.Empty;
                 if (IsUsefulAutomationText(value))
                 {
                     return value;
@@ -4493,7 +4501,24 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
         }
 
-        return preferValue && IsUsefulAutomationText(name) ? name : null;
+        if (preferValue && IsUsefulAutomationText(name)) return name;
+        return observedEmpty || preserveEmpty && name == string.Empty && TryRead(() => element.ControlType) == ControlType.Text
+            ? string.Empty : null;
+
+        string? ReadName(AutomationElement candidate) => preserveEmpty
+            ? TryRead(() => candidate.Properties.Name.TryGetValue(out var text) ? text : null)
+            : TryRead(() => candidate.Name);
+
+        string? ReadValue(AutomationElement candidate) => preserveEmpty
+            ? TryRead(() => candidate.Patterns.Value.PatternOrDefault is { } pattern
+                && pattern.Value.TryGetValue(out var text) ? text : null)
+            : TryRead(() => candidate.Patterns.Value.PatternOrDefault?.Value.Value);
+    }
+
+    internal static string? SelectPrimaryAutomationText(string? name, string? value, bool preferValue, bool preserveEmpty)
+    {
+        if (!preferValue && IsUsefulAutomationText(name)) return name;
+        return IsUsefulAutomationText(value) || (preserveEmpty && value == string.Empty) ? value : null;
     }
 
     internal static bool IsUsefulAutomationText(string? value)

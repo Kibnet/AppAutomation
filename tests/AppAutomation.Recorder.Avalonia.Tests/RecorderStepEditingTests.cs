@@ -1292,6 +1292,15 @@ public sealed class RecorderStepEditingTests
         session.AddRecordedStepForTesting(checkpoint);
         session.AddRecordedStepForTesting(oldRowAssertion);
         session.AddRecordedStepForTesting(newRowAssertion);
+        session.AddRecordedStepForTesting(new RecordedStep(RecordedActionKind.SelectGridRows,
+            checkpoint.Control, StepId: Guid.NewGuid())
+        {
+            GridSelectedRows =
+            [
+                new(checkpoint.GridRowConditions!, checkpointId),
+                new([new RecordedGridRowCondition("Number", "OTHER")])
+            ]
+        });
         var editing = (IRecorderStepEditingSessionDetails)session;
         editing.TryCreateStepEditDraft(checkpoint.StepId, out var draft, out _);
         var replacement = checkpoint with
@@ -1317,6 +1326,8 @@ public sealed class RecorderStepEditingTests
             await Assert.That(preview).Contains("GridRowKeyReader.Capture(Page.OtherGrid, 7)");
             await Assert.That(session.StepJournal[1].Preview).Contains("ByCell(\"Number\", \"OLD\")");
             await Assert.That(session.StepJournal[2].Preview).Contains("Page.OtherGrid, gridRow,");
+            await Assert.That(session.StepJournal[3].Preview).Contains("ByCell(\"Number\", \"OLD\")");
+            await Assert.That(session.StepJournal[3].Preview).Contains("ByCell(\"Number\", \"OTHER\")");
             await Assert.That(session.StepJournal.All(static step => step.CanPersist)).IsTrue();
         }
     }

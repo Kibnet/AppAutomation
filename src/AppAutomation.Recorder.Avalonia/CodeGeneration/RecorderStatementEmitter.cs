@@ -260,6 +260,8 @@ internal static class RecorderStatementEmitter
                 $"Page.SelectGridRow(static page => page.{propertyName}, {rowSelector});",
             RecordedActionKind.SelectGridRow =>
                 throw new InvalidOperationException("SelectGridRow requires a stable named row selector."),
+            RecordedActionKind.SelectGridRows =>
+                $"Page.SelectGridRows(static page => page.{propertyName}, {FormatGridSelectedRows(step, rowVariables)});",
             RecordedActionKind.SortGridByColumn => $"Page.SortGridByColumn(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.ScrollGridToEnd => $"Page.ScrollGridToEnd(static page => page.{propertyName});",
             RecordedActionKind.CopyGridCell => HasNamedGridRow(step)
@@ -1065,6 +1067,14 @@ internal static class RecorderStatementEmitter
         variables.RowAnchors.TryGetValue(checkpointId, out var name)
             ? name
             : throw new InvalidOperationException($"Grid row checkpoint '{checkpointId}' has no generated variable name.");
+
+    private static string FormatGridSelectedRows(RecordedStep step, GridRowVariableNames variables)
+    {
+        var rows = step.GridSelectedRows ?? throw new InvalidOperationException("SelectGridRows requires a complete selected row set.");
+        return "[" + string.Join(", ", rows.Select(row => row.AnchorCheckpointId is { } anchorId
+            ? FormatGridRowAnchorName(anchorId, variables)
+            : FormatGridRowSelector(row.Conditions, variables))) + "]";
+    }
 
     internal static IReadOnlyDictionary<Guid, string> CreateGridRowAnchorNames(
         IReadOnlyList<RecordedStep> steps,

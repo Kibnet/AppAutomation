@@ -4,6 +4,9 @@ using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
@@ -14,6 +17,123 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task RecorderCapturesEffectiveGridRowSelectionAfterControlAndShiftClicks()
+    {
+        using var session = LaunchGridRowSetFixture(includeFilteredDuplicate: true);
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key")).IdentifyRowsBy("Key"));
+
+        var captured = HeadlessRuntime.Dispatch(() =>
+        {
+            var window = session.MainWindow;
+            window.Show();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            var grid = ((Panel)window.Content!).Children.OfType<DataGrid>().Single();
+            using var recorder = new RecorderSession(window, new AppAutomationRecorderOptions
+            { ShowOverlay = false, GridAutomation = catalog });
+            recorder.Start();
+            Click("ROW-01", RawInputModifiers.None);
+            var single = recorder.StepJournal.Single().Preview;
+            Click("ROW-03", RawInputModifiers.Control, captureDuringPress: true);
+            var control = recorder.StepJournal.Single().Preview;
+            Click("ROW-04", RawInputModifiers.Shift);
+            var shift = recorder.StepJournal.Single().Preview;
+            var actual = grid.SelectedItems.Cast<object>().Select(static item => item.ToString()!).ToArray();
+            Click("ROW-02", RawInputModifiers.None);
+            var collapse = recorder.StepJournal.Single().Preview;
+            Click("ROW-02", RawInputModifiers.None);
+            var open = recorder.StepJournal.Single().Preview;
+            return (single, control, shift, actual, collapse, open);
+
+            void Click(string key, RawInputModifiers modifiers, bool captureDuringPress = false)
+            {
+                var row = grid.GetVisualDescendants().OfType<DataGridRow>()
+                    .Single(candidate => candidate.DataContext?.ToString() == key);
+                var point = row.TranslatePoint(new Point(30, row.Bounds.Height / 2), window)!.Value;
+                window.MouseDown(point, MouseButton.Left, modifiers);
+                if (captureDuringPress) _ = recorder.ExportPreview();
+                window.MouseUp(point, MouseButton.Left, modifiers);
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+
+        await Assert.That(captured.single).Contains("Page.SelectGridRow(");
+        await Assert.That(captured.control).Contains("Page.SelectGridRows(");
+        await Assert.That(captured.control).Contains("ROW-01");
+        await Assert.That(captured.control).Contains("ROW-03");
+        await Assert.That(captured.control).DoesNotContain("ROW-02");
+        await Assert.That(captured.shift).Contains("Page.SelectGridRows(");
+        foreach (var key in captured.actual) await Assert.That(captured.shift).Contains(key);
+        await Assert.That(System.Text.RegularExpressions.Regex.Matches(captured.shift, "GridRowSelector.ByCell").Count)
+            .IsEqualTo(captured.actual.Length);
+        await Assert.That(captured.collapse).Contains("Page.SelectGridRows(");
+        await Assert.That(captured.open).Contains("Page.OpenGridRow(");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task GridRowSetUsesTheCompleteNativeSelection()
+    {
+        using var session = LaunchGridRowSetFixture();
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.Name))
+            .IdentifyRowsBy("Key"));
+        var page = new MainWindowPage(new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog));
+        var a = GridRowSelector.ByCell("Key", "ROW-02");
+        var b = GridRowSelector.ByCell("Key", "ROW-12");
+        var c = GridRowSelector.ByCell("Key", "ROW-14");
+        var native = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return ((Panel)session.MainWindow.Content!).Children.OfType<DataGrid>().Single();
+        });
+
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, b]);
+        page.WaitUntilSelectedGridRowsEqual(static candidate => candidate.ArmComplexDataGridControl, [b, a]);
+        await Assert.That(Selection()).IsEqualTo("ROW-02,ROW-12");
+        var mismatch = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
+            static candidate => candidate.ArmComplexDataGridControl, [b, c], timeoutMs: 250));
+        await Assert.That(mismatch!.Message).Contains("Missing: [Key='ROW-14']");
+        await Assert.That(mismatch.Message).Contains("extra: [Key='ROW-02']");
+        Assert.Throws<InvalidOperationException>(() => page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, a]));
+        Assert.Throws<InvalidOperationException>(() => page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl,
+            [c, GridRowSelector.ByCell("Key", "MISSING")]));
+        await Assert.That(Selection()).IsEqualTo("ROW-02,ROW-12");
+        HeadlessRuntime.Dispatch(() => native.CollectionView.Filter = static item => item?.ToString() != "ROW-14");
+        var beforeFilteredRequest = Selection();
+        Assert.Throws<InvalidOperationException>(() =>
+            page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [b, c]));
+        await Assert.That(Selection()).IsEqualTo(beforeFilteredRequest);
+        HeadlessRuntime.Dispatch(() => native.CollectionView.Filter = null);
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [c, b]);
+        await Assert.That(Selection()).IsEqualTo("ROW-12,ROW-14");
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, []);
+        await Assert.That(Selection()).IsEmpty();
+
+        string Selection() => HeadlessRuntime.Dispatch(() =>
+            string.Join(",", native.SelectedItems.Cast<object>().Select(static item => item.ToString()).Order()));
+    }
+
+    private static DesktopAppSession LaunchGridRowSetFixture(bool includeFilteredDuplicate = false)
+    {
+        Window? window = null;
+        return DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () => window = new Window
+            {
+                Width = 520, Height = 360,
+                Content = global::DotnetDebug.Avalonia.GridRowSetFixture.CreateContent(includeFilteredDuplicate)
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]

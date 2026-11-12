@@ -22,6 +22,204 @@ public sealed class FlaUiControlResolverTests
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("DesktopUi")]
+    public async Task GridRowSetUsesTheCompleteNativeSelection(bool publishesSelection)
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = publishesSelection ? null : LaunchNativeGridRuntimeSession("row-set");
+        using var fixture = publishesSelection ? new GridRowSetDesktopFixture() : null;
+        var window = session?.MainWindow ?? fixture!.Window;
+        var conditions = window.Automation.ConditionFactory;
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.Name))
+            .IdentifyRowsBy("Key"));
+        var page = new MainWindowPage(new FlaUiControlResolver(window, conditions).WithGridAutomation(catalog));
+        var a = GridRowSelector.ByCell("Key", "ROW-02");
+        var b = GridRowSelector.ByCell("Key", "ROW-12");
+        var c = GridRowSelector.ByCell("Key", "ROW-14");
+        if (!publishesSelection)
+        {
+            var summary = window.FindFirstDescendant(conditions.ByAutomationId("GridSelectionSummary"));
+            await Assert.That(summary?.Name).IsEqualTo("None");
+            var unsupported = Assert.Throws<NotSupportedException>(() =>
+                page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, b]));
+            await Assert.That(unsupported!.Message).Contains("complete UI Automation multiple selection");
+            await Assert.That(summary!.Name).IsEqualTo("None");
+            return;
+        }
+
+        fixture!.SelectExtra();
+        await Assert.That(fixture.Selection).IsEqualTo("ROW-03");
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [a, b], timeoutMs: 10_000);
+        page.WaitUntilSelectedGridRowsEqual(static candidate => candidate.ArmComplexDataGridControl, [b, a]);
+        await Assert.That(fixture.Selection).IsEqualTo("ROW-02,ROW-12");
+        fixture.ScrollToLast();
+        await Assert.That(fixture.IsRealized(1)).IsFalse();
+        var artifacts = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+        Capture.Element(window).ToFile(Path.Combine(artifacts.FullName, "grid-row-set-offscreen.png"));
+        var mismatch = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
+            static candidate => candidate.ArmComplexDataGridControl, [b], timeoutMs: 250));
+        await Assert.That(mismatch!.Message).Contains("extra: [Key='ROW-02']");
+        await Assert.That(fixture.IsRealized(1)).IsFalse();
+        await Assert.That(fixture.Selection).IsEqualTo("ROW-02,ROW-12");
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [c, b], timeoutMs: 10_000);
+        await Assert.That(fixture.Selection).IsEqualTo("ROW-12,ROW-14");
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, []);
+        await Assert.That(fixture.Selection).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task GridRowSetUsesPublishedCellKeysForVirtualizedNativeSelections()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var fixture = new GridRowSetDesktopFixture(compositeKey: true);
+        var window = fixture.Window;
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                "ArmComplexDataGridControl", "ArmComplexDataGridControl", "ArmComplexDataGridControl")
+            .WithColumns(GridColumnDefinition.Auto("Key"), GridColumnDefinition.Auto("Suffix"))
+            .IdentifyRowsBy("Key", "Suffix"));
+        var page = new MainWindowPage(new FlaUiControlResolver(window, window.Automation.ConditionFactory).WithGridAutomation(catalog));
+        fixture.SelectExtra();
+        var key = GridRowSelector.ByCell("Key", "ROW-03").AndCell("Suffix", string.Empty);
+        var horizontalOffset = fixture.HorizontalOffset;
+        await Assert.That(() => page.WaitUntilSelectedGridRowsEqual(
+            static candidate => candidate.ArmComplexDataGridControl, [key])).Throws<NotSupportedException>();
+        await Assert.That(fixture.HorizontalOffset).IsEqualTo(horizontalOffset);
+        fixture.ScrollToLast();
+        await Assert.That(fixture.IsRealized(2)).IsFalse();
+        fixture.PublishSelection(key);
+        horizontalOffset = fixture.HorizontalOffset;
+        page.WaitUntilSelectedGridRowsEqual(static candidate => candidate.ArmComplexDataGridControl, [key]);
+        await Assert.That(fixture.HorizontalOffset).IsEqualTo(horizontalOffset);
+        page.SelectGridRows(static candidate => candidate.ArmComplexDataGridControl, [key]);
+        fixture.PublishSelection();
+        await Assert.That(() => page.WaitUntilSelectedGridRowsEqual(static candidate => candidate.ArmComplexDataGridControl, []))
+            .Throws<InvalidOperationException>();
+        await Assert.That(fixture.Selection).IsEqualTo("ROW-03");
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task GridRowSetFixtureJoinsTheStaThreadWhenStartupTimesOut()
+    {
+        Thread? worker = null;
+        using var entered = new ManualResetEventSlim();
+        using var exit = new ManualResetEventSlim();
+        var startup = Task.Run(() => Assert.Throws<TimeoutException>(() =>
+            new GridRowSetDesktopFixture(TimeSpan.FromSeconds(1), () =>
+            {
+                worker = Thread.CurrentThread;
+                entered.Set();
+                exit.Wait(TimeSpan.FromSeconds(4));
+            })));
+        try
+        {
+            await Assert.That(entered.Wait(TimeSpan.FromSeconds(5))).IsTrue();
+            await Task.Delay(1200);
+        }
+        finally { exit.Set(); }
+        var timeout = await startup;
+        await Assert.That(timeout).IsNotNull();
+        await Assert.That(worker?.IsAlive).IsEqualTo(false);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task GridRowSetUsesProtectedGesturesAndVerifiesTheCompletePublishedSelection(bool reverseRange)
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession("row-set-gestures");
+        MainWindowFlaUiPageFactory.Create(session).SelectTabItem(static p => p.DataGridTabItem);
+        var window = session.MainWindow;
+        var conditions = window.Automation.ConditionFactory;
+        var catalog = new GridAutomationCatalog().Add(GridAutomationDefinition.ByAutomationIds(
+                nameof(GestureGridPage.Grid), "GridRowSetGestureTable", "GridRowSetGestureTable")
+            .WithColumns(GridColumnDefinition.Auto("Key").ReadIdentityFromRow(GridRowAutomationProperty.ItemStatus))
+            .IdentifyRowsBy("Key"));
+        var page = new GestureGridPage(new FlaUiControlResolver(window, conditions).WithGridAutomation(catalog));
+        await Assert.That(Find("ArmComplexDataGridControl")).IsNotNull();
+        var root = Find("GridRowSetGestureTable");
+        root.Patterns.ScrollItem.PatternOrDefault?.ScrollIntoView();
+        await Assert.That(root.Patterns.Selection.IsSupported).IsFalse();
+        Find("SeedGridSelection").Patterns.Invoke.Pattern.Invoke();
+        await Verify(0, 1);
+        var beforeDisabled = Gestures();
+        Find("DisableGestureRow").Patterns.Invoke.Pattern.Invoke();
+        var disabled = Assert.Throws<InvalidOperationException>(() => Select(2, 12));
+        await Assert.That(disabled!.Message).Contains("disabled");
+        await Verify(0, 1);
+        await Assert.That(Gestures()).IsEqualTo(beforeDisabled);
+        Find("DisableGestureRow").Patterns.Invoke.Pattern.Invoke();
+        Select(0);
+        await Verify(0);
+        var prefix = new List<int> { 0 };
+        foreach (var next in new[] { 2, 5, 6, 12 })
+        {
+            var before = Gestures();
+            prefix.Add(next);
+            Select(prefix.ToArray());
+            await Verify(prefix.ToArray());
+            await Assert.That(Gestures()).IsEqualTo(before + "Control:1;");
+        }
+        var gestureCount = Gestures();
+        Select(12, 6, 5, 2, 0);
+        await Assert.That(Gestures()).IsEqualTo(gestureCount);
+        await Assert.That(root.FindAllDescendants().Any(element =>
+            element.Properties.ItemStatus.ValueOrDefault == "ARM-01" && !element.Properties.IsOffscreen.ValueOrDefault)).IsFalse();
+        var missingExtra = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
+            static p => p.Grid, [Row(12)], timeoutMs: 350));
+        await Assert.That(missingExtra!.Message).Contains("ARM-01");
+
+        Find("ChangeGridView").Patterns.Invoke.Pattern.Invoke();
+        var beforeMissing = Gestures();
+        var filteredOut = Assert.Throws<InvalidOperationException>(() => Select(17));
+        await Assert.That(filteredOut!.Message).Contains("current view");
+        await Assert.That(Gestures()).IsEqualTo(beforeMissing);
+        var range = Enumerable.Range(3, 12).ToArray();
+        // The view is reversed. First argument chooses the Shift anchor if it is one of the bounds.
+        Select(reverseRange ? range : range.Reverse().ToArray());
+        await Verify(range);
+        await Assert.That(Gestures()).Contains("None:1;Shift:1;");
+        await Assert.That(Gestures().Contains("Editor;", StringComparison.Ordinal)).IsFalse();
+        var artifacts = Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "TestResults"));
+        Capture.Element(window).ToFile(Path.Combine(artifacts.FullName, $"grid-gesture-range-{(reverseRange ? "reverse" : "forward")}.png"));
+        Select();
+        await Verify();
+        Select(0, 2, 5, 6, 12);
+        await Verify(0, 2, 5, 6, 12);
+        var beforeRefusal = Gestures();
+        Find("WithholdGridSelection").Patterns.Invoke.Pattern.Invoke();
+        var unavailable = Assert.Throws<NotSupportedException>(() => Select(0, 2));
+        await Assert.That(unavailable!.Message).Contains("GridRowSelectionValue");
+        await Assert.That(Gestures()).IsEqualTo(beforeRefusal);
+
+        AutomationElement Find(string id) => window.FindFirstDescendant(conditions.ByAutomationId(id));
+        string Gestures() => root.Properties.HelpText.ValueOrDefault ?? string.Empty;
+        static GridRowSelector Row(int index) => GridRowSelector.ByCell("Key", $"ARM-{index + 1:D2}");
+        void Select(params int[] indexes) => page.SelectGridRows(static p => p.Grid,
+            indexes.Select(Row).ToArray(), timeoutMs: 12_000);
+        async Task Verify(params int[] indexes)
+        {
+            page.WaitUntilSelectedGridRowsEqual(static p => p.Grid, indexes.Select(Row).ToArray());
+            await Assert.That(Find("GridSelectionSummary").Properties.Name.ValueOrDefault ?? string.Empty)
+                .IsEqualTo(string.Join(",", indexes.Order().Select(static index => $"ARM-{index + 1:D2}")));
+        }
+    }
+
+    private sealed class GestureGridPage(IUiControlResolver resolver) : UiPage(resolver)
+    {
+        private static readonly UiControlDefinition Definition = new(nameof(Grid), UiControlType.Grid, "GridRowSetGestureTable");
+
+        public IGridControl Grid => Resolve<IGridControl>(Definition);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
     public async Task StandaloneComboAppliesTypedValueWithoutLookingForClosedResults(bool alreadyOpen)
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();
@@ -1068,6 +1266,20 @@ public sealed class FlaUiControlResolverTests
             await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Acme.Editor")).IsTrue();
             await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Product.ComboBox")).IsTrue();
             await Assert.That(FlaUiControlResolver.IsUsefulAutomationText("Avalonia.Controls.TextBox")).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task PrimaryAutomationText_DistinguishesEmptyValueFromMissingValue()
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiControlResolver.SelectPrimaryAutomationText(
+                "Column caption", string.Empty, preferValue: true, preserveEmpty: true)).IsEqualTo(string.Empty);
+            await Assert.That(FlaUiControlResolver.SelectPrimaryAutomationText(
+                "Column caption", null, preferValue: true, preserveEmpty: true)).IsNull();
+            await Assert.That(FlaUiControlResolver.SelectPrimaryAutomationText(
+                "Column caption", string.Empty, preferValue: true, preserveEmpty: false)).IsNull();
         }
     }
 

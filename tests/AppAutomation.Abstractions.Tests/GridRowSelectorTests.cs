@@ -12,6 +12,9 @@ public sealed class GridRowSelectorTests
     {
         var order = GridRowSelector.ByCell("OrderId", "ORD-42");
         var line = order.AndCell("Item", "Pump");
+        var identity = new GridRowSetIdentity(["OrderId", "Item"],
+            [new GridRuntimeColumn(0, "OrderId", null, null, null, GridCellValueKind.Text, null, null),
+             new GridRuntimeColumn(1, "Item", null, null, null, GridCellValueKind.Text, null, null)], string.Empty);
 
         using (Assert.Multiple())
         {
@@ -19,6 +22,11 @@ public sealed class GridRowSelectorTests
             await Assert.That(line.Conditions.Count).IsEqualTo(2);
             await Assert.That(line.Conditions[0].ColumnName).IsEqualTo("OrderId");
             await Assert.That(line.Conditions[1].Value).IsEqualTo("Pump");
+            await Assert.That(identity.Read(column => column.ColumnIndex == 0 ? "ORD-42" : string.Empty)
+                .Conditions[1].Value).IsEqualTo(string.Empty);
+            await Assert.That(identity.TryRead(column => column.ColumnIndex == 0 ? "ORD-42" : null)).IsNull();
+            await Assert.That(() => identity.Read(column => column.ColumnIndex == 0 ? "ORD-42" : null))
+                .Throws<InvalidOperationException>();
         }
     }
 

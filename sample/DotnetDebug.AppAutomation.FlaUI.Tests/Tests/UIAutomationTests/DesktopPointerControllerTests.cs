@@ -12,6 +12,82 @@ public sealed class DesktopPointerControllerTests
     private static readonly Point Target = new(140, 160);
 
     [Test]
+    public async Task ModifiedSelectionClick_KeepsTheLeaseAndDoesNotReleaseForeignKeys()
+    {
+        var backend = new FakeBackend();
+        var coordinator = new FakeCoordinator();
+        var error = await Capture(() => Controller(backend, coordinator).RunAsync("grid-row-set", TimeSpan.FromSeconds(1), op =>
+        {
+            op.ClickForSelection(Target, PointerModifier.Control, () => { });
+            op.ClickForSelection(Target with { Y = Target.Y + 40 }, PointerModifier.Shift, () =>
+                backend.State = backend.State with { Modifiers = 1 });
+            return Task.CompletedTask;
+        }));
+        await Assert.That(error is PointerInterferenceException).IsTrue();
+        await Assert.That(backend.Events.Where(static value => value.StartsWith("modified:", StringComparison.Ordinal)).ToArray())
+            .IsEquivalentTo(["modified:Control"]);
+        await Assert.That(backend.State.Modifiers).IsEqualTo(1);
+        await Assert.That(backend.State.Position).IsEqualTo(Saved);
+        await Assert.That(coordinator.Acquisitions).IsEqualTo(1);
+        await Assert.That(coordinator.Releases).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ModifiedSelectionClick_StopsBeforeSendingOnCancellationOrValidationFailure(bool cancel)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var backend = new FakeBackend();
+        var error = await Capture(() => Controller(backend).RunAsync("grid-row-set", TimeSpan.FromSeconds(1), op =>
+        {
+            op.ClickForSelection(Target, PointerModifier.Shift, () =>
+            {
+                if (cancel) cancellation.Cancel();
+                else throw new InvalidOperationException("row changed");
+            });
+            return Task.CompletedTask;
+        }, cancellation.Token));
+        await Assert.That(cancel ? error is OperationCanceledException : error?.Message == "row changed").IsTrue();
+        await Assert.That(backend.Events.Any(static value => value.StartsWith("modified:", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(backend.State).IsEqualTo(new PointerState(Saved, PointerButtons.None, 0));
+    }
+
+    [Test]
+    [Arguments(0, "")]
+    [Arguments(1, "3")]
+    [Arguments(2, "2,3")]
+    [Arguments(3, "3")]
+    [Arguments(4, "")]
+    public async Task ModifiedSelectionClick_CleansUpOnlyDownsInTheAcceptedPrefix(int inserted, string releases) =>
+        await Assert.That(string.Join(",", WindowsPointerBackend.GetModifiedClickCleanup((uint)inserted))).IsEqualTo(releases);
+
+    [Test]
+    [Arguments(0xa2)] // Left Ctrl
+    [Arguments(0xa0)] // Left Shift
+    public async Task ModifiedSelectionClick_ConfirmsOnlyItsAcceptedKeyRelease(int virtualKey)
+    {
+        const uint injected = 0x10;
+        const uint released = 0x80;
+        const uint tag = 123;
+        var events = new ModifiedClickObservation.KeyboardEvents((ushort)virtualKey, tag);
+        events.Observe((uint)virtualKey, injected, tag, accepted: true);
+        events.Observe((uint)virtualKey, injected | released, tag, accepted: false);
+        await Assert.That(events.PressAccepted).IsTrue();
+        await Assert.That(events.ReleaseAccepted).IsFalse();
+        await Assert.That(events.ForeignKey).IsFalse();
+
+        events.Observe((uint)virtualKey, released, tag, accepted: true);
+        events.Observe((uint)virtualKey, injected | released, tag + 1, accepted: true);
+        await Assert.That(events.ForeignKey).IsTrue();
+        await Assert.That(events.ReleaseAccepted).IsFalse();
+
+        events.Observe((uint)virtualKey, injected | released, tag, accepted: true);
+        await Assert.That(events.ReleaseAccepted).IsTrue();
+        await Assert.That(events.ForeignKey).IsTrue();
+    }
+
+    [Test]
     public async Task Click_SavesImmediatelyBeforeActionAndRestoresWithAllButtonsUp()
     {
         var fake = new FakeBackend();
@@ -737,6 +813,8 @@ public sealed class DesktopPointerControllerTests
             if (!NeverReleaseOwnedButton) State = State with { Buttons = State.Buttons & ~WindowsPointerBackend.Mask(button) };
         }
         public void Wheel(double amount, bool horizontal) => Events.Add($"wheel:{amount}:{horizontal}");
+        public void ClickWithModifier(Point expectedPosition, PointerModifier modifier, CancellationToken cancellationToken) =>
+            Events.Add($"modified:{modifier}");
     }
 
     private sealed class FakeCoordinator : IDesktopInputCoordinator
