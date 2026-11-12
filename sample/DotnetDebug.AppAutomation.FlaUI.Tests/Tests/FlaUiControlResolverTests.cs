@@ -198,9 +198,9 @@ public sealed class FlaUiControlResolverTests
         await Assert.That(Gestures()).IsEqualTo(gestureCount);
         await Assert.That(root.FindAllDescendants().Any(element =>
             element.Properties.ItemStatus.ValueOrDefault == "ARM-01" && !element.Properties.IsOffscreen.ValueOrDefault)).IsFalse();
-        var missingExtra = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
-            static p => p.Grid, [Row(12)], timeoutMs: 350));
-        await Assert.That(missingExtra!.Message).Contains("ARM-01");
+        var mismatch = Assert.Throws<TimeoutException>(() => page.WaitUntilSelectedGridRowsEqual(
+            static p => p.Grid, [Row(2), Row(5), Row(6), Row(12)]));
+        await Assert.That(mismatch!.Message).Contains("extra: [Key='ARM-01']");
 
         Find("ChangeGridView").Patterns.Invoke.Pattern.Invoke();
         var beforeMissing = Gestures();

@@ -406,6 +406,10 @@ public sealed class RecorderFullCaptureCoverageTests
             {
                 GridRowConditions = [new RecordedGridRowCondition("OrderId", "ORD-42")]
             },
+            new RecordedStep(RecordedActionKind.SelectGridRows, Descriptor("OrdersGrid", UiControlType.Grid))
+            {
+                GridSelectedRows = [new([new("OrderId", "ORD-42")]), new([new("OrderId", "ORD-43")])]
+            },
             new RecordedStep(RecordedActionKind.OpenGridRow, Descriptor("OrdersGrid", UiControlType.Grid), RowIndex: 0),
             new RecordedStep(RecordedActionKind.SortGridByColumn, Descriptor("OrdersGrid", UiControlType.Grid), StringValue: "Value"),
             new RecordedStep(RecordedActionKind.ScrollGridToEnd, Descriptor("OrdersGrid", UiControlType.Grid)),
