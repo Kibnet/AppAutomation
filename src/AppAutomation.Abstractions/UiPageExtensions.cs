@@ -2028,7 +2028,7 @@ public static partial class UiPageExtensions
             page,
             selector,
             () => string.Equals(
-                TryReadGridCellValue(grid, rowIndex, columnIndex),
+                TryReadGridCellValue(grid, rowIndex, columnIndex) ?? string.Empty,
                 expectedValue,
                 StringComparison.Ordinal),
             timeoutMs,

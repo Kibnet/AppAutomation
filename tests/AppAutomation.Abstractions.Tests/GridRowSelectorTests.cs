@@ -67,6 +67,50 @@ public sealed class GridRowSelectorTests
     }
 
     [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task GridCellTextWait_OnlyTreatsAnExistingNullCellAsEmpty(bool addressable)
+    {
+        var emptyCell = new GridCellValueSnapshot(null) { IsDisplayOnly = true };
+        var row = Row("ORD-1", string.Empty, "10");
+        ((MutableCell)row.Cells[1]).SemanticSnapshot = emptyCell;
+        var nativeGrid = new NativeAddressableGrid(row, ["OrderId", "Status", "Amount"])
+        {
+            ReadCellOverride = () => emptyCell
+        };
+        var page = addressable
+            ? new GridPage(new GridResolver(nativeGrid))
+            : new GridFixture(row).CreatePage();
+        var key = GridRowSelector.ByCell("OrderId", "ORD-1");
+        var missingKey = GridRowSelector.ByCell("OrderId", "ORD-2");
+
+        GridPage WaitForText(GridRowSelector selector, string column, string expected) =>
+            page.WaitUntilGridCellEquals(static p => p.Orders, selector, column, expected, timeoutMs: 250);
+
+        await Assert.That(GridValueReader.ReadCellText(page.Orders, key, "Status")).IsEqualTo(string.Empty);
+        await Assert.That(GridValueReader.ReadCellValue(page.Orders, key, "Status").IsNull).IsTrue();
+        await Assert.That(GridValueReader.ReadCellNumber(page.Orders, key, "Status")).IsNull();
+        await Assert.That(GridValueReader.ReadCellDate(page.Orders, key, "Status")).IsNull();
+        await Assert.That(ReferenceEquals(WaitForText(key, "Status", string.Empty), page)).IsTrue();
+        await Assert.That(() => WaitForText(key, "Status", "Ready")).Throws<UiOperationException>();
+        await Assert.That(() => WaitForText(missingKey, "Status", string.Empty)).Throws<UiOperationException>();
+
+        if (addressable)
+        {
+            await Assert.That(() => WaitForText(key, "Missing", string.Empty)).Throws<UiOperationException>();
+            nativeGrid.ReadCellOverride = () => throw new TimeoutException("The provider did not read the cell.");
+            await Assert.That(() => WaitForText(key, "Status", string.Empty)).Throws<UiOperationException>();
+        }
+        else
+        {
+            await Assert.That(ReferenceEquals(page.WaitUntilGridCellEquals(
+                static p => p.Orders, 0, 1, string.Empty, timeoutMs: 250), page)).IsTrue();
+            await Assert.That(() => page.WaitUntilGridCellEquals(
+                static p => p.Orders, 0, 3, string.Empty, timeoutMs: 250)).Throws<UiOperationException>();
+        }
+    }
+
+    [Test]
     public async Task TableRowKeyBootstrapReadsCurrentPositionThenSurvivesReorder()
     {
         var fixture = new GridFixture(
@@ -1353,6 +1397,8 @@ public sealed class GridRowSelectorTests
 
         public int ResolveRowCallCount { get; private set; }
 
+        public Func<GridCellValueSnapshot>? ReadCellOverride { get; set; }
+
         public GridRowResolution ResolveRow(GridRowSelector selector, int timeoutMs)
         {
             ResolveRowCallCount++;
@@ -1381,6 +1427,11 @@ public sealed class GridRowSelectorTests
             if (!TryGetColumnIndex(address.ColumnName, out var columnIndex))
             {
                 throw new InvalidOperationException("Column was not found.");
+            }
+
+            if (ReadCellOverride is { } readCell)
+            {
+                return readCell();
             }
 
             var value = row.Cells[columnIndex].Value;
