@@ -96,7 +96,12 @@ public interface IComboBoxFilterDisplayValueReader
 }
 
 /// <summary>UI-only display evidence. A hint is not an item; identity invalidates observations after source replacement.</summary>
-public sealed record UiDisplayedValueSnapshot(string? Text, string? PlaceholderText = null, string? SourceIdentity = null);
+public sealed record UiDisplayedValueSnapshot(string? Text, string? PlaceholderText = null, string? SourceIdentity = null)
+{
+    /// <summary>The complete committed selection when the provider can read it, or null when unavailable.
+    /// An empty list is a confirmed empty selection, independent of the displayed caption.</summary>
+    public IReadOnlyList<string>? CommittedItems { get; init; }
+}
 
 /// <summary>
 /// Composes an <see cref="IComboBoxFilterControl"/> while reusing the exact-set popup lifecycle.

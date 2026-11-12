@@ -18,6 +18,176 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 public sealed class HeadlessControlResolverTests
 {
     [Test]
+    [Arguments("template")]
+    [Arguments("binding")]
+    [Arguments("strings")]
+    [Arguments("content-template")]
+    [NotInParallel("DesktopUi")]
+    public async Task StandardComboBoxSelectsAndReadsTheDisplayedCaption(string presentation)
+    {
+        const string target = "Second visible choice";
+        Window? window = null;
+        using var session = DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () =>
+            {
+                var combo = new ComboBox { SelectedIndex = 0 };
+                global::Avalonia.Automation.AutomationProperties.SetAutomationId(combo, "CaptionCombo");
+                var choices = new[] { new CaptionChoice(1, "First visible choice"), new CaptionChoice(2, target) };
+                combo.ItemsSource = presentation == "strings" ? choices.Select(choice => choice.Label).ToArray() : choices;
+                var binding = new global::Avalonia.Data.Binding(nameof(CaptionChoice.Label));
+                if (presentation == "binding")
+                    combo.DisplayMemberBinding = binding;
+                if (presentation == "template")
+                    combo.ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                        new TextBlock { [!TextBlock.TextProperty] = binding });
+                if (presentation == "content-template")
+                    combo.ItemsSource = choices.Select(value => new ComboBoxItem
+                    {
+                        Content = value,
+                        ContentTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                            new TextBlock { [!TextBlock.TextProperty] = binding })
+                    }).ToArray();
+                return window = new Window { Width = 420, Height = 280, Content = combo };
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+        var comboBox = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return (ComboBox)session.MainWindow.Content!;
+        });
+        var page = new CaptionComboPage(new HeadlessControlResolver(session.MainWindow));
+        page.SelectComboItem(static page => page.Choice, target);
+        await Assert.That(page.Choice.SelectedItem?.Text).IsEqualTo(target);
+        await Assert.That(HeadlessRuntime.Dispatch(() => comboBox.SelectedItem is CaptionChoice { Code: 2 }
+            || comboBox.SelectedItem is ComboBoxItem { Content: CaptionChoice { Code: 2 } }
+            || comboBox.SelectedItem is string label && label == target)).IsTrue();
+    }
+
+    private sealed record CaptionChoice(int Code, string Label);
+
+    private sealed class CaptionComboPage(IUiControlResolver resolver) : UiPage(resolver)
+    {
+        public IComboBoxControl Choice => Resolve<IComboBoxControl>(new UiControlDefinition("Choice", UiControlType.ComboBox, "CaptionCombo"));
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("DesktopUi")]
+    public async Task ClosedMultiSelectReadsNativeSelectionWithoutOpeningThePopup(bool filter)
+    {
+        const string root = "ClosedChoices";
+        var values = new[] { new CaptionChoice(1, "Alpha"), new CaptionChoice(2, "Beta; extra"), new CaptionChoice(3, "Gamma") };
+        var opened = 0;
+        Window? window = null;
+        using var session = DesktopAppSession.Launch(new global::AppAutomation.Session.Contracts.HeadlessAppLaunchOptions
+        {
+            CreateMainWindow = () =>
+            {
+                window = new Window
+                {
+                    Width = 420, Height = 280, Content = new StackPanel { Children = { CreateEditor(values[..2]) } }
+                };
+                window.DataTemplates.Add(new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((choice, _) =>
+                    new StackPanel
+                    {
+                        Children =
+                        {
+                            new TextBlock { Text = choice?.Label },
+                            new StackPanel { IsVisible = false, Children = { new TextBlock { Text = "Hidden label" } } }
+                        }
+                    }));
+                return window;
+            },
+            DisposeCallback = () => HeadlessRuntime.Dispatch(() => window?.Close())
+        });
+        var panel = HeadlessRuntime.Dispatch(() =>
+        {
+            session.MainWindow.Show();
+            session.MainWindow.UpdateLayout();
+            return (StackPanel)session.MainWindow.Content!;
+        });
+        IUiControlResolver resolver = new HeadlessControlResolver(session.MainWindow);
+        resolver = filter
+            ? resolver.WithComboBoxFilter("Choices", ComboBoxFilterParts.ByAutomationIds(root, "ClosedOpen", "ClosedItems", "ClosedApply"))
+            : resolver.WithMultiSelect("Choices", MultiSelectParts.ByAutomationIds(root, "ClosedOpen", "ClosedItems", "ClosedApply")
+                with { DisplayValueLocator = "ClosedDisplay" });
+
+        IMultiSelectControl Resolve() => filter
+            ? resolver.Resolve<IComboBoxFilterControl>(new UiControlDefinition("Choices", UiControlType.ComboBoxFilter, root))
+            : resolver.Resolve<IMultiSelectControl>(new UiControlDefinition("Choices", UiControlType.MultiSelect, root));
+
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Alpha", "Beta; extra"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            panel.Children[0] = CreateEditor([values[2]]);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Gamma"]);
+        HeadlessRuntime.Dispatch(() =>
+            ((Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor)panel.Children[0]).SelectedItems = Array.Empty<CaptionChoice>());
+        await Assert.That(Resolve().SelectedItems).IsEmpty();
+        HeadlessRuntime.Dispatch(() =>
+        {
+            object[] content =
+            [
+                new ComboBoxItem { Content = "Plain content" },
+                new ComboBoxItem
+                {
+                    Content = values[1],
+                    ContentTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<CaptionChoice>((_, _) =>
+                        new TextBlock { Text = "Templated content" })
+                }
+            ];
+            panel.Children[0] = CreateEditor(content, content);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Plain content", "Templated content"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            panel.Children[0] = CreateEditor([values[0]], values);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(Resolve().SelectedItems).IsEquivalentTo(["Alpha"]);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            object[] content = [new object()];
+            panel.Children[0] = CreateEditor(content, content);
+            session.MainWindow.UpdateLayout();
+        });
+        await Assert.That(() => Resolve().SelectedItems).Throws<NotSupportedException>();
+        await Assert.That(opened).IsEqualTo(0);
+
+        Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor CreateEditor(object[] selected, object[]? source = null)
+        {
+            var editor = new Eremex.AvaloniaUI.Controls.Editors.ComboBoxEditor
+            {
+                ItemsSource = source ?? values, DisplayMember = source is null ? nameof(CaptionChoice.Label) : string.Empty,
+                SelectionMode = Eremex.AvaloniaUI.Controls.Editors.ItemSelectionMode.Multiple,
+                Watermark = "Choose values", IsTextEditable = !filter, SelectedItems = selected.ToList()
+            };
+            if (filter) editor.DisplayTextConverter = new FilterCaptionConverter();
+            global::Avalonia.Automation.AutomationProperties.SetAutomationId(editor, root);
+            editor.PropertyChanged += (_, change) =>
+            {
+                if (change.Property == Eremex.AvaloniaUI.Controls.Editors.PopupEditor.IsPopupOpenProperty && editor.IsPopupOpen)
+                    opened++;
+            };
+            return editor;
+        }
+    }
+
+    private sealed class FilterCaptionConverter : global::Avalonia.Data.Converters.IValueConverter
+    {
+        public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) => "Filter title";
+        public object ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture) =>
+            throw new NotSupportedException();
+    }
+
+    [Test]
     [NotInParallel("DesktopUi")]
     public async Task RecorderCapturesEffectiveGridRowSelectionAfterControlAndShiftClicks()
     {

@@ -19,6 +19,35 @@ namespace DotnetDebug.AppAutomation.FlaUI.Tests.Tests.UIAutomationTests;
 public sealed class FlaUiControlResolverTests
 {
     [Test]
+    [NotInParallel("DesktopUi")]
+    public async Task ClosedMultiSelectFilterReadsThePublishedSetNotItsConstantCaption()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        using var session = LaunchNativeGridRuntimeSession("closed-filter");
+        var page = MainWindowFlaUiPageFactory.Create(session);
+        await Assert.That(UiControlText.Read(page.ArmStatusFilter)).IsEqualTo("Archived");
+        var missing = Assert.Throws<UiOperationException>(() =>
+            page.WaitUntilSelectedItemsEqual(static p => p.ArmStatusFilter, ["Archived"], timeoutMs: 500));
+        await Assert.That(missing!.InnerException!.Message).Contains("ItemStatus");
+
+        Invoke("PublishSelection");
+        page.WaitUntilSelectedItemsEqual(static p => p.ArmStatusFilter, ["Alpha; Beta", "Open"]);
+        await Assert.That(page.ArmStatusFilter.SelectedItems).IsEquivalentTo(["Open", "Alpha; Beta"]);
+        Invoke("ChangeSelection");
+        page.WaitUntilSelectedItemsEqual(static p => p.ArmStatusFilter, ["Archived"]);
+        Invoke("ClearSelection");
+        page.WaitUntilSelectedItemsEqual(static p => p.ArmStatusFilter, []);
+        await Assert.That(page.ArmStatusFilter.SelectedItems).IsEmpty();
+        await Assert.That(UiControlText.Read(page.ArmStatusFilter)).IsEqualTo("Archived");
+        Invoke("RemoveSelectionPublication");
+        var unobserved = Assert.Throws<NotSupportedException>(() => _ = page.ArmStatusFilter.SelectedItems);
+        await Assert.That(unobserved!.Message).Contains("ItemStatus");
+
+        void Invoke(string id) => session.MainWindow.FindFirstDescendant(session.ConditionFactory.ByAutomationId(id))
+            .Patterns.Invoke.Pattern.Invoke();
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("DesktopUi")]

@@ -314,7 +314,9 @@ public static partial class UiPageExtensions
         {
             return read();
         }
-        catch (Exception exception) when (IsRetryableResolveFailure(exception))
+        catch (Exception exception) when (exception is UiControlResolutionException resolution
+            ? resolution.IsTransient
+            : IsRetryableResolveFailure(exception))
         {
             return false;
         }

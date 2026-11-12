@@ -574,17 +574,8 @@ internal class CheckBox : AutomationElement
     }
 }
 
-internal sealed class ComboBoxItem
+internal sealed record ComboBoxItem(string Text)
 {
-    internal ComboBoxItem(object? item)
-    {
-        Item = item;
-    }
-
-    private object? Item { get; }
-
-    public string Text => Item?.ToString() ?? string.Empty;
-
     public string Name => Text;
 }
 
@@ -596,17 +587,11 @@ internal class ComboBox : AutomationElement
 
     private global::Avalonia.Controls.ComboBox Native => (global::Avalonia.Controls.ComboBox)Control;
 
-    public ComboBoxItem[] Items => Ui(() =>
-    {
-        var values = Native.Items?.Cast<object?>().ToArray() ?? Array.Empty<object?>();
-        return values.Select(item => new ComboBoxItem(item)).ToArray();
-    });
+    public ComboBoxItem[] Items => Ui(() => ListItemCaptionReader.ReadSnapshot(Native, read =>
+        Enumerable.Range(0, Native.Items.Count).Select(index => new ComboBoxItem(read(index) ?? string.Empty)).ToArray()));
 
-    public object? SelectedItem => Ui(() =>
-    {
-        var selected = Native.SelectedItem;
-        return selected is null ? null : new ComboBoxItem(selected);
-    });
+    public ComboBoxItem? SelectedItem => Ui(() => ListItemCaptionReader.ReadSnapshot(Native, read =>
+        Native.SelectedIndex < 0 ? null : new ComboBoxItem(read(Native.SelectedIndex) ?? string.Empty)));
 
     public int SelectedIndex
     {

@@ -13,6 +13,7 @@ using FlaUI.Core.Exceptions;
 using FlaUI.Core.Input;
 using FlaUI.Core.Patterns;
 using FlaUI.Core.WindowsAPI;
+using FlaUI.UIA3.Converters;
 using CultureInfo = System.Globalization.CultureInfo;
 using DateTimeStyles = System.Globalization.DateTimeStyles;
 using NumberStyles = System.Globalization.NumberStyles;
@@ -72,6 +73,17 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         ArgumentNullException.ThrowIfNull(definition);
         var source = FindElement(definition);
         var identity = GetDisplaySourceIdentity(source);
+        if (definition.ValueReadKind != UiValueReadKind.Display)
+        {
+            var selection = MultiSelectSelectionValue.ReadAutomationValue(source.Properties.ItemStatus.ValueOrDefault)
+                ?? ReadCommittedMultiSelectItems(source);
+            if (selection is not null || definition.ValueReadKind == UiValueReadKind.CommittedSelection)
+                return new UiDisplayedValueSnapshot(null, SourceIdentity: identity) { CommittedItems = selection };
+            if (definition.ValueReadKind == UiValueReadKind.ConfirmedFilterSelection)
+                throw new System.NotSupportedException(
+                    $"Filter '{definition.LocatorValue}' does not publish its complete committed UIA selection. "
+                    + "Expose Selection or set ItemStatus on its editor root using MultiSelectSelectionValue.ToAutomationValue.");
+        }
         var placeholder = TryRead(() => source.Properties.HelpText.ValueOrDefault);
         UiDisplayedValueSnapshot Snapshot(string? text) => new(text, placeholder, identity);
         if (TryRead(() => source.IsOffscreen) == true)
@@ -111,6 +123,23 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             throw new InvalidOperationException("The multi-select display exposes multiple input values. Configure DisplayValueLocator.");
         var text = visibleTexts.FirstOrDefault() ?? inputs.FirstOrDefault() ?? value ?? TryRead(() => source.Name);
         return Snapshot(string.Equals(text, TryRead(() => source.AutomationId), StringComparison.Ordinal) ? null : text);
+    }
+
+    private static string[]? ReadCommittedMultiSelectItems(AutomationElement source)
+    {
+        if (source.Patterns.Selection.PatternOrDefault is not global::FlaUI.UIA3.Patterns.SelectionPattern selection
+            || !selection.CanSelectMultiple.TryGetValue(out var multiple) || !multiple)
+            return null;
+
+        // The generic property can map an unpublished array to empty; ask the native provider directly.
+        var selected = selection.NativePattern.GetCurrentSelection()
+            ?? throw new System.NotSupportedException($"Multi-select '{source.AutomationId}' did not publish its complete UIA selection.");
+        return AutomationElementConverter.NativeArrayToManaged(source.Automation, selected).Select(item =>
+        {
+            var name = item.Name;
+            return !string.IsNullOrWhiteSpace(name) ? name.Trim()
+                : throw new System.NotSupportedException($"Multi-select '{source.AutomationId}' has a selected item with no accessible name.");
+        }).ToArray();
     }
 
     public Task PointerClickAsync(UiControlDefinition target, PointerClickOptions? options = null,
