@@ -114,14 +114,7 @@ public static partial class UiPageExtensions
             expectedValue: "IsEnabled=true",
             lastObservedValueFactory: () => $"IsEnabled={checkBox.IsEnabled}");
         checkBox.IsChecked = isChecked;
-        WaitUntil(
-            page,
-            selector,
-            () => checkBox.IsChecked == isChecked,
-            timeoutMs,
-            $"CheckBox '{checkBox.AutomationId}' did not reach expected checked state.",
-            expectedValue: $"IsChecked={isChecked}",
-            lastObservedValueFactory: () => $"IsChecked={checkBox.IsChecked}");
+        WaitForCheckedState(page, selector, isChecked, timeoutMs);
         return page;
     }
 
@@ -1539,16 +1532,52 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
-        var checkBox = Resolve(selector, page);
+        WaitForCheckedState(page, selector, expected, timeoutMs);
+        return page;
+    }
+
+    private static void WaitForCheckedState<TSelf>(
+        TSelf page,
+        Expression<Func<TSelf, ICheckBoxControl>> selector,
+        bool expected,
+        int timeoutMs,
+        [CallerMemberName] string operationName = "")
+        where TSelf : UiPage
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(selector);
+        var resolve = selector.Compile();
+        string? lastObserved = null;
         WaitUntil(
             page,
             selector,
-            () => checkBox.IsChecked == expected,
+            () =>
+            {
+                try
+                {
+                    var checkBox = resolve(page);
+                    if (checkBox is null or IUiControlAvailability { IsAvailable: false })
+                    {
+                        lastObserved = "<check box unavailable>";
+                        return false;
+                    }
+                    var actual = checkBox.IsChecked;
+                    lastObserved = $"IsChecked={actual}";
+                    return actual == expected;
+                }
+                catch (Exception ex) when (ex is UiControlResolutionException resolution
+                    ? resolution.IsTransient
+                    : IsRetryableResolveFailure(ex))
+                {
+                    lastObserved = $"<check box unavailable: {ex.Message}>";
+                    return false;
+                }
+            },
             timeoutMs,
-            $"CheckBox '{checkBox.AutomationId}' did not reach expected checked state.",
+            $"CheckBox '{TryGetPropertyName(selector)}' did not reach expected checked state.",
             expectedValue: $"IsChecked={expected}",
-            lastObservedValueFactory: () => $"IsChecked={checkBox.IsChecked}");
-        return page;
+            lastObservedValueFactory: () => lastObserved,
+            operationName: operationName);
     }
 
     /// <summary>
