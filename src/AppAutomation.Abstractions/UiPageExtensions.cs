@@ -1091,7 +1091,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, IShellNavigationControl>> selector,
         string paneName,
-        int timeoutMs = 5000)
+        int timeoutMs = 10_000)
         where TSelf : UiPage
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(paneName);
