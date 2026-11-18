@@ -1472,37 +1472,60 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
+    [Arguments(0, false)]
+    [Arguments(34, false)]
+    [Arguments(58, false)]
+    [Arguments(58, true)]
     [NotInParallel("DesktopUi")]
-    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems(bool checkboxRows)
+    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems(int checkboxItemCount, bool captionOnAttachment)
     {
+        var checkboxRows = checkboxItemCount > 0;
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var entries = checkboxRows
-            ? Enumerable.Range(1, 34).Select(index => new DisplayListEntry($"Customer {index:00}")).ToArray()
+            ? Enumerable.Range(0, checkboxItemCount).Select(index => new DisplayListEntry(index == 11 ? "Экспорт" : $"Customer {index + 1:00}")).ToArray()
             : [new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B")];
         var list = HeadlessRuntime.Dispatch(() =>
         {
             var control = new global::Avalonia.Controls.ListBox
             {
-                Height = 150,
+                Height = checkboxItemCount == 34 ? 450 : 150,
                 Width = 360,
                 ItemsSource = entries,
-                ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
-                {
-                    if (checkboxRows)
-                    {
-                        var checkBox = new global::Avalonia.Controls.CheckBox { Content = entry?.Caption };
-                        checkBox.Bind(global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty,
-                            new global::Avalonia.Data.Binding(nameof(DisplayListEntry.IsChecked))
-                            { Source = entry, Mode = global::Avalonia.Data.BindingMode.TwoWay });
-                        return checkBox;
-                    }
-                    var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
-                    global::Avalonia.Automation.AutomationProperties.SetName(text, entry?.Caption);
-                    return text;
-                })
+                SelectionMode = checkboxRows ? SelectionMode.Multiple : SelectionMode.Single,
+                AutoScrollToSelectedItem = true
             };
+            control.ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
+            {
+                if (checkboxRows)
+                {
+                    var checkBox = new global::Avalonia.Controls.CheckBox
+                    {
+                        Content = captionOnAttachment ? "Loading" : entry?.Caption
+                    };
+                    AutomationProperties.SetName(checkBox, captionOnAttachment ? "Loading" : entry?.Caption);
+                    if (captionOnAttachment)
+                        checkBox.AttachedToVisualTree += (_, _) =>
+                        {
+                            checkBox.Content = entry?.Caption;
+                            AutomationProperties.SetName(checkBox, entry?.Caption);
+                        };
+                    checkBox.Bind(global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty,
+                        new global::Avalonia.Data.Binding(nameof(DisplayListEntry.IsChecked))
+                        { Source = entry, Mode = global::Avalonia.Data.BindingMode.TwoWay });
+                    checkBox.PropertyChanged += (_, args) =>
+                    {
+                        if (args.Property != global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty
+                            || !checkBox.IsAttachedToVisualTree()) return;
+                        var index = Array.IndexOf(entries, entry);
+                        if (checkBox.IsChecked == true) control.Selection.Select(index);
+                        else control.Selection.Deselect(index);
+                    };
+                    return checkBox;
+                }
+                var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
+                AutomationProperties.SetName(text, entry?.Caption);
+                return text;
+            });
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "CustomerResults");
             session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
             {
@@ -1522,8 +1545,26 @@ public sealed class HeadlessControlResolverTests
 
         if (checkboxRows)
             await Assert.That(HeadlessRuntime.Dispatch(() => list.GetRealizedContainers().Count())).IsLessThan(entries.Length);
-        var available = items.Items;
-        var expected = checkboxRows ? new[] { entries[18].Caption, entries[31].Caption } : ["Customer B"];
+        IReadOnlyList<string> available;
+        if (checkboxItemCount == 34)
+        {
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.ContainerFromIndex(11) is not null)).IsTrue();
+            available = items.SetSelectedItemsAndGetAvailableItems(["Экспорт"]);
+            await Assert.That(entries[11].IsChecked).IsTrue();
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItems!.Cast<object>().Single()))
+                .IsSameReferenceAs(entries[11]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Экспорт"]);
+        }
+        else
+        {
+            available = items.Items;
+        }
+        if (checkboxRows)
+        {
+            items.SetSelectedItems([entries[0].Caption]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo([entries[0].Caption]);
+        }
+        var expected = checkboxRows ? new[] { entries[0].Caption, entries[entries.Length / 2].Caption, entries[^1].Caption } : ["Customer B"];
         items.SetSelectedItems(expected);
 
         using (Assert.Multiple())
@@ -1534,6 +1575,11 @@ public sealed class HeadlessControlResolverTests
                 await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[1]);
             else
                 await Assert.That(entries.Where(entry => entry.IsChecked).Select(entry => entry.Caption)).IsEquivalentTo(expected);
+        }
+        if (checkboxRows)
+        {
+            items.SetSelectedItems(available);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(available);
         }
         items.SetSelectedItems([]);
         await Assert.That(items.SelectedItems).IsEmpty();

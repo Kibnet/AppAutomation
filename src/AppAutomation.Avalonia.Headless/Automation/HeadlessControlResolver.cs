@@ -1368,18 +1368,15 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         {
             if (FindListBoxCore() is { } listBox)
             {
-                return ListItemCaptionReader.ReadSnapshot(listBox, read =>
+                return ListItemCaptionReader.ReadSelectionSnapshot(listBox, (read, requireContainer) =>
                 {
                     if (listBox.Items.Count > 0)
                     {
-                        _ = read(0);
-                        if (FindRowCheckBox(listBox, 0) is not null)
+                        if (FindRowCheckBox(requireContainer(0)) is not null)
                         {
                             return Enumerable.Range(0, listBox.Items.Count)
-                                .Select(index => (Text: read(index)?.Trim() ?? string.Empty,
-                                    Checked: (FindRowCheckBox(listBox, index)
-                                        ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.")).IsChecked == true))
-                                .Where(item => item.Checked).Select(item => item.Text).ToArray();
+                                .Where(index => RequireRowCheckBox(requireContainer(index)).IsChecked == true)
+                                .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
                         }
                     }
                     if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
@@ -1438,11 +1435,12 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             };
         }
 
-        private static global::Avalonia.Controls.CheckBox? FindRowCheckBox(global::Avalonia.Controls.ListBox list, int index)
+        private static global::Avalonia.Controls.CheckBox RequireRowCheckBox(AvaloniaControl container) =>
+            FindRowCheckBox(container)
+            ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.");
+
+        private static global::Avalonia.Controls.CheckBox? FindRowCheckBox(AvaloniaControl container)
         {
-            var container = list.ContainerFromIndex(index);
-            if (container is null)
-                return null;
             var checkBoxes = container.GetVisualDescendants().OfType<global::Avalonia.Controls.CheckBox>().Take(2).ToArray();
             return checkBoxes.Length switch
             {
@@ -1464,33 +1462,31 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             global::Avalonia.Controls.ListBox listBox,
             HashSet<string> requestedValues)
         {
-            return ListItemCaptionReader.ReadSnapshot(listBox, read =>
+            return ListItemCaptionReader.ReadSelectionSnapshot(listBox, (read, requireContainer) =>
             {
                 var currentItems = listBox.Items.Cast<object?>().ToArray();
                 var captions = Enumerable.Range(0, currentItems.Length)
                     .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
-                ApplySelection(currentItems, captions, read);
+                ApplySelection(currentItems, captions, read, requireContainer);
                 return captions;
             });
 
-            void ApplySelection(object?[] items, string[] available, Func<int, string?> read)
+            void ApplySelection(object?[] items, string[] available, Func<int, string?> read,
+                Func<int, AvaloniaControl> requireContainer)
             {
                 ValidateAvailableItems(available, requestedValues);
 
-                if (items.Length > 0)
+                if (items.Length > 0 && FindRowCheckBox(requireContainer(0)) is not null)
                 {
-                    _ = read(0);
-                    if (FindRowCheckBox(listBox, 0) is not null)
+                    for (var index = 0; index < items.Length; index++)
                     {
-                        for (var index = 0; index < items.Length; index++)
-                        {
-                            _ = read(index);
-                            var checkBox = FindRowCheckBox(listBox, index)
-                                ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.");
-                            checkBox.IsChecked = requestedValues.Contains(available[index]);
-                        }
-                        return;
+                        var checkBox = RequireRowCheckBox(requireContainer(index));
+                        if (!string.Equals(read(index)?.Trim(), available[index], StringComparison.Ordinal))
+                            throw new InvalidOperationException("A realized multi-select checkbox row does not match its caption snapshot.");
+                        var selected = requestedValues.Contains(available[index]);
+                        if (checkBox.IsChecked != selected) checkBox.IsChecked = selected;
                     }
+                    return;
                 }
 
                 if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
