@@ -625,6 +625,8 @@ internal sealed record RecordedGridSelectionRow(IReadOnlyList<RecordedGridRowCon
 internal sealed record RecordedGridRowCondition(string ColumnName, string Value)
 {
     public RecorderGridRowValueReference? ValueReference { get; init; }
+
+    public bool IsObjectKey { get; init; }
 }
 
 internal sealed record RecorderStepValidationState(
@@ -698,7 +700,8 @@ internal sealed record GridComboSelectionContext(
     RecorderGridHint GridHint,
     int RowIndex,
     int ColumnIndex,
-    string? LogicalColumnName = null);
+    string? LogicalColumnName = null,
+    object? RowObject = null);
 
 internal sealed record GridComboSelectionContextResolution(
     bool IsConfigured,

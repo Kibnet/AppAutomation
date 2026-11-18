@@ -2,6 +2,7 @@ using System.Collections;
 using System.Reflection;
 using AppAutomation.Abstractions;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
@@ -45,6 +46,17 @@ internal static class GridCellMetadataExtractor
         ArgumentNullException.ThrowIfNull(displayTextReader);
 
         var context = definition?.CellContext ?? GridCellContextDefinition.Default;
+        var referenceOnly = definition?.Columns.Any(static column => column.IsObjectKey) == true;
+        if (referenceOnly)
+        {
+            if (!NativeGridSelectionAccess.TryReadCurrentView(gridRoot, out var currentView))
+            {
+                metadata = null!;
+                error = "Object-key recording requires an authoritative current grid view; ItemsSource alone is not a filtered view.";
+                return false;
+            }
+            items = currentView;
+        }
         var rows = new List<(object Row, int RowIndex, Control Owner)>();
         var fields = new List<string>();
         var rawValues = new List<object?>();
@@ -62,16 +74,16 @@ internal static class GridCellMetadataExtractor
                 continue;
             }
 
-            if (TryFindItem(items, dataContext, out var directIndex, out var directRow))
+            if (TryFindItem(items, dataContext, referenceOnly, out var directIndex, out var directRow))
             {
-                AddDistinctRow(rows, directRow, directIndex, current);
+                AddDistinctRow(rows, directRow, directIndex, current, referenceOnly);
             }
 
             if (TryReadPath(dataContext, context.RowPath, out var contextRowValue)
                 && contextRowValue is not null
-                && TryFindItem(items, contextRowValue, out var rowIndex, out var row))
+                && TryFindItem(items, contextRowValue, referenceOnly, out var rowIndex, out var row))
             {
-                AddDistinctRow(rows, row, rowIndex, current);
+                AddDistinctRow(rows, row, rowIndex, current, referenceOnly);
             }
 
             if (TryReadPath(dataContext, context.FieldNamePath, out var fieldValue)
@@ -164,19 +176,25 @@ internal static class GridCellMetadataExtractor
 
         var selectedRow = rows[0];
         var sourceField = fields[0];
+        var column = definition?.FindColumnBySourceField(sourceField);
         var cellOwner = ResolveCellOwner(
             visualPath,
             selectedRow.Row,
             sourceField,
-            context) ?? selectedRow.Owner;
+            context,
+            referenceOnly)
+            ?? (column?.ReadsDisplayedText == true ? ResolveNativeCellOwner(visualPath, nativeColumn)
+                ?? ResolveConfiguredCellOwner(visualPath, selectedRow.Row) : null)
+            ?? selectedRow.Owner;
         var cellOwnerIndex = Array.IndexOf(visualPath, cellOwner);
         var editorRoot = cellOwnerIndex > 0
             ? visualPath[cellOwnerIndex - 1]
             : cellOwner;
-        var column = definition?.FindColumnBySourceField(sourceField);
-        var rowValuePath = column?.DisplayValuePath ?? column?.SourceFieldName ?? sourceField;
+        var rowValuePath = column?.ReadsDisplayedText == true
+            ? column.SourceFieldName
+            : column?.DisplayValuePath ?? column?.SourceFieldName ?? sourceField;
         var hasRowValue = TryReadPath(selectedRow.Row, rowValuePath, out var displayedRowValue);
-        var raw = IsNativeDataGrid(gridRoot) && hasRowValue
+        var raw = (IsNativeDataGrid(gridRoot) || column?.ReadsDisplayedText == true) && hasRowValue
             ? displayedRowValue
             : rawValues.Count > 0
                 ? rawValues[0]
@@ -184,12 +202,27 @@ internal static class GridCellMetadataExtractor
                     ? displayedRowValue
                     : null;
 
+        string? displayText;
+        if (column?.ReadsDisplayedText == true)
+        {
+            if (!TryReadPublishedDisplayText(cellOwner, out displayText))
+            {
+                metadata = null!;
+                error = $"Grid column '{column.LogicalName}' requires the published Name of its actual cell; the cell does not expose an automation Name.";
+                return false;
+            }
+        }
+        else
+        {
+            displayText = displayTextReader(source)?.Trim();
+        }
+
         metadata = new RecorderGridCellMetadata(
             selectedRow.Row,
             selectedRow.RowIndex,
             sourceField,
             raw,
-            displayTextReader(source)?.Trim(),
+            displayText,
             selectedRow.Owner,
             cellOwner,
             editorRoot,
@@ -202,7 +235,8 @@ internal static class GridCellMetadataExtractor
         IReadOnlyList<Control> visualPath,
         object row,
         string sourceField,
-        GridCellContextDefinition context)
+        GridCellContextDefinition context,
+        bool referenceOnly)
     {
         Control? outermost = null;
         foreach (var control in visualPath)
@@ -211,7 +245,7 @@ internal static class GridCellMetadataExtractor
             if (dataContext is null
                 || !TryReadPath(dataContext, context.RowPath, out var contextRow)
                 || contextRow is null
-                || !(ReferenceEquals(contextRow, row) || contextRow.Equals(row))
+                || !(ReferenceEquals(contextRow, row) || !referenceOnly && contextRow.Equals(row))
                 || !TryReadPath(dataContext, context.FieldNamePath, out var field)
                 || !string.Equals(field?.ToString()?.Trim(), sourceField, StringComparison.Ordinal))
             {
@@ -223,6 +257,29 @@ internal static class GridCellMetadataExtractor
 
         return outermost;
     }
+
+    private static bool TryReadPublishedDisplayText(Control cell, out string? text)
+    {
+        // An explicitly published empty Name is meaningful. Do not replace it with child/editor text.
+        text = AutomationProperties.GetName(cell);
+        if (text is not null) return true;
+        var peer = ControlAutomationPeer.CreatePeerForElement(cell);
+        if (peer is null) return false;
+        text = peer.GetName();
+        return text is not null;
+    }
+
+    private static Control? ResolveNativeCellOwner(IReadOnlyList<Control> path, RecorderNativeGridColumn? column)
+    {
+        if (column is null) return null;
+        return path.LastOrDefault(control =>
+            TryReadProperty(control, "Column", out var value) && ReferenceEquals(value, column.Column)
+            || TryReadDeclaredProperty(control, "OwningColumn", out value) && ReferenceEquals(value, column.Column));
+    }
+
+    private static Control? ResolveConfiguredCellOwner(IReadOnlyList<Control> path, object row) =>
+        path.LastOrDefault(control => control.GetVisualParent() is global::Avalonia.Controls.Grid owner
+            && ReferenceEquals(control.DataContext, row) && ReferenceEquals(owner.DataContext, row));
 
     public static bool IsNativeDataGrid(Control control)
     {
@@ -478,6 +535,7 @@ internal static class GridCellMetadataExtractor
     {
         column = null!;
         GridColumnDefinition? outermostMatch = null;
+        var visualColumns = definition.Columns.Where(static candidate => !candidate.IsObjectKey).ToArray();
         foreach (var current in EnumeratePath(source, gridRoot))
         {
             if (current.GetVisualParent() is not global::Avalonia.Controls.Grid owner
@@ -488,11 +546,11 @@ internal static class GridCellMetadataExtractor
             }
 
             var columnIndex = global::Avalonia.Controls.Grid.GetColumn(current);
-            if (columnIndex >= 0 && columnIndex < definition.Columns.Count)
+            if (columnIndex >= 0 && columnIndex < visualColumns.Length)
             {
                 // Nested editors commonly contain their own zero-based layout grids. The
                 // outermost row grid is the one whose column position describes the cell.
-                outermostMatch = definition.Columns[columnIndex];
+                outermostMatch = visualColumns[columnIndex];
             }
         }
 
@@ -609,6 +667,7 @@ internal static class GridCellMetadataExtractor
     private static bool TryFindItem(
         IReadOnlyList<object?> items,
         object candidate,
+        bool referenceOnly,
         out int rowIndex,
         out object row)
     {
@@ -624,7 +683,7 @@ internal static class GridCellMetadataExtractor
             return true;
         }
 
-        var equivalentIndexes = items
+        var equivalentIndexes = referenceOnly ? [] : items
             .Select(static (item, index) => (Item: item, Index: index))
             .Where(entry => entry.Item is not null && entry.Item.Equals(candidate))
             .Take(2)
@@ -645,11 +704,12 @@ internal static class GridCellMetadataExtractor
         List<(object Row, int RowIndex, Control Owner)> rows,
         object row,
         int rowIndex,
-        Control owner)
+        Control owner,
+        bool referenceOnly)
     {
         if (rows.Any(candidate =>
                 candidate.RowIndex == rowIndex
-                && (ReferenceEquals(candidate.Row, row) || candidate.Row.Equals(row))))
+                && (ReferenceEquals(candidate.Row, row) || !referenceOnly && candidate.Row.Equals(row))))
         {
             return;
         }

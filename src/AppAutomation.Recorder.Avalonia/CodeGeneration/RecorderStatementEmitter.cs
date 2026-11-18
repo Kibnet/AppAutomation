@@ -171,7 +171,7 @@ internal static class RecorderStatementEmitter
             generatedValueVariables,
             copiedValueVariables,
             gridRowAnchorNames)
-        { Targets = gridTargets };
+        { Targets = gridTargets, OwnerStep = step };
         var rowSelector = HasNamedGridRow(step)
             ? FormatGridRowSelector(step, rowVariables)
             : string.Empty;
@@ -747,7 +747,7 @@ internal static class RecorderStatementEmitter
                     : $"NumericDisplayValueReader.Read(Page.{propertyName})",
             RecorderValueAccessorKind.GridCellValue when gridValueReference is not null =>
                 $"GridValueReader.ReadCellNumber(Page.{propertyName}, "
-                + $"{FormatGridRowSelector(gridValueReference.RowConditions, rowVariables)}, "
+                + $"{(rowVariables.Targets?.Find(rowVariables.OwnerStep, gridValueReference)?.Name ?? FormatGridRowSelector(gridValueReference.RowConditions, rowVariables))}, "
                 + $"\"{EscapeString(gridValueReference.TargetColumnName)}\")",
             _ => throw new InvalidOperationException(
                 $"Control operand '{control.ProposedPropertyName}' does not expose a valid numeric value reference.")
@@ -1051,6 +1051,8 @@ internal static class RecorderStatementEmitter
 
     private static string FormatGridRowSelector(RecordedStep step, GridRowVariableNames variables)
     {
+        if (step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow && step.CheckpointId is { } ownCheckpoint)
+            return FormatGridRowAnchorName(ownCheckpoint, variables);
         if (step.GridRowAnchorCheckpointId is { } checkpointId)
         {
             return FormatGridRowAnchorName(checkpointId, variables);
@@ -1073,7 +1075,7 @@ internal static class RecorderStatementEmitter
         var rows = step.GridSelectedRows ?? throw new InvalidOperationException("SelectGridRows requires a complete selected row set.");
         return "[" + string.Join(", ", rows.Select(row => row.AnchorCheckpointId is { } anchorId
             ? FormatGridRowAnchorName(anchorId, variables)
-            : FormatGridRowSelector(row.Conditions, variables))) + "]";
+            : variables.Targets?.Find(step, row)?.Name ?? FormatGridRowSelector(row.Conditions, variables))) + "]";
     }
 
     internal static IReadOnlyDictionary<Guid, string> CreateGridRowAnchorNames(
@@ -1231,6 +1233,8 @@ internal static class RecorderStatementEmitter
         {
             throw new InvalidOperationException("Named grid step does not contain row conditions.");
         }
+        if (conditions.Any(static condition => condition.IsObjectKey))
+            throw new InvalidOperationException("An object-key row requires an earlier explicit runtime row capture; recorded object keys cannot be emitted as literals.");
 
         var builder = new StringBuilder();
         var first = conditions[0];
@@ -1282,6 +1286,7 @@ internal static class RecorderStatementEmitter
         IReadOnlyDictionary<Guid, string> RowAnchors)
     {
         public RecorderGridTargetVariables? Targets { get; init; }
+        public RecordedStep? OwnerStep { get; init; }
     }
 
     private static string FormatGridTargetColumn(RecordedStep step)

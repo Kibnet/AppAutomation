@@ -1105,7 +1105,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl
+    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl, IBudgetedTextEntry
     {
         private readonly Window? _ownerWindow;
 
@@ -1120,17 +1120,41 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             set => Inner.Text = value;
         }
 
-        public void Enter(string value)
+        public void Enter(string value) =>
+            EnterCore(value, budget: null);
+
+        void IBudgetedTextEntry.Enter(string value, UiOperationTimeoutBudget budget) =>
+            EnterCore(value, budget);
+
+        private void EnterCore(string value, UiOperationTimeoutBudget? budget)
         {
             ArgumentNullException.ThrowIfNull(value);
-            if (Inner.Patterns.Value.IsSupported
-                && !Inner.Patterns.Value.Pattern.IsReadOnly.ValueOrDefault)
+            if (budget is not null || _ownerWindow is not null)
             {
-                Inner.Text = value;
+                if (!Inner.IsEnabled)
+                    throw new InvalidOperationException($"Text control '{AutomationId}' is disabled.");
+                budget ??= UiOperationTimeoutBudget.Start(5000, "text entry");
+            }
+
+            if (Inner.Patterns.Value.TryGetPattern(out var pattern))
+            {
+                if (pattern.IsReadOnly.ValueOrDefault)
+                    throw new InvalidOperationException($"Text control '{AutomationId}' is read-only.");
+
+                PrepareInput();
+                pattern.SetValue(value);
                 return;
             }
 
+            PrepareInput();
             Inner.EnterText(value);
+
+            void PrepareInput()
+            {
+                if (budget is null) return;
+                FocusForTextInput(budget, "entering text");
+                _ = budget.Remaining;
+            }
         }
 
         public bool TryGetIsReadOnly(out bool isReadOnly)
@@ -1144,8 +1168,20 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public Task PasteFromClipboardAsync(int timeoutMs, CancellationToken cancellationToken = default)
         {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "clipboard paste");
+            FocusForTextInput(budget, "clipboard paste", cancellationToken);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_V);
+            return Task.CompletedTask;
+        }
+
+        private void FocusForTextInput(UiOperationTimeoutBudget budget, string action, CancellationToken cancellationToken = default)
+        {
             cancellationToken.ThrowIfCancellationRequested();
+            _ = budget.Remaining;
+            if (TryRead(() => Inner.Properties.HasKeyboardFocus.Value))
+                return;
+
             (_ownerWindow ?? FindContainingWindow(Inner))?.SetForeground();
             Inner.Focus();
             _ = UiWait.Until(
@@ -1153,14 +1189,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 static hasFocus => hasFocus,
                 new UiWaitOptions
                 {
-                    Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+                    Timeout = budget.Remaining,
                     PollInterval = TimeSpan.FromMilliseconds(25)
                 },
-                $"Text control '{AutomationId}' did not receive keyboard focus before clipboard paste.",
+                $"Text control '{AutomationId}' did not receive keyboard focus before {action}.",
                 cancellationToken);
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_V);
-            return Task.CompletedTask;
         }
 
         private static Window? FindContainingWindow(AutomationElement element)

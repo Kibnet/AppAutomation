@@ -40,6 +40,7 @@ public sealed record GridIndexedRowSelector
     internal GridIndexedRowSelector WithDeclaredUniqueIdentity()
     {
         return HasDeclaredUniqueIdentity
+            || Conditions.Any(static condition => condition.Column.IsObjectKey || condition.Column.UsesObjectRowIdentity)
             ? this
             : new GridIndexedRowSelector(Conditions, hasDeclaredUniqueIdentity: true);
     }

@@ -19,6 +19,20 @@ internal static class GridCellValueNormalizer
             CultureName = cultureName,
             FormatString = column.FormatString
         };
+        if (column.ReadsDisplayedText && !snapshot.HasAuthoritativeDisplayText)
+        {
+            throw new InvalidOperationException(
+                $"Grid '{gridPropertyName}' column '{column.LogicalName}' requires published display text from the addressed cell, "
+                + "but the provider did not expose an authoritative display value.");
+        }
+
+        if (snapshot.HasAuthoritativeDisplayText)
+        {
+            return snapshot.IsDisplayOnly
+                ? NormalizeTypedValue(configuredSnapshot, column)
+                : configuredSnapshot;
+        }
+
         if (snapshot.IsDisplayOnly)
         {
             return NormalizeTypedValue(configuredSnapshot, column);
@@ -69,6 +83,11 @@ internal static class GridCellValueNormalizer
         if (!string.IsNullOrWhiteSpace(column.FormatString))
         {
             definition = definition.FormatWith(column.FormatString, column.CultureName);
+        }
+
+        if (column.ReadsDisplayedText)
+        {
+            definition = definition.ReadDisplayedText(column.CultureName);
         }
 
         if (column.BooleanTrueDisplayText is not null

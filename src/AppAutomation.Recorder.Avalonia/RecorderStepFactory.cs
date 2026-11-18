@@ -255,7 +255,7 @@ internal sealed partial class RecorderStepFactory
             .Any(rootItems => TryFindMenuItemPath(rootItems, item, out _));
     }
 
-    public StepCreationResult TryCreateTextEntryStep(TextBox textBox)
+    public StepCreationResult TryCreateTextEntryStep(TextBox textBox, string? replayText = null)
     {
         ArgumentNullException.ThrowIfNull(textBox);
 
@@ -292,7 +292,7 @@ internal sealed partial class RecorderStepFactory
         }
 
         var descriptor = locatorResult.Control;
-        var text = textBox.Text ?? string.Empty;
+        var text = replayText ?? textBox.Text ?? string.Empty;
         if (TryResolveActionHint(textBox, descriptor) == RecorderActionHint.SpinnerTextBox
             && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var numericValue))
         {
@@ -321,6 +321,11 @@ internal sealed partial class RecorderStepFactory
                 CanPersist: locatorResult.CanPersist),
             locatorResult.Message);
     }
+
+    internal string ReadTextEntryValue(TextBox textBox, string? capturedText) =>
+        TryResolveSearchControlHint(textBox, out _)
+            ? textBox.Text ?? string.Empty
+            : RecorderNumericValueReader.ReadTextForReplay(textBox, capturedText);
 
     internal StepCreationResult TryCreateGeneratedTextEntryStep(
         TextBox textBox,
@@ -1719,8 +1724,12 @@ internal sealed partial class RecorderStepFactory
 
         IReadOnlyList<object?> items;
         if (NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var view)) items = view;
+        else if (definition.Columns.Any(static column => column.IsObjectKey))
+            return new GridRowGestureCaptureResult(true, StepCreationResult.Unsupported(
+                $"Grid '{definition.PagePropertyName}' requires an authoritative current view for object-key recording."));
         else _ = TryReadItemsSource(gridSource, out items);
-        if (!TryResolveGridRow(source, gridSource, items, out var rowIndex, out _))
+        if (!TryResolveGridRow(source, gridSource, items, out var rowIndex, out _,
+                referenceOnly: definition.Columns.Any(static column => column.IsObjectKey)))
         {
             return new GridRowGestureCaptureResult(
                 true,
@@ -2622,7 +2631,12 @@ internal sealed partial class RecorderStepFactory
         out string? error)
     {
         snapshot = null;
-        if (candidate.GridContext is not null && ExtractTextValue(source) is { } displayedText)
+        var readsPublishedDisplay = candidate.GridContext?.TargetColumnName is { } columnName
+            && _options.GridAutomation.Any(definition => definition.RuntimeLocatorKind == candidate.Control.LocatorKind
+                && string.Equals(definition.RuntimeLocatorValue, candidate.Control.LocatorValue, StringComparison.Ordinal)
+                && definition.FindColumn(columnName)?.ReadsDisplayedText == true);
+        if (candidate.GridContext is not null && !readsPublishedDisplay
+            && ExtractTextValue(source) is { } displayedText)
             candidate = candidate with { DisplayText = displayedText };
         var prototypeResult = TryCreateSemanticSnapshotPrototype(source!, candidate);
         if (!prototypeResult.Success || prototypeResult.Step is null)
@@ -3725,6 +3739,18 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
+        var configuredDefinition = _options.GridAutomation.FirstOrDefault(definition =>
+            definition.RuntimeLocatorKind == target.LocatorKind
+            && string.Equals(definition.RuntimeLocatorValue, target.LocatorValue.Trim(), StringComparison.Ordinal));
+        if (target.ValueAccessorKind is RecorderValueAccessorKind.GridCellText or RecorderValueAccessorKind.GridCellValue
+            && configuredDefinition?.Columns.Any(static column => column.IsObjectKey) == true)
+        {
+            error = "A custom semantic resolver cannot supply bare object-key row conditions. "
+                + "Use the configured grid's actual cell metadata and published row ItemStatus for capture "
+                + "(return NotHandled for this cell), then Remember its runtime row before recording dependent actions.";
+            return false;
+        }
+
         GridValueContext? gridContext = null;
         if (target.ValueAccessorKind is RecorderValueAccessorKind.GridCellText
             or RecorderValueAccessorKind.GridCellValue)
@@ -4108,7 +4134,7 @@ internal sealed partial class RecorderStepFactory
             var logicalColumnName = configuredColumn?.LogicalName ?? metadata.SourceFieldName;
             var configuredColumnIndex = FindColumnIndex(hint.ColumnPropertyNames, logicalColumnName);
             var cellValue = metadata.DisplayText;
-            if (string.IsNullOrWhiteSpace(cellValue)
+            if (configuredColumn?.ReadsDisplayedText != true && string.IsNullOrWhiteSpace(cellValue)
                 && !TryFormatGridValue(metadata.RawValue, configuredColumn, out cellValue))
             {
                 error = $"Grid column '{logicalColumnName}' does not expose readable display text. "
@@ -5276,7 +5302,9 @@ internal sealed partial class RecorderStepFactory
             warning);
 
         return CreateGridStep(
-            results,
+            TryResolveGridSearchPickerGridSource(hint, out var gridHint, out _)
+                && FindGridDefinition(gridHint)?.Columns.Any(static column => column.IsObjectKey) == true
+                    ? searchInput : results,
             new RecordedStep(
                 RecordedActionKind.SearchAndSelectGridCell,
                 descriptor,
@@ -5735,6 +5763,19 @@ internal sealed partial class RecorderStepFactory
         var column = definition is null || string.IsNullOrWhiteSpace(context.LogicalColumnName)
             ? null
             : definition.FindColumn(context.LogicalColumnName);
+        var rowIndex = context.RowIndex;
+        var captureSource = validationSource;
+        if (definition?.Columns.Any(static candidate => candidate.IsObjectKey) == true)
+        {
+            if (context.RowObject is null || !NativeGridSelectionAccess.TryReadCurrentView(context.GridSource, out var currentView)
+                || currentView.Count(item => ReferenceEquals(item, context.RowObject)) != 1
+                || !TryResolveGridRow(context.CellSource, context.GridSource, currentView, out _, out var currentRow, referenceOnly: true)
+                || !ReferenceEquals(currentRow, context.RowObject))
+                return new GridComboSelectionCaptureResult(true, true, context, StepCreationResult.Unsupported(
+                    "The selection editor's original object row is no longer unique in the current view; capture its runtime row again."));
+            rowIndex = Array.FindIndex(currentView, item => ReferenceEquals(item, context.RowObject));
+            captureSource = context.CellSource;
+        }
         var isSearchPicker = column?.EditorKind == GridCellEditorKind.SearchPicker;
         var searchText = string.IsNullOrWhiteSpace(capturedSearchText)
             ? selectedText.Trim()
@@ -5745,7 +5786,7 @@ internal sealed partial class RecorderStepFactory
                 : RecordedActionKind.SelectGridCellComboItem,
             descriptor,
             StringValue: isSearchPicker ? searchText : selectedText.Trim(),
-            RowIndex: context.RowIndex,
+            RowIndex: rowIndex,
             ColumnIndex: context.ColumnIndex,
             ItemValue: isSearchPicker ? selectedText.Trim() : null,
             GridCellEditCommitMode: GridCellEditCommitMode.Commit)
@@ -5753,12 +5794,12 @@ internal sealed partial class RecorderStepFactory
             GridTargetColumnName = context.LogicalColumnName
         };
         var result = CreateGridStep(
-            validationSource,
+            captureSource,
             prototype,
             null,
             hint.TargetLocatorValue,
             hint.TargetLocatorKind,
-            context.RowIndex,
+            rowIndex,
             context.ColumnIndex,
             excludeTargetColumnFromIdentity: true);
 
@@ -5822,7 +5863,8 @@ internal sealed partial class RecorderStepFactory
                     hint,
                     metadata.RowIndex,
                     configuredColumnIndex,
-                    logicalColumnName),
+                    logicalColumnName,
+                    metadata.Row),
                 null);
         }
 
@@ -5942,7 +5984,14 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (TryReadItemsSource(gridSource, out var items)
+        var objectIdentity = FindGridDefinition(gridHint)?.Columns.Any(static column => column.IsObjectKey) == true;
+        if (objectIdentity)
+        {
+            if (!NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var currentView)
+                || !TryResolveGridRow(searchInput, gridSource, currentView, out rowIndex, out _, referenceOnly: true))
+                return false;
+        }
+        else if (TryReadItemsSource(gridSource, out var items)
             && TryResolveGridRow(searchInput, gridSource, items, out rowIndex, out _))
         {
             // Row resolved from the live grid context.
@@ -6008,6 +6057,13 @@ internal sealed partial class RecorderStepFactory
 
     private bool TryResolveGridRowIndex(Control source, RecorderGridActionHint hint, out int rowIndex)
     {
+        if (TryResolveGridHint(source, out var objectHint, out var objectGrid)
+            && FindGridDefinition(objectHint)?.Columns.Any(static column => column.IsObjectKey) == true)
+        {
+            rowIndex = -1;
+            return NativeGridSelectionAccess.TryReadCurrentView(objectGrid, out var currentView)
+                && TryResolveGridRow(source, objectGrid, currentView, out rowIndex, out _, referenceOnly: true);
+        }
         if (hint.RowIndex is >= 0)
         {
             rowIndex = hint.RowIndex.Value;
@@ -6032,6 +6088,10 @@ internal sealed partial class RecorderStepFactory
     {
         rowIndex = hint.RowIndex is >= 0 ? hint.RowIndex.Value : -1;
         columnIndex = hint.ColumnIndex is >= 0 ? hint.ColumnIndex.Value : -1;
+        if (TryResolveGridHint(source, out var objectHint, out var objectGrid)
+            && FindGridDefinition(objectHint)?.Columns.Any(static column => column.IsObjectKey) == true)
+            return NativeGridSelectionAccess.TryReadCurrentView(objectGrid, out var currentView)
+                && TryResolveGridCell(source, objectGrid, objectHint, currentView, out rowIndex, out columnIndex, out _);
         if (rowIndex >= 0 && columnIndex >= 0)
         {
             return true;
@@ -6126,6 +6186,11 @@ internal sealed partial class RecorderStepFactory
             if (columnIndex >= 0)
             {
                 rowIndex = metadata.RowIndex;
+                if (definition?.FindColumn(logicalColumnName)?.ReadsDisplayedText == true)
+                {
+                    cellValue = metadata.DisplayText!;
+                    return true;
+                }
                 if (TryReadDisplayedGridCellValue(
                         gridSource,
                         metadata.Row,
@@ -6151,6 +6216,9 @@ internal sealed partial class RecorderStepFactory
             }
 
         }
+
+        if (definition?.Columns.Any(static column => column.IsObjectKey || column.ReadsDisplayedText) == true)
+            return false;
 
         if (!TryResolveGridRow(source, gridSource, items, out rowIndex, out var rowItem))
         {
@@ -6227,7 +6295,8 @@ internal sealed partial class RecorderStepFactory
         Control gridSource,
         IReadOnlyList<object?> items,
         out int rowIndex,
-        out object item)
+        out object item,
+        bool referenceOnly = false)
     {
         foreach (var current in EnumerateRelatedControls(source))
         {
@@ -6242,7 +6311,7 @@ internal sealed partial class RecorderStepFactory
                 continue;
             }
 
-            if (TryFindItemIndex(items, dataContext, out rowIndex, out item))
+            if (TryFindItemIndex(items, dataContext, out rowIndex, out item, referenceOnly))
             {
                 return true;
             }
@@ -6251,7 +6320,7 @@ internal sealed partial class RecorderStepFactory
             {
                 if (TryReadObjectProperty(dataContext, propertyName, out var rowCandidate)
                     && rowCandidate is not null
-                    && TryFindItemIndex(items, rowCandidate, out rowIndex, out item))
+                    && TryFindItemIndex(items, rowCandidate, out rowIndex, out item, referenceOnly))
                 {
                     return true;
                 }
@@ -6568,7 +6637,8 @@ internal sealed partial class RecorderStepFactory
         IReadOnlyList<object?> items,
         object dataContext,
         out int rowIndex,
-        out object item)
+        out object item,
+        bool referenceOnly = false)
     {
         for (var i = 0; i < items.Count; i++)
         {
@@ -6578,7 +6648,7 @@ internal sealed partial class RecorderStepFactory
                 continue;
             }
 
-            if (ReferenceEquals(candidate, dataContext) || candidate.Equals(dataContext))
+            if (ReferenceEquals(candidate, dataContext) || !referenceOnly && candidate.Equals(dataContext))
             {
                 rowIndex = i;
                 item = candidate;
@@ -6774,6 +6844,14 @@ internal sealed partial class RecorderStepFactory
                 $"Grid '{definition.PagePropertyName}' does not expose the configured ItemsSource for stable row capture.");
         }
 
+        var usesObjectIdentity = definition.Columns.Any(static column => column.IsObjectKey);
+        if (usesObjectIdentity)
+        {
+            if (!NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var currentView))
+                return StepCreationResult.Unsupported($"Grid '{definition.PagePropertyName}' requires an authoritative current view for object-key recording.");
+            items = currentView;
+        }
+
         if (rowIndex < 0 || rowIndex >= items.Count || items[rowIndex] is not { } item)
         {
             return StepCreationResult.Unsupported(
@@ -6834,6 +6912,9 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported(readError);
         }
 
+        if (usesObjectIdentity && !TryValidateObjectRowPublication(source, gridSource, item, definition, out readError))
+            return StepCreationResult.Unsupported(readError);
+
         var matchingRows = 0;
         foreach (var candidate in items)
         {
@@ -6867,7 +6948,10 @@ internal sealed partial class RecorderStepFactory
             items,
             item);
         var conditions = effectiveIdentityColumns
-            .Select((columnName, index) => new RecordedGridRowCondition(columnName, identityValues[index]))
+            .Select((columnName, index) => new RecordedGridRowCondition(columnName, identityValues[index])
+            {
+                IsObjectKey = definition.FindColumn(columnName)?.IsObjectKey == true
+            })
             .ToArray();
         return CreateStep(
             source,
@@ -7089,6 +7173,17 @@ internal sealed partial class RecorderStepFactory
             var columnName = identityColumns[index];
             var definition = FindGridDefinition(hint);
             var column = definition?.FindColumn(columnName);
+            if (column?.IsObjectKey == true)
+            {
+                try { result[index] = GridRowObjectKey.Get(item); }
+                catch (ArgumentException exception)
+                {
+                    values = [];
+                    error = $"Grid '{hint.TargetLocatorValue}' cannot use this object row: {exception.Message}";
+                    return false;
+                }
+                continue;
+            }
             var valuePath = column?.DisplayValuePath ?? column?.SourceFieldName ?? columnName;
             if (!TryReadPropertyPathValue(item, valuePath, out var rawValue)
                 || !TryFormatGridValue(rawValue, column, out result[index]))
@@ -7103,6 +7198,37 @@ internal sealed partial class RecorderStepFactory
         error = string.Empty;
         return true;
     }
+
+    private static bool TryValidateObjectRowPublication(Control source, Control grid, object row,
+        GridAutomationDefinition definition, out string error)
+    {
+        var key = GridRowObjectKey.Get(row);
+        var property = GetObjectRowPublicationProperty(definition);
+        var published = EnumerateRelatedControls(source)
+            .TakeWhile(control => !ReferenceEquals(control, grid))
+            .Where(control => ReferenceEquals(control.DataContext, row))
+            .Select(control => control.GetValue(property))
+            .Where(static value => value is not null)
+            .ToArray();
+        if (published.Length > 0 && published.All(value => string.Equals(value, key, StringComparison.Ordinal)))
+        {
+            error = string.Empty;
+            return true;
+        }
+        error = $"Grid '{definition.PagePropertyName}' object row must publish its current GridRowObjectKey in the actual row {property.Name}; "
+            + (published.Length == 0 ? "no row key was published." : "the published row key does not match the current row object (possibly a recycled container).");
+        return false;
+    }
+
+    private static AttachedProperty<string?> GetObjectRowPublicationProperty(GridAutomationDefinition definition) =>
+        definition.Columns.Single(static column => column.IsObjectKey).RowIdentityAutomationProperty switch
+        {
+            GridRowAutomationProperty.AutomationId => AutomationProperties.AutomationIdProperty,
+            GridRowAutomationProperty.Name => AutomationProperties.NameProperty,
+            GridRowAutomationProperty.HelpText => AutomationProperties.HelpTextProperty,
+            GridRowAutomationProperty.ItemStatus => AutomationProperties.ItemStatusProperty,
+            _ => throw new InvalidOperationException($"Grid '{definition.PagePropertyName}' configures an unsupported object-key publication property.")
+        };
 
     private static bool TryReadPropertyPathValue(object item, string propertyPath, out object? value)
     {

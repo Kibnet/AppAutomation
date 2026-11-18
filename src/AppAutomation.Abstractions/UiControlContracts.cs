@@ -85,6 +85,11 @@ public interface ITextBoxControl : IUiControl
     void Enter(string value);
 }
 
+internal interface IBudgetedTextEntry
+{
+    void Enter(string value, UiOperationTimeoutBudget budget);
+}
+
 /// <summary>
 /// Represents a clickable button control.
 /// </summary>

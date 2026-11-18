@@ -5550,6 +5550,7 @@ internal sealed partial class RecorderSession :
         }
 
         var textBox = _pendingTextBox;
+        var capturedText = _pendingTextValue;
         var copiedValueId = ReferenceEquals(textBox, _pendingCopiedValuePasteTarget)
             ? _pendingCopiedValuePasteId
             : null;
@@ -5574,12 +5575,13 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        var replayText = _stepFactory.ReadTextEntryValue(textBox, capturedText);
         if (copiedValueId is { } copiedId)
         {
             var copiedValue = CreateCopiedValueOptions()
                 .FirstOrDefault(option => option.CopiedValueId == copiedId);
             if (copiedValue is not null
-                && string.Equals(textBox.Text, copiedValue.PreviewValue, StringComparison.Ordinal))
+                && string.Equals(replayText, copiedValue.PreviewValue, StringComparison.Ordinal))
             {
                 AddStep(
                     _stepFactory.TryCreateCopiedTextEntryStep(textBox, copiedValue),
@@ -5589,7 +5591,7 @@ internal sealed partial class RecorderSession :
             }
         }
 
-        AddStep(_stepFactory.TryCreateTextEntryStep(textBox), textBox, "TextEntry");
+        AddStep(_stepFactory.TryCreateTextEntryStep(textBox, replayText), textBox, "TextEntry");
     }
 
     private bool TryRecordSearchHistoryAction(Control? source)

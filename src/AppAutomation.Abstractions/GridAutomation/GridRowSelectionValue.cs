@@ -46,6 +46,12 @@ public static class GridRowSelectionValue
                 || conditions.Any(part => part is null || part.Value is null || !identity.LogicalColumns.Contains(part.ColumnName))
                 || conditions.Select(static part => part.ColumnName).Distinct(StringComparer.Ordinal).Count() != conditions.Length)
                 throw new InvalidOperationException("A published grid row does not use the configured stable identity columns.");
+            for (var index = 0; index < identity.LogicalColumns.Count; index++)
+            {
+                if (identity.RuntimeColumns[index].IsObjectKey
+                    && string.IsNullOrWhiteSpace(conditions.Single(part => part.ColumnName == identity.LogicalColumns[index]).Value))
+                    throw new InvalidOperationException("A published grid row does not expose a readable object key.");
+            }
             var row = GridRowSelector.ByCell(conditions[0].ColumnName, conditions[0].Value);
             foreach (var part in conditions.Skip(1)) row = row.AndCell(part.ColumnName, part.Value);
             return row;

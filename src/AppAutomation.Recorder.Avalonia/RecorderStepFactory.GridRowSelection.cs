@@ -31,6 +31,8 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported($"Grid '{definition.PagePropertyName}' does not expose an authoritative current view for stable selection capture.");
 
         var columns = definition.RowIdentityColumns;
+        var publication = definition.Columns.Any(static column => column.IsObjectKey)
+            ? GetObjectRowPublicationProperty(definition) : null;
         var rows = new List<RecordedGridSelectionRow>(selected.Count);
         var selectedByKey = new Dictionary<string, object>(StringComparer.Ordinal);
         foreach (var item in selected)
@@ -39,10 +41,23 @@ internal sealed partial class RecorderStepFactory
                 return StepCreationResult.Unsupported("The selected grid row has no readable source item.");
             if (!TryReadGridModelIdentity(hint, item, columns, out var values, out var error))
                 return StepCreationResult.Unsupported(error);
+            if (publication is not null)
+            {
+                var rowOwner = EnumerateDescendantControls(grid).FirstOrDefault(control =>
+                    ReferenceEquals(control.DataContext, item)
+                    && control.GetValue(publication) is not null);
+                if (rowOwner is null || !TryValidateObjectRowPublication(rowOwner, grid, item, definition, out error))
+                    return StepCreationResult.Unsupported(rowOwner is null
+                        ? $"Grid '{definition.PagePropertyName}' selected object row does not publish its current key in an actual row {publication.Name}."
+                        : error);
+            }
             if (!selectedByKey.TryAdd(Key(values), item))
                 return StepCreationResult.Unsupported("More than one selected grid row has the same stable key.");
             rows.Add(new RecordedGridSelectionRow(columns.Select((name, index) =>
-                new RecordedGridRowCondition(name, values[index])).ToArray()));
+                new RecordedGridRowCondition(name, values[index])
+                {
+                    IsObjectKey = definition.FindColumn(name)?.IsObjectKey == true
+                }).ToArray()));
         }
 
         if (rows.Count > 0)

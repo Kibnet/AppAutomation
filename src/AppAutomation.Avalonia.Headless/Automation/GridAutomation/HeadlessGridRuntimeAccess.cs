@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using AppAutomation.Abstractions;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
@@ -128,22 +129,23 @@ internal static class HeadlessGridRuntimeAccess
         Control grid,
         object row,
         int rowIndex,
-        GridRuntimeColumn column)
+        GridRuntimeColumn? column,
+        bool referenceOnly = false)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
-        ArgumentNullException.ThrowIfNull(column);
+        referenceOnly |= column?.UsesObjectRowIdentity == true;
         if (grid is DataGrid dataGrid)
         {
-            var dataGridColumn = FindDataGridColumn(dataGrid, column);
+            var dataGridColumn = column is null ? null : FindDataGridColumn(dataGrid, column);
             dataGrid.ScrollIntoView(row, dataGridColumn);
             dataGrid.Dispatcher.RunJobs();
             dataGrid.UpdateLayout();
             return true;
         }
 
-        var providerColumn = FindProviderColumn(grid, column);
-        var providerRowIndex = ResolveProviderRowIndex(grid, row) ?? rowIndex;
+        var providerColumn = column is null ? null : FindProviderColumn(grid, column);
+        var providerRowIndex = ResolveProviderRowIndex(grid, row, referenceOnly) ?? rowIndex;
         foreach (var method in FindMethods(grid, "ScrollIntoView"))
         {
             var parameters = method.GetParameters();
@@ -155,6 +157,8 @@ internal static class HeadlessGridRuntimeAccess
             object firstArgument;
             if (parameters[0].ParameterType.IsInstanceOfType(row))
             {
+                // Object-based provider overloads may resolve a value-equal row instead.
+                if (referenceOnly) continue;
                 firstArgument = row;
             }
             else if (parameters[0].ParameterType == typeof(int))
@@ -190,6 +194,34 @@ internal static class HeadlessGridRuntimeAccess
         return false;
     }
 
+    public static bool RevealRow(Control grid, object row, bool referenceOnly = false)
+    {
+        if (ScrollIntoView(grid, row, rowIndex: -1, column: null, referenceOnly))
+            return true;
+
+        // Use the live view index only with a viewport whose extent is measured in rows, not pixels.
+        if (ResolveProviderRowIndex(grid, row, referenceOnly) is not int rowIndex || rowIndex < 0
+            || grid.GetType().GetMethod("GetVisibleRowIndexByRowIndex", PublicInstance,
+                binder: null, types: [typeof(int)], modifiers: null) is not { } mapIndex
+            || mapIndex.Invoke(grid, [rowIndex]) is not int index || index < 0
+            || !GridPropertyValueReader.TryReadProperty(grid, "VisibleRowCount", out var countValue)
+            || countValue is not int count || index >= count)
+            return false;
+
+        var viewports = grid.GetVisualDescendants().OfType<ScrollViewer>()
+            .Where(viewport => ReferenceEquals(viewport.TemplatedParent, grid) && viewport.IsEffectivelyVisible
+                && Math.Abs(viewport.Extent.Height - count) < 1e-6
+                && viewport.Viewport.Height > 0 && viewport.Viewport.Height < viewport.Extent.Height)
+            .Take(2).ToArray();
+        if (viewports.Length != 1)
+            return false;
+
+        var viewer = viewports[0];
+        viewer.SetCurrentValue(ScrollViewer.OffsetProperty,
+            new Vector(viewer.Offset.X, Math.Min(index, viewer.Extent.Height - viewer.Viewport.Height)));
+        return true;
+    }
+
     public static HeadlessGridEditorActivation ActivateEditor(
         Control grid,
         object row,
@@ -206,14 +238,14 @@ internal static class HeadlessGridRuntimeAccess
         }
 
         var providerColumn = FindProviderColumn(grid, column);
-        var providerRowIndex = ResolveProviderRowIndex(grid, row) ?? rowIndex;
+        var providerRowIndex = ResolveProviderRowIndex(grid, row, column.UsesObjectRowIdentity) ?? rowIndex;
         if (providerRowIndex < 0)
         {
             throw new InvalidOperationException(
                 "Grid runtime could not resolve the requested source item to a visible row index.");
         }
 
-        var focusedItemAssigned = SetPropertyIfCompatible(grid, "FocusedItem", row);
+        var focusedItemAssigned = !column.UsesObjectRowIdentity && SetPropertyIfCompatible(grid, "FocusedItem", row);
         var focusedRowAssigned = SetPropertyIfCompatible(grid, "FocusedRowIndex", providerRowIndex);
         var focusedColumnAssigned = providerColumn is null;
         if (providerColumn is not null)
@@ -337,34 +369,50 @@ internal static class HeadlessGridRuntimeAccess
         return false;
     }
 
-    public static bool SelectRow(Control grid, object row)
+    public static bool SelectRow(Control grid, object row, bool referenceOnly = false)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
         if (grid is DataGrid dataGrid)
         {
             dataGrid.SelectedItem = row;
-            return ReferenceEquals(dataGrid.SelectedItem, row) || Equals(dataGrid.SelectedItem, row);
+            return ReferenceEquals(dataGrid.SelectedItem, row) || !referenceOnly && Equals(dataGrid.SelectedItem, row);
         }
 
-        return SetPropertyIfCompatible(grid, "SelectedItem", row)
-            || SetPropertyIfCompatible(grid, "FocusedItem", row);
+        if (referenceOnly && ResolveProviderRowIndex(grid, row, referenceOnly: true) is int index && index >= 0)
+        {
+            _ = SetPropertyIfCompatible(grid, "FocusedRowIndex", index);
+            var clear = grid.GetType().GetMethod("ClearSelection", PublicInstance, binder: null, types: Type.EmptyTypes, modifiers: null);
+            var select = grid.GetType().GetMethod("SelectRow", PublicInstance, binder: null, types: [typeof(int)], modifiers: null);
+            if (clear is not null && select is not null && NativeGridSelectionAccess.ReadItems(grid) is not null)
+            {
+                clear.Invoke(grid, null);
+                select.Invoke(grid, [index]);
+                return IsRowSelected(grid, row, referenceOnly: true);
+            }
+            return IsPropertyValue(grid, "FocusedItem", row, referenceOnly: true);
+        }
+
+        return SetPropertyIfCompatible(grid, "SelectedItem", row, referenceOnly)
+            || SetPropertyIfCompatible(grid, "FocusedItem", row, referenceOnly);
     }
 
-    public static bool IsRowSelected(Control grid, object row)
+    public static bool IsRowSelected(Control grid, object row, bool referenceOnly = false)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
+        if (referenceOnly && NativeGridSelectionAccess.ReadItems(grid) is { } selected)
+            return selected.Cast<object?>().Any(item => ReferenceEquals(item, row));
         if (grid is DataGrid dataGrid)
         {
-            return ReferenceEquals(dataGrid.SelectedItem, row) || Equals(dataGrid.SelectedItem, row);
+            return ReferenceEquals(dataGrid.SelectedItem, row) || !referenceOnly && Equals(dataGrid.SelectedItem, row);
         }
 
-        return IsPropertyValue(grid, "SelectedItem", row)
-            || IsPropertyValue(grid, "FocusedItem", row);
+        return IsPropertyValue(grid, "SelectedItem", row, referenceOnly)
+            || IsPropertyValue(grid, "FocusedItem", row, referenceOnly);
     }
 
-    private static bool IsPropertyValue(object source, string propertyName, object expected)
+    private static bool IsPropertyValue(object source, string propertyName, object expected, bool referenceOnly = false)
     {
         var property = source.GetType().GetProperty(
             propertyName,
@@ -375,7 +423,7 @@ internal static class HeadlessGridRuntimeAccess
         }
 
         var actual = property.GetValue(source);
-        return ReferenceEquals(actual, expected) || Equals(actual, expected);
+        return ReferenceEquals(actual, expected) || !referenceOnly && Equals(actual, expected);
     }
 
     private static bool IsCellContextMatch(object? context, object row, GridRuntimeColumn column)
@@ -387,7 +435,7 @@ internal static class HeadlessGridRuntimeAccess
             return false;
         }
 
-        return (ReferenceEquals(candidateRow, row) || Equals(candidateRow, row))
+        return (ReferenceEquals(candidateRow, row) || !column.UsesObjectRowIdentity && Equals(candidateRow, row))
             && string.Equals(
                 Convert.ToString(fieldName, System.Globalization.CultureInfo.InvariantCulture),
                 column.SourceFieldName,
@@ -465,7 +513,7 @@ internal static class HeadlessGridRuntimeAccess
             started = dataGrid.BeginEdit();
             dataGrid.Dispatcher.RunJobs();
             dataGrid.UpdateLayout();
-            var editor = FindDataGridEditor(dataGrid, row);
+            var editor = FindDataGridEditor(dataGrid, row, column.UsesObjectRowIdentity);
             return new HeadlessGridEditorActivation(
                 started,
                 editor,
@@ -539,14 +587,14 @@ internal static class HeadlessGridRuntimeAccess
             : null;
     }
 
-    private static Control? FindDataGridEditor(DataGrid dataGrid, object? row)
+    private static Control? FindDataGridEditor(DataGrid dataGrid, object? row, bool referenceOnly = false)
     {
         if (row is null)
         {
             return null;
         }
 
-        var activeCell = FindCurrentDataGridCell(dataGrid, row);
+        var activeCell = FindCurrentDataGridCell(dataGrid, row, referenceOnly);
         if (activeCell is null)
         {
             return null;
@@ -585,7 +633,7 @@ internal static class HeadlessGridRuntimeAccess
         };
     }
 
-    private static DataGridCell? FindCurrentDataGridCell(DataGrid dataGrid, object row)
+    private static DataGridCell? FindCurrentDataGridCell(DataGrid dataGrid, object row, bool referenceOnly = false)
     {
         var currentColumn = dataGrid.CurrentColumn;
         if (currentColumn is null || !currentColumn.IsVisible)
@@ -601,7 +649,7 @@ internal static class HeadlessGridRuntimeAccess
 
         var matchingRows = dataGrid.GetVisualDescendants()
             .OfType<DataGridRow>()
-            .Where(candidate => ReferenceEquals(candidate.DataContext, row) || Equals(candidate.DataContext, row))
+            .Where(candidate => ReferenceEquals(candidate.DataContext, row) || !referenceOnly && Equals(candidate.DataContext, row))
             .Take(2)
             .ToArray();
         if (matchingRows.Length != 1)
@@ -651,8 +699,21 @@ internal static class HeadlessGridRuntimeAccess
         return controls.Length == 0 ? "<none>" : string.Join(", ", controls);
     }
 
-    private static int? ResolveProviderRowIndex(Control grid, object row)
+    private static int? ResolveProviderRowIndex(Control grid, object row, bool referenceOnly = false)
     {
+        if (referenceOnly)
+        {
+            var view = ReadCurrentViewItems(grid);
+            var indexes = view.Items.Select((item, index) => (item, index))
+                .Where(entry => ReferenceEquals(entry.item, row)).Take(2).ToArray();
+            if (!view.IsAuthoritative || indexes.Length != 1)
+                throw new InvalidOperationException("Grid runtime cannot prove a unique object row in its current view.");
+            var toRowIndex = grid.GetType().GetMethod("GetRowIndexByVisibleRowIndex", PublicInstance,
+                binder: null, types: [typeof(int)], modifiers: null);
+            if (toRowIndex is not null) return (int?)toRowIndex.Invoke(grid, [indexes[0].index]);
+            throw new NotSupportedException("Grid runtime does not expose a current-view row-index mapping for reference identity.");
+        }
+
         var methods = FindMethods(grid, "FindRowByItem")
             .Where(method =>
             {
@@ -674,7 +735,7 @@ internal static class HeadlessGridRuntimeAccess
             : null;
     }
 
-    private static bool SetPropertyIfCompatible(object target, string propertyName, object value)
+    private static bool SetPropertyIfCompatible(object target, string propertyName, object value, bool referenceOnly = false)
     {
         var properties = target.GetType()
             .GetProperties(PublicInstance)
@@ -692,7 +753,7 @@ internal static class HeadlessGridRuntimeAccess
 
         properties[0].SetValue(target, value);
         return ReferenceEquals(properties[0].GetValue(target), value)
-            || Equals(properties[0].GetValue(target), value);
+            || !referenceOnly && Equals(properties[0].GetValue(target), value);
     }
 
     private static bool SetPropertyIfCompatible(object target, string propertyName, int value)

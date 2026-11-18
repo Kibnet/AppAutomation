@@ -136,23 +136,38 @@ internal static class RecorderGeneratedSourceCompiler
             .ToArray();
     }
 
-    private static MetadataReference[] CreateMetadataReferences()
+    public static IReadOnlyList<Diagnostic> CompileConsumerSource(string source, bool recorderEnabled)
+    {
+        var options = new CSharpParseOptions(LanguageVersion.Latest,
+            preprocessorSymbols: recorderEnabled ? ["APPAUTOMATION_RECORDER"] : []);
+        return CSharpCompilation.Create("ObjectKeyConsumer",
+                [CSharpSyntaxTree.ParseText(source, options)],
+                CreateMetadataReferences(includeRecorder: recorderEnabled),
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary))
+            .GetDiagnostics().Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).ToArray();
+    }
+
+    private static MetadataReference[] CreateMetadataReferences(bool includeRecorder = true)
     {
         var references = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
         var trustedPlatformAssemblies = (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty;
         foreach (var path in trustedPlatformAssemblies.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
+            if (!Include(path)) continue;
             references[path] = MetadataReference.CreateFromFile(path);
         }
 
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (!assembly.IsDynamic && !string.IsNullOrWhiteSpace(assembly.Location))
+            if (!assembly.IsDynamic && !string.IsNullOrWhiteSpace(assembly.Location) && Include(assembly.Location))
             {
                 references[assembly.Location] = MetadataReference.CreateFromFile(assembly.Location);
             }
         }
 
         return references.Values.ToArray();
+
+        bool Include(string path) => includeRecorder
+            || !string.Equals(Path.GetFileName(path), "AppAutomation.Recorder.Avalonia.dll", StringComparison.OrdinalIgnoreCase);
     }
 }

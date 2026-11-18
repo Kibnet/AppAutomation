@@ -1,15 +1,20 @@
+using System.Globalization;
+using System.Text.Json;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
+using Eremex.AvaloniaUI.Controls.Editors;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -17,6 +22,100 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [Arguments("en-US")]
+    [Arguments("ru-RU")]
+    [NotInParallel("DesktopUi")]
+    public async Task RecorderReplaysExactSpinEditorInputAfterDisplayFormatting(string cultureName)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var result = HeadlessRuntime.Dispatch(() =>
+        {
+            var window = session.MainWindow;
+            var previousCulture = CultureInfo.CurrentCulture;
+            var culture = CultureInfo.GetCultureInfo(cultureName);
+            CultureInfo.CurrentCulture = culture;
+            try
+            {
+                const decimal expected = 12.3456m;
+                var enteredText = expected.ToString(culture);
+                var price = new PriceValue { Amount = 1m };
+                var editor = new SpinEditor
+                {
+                    Mask = "############################0.############################",
+                    MaskCulture = culture,
+                    MaskUseAsDisplayFormat = false,
+                    DisplayFormatString = "F2",
+                    ShowEditorButtons = false
+                };
+                editor.Bind(SpinEditor.ValueProperty, new Binding(nameof(PriceValue.Amount))
+                {
+                    Source = price,
+                    Mode = BindingMode.TwoWay
+                });
+                var outside = new TextBox();
+                window.Content = new StackPanel { Children = { editor, outside } };
+                window.Show();
+                window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                CultureInfo.CurrentCulture = culture;
+
+                var input = editor.GetVisualDescendants().OfType<TextBox>().Single();
+                AutomationProperties.SetAutomationId(input, "TestPrice_Input");
+                using var recorder = (RecorderSession)AppAutomationRecorder.Attach(window, new() { ShowOverlay = false });
+                recorder.Start();
+                EnterAndCommit(enteredText);
+                var committed = (editor.Value, price.Amount, input.Text);
+                recorder.Stop();
+                var step = recorder.StepJournal.Single();
+
+                const string prefix = "Page.EnterText(static page => page.TestPrice_Input, ";
+                if (!step.Preview.StartsWith(prefix, StringComparison.Ordinal) || !step.Preview.EndsWith(");", StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Unexpected recorded command: {step.Preview}");
+                var replayText = JsonSerializer.Deserialize<string>(step.Preview[prefix.Length..^2])!;
+                price.Amount = 1m;
+                var reset = editor.Value;
+                EnterAndCommit(replayText);
+                return (enteredText, committed, step.Preview, reset, Replayed: (editor.Value, price.Amount));
+
+                void EnterAndCommit(string text)
+                {
+                    input.Focus();
+                    Dispatcher.UIThread.RunJobs();
+                    CultureInfo.CurrentCulture = culture;
+                    window.KeyPress(Key.A, RawInputModifiers.Control, PhysicalKey.A, "a");
+                    window.KeyRelease(Key.A, RawInputModifiers.None, PhysicalKey.A, "a");
+                    CultureInfo.CurrentCulture = culture;
+                    window.KeyTextInput(text);
+                    outside.Focus(); // Commit immediately, before Recorder's debounce.
+                }
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previousCulture;
+            }
+        });
+
+        await Assert.That(result.committed.Value).IsEqualTo(12.3456m);
+        await Assert.That(result.committed.Amount).IsEqualTo(12.3456m);
+        await Assert.That(result.committed.Text).IsEqualTo(12.3456m.ToString("F2", CultureInfo.GetCultureInfo(cultureName)));
+        await Assert.That(result.Preview).IsEqualTo($"Page.EnterText(static page => page.TestPrice_Input, \"{result.enteredText}\");");
+        await Assert.That(result.reset).IsEqualTo(1m);
+        await Assert.That(result.Replayed.Value).IsEqualTo(12.3456m);
+        await Assert.That(result.Replayed.Amount).IsEqualTo(12.3456m);
+    }
+
+    private sealed class PriceValue : AvaloniaObject
+    {
+        public static readonly StyledProperty<decimal?> AmountProperty = AvaloniaProperty.Register<PriceValue, decimal?>(nameof(Amount));
+
+        public decimal? Amount
+        {
+            get => GetValue(AmountProperty);
+            set => SetValue(AmountProperty, value);
+        }
+    }
+
     [Test]
     [Arguments("template")]
     [Arguments("binding")]
@@ -1472,37 +1571,60 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
+    [Arguments(0, false)]
+    [Arguments(34, false)]
+    [Arguments(58, false)]
+    [Arguments(58, true)]
     [NotInParallel("DesktopUi")]
-    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems(bool checkboxRows)
+    public async Task MultiSelectItemsSurface_UsesRenderedListCaptionsForObjectItems(int checkboxItemCount, bool captionOnAttachment)
     {
+        var checkboxRows = checkboxItemCount > 0;
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
         var entries = checkboxRows
-            ? Enumerable.Range(1, 34).Select(index => new DisplayListEntry($"Customer {index:00}")).ToArray()
+            ? Enumerable.Range(0, checkboxItemCount).Select(index => new DisplayListEntry(index == 11 ? "Экспорт" : $"Customer {index + 1:00}")).ToArray()
             : [new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B")];
         var list = HeadlessRuntime.Dispatch(() =>
         {
             var control = new global::Avalonia.Controls.ListBox
             {
-                Height = 150,
+                Height = checkboxItemCount == 34 ? 450 : 150,
                 Width = 360,
                 ItemsSource = entries,
-                ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
-                {
-                    if (checkboxRows)
-                    {
-                        var checkBox = new global::Avalonia.Controls.CheckBox { Content = entry?.Caption };
-                        checkBox.Bind(global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty,
-                            new global::Avalonia.Data.Binding(nameof(DisplayListEntry.IsChecked))
-                            { Source = entry, Mode = global::Avalonia.Data.BindingMode.TwoWay });
-                        return checkBox;
-                    }
-                    var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
-                    global::Avalonia.Automation.AutomationProperties.SetName(text, entry?.Caption);
-                    return text;
-                })
+                SelectionMode = checkboxRows ? SelectionMode.Multiple : SelectionMode.Single,
+                AutoScrollToSelectedItem = true
             };
+            control.ItemTemplate = new global::Avalonia.Controls.Templates.FuncDataTemplate<DisplayListEntry>((entry, _) =>
+            {
+                if (checkboxRows)
+                {
+                    var checkBox = new global::Avalonia.Controls.CheckBox
+                    {
+                        Content = captionOnAttachment ? "Loading" : entry?.Caption
+                    };
+                    AutomationProperties.SetName(checkBox, captionOnAttachment ? "Loading" : entry?.Caption);
+                    if (captionOnAttachment)
+                        checkBox.AttachedToVisualTree += (_, _) =>
+                        {
+                            checkBox.Content = entry?.Caption;
+                            AutomationProperties.SetName(checkBox, entry?.Caption);
+                        };
+                    checkBox.Bind(global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty,
+                        new global::Avalonia.Data.Binding(nameof(DisplayListEntry.IsChecked))
+                        { Source = entry, Mode = global::Avalonia.Data.BindingMode.TwoWay });
+                    checkBox.PropertyChanged += (_, args) =>
+                    {
+                        if (args.Property != global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty
+                            || !checkBox.IsAttachedToVisualTree()) return;
+                        var index = Array.IndexOf(entries, entry);
+                        if (checkBox.IsChecked == true) control.Selection.Select(index);
+                        else control.Selection.Deselect(index);
+                    };
+                    return checkBox;
+                }
+                var text = new global::Avalonia.Controls.TextBlock { Text = entry?.Caption };
+                AutomationProperties.SetName(text, entry?.Caption);
+                return text;
+            });
             global::Avalonia.Automation.AutomationProperties.SetAutomationId(control, "CustomerResults");
             session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
             {
@@ -1522,8 +1644,26 @@ public sealed class HeadlessControlResolverTests
 
         if (checkboxRows)
             await Assert.That(HeadlessRuntime.Dispatch(() => list.GetRealizedContainers().Count())).IsLessThan(entries.Length);
-        var available = items.Items;
-        var expected = checkboxRows ? new[] { entries[18].Caption, entries[31].Caption } : ["Customer B"];
+        IReadOnlyList<string> available;
+        if (checkboxItemCount == 34)
+        {
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.ContainerFromIndex(11) is not null)).IsTrue();
+            available = items.SetSelectedItemsAndGetAvailableItems(["Экспорт"]);
+            await Assert.That(entries[11].IsChecked).IsTrue();
+            await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItems!.Cast<object>().Single()))
+                .IsSameReferenceAs(entries[11]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(["Экспорт"]);
+        }
+        else
+        {
+            available = items.Items;
+        }
+        if (checkboxRows)
+        {
+            items.SetSelectedItems([entries[0].Caption]);
+            await Assert.That(items.SelectedItems).IsEquivalentTo([entries[0].Caption]);
+        }
+        var expected = checkboxRows ? new[] { entries[0].Caption, entries[entries.Length / 2].Caption, entries[^1].Caption } : ["Customer B"];
         items.SetSelectedItems(expected);
 
         using (Assert.Multiple())
@@ -1534,6 +1674,11 @@ public sealed class HeadlessControlResolverTests
                 await Assert.That(HeadlessRuntime.Dispatch(() => list.SelectedItem)).IsSameReferenceAs(entries[1]);
             else
                 await Assert.That(entries.Where(entry => entry.IsChecked).Select(entry => entry.Caption)).IsEquivalentTo(expected);
+        }
+        if (checkboxRows)
+        {
+            items.SetSelectedItems(available);
+            await Assert.That(items.SelectedItems).IsEquivalentTo(available);
         }
         items.SetSelectedItems([]);
         await Assert.That(items.SelectedItems).IsEmpty();
@@ -2084,6 +2229,88 @@ public sealed class HeadlessControlResolverTests
         {
             Environment.SetEnvironmentVariable(fixtureVariable, previous);
         }
+    }
+
+    [Test]
+    [Arguments(1, false, false)]
+    [Arguments(47, false, false)]
+    [Arguments(1, true, false)]
+    [Arguments(63, false, true)]
+    [NotInParallel("DesktopUi")]
+    public async Task OpenGridRow_DoubleClicksTheStableNativeRowAfterVirtualization(
+        int index, bool reverseSort, bool focusTargetBeforeOpening)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = Enumerable.Range(0, 64).Select(i => new VisualGridTestRow($"ROW-{i:00}")).ToArray();
+        var opened = new List<string>();
+        var native = HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl
+            {
+                ItemsSource = rows,
+                Height = 180,
+                Width = 300,
+                ShowGroupPanel = false,
+                SelectionMode = Eremex.AvaloniaUI.Controls.DataControl.RowSelectionMode.Multiple,
+                AutoScrollToFocusedRow = false,
+                AllowEditing = false
+            };
+            AutomationProperties.SetAutomationId(grid, "VirtualizedGrid");
+            grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+            {
+                FieldName = nameof(VisualGridTestRow.Key),
+                Header = "Key",
+                SortIndex = 0,
+                SortDirection = System.ComponentModel.ListSortDirection.Ascending
+            });
+            grid.RowClick += (_, args) =>
+            {
+                if (args.ClickCount == 2 && grid.GetSourceItemByRowIndex(args.RowIndex) is VisualGridTestRow row)
+                    opened.Add(row.Key);
+            };
+            session.MainWindow.Content = grid;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+            return grid;
+        });
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("VirtualizedGrid", "VirtualizedGrid", "VirtualizedGrid")
+                .WithColumns(GridColumnDefinition.Auto(nameof(VisualGridTestRow.Key)))
+                .IdentifyRowsBy(nameof(VisualGridTestRow.Key)));
+        var gridControl = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog)
+            .Resolve<IGridControl>(new UiControlDefinition("VirtualizedGrid", UiControlType.Grid, "VirtualizedGrid"));
+        var selector = index == 1
+            ? GridRowKeyReader.Capture(gridControl, index)
+            : GridRowSelector.ByCell(nameof(VisualGridTestRow.Key), rows[index].Key);
+        var (isRealized, currentIndex, focusedIndex) = HeadlessRuntime.Dispatch(() =>
+        {
+            if (reverseSort)
+            {
+                native.Columns[0].SortDirection = System.ComponentModel.ListSortDirection.Descending;
+                native.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            }
+
+            if (focusTargetBeforeOpening)
+            {
+                native.FocusedRowIndex = native.FindRowByItem(rows[index]);
+                native.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            }
+
+            return (native.GetVisualDescendants()
+                    .OfType<Eremex.AvaloniaUI.Controls.DataGrid.Visuals.DataGridRowControl>()
+                    .Any(row => ReferenceEquals(row.DataContext, rows[index])),
+                native.FindRowByItem(rows[index]), native.FocusedRowIndex);
+        });
+        await Assert.That(currentIndex).IsEqualTo(reverseSort ? 63 - index : index);
+        await Assert.That(isRealized).IsEqualTo(index == 1 && !reverseSort);
+        if (focusTargetBeforeOpening) await Assert.That(focusedIndex).IsEqualTo(index);
+
+        ((IAddressableGridControl)gridControl).OpenRow(selector, 5000);
+
+        await Assert.That(opened).IsEquivalentTo(new[] { rows[index].Key });
     }
 
     private sealed record VisualGridTestRow(string Key);

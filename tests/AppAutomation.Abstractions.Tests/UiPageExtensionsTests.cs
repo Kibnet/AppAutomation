@@ -1224,7 +1224,9 @@ public sealed class UiPageExtensionsTests
     }
 
     [Test]
-    public async Task ActivateShellPane_ThrowsUiOperationException_WhenRuntimeShellFails()
+    [Arguments(false, 10_000)]
+    [Arguments(true, 60)]
+    public async Task ActivateShellPane_ThrowsUiOperationException_WhenRuntimeShellFails(bool useExplicitTimeout, int expectedTimeoutMs)
     {
         var shell = new FakeShellNavigationControl("Shell")
         {
@@ -1235,10 +1237,10 @@ public sealed class UiPageExtensionsTests
         UiOperationException? exception = null;
         try
         {
-            page.ActivateShellPane(
-                static candidate => candidate.Shell,
-                "Customers",
-                timeoutMs: 60);
+            if (useExplicitTimeout)
+                page.ActivateShellPane(static candidate => candidate.Shell, "Customers", timeoutMs: expectedTimeoutMs);
+            else
+                page.ActivateShellPane(static candidate => candidate.Shell, "Customers");
         }
         catch (UiOperationException ex)
         {
@@ -1250,6 +1252,7 @@ public sealed class UiPageExtensionsTests
             await Assert.That(exception).IsNotNull();
             await Assert.That(exception!.FailureContext.OperationName).IsEqualTo("ActivateShellPane");
             await Assert.That(exception.FailureContext.ControlPropertyName).IsEqualTo("Shell");
+            await Assert.That(exception.FailureContext.Timeout).IsEqualTo(TimeSpan.FromMilliseconds(expectedTimeoutMs));
             await Assert.That(exception.Message).Contains("pane tabs are not configured");
             await Assert.That(exception.InnerException is NotSupportedException).IsEqualTo(true);
         }

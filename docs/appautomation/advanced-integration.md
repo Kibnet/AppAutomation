@@ -391,3 +391,103 @@ return AvaloniaDesktopLaunchHost.CreateLaunchOptions(
 - `Headless` покрывает сценарии быстрой проверки и критичные детерминированные сценарии;
 - нестабильные пути, доступные только в настольном режиме, остаются в `FlaUI`;
 - после каждого добавленного сценария `Headless` заново проверяйте стабильность повторных запусков.
+
+## 11. Строки без бизнес-Id и текст сложных ячеек
+
+### Ключ конкретного объекта строки
+
+Если строки имеют устойчивый бизнес-Id, продолжайте использовать `IdentifyRowsBy("Id")`.
+Для пустых или одинаковых строк без такого Id доступен явный opt-in:
+
+```csharp
+var grid = GridAutomationDefinition.ByAutomationIds("ComponentsGrid", "ComponentsGrid", "ComponentsGrid")
+    .WithColumns(
+        GridColumnDefinition.ObjectKey("RowKey"),
+        GridColumnDefinition.Auto("Product"),
+        GridColumnDefinition.Auto("Volume").AsValue(GridCellValueKind.Number))
+    .IdentifyRowsBy("RowKey");
+```
+
+`RowKey` — логическое имя скрытого источника, не новое свойство модели. `GridRowObjectKey.Get(row)` выдаёт ключ по ссылке
+на объект; одинаковые `record`-значения не объединяются. Редактирование, перестановка и пересоздание визуального контейнера
+не меняют ключ. Registry не добавляет данные в модель/JSON и не удерживает удалённые объекты.
+
+В приложении включите `GridRowObjectKeyPublication.IsEnabled` на **реальных контейнерах строк этой таблицы**.
+Механизм из `AppAutomation.Recorder.Avalonia` публикует ключ текущего `DataContext` в `AutomationProperties.ItemStatus`
+и не требует активной записи. Не применяйте его к заголовкам, ячейкам или строкам с уже опубликованным бизнес-Id.
+Обычный binding-конвертер для этой задачи недостаточен: смена контекста на равный `record` может не вызвать уведомление binding.
+
+Ключ не исправляет ошибочный контекст самого native control. Если после переработки контейнера его индекс уже относится к новой
+строке, а `CellData.Row`/`DataContext` всё ещё содержат прежний объект, библиотека должна отказать, а не выбрать value-equal
+соседа. Такой случай обнаружен у Eremex при переработке большого набора одинаковых пустых records; исправлением Eremex этот
+механизм не является. Корректное соответствие row context фактическому объекту остаётся условием интеграции.
+
+Если Recorder подключён условно, регистрируйте соответствующий row style в automation-bootstrap под тем же
+`#if APPAUTOMATION_RECORDER`. Не добавляйте безусловную XAML-ссылку на отсутствующий assembly в обычную сборку приложения.
+Например, к уже существующему scoped row style добавляется:
+
+```csharp
+#if APPAUTOMATION_RECORDER
+rowStyle.Setters.Add(new Setter(GridRowObjectKeyPublication.IsEnabledProperty, true));
+#endif
+```
+
+Recorder, Headless и UIA-публикация должны использовать этот **общий** owner ключа.
+Если приложение публикует полный выбор/текущий view через `GridRowSelectionValue.ToAutomationValue`, для `ObjectKey`-колонки
+оно также вызывает `GridRowObjectKey.Get(item)`, а не читает одноимённое свойство VM. Logical column в snapshot и каталоге должна совпадать.
+Полный текущий view позволяет FlaUI проверить отсутствие дубликатов без обхода всех viewport.
+Нет полного доказательства текущей выборки — нет успешной операции по предположению об уникальности.
+
+В начале каждого запуска тест получает новый runtime selector:
+
+```csharp
+var previous = GridRowKeyReader.CaptureFirst(Page.ComponentsGrid);
+// После штатного добавления одной пустой строки:
+var added = GridRowKeyReader.CaptureFirst(Page.ComponentsGrid, new[] { previous });
+```
+
+Исключать нужно все прежние строки, а не только одну, если их несколько. Ключи не переносятся между процессами и новыми
+экземплярами после reload/клонирования. Старый selector должен вернуть not found, а не выбрать похожую строку.
+Для нового объекта требуется явный новый capture. Два появления того же reference в текущем view неоднозначны.
+
+В Recorder задайте явный источник runtime-строки через Remember → Edit → `Current table row`.
+Последующие Check/Copy/Edit/Select/Open и формулы используют этот anchor. Без такого источника новый ObjectKey workflow
+не экспортирует GUID из записи и не подставляет произвольную первую строку. Сами object keys никогда не являются replay-литералами.
+
+### Отображаемый текст отдельно от значения
+
+Если приложение уже публикует пользовательский текст реальной ячейки в UIA `Name`, его можно читать одинаково в Recorder,
+Headless и FlaUI:
+
+```csharp
+GridColumnDefinition.Auto("Components").AtRuntime("Компоненты").ReadDisplayedText();
+GridColumnDefinition.Auto("ProductionRate").AtRuntime("Производительность")
+    .AsValue(GridCellValueKind.Text).ReadDisplayedText();
+```
+
+Формат, единицы, подписи и порядок элементов определяет приложение. Библиотека не склеивает произвольные дочерние `TextBlock`
+и не считает `collection.ToString()` отображением шаблона. Пустой опубликованный `Name` допустим; отсутствие доступной
+ячейки/источника или неоднозначность не подменяются пустым результатом. Неправильно опубликованный пустой `Name` должен
+выявляться интеграционными тестами приложения.
+
+В этом режиме `DisplayValueFrom`/`FormatWith` не применяются одновременно и колонка не используется как identity.
+Доступный `RawValue` сохраняется независимо от `DisplayText`: например, `12.345m` и `12,3 кг/час`.
+Чтение ничего не округляет и не записывает в бизнес-модель. FlaUI не восстанавливает исходную точность из округлённой подписи:
+если отдельного semantic UIA-значения нет, это display-only представление. Для строгих числовых проверок используйте доступный
+семантический источник, а не подпись с единицей. Обычные Number/Date/DateTime/Reference/Boolean колонки без opt-in не меняются.
+
+### Миграция адаптера рецептов ARM
+
+Подключение выполняет владелец ARM; изменения его кода не входят в реализацию библиотеки.
+
+1. В таблице компонентов заменить скрытую колонку `AutomationRowKey` на `ObjectKey("RowKey")` и identity на `RowKey`;
+   публикацию на реальном row заменить общим `GridRowObjectKeyPublication`. В основной таблице рецептов оставить настоящий `Id`.
+2. Согласовать `GridSelectionAutomation`/полный UIA snapshot с новым источником и логическим именем ключа.
+3. Только колонки `Components` и `ProductionRate` перевести на `ReadDisplayedText`, убрав их прежние `DisplayValueFrom`/`FormatWith`.
+4. Сохранить UI-форматирование производительности (`CustomColumnDisplayText`/`UnitDisplayTextFormatter`) и публикацию этого текста в `Name`.
+5. Убрать зависимость `RecipeGridCellDisplayTextConverter` от `AutomationComponentsText`: публиковать подписи списка через UI/automation-слой,
+   используя то же представление, что показывает шаблон. **Сам converter не удалять**, пока его не заменяет проверенная эквивалентная UIA-публикация.
+6. После проверки нового подключения удалить из VM `AutomationComponentsText`, `AutomationProductionRateText`, `AutomationRowKey`,
+   старый helper `PresentationRowIdentity` и только соответствующие им исключения в `ComparisonUtils`.
+7. Проверить обычную сборку без Recorder, UI шаблонов и существующие ARM сценарии записи/Headless/FlaUI.
+   Зелёные собственные тесты AppAutomation сами по себе не подтверждают такую интеграцию.

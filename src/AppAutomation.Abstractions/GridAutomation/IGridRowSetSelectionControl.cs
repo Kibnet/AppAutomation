@@ -37,7 +37,7 @@ internal sealed record GridRowSetIdentity(
         {
             var name = LogicalColumns[index];
             var value = read(RuntimeColumns[index]);
-            if (value is null)
+            if (value is null || RuntimeColumns[index].IsObjectKey && string.IsNullOrWhiteSpace(value))
             {
                 if (!requireComplete) return null;
                 throw new InvalidOperationException($"A selected grid row does not expose stable identity column '{name}'.");
@@ -50,8 +50,11 @@ internal sealed record GridRowSetIdentity(
     internal GridIndexedRowSelector ToRuntimeSelector(GridRowSelector selector)
     {
         var values = selector.Conditions.ToDictionary(static part => part.ColumnName, static part => part.Value, StringComparer.Ordinal);
-        return new GridIndexedRowSelector(RuntimeColumns.Select((column, index) =>
-            new GridIndexedCellCondition(column, values[LogicalColumns[index]]))).WithDeclaredUniqueIdentity();
+        var mapped = new GridIndexedRowSelector(RuntimeColumns.Select((column, index) =>
+            new GridIndexedCellCondition(column, values[LogicalColumns[index]])));
+        return RuntimeColumns.Any(static column => column.IsObjectKey || column.UsesObjectRowIdentity)
+            ? mapped
+            : mapped.WithDeclaredUniqueIdentity();
     }
 }
 

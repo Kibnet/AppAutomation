@@ -12,7 +12,14 @@ namespace AppAutomation.Avalonia.Headless.Internal.AutomationModel;
 internal static class ListItemCaptionReader
 {
     public static T ReadSnapshot<T>(ItemsControl itemsControl, Func<Func<int, string?>, T> read,
-        int timeoutMs = 5000)
+        int timeoutMs = 5000) =>
+        ReadSnapshotCore(itemsControl, (readCaption, _) => read(readCaption), timeoutMs, selectionSnapshot: false);
+
+    internal static T ReadSelectionSnapshot<T>(ItemsControl itemsControl, Func<Func<int, string?>, Func<int, Control>, T> read,
+        int timeoutMs = 10_000) => ReadSnapshotCore(itemsControl, read, timeoutMs, selectionSnapshot: true);
+
+    private static T ReadSnapshotCore<T>(ItemsControl itemsControl, Func<Func<int, string?>, Func<int, Control>, T> read,
+        int timeoutMs, bool selectionSnapshot)
     {
         var budget = UiOperationTimeoutBudget.Start(timeoutMs, "list snapshot read");
         var changed = false;
@@ -25,9 +32,40 @@ internal static class ListItemCaptionReader
         string? ReadAt(int index)
         {
             EnsureUnchanged();
+            if (selectionSnapshot) _ = budget.Remaining;
             return itemsControl is global::Avalonia.Controls.ComboBox combo
                 ? ReadComboBoxCaption(combo, index)
-                : ReadListBoxCaption(itemsControl, index, EnsureUnchanged);
+                : ReadListBoxCaption(itemsControl, index, EnsureUnchanged, selectionSnapshot ? RequireContainer : null);
+        }
+        Control RequireContainer(int index)
+        {
+            EnsureUnchanged();
+            _ = budget.Remaining;
+            if (FindContainer() is { } existing) return existing;
+
+            // Settle deferred item updates before accepting a revealed row. Selection
+            // auto-scroll can displace it, so reveal once more after those jobs settle.
+            if (Reveal() is { } realized) return realized;
+            if (Reveal() is { } retried) return retried;
+
+            throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
+                $"List '{AutomationProperties.GetAutomationId(itemsControl)}' item at index {index} did not realize a live container.");
+
+            Control? FindContainer() => itemsControl.ContainerFromIndex(index) is { } container
+                && container.IsAttachedToVisualTree() && itemsControl.IndexFromContainer(container) == index
+                    ? container : null;
+
+            Control? Reveal()
+            {
+                _ = budget.Remaining;
+                itemsControl.ScrollIntoView(index);
+                itemsControl.UpdateLayout();
+                itemsControl.Dispatcher.RunJobs();
+                itemsControl.UpdateLayout();
+                EnsureUnchanged();
+                _ = budget.Remaining;
+                return FindContainer();
+            }
         }
 
         itemsControl.Items.CollectionChanged += OnItemsChanged;
@@ -40,8 +78,9 @@ internal static class ListItemCaptionReader
 
                 try
                 {
-                    var result = read(ReadAt);
+                    var result = read(ReadAt, RequireContainer);
                     EnsureUnchanged();
+                    if (selectionSnapshot) _ = budget.Remaining;
                     return result;
                 }
                 catch (ItemsChangedDuringReadException)
@@ -57,7 +96,8 @@ internal static class ListItemCaptionReader
         }
     }
 
-    private static string? ReadListBoxCaption(ItemsControl list, int index, Action ensureUnchanged)
+    private static string? ReadListBoxCaption(ItemsControl list, int index, Action ensureUnchanged,
+        Func<int, Control>? requireContainer)
     {
         var item = list.Items[index];
         if (item is null)
@@ -65,7 +105,8 @@ internal static class ListItemCaptionReader
             return null;
         }
 
-        var container = list.ContainerFromIndex(index);
+        var container = requireContainer is not null && (list.ItemTemplate is not null || item is Control)
+            ? requireContainer(index) : list.ContainerFromIndex(index);
         if (container is null && (list.ItemTemplate is not null || item is Control))
         {
             list.ScrollIntoView(index);
