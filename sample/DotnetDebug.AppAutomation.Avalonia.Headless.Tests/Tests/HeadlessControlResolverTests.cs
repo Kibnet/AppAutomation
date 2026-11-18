@@ -2086,6 +2086,88 @@ public sealed class HeadlessControlResolverTests
         }
     }
 
+    [Test]
+    [Arguments(1, false, false)]
+    [Arguments(47, false, false)]
+    [Arguments(1, true, false)]
+    [Arguments(63, false, true)]
+    [NotInParallel("DesktopUi")]
+    public async Task OpenGridRow_DoubleClicksTheStableNativeRowAfterVirtualization(
+        int index, bool reverseSort, bool focusTargetBeforeOpening)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var rows = Enumerable.Range(0, 64).Select(i => new VisualGridTestRow($"ROW-{i:00}")).ToArray();
+        var opened = new List<string>();
+        var native = HeadlessRuntime.Dispatch(() =>
+        {
+            var grid = new Eremex.AvaloniaUI.Controls.DataGrid.DataGridControl
+            {
+                ItemsSource = rows,
+                Height = 180,
+                Width = 300,
+                ShowGroupPanel = false,
+                SelectionMode = Eremex.AvaloniaUI.Controls.DataControl.RowSelectionMode.Multiple,
+                AutoScrollToFocusedRow = false,
+                AllowEditing = false
+            };
+            AutomationProperties.SetAutomationId(grid, "VirtualizedGrid");
+            grid.Columns.Add(new Eremex.AvaloniaUI.Controls.DataGrid.GridColumn
+            {
+                FieldName = nameof(VisualGridTestRow.Key),
+                Header = "Key",
+                SortIndex = 0,
+                SortDirection = System.ComponentModel.ListSortDirection.Ascending
+            });
+            grid.RowClick += (_, args) =>
+            {
+                if (args.ClickCount == 2 && grid.GetSourceItemByRowIndex(args.RowIndex) is VisualGridTestRow row)
+                    opened.Add(row.Key);
+            };
+            session.MainWindow.Content = grid;
+            session.MainWindow.Show();
+            session.MainWindow.Dispatcher.RunJobs();
+            session.MainWindow.UpdateLayout();
+            return grid;
+        });
+        var catalog = new GridAutomationCatalog().Add(
+            GridAutomationDefinition.ByAutomationIds("VirtualizedGrid", "VirtualizedGrid", "VirtualizedGrid")
+                .WithColumns(GridColumnDefinition.Auto(nameof(VisualGridTestRow.Key)))
+                .IdentifyRowsBy(nameof(VisualGridTestRow.Key)));
+        var gridControl = new HeadlessControlResolver(session.MainWindow).WithGridAutomation(catalog)
+            .Resolve<IGridControl>(new UiControlDefinition("VirtualizedGrid", UiControlType.Grid, "VirtualizedGrid"));
+        var selector = index == 1
+            ? GridRowKeyReader.Capture(gridControl, index)
+            : GridRowSelector.ByCell(nameof(VisualGridTestRow.Key), rows[index].Key);
+        var (isRealized, currentIndex, focusedIndex) = HeadlessRuntime.Dispatch(() =>
+        {
+            if (reverseSort)
+            {
+                native.Columns[0].SortDirection = System.ComponentModel.ListSortDirection.Descending;
+                native.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            }
+
+            if (focusTargetBeforeOpening)
+            {
+                native.FocusedRowIndex = native.FindRowByItem(rows[index]);
+                native.Dispatcher.RunJobs();
+                session.MainWindow.UpdateLayout();
+            }
+
+            return (native.GetVisualDescendants()
+                    .OfType<Eremex.AvaloniaUI.Controls.DataGrid.Visuals.DataGridRowControl>()
+                    .Any(row => ReferenceEquals(row.DataContext, rows[index])),
+                native.FindRowByItem(rows[index]), native.FocusedRowIndex);
+        });
+        await Assert.That(currentIndex).IsEqualTo(reverseSort ? 63 - index : index);
+        await Assert.That(isRealized).IsEqualTo(index == 1 && !reverseSort);
+        if (focusTargetBeforeOpening) await Assert.That(focusedIndex).IsEqualTo(index);
+
+        ((IAddressableGridControl)gridControl).OpenRow(selector, 5000);
+
+        await Assert.That(opened).IsEquivalentTo(new[] { rows[index].Key });
+    }
+
     private sealed record VisualGridTestRow(string Key);
 
     private sealed record VisualGridRowContext(VisualGridTestRow Row);

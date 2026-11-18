@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using AppAutomation.Abstractions;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
@@ -128,21 +129,20 @@ internal static class HeadlessGridRuntimeAccess
         Control grid,
         object row,
         int rowIndex,
-        GridRuntimeColumn column)
+        GridRuntimeColumn? column)
     {
         ArgumentNullException.ThrowIfNull(grid);
         ArgumentNullException.ThrowIfNull(row);
-        ArgumentNullException.ThrowIfNull(column);
         if (grid is DataGrid dataGrid)
         {
-            var dataGridColumn = FindDataGridColumn(dataGrid, column);
+            var dataGridColumn = column is null ? null : FindDataGridColumn(dataGrid, column);
             dataGrid.ScrollIntoView(row, dataGridColumn);
             dataGrid.Dispatcher.RunJobs();
             dataGrid.UpdateLayout();
             return true;
         }
 
-        var providerColumn = FindProviderColumn(grid, column);
+        var providerColumn = column is null ? null : FindProviderColumn(grid, column);
         var providerRowIndex = ResolveProviderRowIndex(grid, row) ?? rowIndex;
         foreach (var method in FindMethods(grid, "ScrollIntoView"))
         {
@@ -188,6 +188,34 @@ internal static class HeadlessGridRuntimeAccess
         }
 
         return false;
+    }
+
+    public static bool RevealRow(Control grid, object row)
+    {
+        if (ScrollIntoView(grid, row, rowIndex: -1, column: null))
+            return true;
+
+        // Use the live view index only with a viewport whose extent is measured in rows, not pixels.
+        if (ResolveProviderRowIndex(grid, row) is not int rowIndex || rowIndex < 0
+            || grid.GetType().GetMethod("GetVisibleRowIndexByRowIndex", PublicInstance,
+                binder: null, types: [typeof(int)], modifiers: null) is not { } mapIndex
+            || mapIndex.Invoke(grid, [rowIndex]) is not int index || index < 0
+            || !GridPropertyValueReader.TryReadProperty(grid, "VisibleRowCount", out var countValue)
+            || countValue is not int count || index >= count)
+            return false;
+
+        var viewports = grid.GetVisualDescendants().OfType<ScrollViewer>()
+            .Where(viewport => ReferenceEquals(viewport.TemplatedParent, grid) && viewport.IsEffectivelyVisible
+                && Math.Abs(viewport.Extent.Height - count) < 1e-6
+                && viewport.Viewport.Height > 0 && viewport.Viewport.Height < viewport.Extent.Height)
+            .Take(2).ToArray();
+        if (viewports.Length != 1)
+            return false;
+
+        var viewer = viewports[0];
+        viewer.SetCurrentValue(ScrollViewer.OffsetProperty,
+            new Vector(viewer.Offset.X, Math.Min(index, viewer.Extent.Height - viewer.Viewport.Height)));
+        return true;
     }
 
     public static HeadlessGridEditorActivation ActivateEditor(
