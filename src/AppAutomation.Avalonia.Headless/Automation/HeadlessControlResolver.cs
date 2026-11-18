@@ -1370,14 +1370,11 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             {
                 return ListItemCaptionReader.ReadSelectionSnapshot(listBox, (read, requireContainer) =>
                 {
-                    if (listBox.Items.Count > 0)
+                    if (FindFirstRowCheckBox(listBox, requireContainer) is not null)
                     {
-                        if (FindRowCheckBox(requireContainer(0)) is not null)
-                        {
-                            return Enumerable.Range(0, listBox.Items.Count)
-                                .Where(index => RequireRowCheckBox(requireContainer(index)).IsChecked == true)
-                                .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
-                        }
+                        return Enumerable.Range(0, listBox.Items.Count)
+                            .Where(index => RequireRowCheckBox(requireContainer(index)).IsChecked == true)
+                            .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
                     }
                     if (listBox.SelectionMode == global::Avalonia.Controls.SelectionMode.Single)
                     {
@@ -1435,6 +1432,15 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             };
         }
 
+        private static global::Avalonia.Controls.CheckBox? FindFirstRowCheckBox(
+            global::Avalonia.Controls.ListBox listBox, Func<int, AvaloniaControl> requireContainer)
+        {
+            if (listBox.Items.Count == 0) return null;
+            var container = listBox.ItemTemplate is not null || listBox.Items[0] is AvaloniaControl
+                ? requireContainer(0) : listBox.ContainerFromIndex(0);
+            return container is null ? null : FindRowCheckBox(container);
+        }
+
         private static global::Avalonia.Controls.CheckBox RequireRowCheckBox(AvaloniaControl container) =>
             FindRowCheckBox(container)
             ?? throw new InvalidOperationException("Multi-select checkbox rows expose inconsistent templates.");
@@ -1476,7 +1482,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             {
                 ValidateAvailableItems(available, requestedValues);
 
-                if (items.Length > 0 && FindRowCheckBox(requireContainer(0)) is not null)
+                if (FindFirstRowCheckBox(listBox, requireContainer) is not null)
                 {
                     for (var index = 0; index < items.Length; index++)
                     {

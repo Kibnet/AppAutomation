@@ -43,14 +43,9 @@ internal static class ListItemCaptionReader
             _ = budget.Remaining;
             if (FindContainer() is { } existing) return existing;
 
-            // A normal reveal can realize the row synchronously. Pump the dispatcher only
-            // if necessary: deferred auto-scroll to the selection can displace the target.
+            // Settle deferred item updates before accepting a revealed row. Selection
+            // auto-scroll can displace it, so reveal once more after those jobs settle.
             if (Reveal() is { } realized) return realized;
-            itemsControl.Dispatcher.RunJobs();
-            itemsControl.UpdateLayout();
-            EnsureUnchanged();
-            _ = budget.Remaining;
-            if (FindContainer() is { } settled) return settled;
             if (Reveal() is { } retried) return retried;
 
             throw new UiControlResolutionException(UiControlResolutionFailure.Detached,
@@ -64,6 +59,8 @@ internal static class ListItemCaptionReader
             {
                 _ = budget.Remaining;
                 itemsControl.ScrollIntoView(index);
+                itemsControl.UpdateLayout();
+                itemsControl.Dispatcher.RunJobs();
                 itemsControl.UpdateLayout();
                 EnsureUnchanged();
                 _ = budget.Remaining;

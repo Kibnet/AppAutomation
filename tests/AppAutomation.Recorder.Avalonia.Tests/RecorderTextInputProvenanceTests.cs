@@ -72,13 +72,13 @@ public sealed class RecorderTextInputProvenanceTests
     public async Task FocusLossThatNormalizesTheAcceptedValue_RecordsTheNormalizedText()
     {
         var headless = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderTextInputProvenanceTests).Assembly);
-        var replayText = await headless.Dispatch(() =>
+        var replayText = headless.Dispatch(() =>
         {
             var input = new TextBox { Text = "10" };
             var editor = new NumericInputOwner { Content = input, Value = 10m };
             editor.ApplyTemplate();
             return RecorderNumericValueReader.ReadTextForReplay(input, "12");
-        }, CancellationToken.None);
+        }, CancellationToken.None).GetAwaiter().GetResult();
 
         await Assert.That(replayText).IsEqualTo("10");
     }
