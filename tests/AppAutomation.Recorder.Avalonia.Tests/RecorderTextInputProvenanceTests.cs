@@ -69,6 +69,26 @@ public sealed class RecorderTextInputProvenanceTests
     }
 
     [Test]
+    public async Task FocusLossThatNormalizesTheAcceptedValue_RecordsTheNormalizedText()
+    {
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderTextInputProvenanceTests).Assembly);
+        var replayText = await headless.Dispatch(() =>
+        {
+            var input = new TextBox { Text = "10" };
+            var editor = new NumericInputOwner { Content = input, Value = 10m };
+            editor.ApplyTemplate();
+            return RecorderNumericValueReader.ReadTextForReplay(input, "12");
+        }, CancellationToken.None);
+
+        await Assert.That(replayText).IsEqualTo("10");
+    }
+
+    private sealed class NumericInputOwner : ContentControl
+    {
+        public decimal Value { get; init; }
+    }
+
+    [Test]
     public async Task DeleteKeyInEditableTextBox_RecordsEmptyText()
     {
         var previews = Capture(() => new TextBox { Text = "Seed" }, (_, textBox) =>

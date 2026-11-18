@@ -1,15 +1,20 @@
+using System.Globalization;
+using System.Text.Json;
 using AppAutomation.Abstractions;
 using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Session;
 using AppAutomation.Recorder.Avalonia;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DotnetDebug.AppAutomation.Authoring.Pages;
 using DotnetDebug.AppAutomation.TestHost;
+using Eremex.AvaloniaUI.Controls.Editors;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -17,6 +22,100 @@ namespace DotnetDebug.AppAutomation.Avalonia.Headless.Tests.Tests.UIAutomationTe
 
 public sealed class HeadlessControlResolverTests
 {
+    [Test]
+    [Arguments("en-US")]
+    [Arguments("ru-RU")]
+    [NotInParallel("DesktopUi")]
+    public async Task RecorderReplaysExactSpinEditorInputAfterDisplayFormatting(string cultureName)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var result = HeadlessRuntime.Dispatch(() =>
+        {
+            var window = session.MainWindow;
+            var previousCulture = CultureInfo.CurrentCulture;
+            var culture = CultureInfo.GetCultureInfo(cultureName);
+            CultureInfo.CurrentCulture = culture;
+            try
+            {
+                const decimal expected = 12.3456m;
+                var enteredText = expected.ToString(culture);
+                var price = new PriceValue { Amount = 1m };
+                var editor = new SpinEditor
+                {
+                    Mask = "############################0.############################",
+                    MaskCulture = culture,
+                    MaskUseAsDisplayFormat = false,
+                    DisplayFormatString = "F2",
+                    ShowEditorButtons = false
+                };
+                editor.Bind(SpinEditor.ValueProperty, new Binding(nameof(PriceValue.Amount))
+                {
+                    Source = price,
+                    Mode = BindingMode.TwoWay
+                });
+                var outside = new TextBox();
+                window.Content = new StackPanel { Children = { editor, outside } };
+                window.Show();
+                window.UpdateLayout();
+                Dispatcher.UIThread.RunJobs();
+                CultureInfo.CurrentCulture = culture;
+
+                var input = editor.GetVisualDescendants().OfType<TextBox>().Single();
+                AutomationProperties.SetAutomationId(input, "TestPrice_Input");
+                using var recorder = (RecorderSession)AppAutomationRecorder.Attach(window, new() { ShowOverlay = false });
+                recorder.Start();
+                EnterAndCommit(enteredText);
+                var committed = (editor.Value, price.Amount, input.Text);
+                recorder.Stop();
+                var step = recorder.StepJournal.Single();
+
+                const string prefix = "Page.EnterText(static page => page.TestPrice_Input, ";
+                if (!step.Preview.StartsWith(prefix, StringComparison.Ordinal) || !step.Preview.EndsWith(");", StringComparison.Ordinal))
+                    throw new InvalidOperationException($"Unexpected recorded command: {step.Preview}");
+                var replayText = JsonSerializer.Deserialize<string>(step.Preview[prefix.Length..^2])!;
+                price.Amount = 1m;
+                var reset = editor.Value;
+                EnterAndCommit(replayText);
+                return (enteredText, committed, step.Preview, reset, Replayed: (editor.Value, price.Amount));
+
+                void EnterAndCommit(string text)
+                {
+                    input.Focus();
+                    Dispatcher.UIThread.RunJobs();
+                    CultureInfo.CurrentCulture = culture;
+                    window.KeyPress(Key.A, RawInputModifiers.Control, PhysicalKey.A, "a");
+                    window.KeyRelease(Key.A, RawInputModifiers.None, PhysicalKey.A, "a");
+                    CultureInfo.CurrentCulture = culture;
+                    window.KeyTextInput(text);
+                    outside.Focus(); // Commit immediately, before Recorder's debounce.
+                }
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previousCulture;
+            }
+        });
+
+        await Assert.That(result.committed.Value).IsEqualTo(12.3456m);
+        await Assert.That(result.committed.Amount).IsEqualTo(12.3456m);
+        await Assert.That(result.committed.Text).IsEqualTo(12.3456m.ToString("F2", CultureInfo.GetCultureInfo(cultureName)));
+        await Assert.That(result.Preview).IsEqualTo($"Page.EnterText(static page => page.TestPrice_Input, \"{result.enteredText}\");");
+        await Assert.That(result.reset).IsEqualTo(1m);
+        await Assert.That(result.Replayed.Value).IsEqualTo(12.3456m);
+        await Assert.That(result.Replayed.Amount).IsEqualTo(12.3456m);
+    }
+
+    private sealed class PriceValue : AvaloniaObject
+    {
+        public static readonly StyledProperty<decimal?> AmountProperty = AvaloniaProperty.Register<PriceValue, decimal?>(nameof(Amount));
+
+        public decimal? Amount
+        {
+            get => GetValue(AmountProperty);
+            set => SetValue(AmountProperty, value);
+        }
+    }
+
     [Test]
     [Arguments("template")]
     [Arguments("binding")]

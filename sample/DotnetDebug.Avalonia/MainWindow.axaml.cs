@@ -65,6 +65,11 @@ public partial class MainWindow : Window
             Content = ClosedFilterSelectionFixture.CreateContent();
             return;
         }
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_TEXT_ENTRY_FIXTURE") == "1")
+        {
+            Content = FocusedTextEntryFixture.CreateContent();
+            return;
+        }
         DataContext = _viewModel;
         InitializeNativeGridRuntimeFixture();
         if (Environment.GetEnvironmentVariable("APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE") == "presentation")

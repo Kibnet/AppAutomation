@@ -20,6 +20,46 @@ public sealed class FlaUiControlResolverTests
 {
     [Test]
     [NotInParallel("DesktopUi")]
+    public async Task EnterTextFocusesTheInputBeforeSettingItsValue()
+    {
+        DesktopUiAvailabilityGuard.SkipIfUnavailable();
+        var defaults = DotnetDebugAppLaunchHost.CreateDesktopLaunchOptions(buildBeforeLaunch: false);
+        using var session = DesktopAppSession.Launch(new DesktopAppLaunchOptions
+        {
+            ExecutablePath = defaults.ExecutablePath,
+            WorkingDirectory = defaults.WorkingDirectory,
+            Arguments = defaults.Arguments,
+            DisposeCallback = defaults.DisposeCallback,
+            MainWindowTimeout = defaults.MainWindowTimeout,
+            PollInterval = defaults.PollInterval,
+            WindowPlacement = defaults.WindowPlacement,
+            EnvironmentVariables = new Dictionary<string, string?>(defaults.EnvironmentVariables, StringComparer.Ordinal)
+            {
+                ["APPAUTOMATION_TEXT_ENTRY_FIXTURE"] = "1"
+            }
+        });
+        var window = session.MainWindow;
+        var other = window.FindFirstDescendant(session.ConditionFactory.ByAutomationId("OtherInput"));
+        other.Focus();
+        await Assert.That(other.Properties.HasKeyboardFocus.Value).IsTrue();
+        var page = new PrecisionInputPage(new FlaUiControlResolver(window, session.ConditionFactory));
+
+        page.EnterText(static p => p.PrecisionInput, "12.3456");
+        other.Focus();
+        page.WaitUntilTextEquals(static p => p.PrecisionInput, "12.35");
+        await Assert.That(page.AcceptedValue.Text).IsEqualTo("12.3456");
+    }
+
+    private sealed class PrecisionInputPage(IUiControlResolver resolver) : UiPage(resolver)
+    {
+        public ITextBoxControl PrecisionInput => Resolve<ITextBoxControl>(
+            new UiControlDefinition("PrecisionInput", UiControlType.TextBox, "PrecisionInput"));
+        public ILabelControl AcceptedValue => Resolve<ILabelControl>(
+            new UiControlDefinition("AcceptedValue", UiControlType.Label, "AcceptedValue"));
+    }
+
+    [Test]
+    [NotInParallel("DesktopUi")]
     public async Task ClosedMultiSelectFilterReadsThePublishedSetNotItsConstantCaption()
     {
         DesktopUiAvailabilityGuard.SkipIfUnavailable();

@@ -1,3 +1,4 @@
+using System.Globalization;
 using AppAutomation.Abstractions;
 using Avalonia.Controls;
 
@@ -6,6 +7,32 @@ namespace AppAutomation.Recorder.Avalonia;
 /// <summary>Reads the numeric editor value while retaining the user's formatted input text.</summary>
 internal static class RecorderNumericValueReader
 {
+    internal static string ReadTextForReplay(TextBox input, string? capturedText)
+    {
+        var displayedText = input.Text ?? string.Empty;
+        var culture = CultureInfo.CurrentCulture;
+        const NumberStyles styles = NumberStyles.Number | NumberStyles.AllowExponent;
+        if (capturedText is null || string.Equals(capturedText, displayedText, StringComparison.Ordinal)
+            || !decimal.TryParse(capturedText, styles, culture, out var entered)
+            || !decimal.TryParse(displayedText, styles, culture, out var displayed)
+            || entered == displayed)
+        {
+            return displayedText;
+        }
+
+        // Only the editor can distinguish display rounding from input it rejected or normalized.
+        foreach (var owner in RecorderControlTree.EnumerateRelatedControls(input).Skip(1))
+        {
+            if (GridPropertyValueReader.TryReadProperty(owner, "Value", out var value)
+                && GridNumericText.TryConvertFiniteDecimal(value, out var committed))
+            {
+                return committed == entered ? capturedText : displayedText;
+            }
+        }
+
+        return displayedText;
+    }
+
     internal static bool TryReadNumericValue(Control control, out double value)
     {
         return TryReadNumericValue(control, out value, out _);

@@ -46,8 +46,8 @@ public static partial class UiPageExtensions
         int timeoutMs = 5000)
         where TSelf : UiPage
     {
+        var budget = UiOperationTimeoutBudget.Start(timeoutMs, "text entry");
         var textBox = Resolve(selector, page);
-        textBox.Enter(value);
         WaitUntil(
             page,
             selector,
@@ -55,7 +55,15 @@ public static partial class UiPageExtensions
             timeoutMs,
             $"TextBox '{textBox.AutomationId}' did not reach expected value.",
             expectedValue: value,
-            lastObservedValueFactory: () => textBox.Text);
+            lastObservedValueFactory: () => textBox.Text,
+            beforeWait: () =>
+            {
+                if (textBox is IBudgetedTextEntry entry)
+                    entry.Enter(value, budget);
+                else
+                    textBox.Enter(value);
+                return budget.Remaining;
+            });
         return page;
     }
 
@@ -3239,19 +3247,19 @@ public static partial class UiPageExtensions
         string timeoutMessage,
         string? expectedValue = null,
         Func<string?>? lastObservedValueFactory = null,
-        [CallerMemberName] string operationName = "")
+        [CallerMemberName] string operationName = "",
+        Func<TimeSpan>? beforeWait = null)
         where TSelf : UiPage
     {
         var startedAtUtc = DateTimeOffset.UtcNow;
         var timeout = TimeSpan.FromMilliseconds(timeoutMs);
-        var waitOptions = new UiWaitOptions
-        {
-            Timeout = timeout,
-            PollInterval = TimeSpan.FromMilliseconds(100)
-        };
-
         try
         {
+            var waitOptions = new UiWaitOptions
+            {
+                Timeout = beforeWait?.Invoke() ?? timeout,
+                PollInterval = TimeSpan.FromMilliseconds(100)
+            };
             UiWait.Until(
                 condition,
                 static value => value,

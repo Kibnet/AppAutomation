@@ -255,7 +255,7 @@ internal sealed partial class RecorderStepFactory
             .Any(rootItems => TryFindMenuItemPath(rootItems, item, out _));
     }
 
-    public StepCreationResult TryCreateTextEntryStep(TextBox textBox)
+    public StepCreationResult TryCreateTextEntryStep(TextBox textBox, string? replayText = null)
     {
         ArgumentNullException.ThrowIfNull(textBox);
 
@@ -292,7 +292,7 @@ internal sealed partial class RecorderStepFactory
         }
 
         var descriptor = locatorResult.Control;
-        var text = textBox.Text ?? string.Empty;
+        var text = replayText ?? textBox.Text ?? string.Empty;
         if (TryResolveActionHint(textBox, descriptor) == RecorderActionHint.SpinnerTextBox
             && double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var numericValue))
         {
@@ -321,6 +321,11 @@ internal sealed partial class RecorderStepFactory
                 CanPersist: locatorResult.CanPersist),
             locatorResult.Message);
     }
+
+    internal string ReadTextEntryValue(TextBox textBox, string? capturedText) =>
+        TryResolveSearchControlHint(textBox, out _)
+            ? textBox.Text ?? string.Empty
+            : RecorderNumericValueReader.ReadTextForReplay(textBox, capturedText);
 
     internal StepCreationResult TryCreateGeneratedTextEntryStep(
         TextBox textBox,
