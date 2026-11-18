@@ -92,6 +92,39 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
             ValidateEnum(definition.RuntimeLocatorKind, nameof(definition.RuntimeLocatorKind));
             foreach (var column in definition.Columns)
             {
+                if (column.IsObjectKey)
+                {
+                    if (definition.RowIdentityColumns.Count != 1
+                        || !string.Equals(definition.RowIdentityColumns[0], column.LogicalName, StringComparison.Ordinal))
+                    {
+                        throw new ArgumentException(
+                            $"Grid object-key column '{column.LogicalName}' must be the only identity declared by IdentifyRowsBy(...).",
+                            nameof(definitions));
+                    }
+
+                    if (column.HasObjectKeyFieldOverride || column.RuntimeColumnName is not null
+                        || column.DisplayValuePath is not null || column.FormatString is not null
+                        || column.CultureName is not null || column.ReadsDisplayedText
+                        || column.ValueKind is { } objectKeyKind && objectKeyKind != GridCellValueKind.Text
+                        || column.EditorKind is not null || column.EditorParts is not null
+                        || column.BooleanTrueDisplayText is not null || column.BooleanFalseDisplayText is not null)
+                    {
+                        throw new ArgumentException(
+                            $"Grid object-key column '{column.LogicalName}' is hidden identity metadata and cannot configure a model field, runtime cell, display projection, formatting, or editor.",
+                            nameof(definitions));
+                    }
+                }
+
+                if (column.ReadsDisplayedText
+                    && (column.DisplayValuePath is not null || column.FormatString is not null
+                        || column.RowIdentityAutomationProperty is not null || column.IsStableIdentityCandidate
+                        || definition.RowIdentityColumns.Contains(column.LogicalName, StringComparer.Ordinal)))
+                {
+                    throw new ArgumentException(
+                        $"Grid column '{column.LogicalName}' reads published display text and cannot also configure display projection, formatting, or row identity.",
+                        nameof(definitions));
+                }
+
                 if (column.ValueKind is { } valueKind)
                 {
                     ValidateEnum(valueKind, nameof(column.ValueKind));
@@ -206,6 +239,7 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
     private static string ComputeFingerprint(IEnumerable<GridAutomationDefinition> definitions)
     {
         var builder = new StringBuilder();
+        var sourceModes = new List<(string GridName, GridColumnDefinition Column)>();
         foreach (var definition in definitions.OrderBy(static item => item.PagePropertyName, StringComparer.Ordinal))
         {
             AppendField(builder, definition.PagePropertyName);
@@ -245,6 +279,24 @@ public sealed class GridAutomationCatalog : IReadOnlyCollection<GridAutomationDe
                 AppendField(builder, column.BooleanTrueDisplayText);
                 AppendField(builder, column.BooleanFalseDisplayText);
                 AppendEditorParts(builder, column.EditorParts);
+                if (column.IsObjectKey || column.ReadsDisplayedText)
+                {
+                    sourceModes.Add((definition.PagePropertyName, column));
+                }
+            }
+        }
+
+        // Keep the complete legacy payload unchanged so existing autosaves remain compatible without opt-in.
+        if (sourceModes.Count > 0)
+        {
+            AppendField(builder, "GridColumnSources/v1");
+            AppendField(builder, sourceModes.Count);
+            foreach (var (gridName, column) in sourceModes)
+            {
+                AppendField(builder, gridName);
+                AppendField(builder, column.LogicalName);
+                AppendField(builder, column.IsObjectKey);
+                AppendField(builder, column.ReadsDisplayedText);
             }
         }
 

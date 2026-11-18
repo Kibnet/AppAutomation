@@ -109,7 +109,8 @@ public sealed partial class HeadlessControlResolver
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             return UiWait.Until(() =>
             {
-                var rows = ReadIndexedRows();
+                var objectIdentity = identityColumns.Any(static column => column.IsObjectKey);
+                var rows = ReadIndexedRows(objectIdentity);
                 var selected = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 {
                     var grid = Inner.Control;
@@ -142,7 +143,9 @@ public sealed partial class HeadlessControlResolver
                 if (selected.Item is null) return CaptureIdentity();
                 return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 {
-                    var current = HeadlessGridRuntimeAccess.ReadSourceItems(Inner.Control);
+                    var current = objectIdentity
+                        ? ReadObjectIdentityView()
+                        : HeadlessGridRuntimeAccess.ReadSourceItems(Inner.Control);
                     if (!current.SequenceEqual(rows.Select(static row => row.Item), ReferenceEqualityComparer.Instance)) return null;
                     var view = HeadlessGridRuntimeAccess.ReadCurrentViewItems(Inner.Control);
                     if (view.IsAuthoritative && !view.Items.Any(item => ReferenceEquals(item, selected.Item))) return null;
@@ -151,6 +154,7 @@ public sealed partial class HeadlessControlResolver
 
                 GridRowPositionIdentity CaptureIdentity()
                 {
+                    if (objectIdentity) VerifyObjectRowPublication(selected, identityColumns);
                     var values = identityColumns.Select(column => ReadCellSnapshot(selected, column).DisplayText).ToArray();
                     if (rows.Count(row => identityColumns.Select(column => ReadCellSnapshot(row, column).DisplayText)
                             .SequenceEqual(values, StringComparer.Ordinal)) != 1)
@@ -177,7 +181,8 @@ public sealed partial class HeadlessControlResolver
             var budget = UiOperationTimeoutBudget.Start(timeoutMs, "capture grid row key");
             AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 BringIntoOuterViewport(Inner.Control));
-            var rows = UiWait.Until(ReadIndexedRows, available => available.Length > position,
+            var rows = UiWait.Until(() => ReadIndexedRows(identityColumns.Any(static column => column.IsObjectKey)),
+                available => available.Length > position,
                 new UiWaitOptions
                 {
                     Timeout = budget.Remaining,
@@ -220,6 +225,8 @@ public sealed partial class HeadlessControlResolver
                         $"Grid '{_gridDescription}' row at current view position {position} has a non-unique runtime key.");
                 }
 
+                if (identityColumns.Any(static column => column.IsObjectKey))
+                    AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => VerifyObjectRowPublication(selected, identityColumns));
                 return new GridRowPositionIdentity(selectedValues, IsUnique: true);
             }
         }
@@ -355,8 +362,18 @@ public sealed partial class HeadlessControlResolver
             int timeoutMs)
         {
             ArgumentNullException.ThrowIfNull(column);
+            var operation = System.Diagnostics.Stopwatch.StartNew();
             var match = ResolveUniqueRow(row, timeoutMs);
-            return ReadCellSnapshot(match, column);
+            column = WithRowIdentity(column, row);
+            if (column.ReadsDisplayedText)
+                return ReadPublishedCell(row, match, column, operation, timeoutMs);
+            return column.UsesObjectRowIdentity
+                ? AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                {
+                    RequireCurrentObjectRow(match, required: true);
+                    return ReadCellSnapshot(match, column);
+                })
+                : ReadCellSnapshot(match, column);
         }
 
         public string CopyCell(
@@ -375,35 +392,54 @@ public sealed partial class HeadlessControlResolver
         {
             ArgumentNullException.ThrowIfNull(column);
             ArgumentNullException.ThrowIfNull(request);
+            column = WithRowIdentity(column, row);
             var operation = System.Diagnostics.Stopwatch.StartNew();
             var match = ResolveUniqueRow(row, timeoutMs);
-            if (match.Item is not null)
+            if (match.Item is not null && column.UsesObjectRowIdentity)
+            {
+                var remaining = timeoutMs - (int)operation.ElapsedMilliseconds;
+                if (remaining <= 0) throw new TimeoutException("The grid edit budget expired before materializing its target.");
+                var targetCell = FindCatalogVisualCell(match, column, remaining);
+                ValidateObjectEditBudget();
+                _ = targetCell
+                    ?? throw new InvalidOperationException(
+                        $"Grid '{_gridDescription}' could not materialize the requested object row and column before editing.");
+            }
+            else if (match.Item is not null)
             {
                 _ = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    HeadlessGridRuntimeAccess.ScrollIntoView(
+                {
+                    RequireCurrentObjectRow(match, column.UsesObjectRowIdentity);
+                    return HeadlessGridRuntimeAccess.ScrollIntoView(
                         Inner.Control,
                         match.Item,
                         match.RowIndex,
-                        column));
+                        column);
+                });
             }
 
             var activation = match.Item is null
                 ? new HeadlessGridEditorActivation(false, null, "The resolved row has no source item.")
                 : AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    HeadlessGridRuntimeAccess.ActivateEditor(
+                {
+                    ValidateObjectEditBudget();
+                    RequireCurrentObjectRow(match, column.UsesObjectRowIdentity);
+                    return HeadlessGridRuntimeAccess.ActivateEditor(
                         Inner.Control,
                         match.Item,
                         match.RowIndex,
-                        column));
-            var editRequest = GridCellEditRequestValidation.CreateIndexedRequest(
-                match.RowIndex,
-                column.RuntimeColumnIndex ?? column.ColumnIndex,
-                request,
-                timeoutMs,
-                request.EditorParts ?? column.EditorParts);
+                        column);
+                });
             var transactionCompleted = false;
             try
             {
+                ValidateObjectEditBudget();
+                var editRequest = GridCellEditRequestValidation.CreateIndexedRequest(
+                    match.RowIndex,
+                    column.RuntimeColumnIndex ?? column.ColumnIndex,
+                    request,
+                    column.UsesObjectRowIdentity ? timeoutMs - (int)operation.ElapsedMilliseconds : timeoutMs,
+                    request.EditorParts ?? column.EditorParts);
                 var activeEditor = activation.ActiveEditor;
                 AutomationElement? cell = null;
                 if (activeEditor is null)
@@ -446,7 +482,8 @@ public sealed partial class HeadlessControlResolver
                         + $"Editor activation details: {activation.FailureReason ?? "<none>"}.");
                 }
 
-                if (!TryWriteCellValue(editorRoot, editRequest, activeEditor))
+                if (!TryWriteCellValue(editorRoot, editRequest, activeEditor,
+                        () => { ValidateObjectEditBudget(); RequireObjectEditTarget(match, column, editorRoot); }))
                 {
                     var observedControls = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                         ReadCellControls(editorRoot)
@@ -462,6 +499,7 @@ public sealed partial class HeadlessControlResolver
                         + $"cell controls: {string.Join(", ", observedControls)}.");
                 }
 
+                ValidateObjectEditBudget();
                 var invoked = InvokeEditorButton(
                     editorRoot,
                     request.CommitMode == GridCellEditCommitMode.Cancel
@@ -497,6 +535,12 @@ public sealed partial class HeadlessControlResolver
                             Inner.Control,
                             GridCellEditCommitMode.Cancel));
                 }
+            }
+
+            void ValidateObjectEditBudget()
+            {
+                if (column.UsesObjectRowIdentity && operation.ElapsedMilliseconds >= timeoutMs)
+                    throw new TimeoutException("The grid edit budget expired before acting on the object row.");
             }
 
             global::Avalonia.Controls.Control? WaitForActivatedEditor(
@@ -546,6 +590,7 @@ public sealed partial class HeadlessControlResolver
             {
                 // Resolve the key again after navigation or layout, which can replace row containers and items.
                 var match = ResolveUniqueRow(row, Remaining());
+                var objectIdentity = UsesObjectIdentity(row);
                 var result = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 {
                     _ = Remaining();
@@ -560,7 +605,7 @@ public sealed partial class HeadlessControlResolver
                         }
                     }
 
-                    var target = FindOpenRowTarget(match, rowPaths);
+                    var target = FindOpenRowTarget(match, rowPaths, objectIdentity);
                     if (target is not null && !ReferenceEquals(broughtTarget, target) && BringIntoOuterViewport(target))
                     {
                         broughtTarget = target;
@@ -576,7 +621,7 @@ public sealed partial class HeadlessControlResolver
                             return OpenRowAttempt.AwaitContainer;
 
                         _ = Remaining();
-                        if (HeadlessGridRuntimeAccess.RevealRow(Inner.Control, item))
+                        if (HeadlessGridRuntimeAccess.RevealRow(Inner.Control, item, objectIdentity))
                         {
                             revealedItem = item;
                             RefreshLayout();
@@ -592,6 +637,12 @@ public sealed partial class HeadlessControlResolver
                             $"Visual grid '{_gridDescription}' row target has no owning top-level window.");
 
                     var point = GetVisibleRowPoint(target, topLevel, visible);
+                    RequireCurrentObjectRow(match, objectIdentity);
+                    if (objectIdentity && !ReferenceEquals(target.DataContext, match.Item)
+                        && !(target.DataContext is { } context && rowPaths.Any(path =>
+                            GridPropertyValueReader.TryReadPath(context, path, out var current)
+                            && ReferenceEquals(current, match.Item))))
+                        throw new InvalidOperationException($"Grid '{_gridDescription}' row target was recycled before the double click.");
                     _ = Remaining();
                     topLevel.MouseDown(point, MouseButton.Left);
                     topLevel.MouseUp(point, MouseButton.Left);
@@ -678,7 +729,8 @@ public sealed partial class HeadlessControlResolver
 
         private Control? FindOpenRowTarget(
             IndexedHeadlessRow row,
-            IReadOnlyList<string> rowPaths)
+            IReadOnlyList<string> rowPaths,
+            bool referenceOnly = false)
         {
             if (row.VisualRow is not null)
             {
@@ -707,7 +759,7 @@ public sealed partial class HeadlessControlResolver
                             path,
                             out var candidateRow)
                         && (ReferenceEquals(candidateRow, row.Item)
-                            || Equals(candidateRow, row.Item)))))
+                            || !referenceOnly && Equals(candidateRow, row.Item)))))
                 .ToArray();
             var rowContainers = candidates
                 .Where(candidate => ReferenceEquals(candidate.DataContext, row.Item)
@@ -734,11 +786,14 @@ public sealed partial class HeadlessControlResolver
             }
 
             var selected = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                HeadlessGridRuntimeAccess.SelectRow(Inner.Control, match.Item));
+            {
+                RequireCurrentObjectRow(match, UsesObjectIdentity(row));
+                return HeadlessGridRuntimeAccess.SelectRow(Inner.Control, match.Item, UsesObjectIdentity(row));
+            });
             while (selected)
             {
                 if (AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                        HeadlessGridRuntimeAccess.IsRowSelected(Inner.Control, match.Item)))
+                        HeadlessGridRuntimeAccess.IsRowSelected(Inner.Control, match.Item, UsesObjectIdentity(row))))
                 {
                     return;
                 }
@@ -804,20 +859,22 @@ public sealed partial class HeadlessControlResolver
         private bool TryWriteCellValue(
             global::Avalonia.Controls.Control cell,
             GridCellEditRequest request,
-            global::Avalonia.Controls.Control? activeEditor = null)
+            global::Avalonia.Controls.Control? activeEditor = null,
+            Action? validateTarget = null)
         {
             if (request.EditorKind == GridCellEditorKind.SearchPicker)
             {
-                return TryWriteSearchPicker(cell, request, activeEditor);
+                return TryWriteSearchPicker(cell, request, activeEditor, validateTarget);
             }
 
             if (request.EditorKind == GridCellEditorKind.ComboBox)
             {
-                return TryWriteComboBox(cell, request, activeEditor);
+                return TryWriteComboBox(cell, request, activeEditor, validateTarget);
             }
 
             return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
+                validateTarget?.Invoke();
                 var controls = ReadCellControls(cell);
                 if (activeEditor is not null && !controls.Contains(activeEditor))
                 {
@@ -867,10 +924,12 @@ public sealed partial class HeadlessControlResolver
         private bool TryWriteComboBox(
             global::Avalonia.Controls.Control cell,
             GridCellEditRequest request,
-            global::Avalonia.Controls.Control? activeEditor)
+            global::Avalonia.Controls.Control? activeEditor,
+            Action? validateTarget = null)
         {
             var nativeCombos = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
             {
+                validateTarget?.Invoke();
                 var configured = ResolveEditorPart(cell, request.EditorParts?.Input, activeEditor);
                 return configured is global::Avalonia.Controls.ComboBox combo
                     ? new[] { combo }
@@ -888,7 +947,10 @@ public sealed partial class HeadlessControlResolver
             if (nativeCombos.Length == 1)
             {
                 return AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    TrySelectComboBoxItem(nativeCombos[0], request.Value));
+                {
+                    validateTarget?.Invoke();
+                    return TrySelectComboBoxItem(nativeCombos[0], request.Value);
+                });
             }
 
             if (request.EditorParts?.Results is null)
@@ -903,8 +965,8 @@ public sealed partial class HeadlessControlResolver
                 request.Value,
                 request.CommitMode == GridCellEditCommitMode.Commit,
                 UiOperationTimeoutBudget.Start(request.TimeoutMs, "grid ComboBox selection"),
-                () => Session.HeadlessRuntime.Dispatch(() => ResolveEditorPart(cell, parts.Input, activeEditor)),
-                () => Session.HeadlessRuntime.Dispatch(() => ResolveEditorPart(cell, parts.Results, activeEditor)) is { } results
+                () => Session.HeadlessRuntime.Dispatch(() => { validateTarget?.Invoke(); return ResolveEditorPart(cell, parts.Input, activeEditor); }),
+                () => Session.HeadlessRuntime.Dispatch(() => { validateTarget?.Invoke(); return ResolveEditorPart(cell, parts.Results, activeEditor); }) is { } results
                     ? new(results)
                     : null,
                 () =>
@@ -947,7 +1009,8 @@ public sealed partial class HeadlessControlResolver
         private bool TryWriteSearchPicker(
             global::Avalonia.Controls.Control cell,
             GridCellEditRequest request,
-            global::Avalonia.Controls.Control? activeEditor)
+            global::Avalonia.Controls.Control? activeEditor,
+            Action? validateTarget = null)
         {
             if (string.IsNullOrWhiteSpace(request.SearchText))
             {
@@ -959,7 +1022,8 @@ public sealed partial class HeadlessControlResolver
                 cell,
                 request,
                 activeEditor,
-                stopwatch);
+                stopwatch,
+                validateTarget);
             if (searchInputControl is null)
             {
                 throw CreateSearchPickerPartException(cell, request, "input", "was not found");
@@ -973,6 +1037,7 @@ public sealed partial class HeadlessControlResolver
                     $"expected TextBox but found '{searchInputControl.GetType().FullName}'");
             }
 
+            AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() => validateTarget?.Invoke());
             AutomationElement.WrapControl(searchInput).AsTextBox().Enter(request.SearchText);
 
             var openButton = request.EditorParts?.OpenButton;
@@ -985,7 +1050,8 @@ public sealed partial class HeadlessControlResolver
                 request,
                 activeEditor,
                 stopwatch,
-                initialWait);
+                initialWait,
+                validateTarget);
             if (selection.Selected)
             {
                 return true;
@@ -1008,7 +1074,8 @@ public sealed partial class HeadlessControlResolver
                     request,
                     activeEditor,
                     stopwatch,
-                    remaining);
+                    remaining,
+                    validateTarget);
                 if (finalSelection.Selected)
                 {
                     return true;
@@ -1045,12 +1112,14 @@ public sealed partial class HeadlessControlResolver
             global::Avalonia.Controls.Control cell,
             GridCellEditRequest request,
             global::Avalonia.Controls.Control? activeEditor,
-            System.Diagnostics.Stopwatch stopwatch)
+            System.Diagnostics.Stopwatch stopwatch,
+            Action? validateTarget = null)
         {
             do
             {
                 var input = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 {
+                    validateTarget?.Invoke();
                     var controls = ReadSearchPickerControls(cell, activeEditor);
                     var configured = ResolveEditorPart(
                         cell,
@@ -1105,7 +1174,8 @@ public sealed partial class HeadlessControlResolver
             GridCellEditRequest request,
             global::Avalonia.Controls.Control? activeEditor,
             System.Diagnostics.Stopwatch stopwatch,
-            int maximumWaitMilliseconds)
+            int maximumWaitMilliseconds,
+            Action? validateTarget = null)
         {
             var deadline = Math.Min(
                 request.TimeoutMs,
@@ -1116,6 +1186,7 @@ public sealed partial class HeadlessControlResolver
             {
                 var resultsControl = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                 {
+                    validateTarget?.Invoke();
                     var controls = ReadSearchPickerControls(cell, activeEditor);
                     var configured = ResolveEditorPart(
                         cell,
@@ -1604,12 +1675,14 @@ public sealed partial class HeadlessControlResolver
 
         private GridRuntimeColumn ResolveRuntimeColumn(string columnName, GridColumnDefinition? configuration)
         {
-            if (!TryGetColumnIndex(columnName, out var columnIndex))
+            if (!TryGetColumnIndex(columnName, out var columnIndex) && configuration?.IsObjectKey != true)
             {
                 throw new InvalidOperationException(
                     $"Grid column '{columnName}' was not found in grid '{AutomationId}'. "
                     + $"Available columns: {string.Join(", ", ColumnNames)}.");
             }
+
+            if (columnIndex < 0) columnIndex = 0;
 
             return new GridRuntimeColumn(
                 columnIndex,
@@ -1624,6 +1697,8 @@ public sealed partial class HeadlessControlResolver
                 RuntimeColumnIndex = columnIndex,
                 RuntimeColumnName = configuration?.RuntimeColumnName ?? columnName.Trim(),
                 RowIdentityAutomationProperty = configuration?.RowIdentityAutomationProperty,
+                IsObjectKey = configuration?.IsObjectKey == true,
+                ReadsDisplayedText = configuration?.ReadsDisplayedText == true,
                 BooleanTrueDisplayText = configuration?.BooleanTrueDisplayText,
                 BooleanFalseDisplayText = configuration?.BooleanFalseDisplayText
             };
@@ -1641,6 +1716,9 @@ public sealed partial class HeadlessControlResolver
                 matches = FindMatchingRows(row, out rowCount);
                 if (matches.Count == 1)
                 {
+                    if (UsesObjectIdentity(row))
+                        AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                            VerifyObjectRowPublication(matches[0], row.Conditions.Select(static condition => condition.Column).ToArray()));
                     return matches[0];
                 }
 
@@ -1662,7 +1740,7 @@ public sealed partial class HeadlessControlResolver
             GridIndexedRowSelector selector,
             out int rowCount)
         {
-            var rows = ReadIndexedRows();
+            var rows = ReadIndexedRows(UsesObjectIdentity(selector));
             rowCount = rows.Length;
             return rows
                 .Where(row => selector.Conditions.All(condition =>
@@ -1673,10 +1751,12 @@ public sealed partial class HeadlessControlResolver
                 .ToList();
         }
 
-        private IndexedHeadlessRow[] ReadIndexedRows()
+        private IndexedHeadlessRow[] ReadIndexedRows(bool objectIdentity = false)
         {
-            var sourceItems = ReadSourceItems();
-            if (sourceItems.Length > 0)
+            var sourceItems = objectIdentity
+                ? AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(ReadObjectIdentityView)
+                : ReadSourceItems();
+            if (sourceItems.Length > 0 || objectIdentity)
             {
                 return sourceItems
                     .Select(static (item, index) => new IndexedHeadlessRow(index, item, null))
@@ -1722,11 +1802,13 @@ public sealed partial class HeadlessControlResolver
                     return candidate;
                 }
 
-                _ = HeadlessGridRuntimeAccess.ScrollIntoView(
+                var scrolled = HeadlessGridRuntimeAccess.ScrollIntoView(
                     Inner.Control,
                     row.Item,
                     row.RowIndex,
                     column);
+                if (!scrolled && column.UsesObjectRowIdentity)
+                    _ = HeadlessGridRuntimeAccess.RevealRow(Inner.Control, row.Item, referenceOnly: true);
                 RefreshGridLayout();
 
                 return HeadlessGridRuntimeAccess.FindCell(
@@ -1740,7 +1822,8 @@ public sealed partial class HeadlessControlResolver
                 return new AutomationElement(structuralCell);
             }
 
-            var indexedCell = FindVisualCell(row.RowIndex, column.RuntimeColumnIndex ?? column.ColumnIndex);
+            var indexedCell = column.UsesObjectRowIdentity ? null
+                : FindVisualCell(row.RowIndex, column.RuntimeColumnIndex ?? column.ColumnIndex);
             while (indexedCell is null && stopwatch.ElapsedMilliseconds < timeoutMs)
             {
                 var remaining = timeoutMs - (int)stopwatch.ElapsedMilliseconds;
@@ -1759,7 +1842,8 @@ public sealed partial class HeadlessControlResolver
                     return new AutomationElement(structuralCell);
                 }
 
-                indexedCell = FindVisualCell(row.RowIndex, column.RuntimeColumnIndex ?? column.ColumnIndex);
+                if (!column.UsesObjectRowIdentity)
+                    indexedCell = FindVisualCell(row.RowIndex, column.RuntimeColumnIndex ?? column.ColumnIndex);
             }
 
             return indexedCell;
@@ -1782,6 +1866,8 @@ public sealed partial class HeadlessControlResolver
         {
             if (row.Item is not null)
             {
+                if (column.IsObjectKey)
+                    return new GridCellValueSnapshot(GridRowObjectKey.Get(row.Item), GridRowObjectKey.Get(row.Item));
                 var rawValue = ReadPropertyPath(row.Item, column.SourceFieldName);
                 return GridCellValueNormalizer.Normalize(_gridDescription, new GridCellValueSnapshot(
                     GridCellDisplayFormatter.Format(rawValue, cultureName: column.CultureName),

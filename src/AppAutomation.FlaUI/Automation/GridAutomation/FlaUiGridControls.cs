@@ -228,6 +228,7 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row)) return CreateRowSetRuntime().ResolveRow(row, timeoutMs);
             var matches = FindMatchingRows(row, timeoutMs, out var scannedRows);
             var description = DescribeIndexedResolution(row, matches.Length, scannedRows);
             return matches.Length switch
@@ -245,6 +246,7 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(column);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row)) return CreateRowSetRuntime().ReadCell(row, column, timeoutMs);
             var budget = Stopwatch.StartNew();
             var resolved = ResolveUniqueRow(row, timeoutMs, out _);
             EnsureRemainingBudget(budget, timeoutMs, "read a grid cell");
@@ -252,6 +254,7 @@ public sealed partial class FlaUiControlResolver
             var cell = TryRead(() => resolved.Cells.ElementAtOrDefault(columnIndex))
                 ?? throw new InvalidOperationException(
                     $"Grid source field '{column.SourceFieldName}' was not found in the selected row of grid '{AutomationId}'.");
+            if (column.ReadsDisplayedText) return ReadPublishedCellPresentation(cell, column, AutomationId);
             var value = new FlaUiGridCellControl(cell).Value;
             return new GridCellValueSnapshot(value, value, column.ValueKind) { IsDisplayOnly = true };
         }
@@ -270,6 +273,11 @@ public sealed partial class FlaUiControlResolver
             ArgumentNullException.ThrowIfNull(column);
             ArgumentNullException.ThrowIfNull(request);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row))
+            {
+                CreateRowSetRuntime().EditCell(row, column, request, timeoutMs);
+                return;
+            }
             var budget = Stopwatch.StartNew();
             var resolved = ResolveUniqueRow(row, timeoutMs, out _);
             EditResolvedCell(
@@ -284,6 +292,11 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row))
+            {
+                CreateRowSetRuntime().OpenRow(row, timeoutMs);
+                return;
+            }
             var resolved = ResolveUniqueRow(row, timeoutMs, out var scannedRows);
             TryRead(() =>
             {
@@ -337,6 +350,11 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row))
+            {
+                CreateRowSetRuntime().SelectRow(row, timeoutMs);
+                return;
+            }
             var stopwatch = Stopwatch.StartNew();
             var resolved = ResolveUniqueRow(row, timeoutMs, out var scannedRows);
             SelectAndConfirmGridRow(

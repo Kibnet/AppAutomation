@@ -51,7 +51,7 @@ public sealed class GridRowSelector
 
     internal GridRowSelector WithDeclaredUniqueIdentity()
     {
-        return HasDeclaredUniqueIdentity
+        return HasDeclaredUniqueIdentity || _columnDefinitions?.Values.Any(static column => column.IsObjectKey) == true
             ? this
             : new GridRowSelector(_conditions.ToArray(), hasDeclaredUniqueIdentity: true, _columnDefinitions);
     }
@@ -64,7 +64,7 @@ public sealed class GridRowSelector
                 definitions.ToDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal));
         return new GridRowSelector(
             _conditions.ToArray(),
-            HasDeclaredUniqueIdentity,
+            HasDeclaredUniqueIdentity && !snapshot.Values.Any(static column => column.IsObjectKey),
             snapshot);
     }
 

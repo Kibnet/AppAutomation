@@ -17,6 +17,317 @@ public sealed class RecorderGroupedGridTests
     [Test]
     [Arguments(false)]
     [Arguments(true)]
+    public async Task ObjectKeyConsumerBootstrapCompilesWithAndWithoutRecorderDependency(bool recorderEnabled)
+    {
+        const string source = """
+            using Avalonia;
+            using Avalonia.Controls;
+            using Avalonia.Styling;
+            public static class ConsumerAutomationBootstrap
+            {
+                public static Style ConfigureRowStyle()
+                {
+                    var rowStyle = new Style(selector => selector.OfType<Border>());
+            #if APPAUTOMATION_RECORDER
+                    rowStyle.Setters.Add(new Setter(
+                        AppAutomation.Recorder.Avalonia.GridRowObjectKeyPublication.IsEnabledProperty, true));
+            #endif
+                    return rowStyle;
+                }
+            }
+            """;
+        var errors = RecorderGeneratedSourceCompiler.CompileConsumerSource(source, recorderEnabled);
+        await Assert.That(errors).IsEmpty().Because(string.Join(Environment.NewLine, errors));
+        var unguarded = source.Replace("#if APPAUTOMATION_RECORDER", string.Empty, StringComparison.Ordinal)
+            .Replace("#endif", string.Empty, StringComparison.Ordinal);
+        var missingDependency = RecorderGeneratedSourceCompiler.CompileConsumerSource(unguarded, recorderEnabled: false);
+        await Assert.That(missingDependency.Count > 0).IsTrue()
+            .Because("The disabled consumer compilation must really exclude the Recorder assembly, not merely omit the preprocessor symbol.");
+    }
+
+    [Test]
+    public async Task ObjectKeyTargetsStayScopedToTheirStepWhenFormulaAndSelectionPayloadsAreShared()
+    {
+        var grid = new RecordedControlDescriptor("ObservedGrid", UiControlType.Grid, "ObservedGrid",
+            UiLocatorKind.AutomationId, false, typeof(GridHost).FullName!, null);
+        var firstRow = new[] { new RecordedGridRowCondition("RowKey", "object-a") { IsObjectKey = true } };
+        var secondRow = new[] { new RecordedGridRowCondition("RowKey", "object-b") { IsObjectKey = true } };
+        var rememberFirst = new RecordedStep(RecordedActionKind.CaptureCheckpoint, grid, StepId: Guid.NewGuid(),
+            ValueKind: RecorderValueKind.Number, ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+            DoubleValue: 12, CheckpointId: Guid.NewGuid(), CheckpointVariableName: "firstValue")
+        {
+            GridRowSourceMode = RecorderGridRowSourceMode.CurrentTableRow, GridRowConditions = firstRow,
+            GridTargetColumnName = "Value", GridCapturedRowPosition = 1, CanCaptureGridRowKey = true
+        };
+        var rememberSecond = rememberFirst with
+        {
+            StepId = Guid.NewGuid(), CheckpointId = Guid.NewGuid(), CheckpointVariableName = "secondValue",
+            GridRowConditions = secondRow, GridCapturedRowPosition = 0
+        };
+        var formula = rememberFirst with
+        {
+            ActionKind = RecordedActionKind.AssertValue, StepId = Guid.NewGuid(),
+            CheckpointId = null, CheckpointVariableName = null, ComparisonKind = RecorderComparisonKind.Equal,
+            GridRowSourceMode = RecorderGridRowSourceMode.RecordedStableKey,
+            NumericExpectedExpression = new(RecorderArithmeticOperation.Add,
+                RecorderNumericOperand.FromControl(grid, RecorderValueAccessorKind.GridCellValue,
+                    new RecorderGridValueReference(secondRow, "Value")), RecorderNumericOperand.FromLiteral(1))
+        };
+        var sharedSelection = new RecordedGridSelectionRow(secondRow);
+        var select = new RecordedStep(RecordedActionKind.SelectGridRows, grid, StepId: Guid.NewGuid())
+        {
+            GridSelectedRows = [sharedSelection]
+        };
+        var rememberAgain = rememberSecond with
+        {
+            StepId = Guid.NewGuid(), CheckpointId = Guid.NewGuid(), CheckpointVariableName = "secondValueAgain"
+        };
+        var steps = new[] { rememberFirst, rememberSecond, formula, select, rememberAgain,
+            formula with { StepId = Guid.NewGuid() }, select with { StepId = Guid.NewGuid() } };
+        var generator = new AuthoringCodeGenerator(new AuthoringProjectScanner(), logger: null);
+        var preview = generator.GeneratePreview(steps);
+        var laterCapture = preview.IndexOf("var gridRow3 = ", StringComparison.Ordinal);
+        await Assert.That(laterCapture >= 0).IsTrue().Because(preview);
+        var earlierCode = preview[..laterCapture];
+        var laterCode = preview[laterCapture..];
+        await Assert.That(earlierCode).Contains("ReadCellNumber(Page.ObservedGrid, gridRow2, \"Value\")");
+        await Assert.That(earlierCode).Contains("[gridRow2]");
+        await Assert.That(earlierCode).DoesNotContain("gridRow3");
+        await Assert.That(laterCode).Contains("ReadCellNumber(Page.ObservedGrid, gridRow3, \"Value\")");
+        await Assert.That(laterCode).Contains("[gridRow3]");
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage, RecorderScenarioDestinationSources.CompilableScenario);
+        var saved = await project.SaveAsync(project.CreateSaveContext("Scoped object rows", "scoped-object-rows"), steps);
+        await Assert.That(RecorderGeneratedSourceCompiler.Compile(project.RootPath)).IsEmpty();
+        var state = new RecorderAutosaveState("Scoped object rows", "scoped-object-rows", "ScopedObjectRows", DateTimeOffset.UtcNow, steps);
+        var autosave = Path.Combine(project.RootPath, "scoped-object-rows.autosave.cs");
+        await File.WriteAllTextAsync(autosave, RecorderAutosaveStateSerializer.CreateMarker(state));
+        await Assert.That(RecorderAutosaveStateSerializer.TryRead(autosave, out var restored, out var error)).IsTrue().Because(error);
+        await Assert.That(generator.GeneratePreview(restored!.Steps)).IsEqualTo(preview);
+        await Assert.That(await File.ReadAllTextAsync(saved.ScenarioFilePath!)).DoesNotContain("object-b");
+    }
+
+    [Test]
+    public Task ObjectKeyPublicationTracksRecycledDataContextWithoutARecorderSession() => OnUI(async () =>
+    {
+        var first = new Row(string.Empty, 12.345m);
+        var second = new Row(string.Empty, 12.345m);
+        var row = new Border { DataContext = first, Child = new TextBlock { Text = "row" } };
+        var window = new Window { Width = 300, Height = 120, Content = row };
+        try
+        {
+            GridRowObjectKeyPublication.SetIsEnabled(row, true);
+            window.Show();
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo(GridRowObjectKey.Get(first));
+            row.DataContext = second;
+            await Assert.That(ReferenceEquals(row.DataContext, second)).IsTrue()
+                .Because("Equal record assignment must really replace the row reference before publication can reflect it.");
+            row.InvalidateMeasure();
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo(GridRowObjectKey.Get(second));
+            await Assert.That(GridRowObjectKey.Get(second)).IsNotEqualTo(GridRowObjectKey.Get(first));
+            row.DataContext = first;
+            await Assert.That(ReferenceEquals(row.DataContext, first)).IsTrue();
+            row.InvalidateMeasure();
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo(GridRowObjectKey.Get(first));
+            row.DataContext = null;
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsNull();
+            row.DataContext = second;
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo(GridRowObjectKey.Get(second));
+            GridRowObjectKeyPublication.SetIsEnabled(row, false);
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsNull();
+            AutomationProperties.SetItemStatus(row, "foreign metadata");
+            row.DataContext = first;
+            row.InvalidateMeasure();
+            window.UpdateLayout();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo("foreign metadata");
+            await Assert.That(() => GridRowObjectKeyPublication.SetIsEnabled(row, true))
+                .Throws<InvalidOperationException>();
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo("foreign metadata");
+            row.ClearValue(AutomationProperties.ItemStatusProperty);
+            GridRowObjectKeyPublication.SetIsEnabled(row, true);
+            AutomationProperties.SetItemStatus(row, "new foreign metadata");
+            GridRowObjectKeyPublication.SetIsEnabled(row, false);
+            await Assert.That(AutomationProperties.GetItemStatus(row)).IsEqualTo("new foreign metadata");
+        }
+        finally
+        {
+            GridRowObjectKeyPublication.SetIsEnabled(row, false);
+            window.Close();
+        }
+    });
+
+    [Test]
+    public Task PublishedCellNamePreservesRawAndIgnoresTheChildUnderThePointer() => OnUI(async () =>
+    {
+        var root = Host();
+        var row = new Row(string.Empty, 12.345m);
+        root.ItemsSource = [row];
+        root.CollectionView = [row];
+        var child = new TextBlock { Text = "wrong child value" };
+        var cell = new Border { DataContext = new Cell(row, new Column("Value", "Value"), "wrong context raw"), Child = child };
+        const string published = "  Альфа\nБета: 12,3 ед/час  ";
+        AutomationProperties.SetName(cell, published);
+        var owner = new Border { DataContext = row, Child = cell };
+        AutomationProperties.SetItemStatus(owner, GridRowObjectKey.Get(row));
+        root.Children.Add(owner);
+        Arrange(root);
+        var definition = ObjectDefinition();
+        var success = GridCellMetadataExtractor.TryExtract(child, root, definition, root.ItemsSource.Cast<object?>().ToArray(),
+            _ => "wrong cursor value", out var metadata, out var error);
+        await Assert.That(success).IsTrue().Because(error);
+        await Assert.That(ReferenceEquals(metadata.CellOwner, cell)).IsTrue();
+        await Assert.That(metadata.RawValue).IsEqualTo(12.345m);
+        await Assert.That(metadata.DisplayText).IsEqualTo(published);
+        AutomationProperties.SetName(cell, string.Empty);
+        await Assert.That(GridCellMetadataExtractor.TryExtract(child, root, definition, [row], _ => "fallback", out metadata, out error))
+            .IsTrue().Because(error);
+        await Assert.That(metadata.DisplayText).IsEqualTo(string.Empty);
+    });
+
+    [Test]
+    public Task HiddenObjectKeyDoesNotShiftConfiguredLayoutCellColumns() => OnUI(async () =>
+    {
+        var row = new Row(string.Empty, 12.345m);
+        var root = new PresentationLayoutGridHost { ItemsSource = new[] { row }, CollectionView = new[] { row } };
+        var child = new TextBlock { Text = "child text" };
+        var cell = new Border { Child = child };
+        AutomationProperties.SetName(cell, "12,3 ед/час");
+        var visualRow = new Grid { DataContext = row };
+        Grid.SetColumn(cell, 0);
+        visualRow.Children.Add(cell);
+        root.Children.Add(visualRow);
+        Arrange(root);
+        var extracted = GridCellMetadataExtractor.TryExtract(child, root, ObjectDefinition(), [row],
+            _ => "wrong fallback", out var metadata, out var error);
+        await Assert.That(extracted).IsTrue().Because(error);
+        await Assert.That(metadata.SourceFieldName).IsEqualTo("Value");
+        await Assert.That(ReferenceEquals(metadata.CellOwner, cell)).IsTrue();
+        await Assert.That(metadata.RawValue).IsEqualTo(12.345m);
+        await Assert.That(metadata.DisplayText).IsEqualTo("12,3 ед/час");
+    });
+
+    [Test]
+    [Arguments(GridRowAutomationProperty.ItemStatus)]
+    [Arguments(GridRowAutomationProperty.HelpText)]
+    public Task ObjectKeyRecordingUsesCurrentViewAndRejectsWrongOrDuplicatePublication(
+        GridRowAutomationProperty publication) => OnUI(async () =>
+    {
+        var root = Host();
+        var first = new Row(string.Empty, 0m);
+        var second = new Row(string.Empty, 0m);
+        root.ItemsSource = [first, second, second];
+        root.CollectionView = [first, second];
+        var child = new TextBlock { Text = "0" };
+        var cell = new Border { DataContext = new Cell(second, new Column("Value", "Value"), 0m), Child = child };
+        AutomationProperties.SetName(cell, "0");
+        var owner = new Border { DataContext = second, Child = cell };
+        var property = publication == GridRowAutomationProperty.HelpText
+            ? AutomationProperties.HelpTextProperty : AutomationProperties.ItemStatusProperty;
+        owner.SetValue(property, GridRowObjectKey.Get(second));
+        root.Children.Add(owner);
+        Arrange(root);
+        var definition = ObjectDefinition(publication);
+        var options = new AppAutomationRecorderOptions
+        {
+            GridAutomation = new GridAutomationCatalog().Add(definition), ShowOverlay = false
+        };
+        var factory = new RecorderStepFactory(options, () => root);
+        var captured = factory.TryCreateCatalogGridRowGestureStep(child, openRow: false).StepResult;
+        await Assert.That(captured.Success).IsTrue().Because(captured.Message);
+        await Assert.That(captured.Step!.GridRowConditions!.Single().Value).IsEqualTo(GridRowObjectKey.Get(second));
+        await Assert.That(captured.Step.GridRowConditions.Single().IsObjectKey).IsTrue();
+        var selection = factory.CreateGridRowSetStep(root, [second]);
+        await Assert.That(selection.Success).IsTrue().Because(selection.Message);
+        await Assert.That(selection.Step!.GridSelectedRows!.Single().Conditions.Single().Value)
+            .IsEqualTo(GridRowObjectKey.Get(second));
+        root.CollectionView = [first];
+        await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Success).IsFalse();
+        root.CollectionView = [first, second, second];
+        await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("matched 2 rows");
+        root.CollectionView = [first, second];
+        owner.SetValue(property, GridRowObjectKey.Get(first));
+        await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("does not match");
+        await Assert.That(factory.CreateGridRowSetStep(root, [second]).Success).IsFalse();
+        owner.ClearValue(property);
+        await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("no row key");
+        root.CollectionView = null;
+        await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("authoritative current view");
+        root.CollectionView = [first, second];
+        owner.SetValue(property, GridRowObjectKey.Get(second));
+        options.SemanticValueResolvers.Add(new SemanticValueResolver(_ => RecorderSemanticValueResolution.Resolved(
+            new RecorderSemanticValueTarget("ObservedGrid", UiControlType.Grid, RecorderValueKind.Text, RecorderValueAccessorKind.GridCellValue)
+            {
+                StringValue = "unverified custom text",
+                GridContext = new([new("RowKey", GridRowObjectKey.Get(second))], "Value")
+            })));
+        await Assert.That(factory.TryCaptureSemanticValueSnapshot(child, out var snapshot, out var error)).IsFalse();
+        await Assert.That(snapshot).IsNull();
+        await Assert.That(error).Contains("actual cell metadata");
+    });
+
+    private static GridAutomationDefinition ObjectDefinition(
+        GridRowAutomationProperty publication = GridRowAutomationProperty.ItemStatus) =>
+        GridAutomationDefinition.ByAutomationIds("ObservedGrid", "ObservedGrid", "ObservedGrid")
+            .WithColumns(GridColumnDefinition.ObjectKey("RowKey").ReadIdentityFromRow(publication),
+                GridColumnDefinition.Auto("Value").ReadDisplayedText())
+            .IdentifyRowsBy("RowKey");
+
+    [Test]
+    public Task ObjectRowRememberCheckAndCopyUseOnePublishedCellAndRuntimeAnchor() => OnUI(async () =>
+    {
+        var root = Host();
+        var first = new Row(string.Empty, 12.345m);
+        var target = new Row(string.Empty, 12.345m);
+        root.ItemsSource = [first, target];
+        root.CollectionView = [first, target];
+        var child = new TextBlock { Text = "not the cell presentation" };
+        var cell = new Border { DataContext = new Cell(target, new Column("Value", "Value"), target.Value), Child = child };
+        const string published = "Альфа\nБета: 12,3 ед/час";
+        AutomationProperties.SetName(cell, published);
+        var rowOwner = new Border { DataContext = target, Child = cell };
+        AutomationProperties.SetItemStatus(rowOwner, GridRowObjectKey.Get(target));
+        root.Children.Add(rowOwner);
+        Arrange(root);
+        var definition = GridAutomationDefinition.ByAutomationIds("ObservedGrid", "ObservedGrid", "ObservedGrid")
+            .WithColumns(GridColumnDefinition.ObjectKey("RowKey"),
+                GridColumnDefinition.Auto("Value").AsValue(GridCellValueKind.Text).ReadDisplayedText())
+            .IdentifyRowsBy("RowKey");
+        using var session = Session(root, definition);
+        session.Start();
+        RecorderCheckTargetSelection? selected = null;
+        session.CheckTargetSelected += (_, args) => selected = args.Selection;
+        session.BeginCheckTargetSelection();
+        session.SelectCheckTargetForTesting(child);
+        await Assert.That(selected!.ValueSnapshot).IsNotNull();
+        await Assert.That(selected.ValueSnapshot!.Prototype.StringValue).IsEqualTo(published);
+        await Assert.That(selected.ValueSnapshot.Prototype.CapturedDisplayText).IsEqualTo(published);
+        var details = (IRecorderCheckpointSessionDetails)session;
+        details.CaptureCheckpoint(selected, "displayedComponents");
+        details.CaptureCurrentValueAssertion(selected);
+        root.CollectionView = [target, first];
+        RecorderCopiedValueTargetSelection? copy = null;
+        session.CopiedValueTargetSelected += (_, args) => copy = args.Selection;
+        session.BeginCopiedValueTargetSelection();
+        session.SelectCopiedValueTargetForTesting(child);
+        string? clipboard = null;
+        await session.CommitCopiedValueAsync(copy!, (text, _) => { clipboard = text; return Task.CompletedTask; });
+        await Assert.That(clipboard).IsEqualTo(published);
+        var preview = session.ExportPreview();
+        await Assert.That(preview).Contains("GridRowKeyReader.Capture(Page.ObservedGrid, 1)");
+        await Assert.That(preview.Split("GridRowKeyReader.Capture(").Length - 1).IsEqualTo(1);
+        await Assert.That(preview).DoesNotContain(GridRowObjectKey.Get(target));
+        await Assert.That(preview).DoesNotContain("CaptureFirst");
+        await Assert.That(session.StepJournal.All(static step => step.CanPersist)).IsTrue();
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     public Task NestedHeaderCaptureAndCopyKeepTheCompletePathAfterReorder(bool publishedAddress) => OnUI(async () =>
     {
         var root = Host();
@@ -518,8 +829,14 @@ public sealed class RecorderGroupedGridTests
     public sealed class GridHost : StackPanel
     {
         public IReadOnlyList<Row> ItemsSource { get; set; } = [];
+        public IReadOnlyList<Row>? CollectionView { get; set; }
         public IReadOnlyList<Column> Columns { get; set; } = [new("Customer", "Контрагент"), new("Order", "Номер заказа")];
         public IReadOnlyList<Band> Bands { get; set; } = [];
+    }
+    private sealed class PresentationLayoutGridHost : StackPanel
+    {
+        public object? ItemsSource { get; init; }
+        public object? CollectionView { get; init; }
     }
     public sealed record Row([property: Key] string Id, object Value);
     public sealed record Column(string FieldName, string Header);

@@ -45,6 +45,18 @@ public sealed record GridRuntimeColumn
     /// <summary>Gets the real row metadata property used when an identity column is hidden.</summary>
     public GridRowAutomationProperty? RowIdentityAutomationProperty { get; init; }
 
+    /// <summary>Gets whether this column reads a reference-lifetime row key instead of a model field.</summary>
+    public bool IsObjectKey { get; init; }
+
+    /// <summary>Gets whether this column reads the addressed cell's published display text.</summary>
+    public bool ReadsDisplayedText { get; init; }
+
+    /// <summary>Gets whether every row match in this grid must use reference identity rather than value equality.</summary>
+    public bool UsesObjectRowIdentity { get; init; }
+
+    /// <summary>Gets the grid's object-key publication property, including on non-key columns in object identity mode.</summary>
+    public GridRowAutomationProperty? ObjectRowKeyAutomationProperty { get; init; }
+
     public string SourceFieldName { get; }
 
     public string? DisplayValuePath { get; }

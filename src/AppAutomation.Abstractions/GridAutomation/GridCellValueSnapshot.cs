@@ -19,5 +19,11 @@ public sealed record GridCellValueSnapshot(
     /// </summary>
     public bool IsDisplayOnly { get; init; }
 
+    /// <summary>
+    /// Indicates that DisplayText was read from the addressed cell's published UI presentation.
+    /// Projection and formatting must not replace it; unlike IsDisplayOnly, a precise model RawValue can remain available.
+    /// </summary>
+    public bool HasAuthoritativeDisplayText { get; init; }
+
     public bool IsNull => RawValue is null && DisplayText is null;
 }

@@ -14,6 +14,67 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 public sealed class RecorderStableGridSelectorTests
 {
     [Test]
+    public async Task ObjectKeyReplayRequiresExplicitRememberAndSharesAnchorsWithFormulaOperandsAndRowSets()
+    {
+        const string firstKey = "object-key-from-old-process-one";
+        const string secondKey = "object-key-from-old-process-two";
+        var firstConditions = new[] { new RecordedGridRowCondition("RowKey", firstKey) { IsObjectKey = true } };
+        var secondConditions = new[] { new RecordedGridRowCondition("RowKey", secondKey) { IsObjectKey = true } };
+        var first = new RecordedStep(RecordedActionKind.CaptureCheckpoint, GridDescriptor(),
+            StepId: Guid.NewGuid(), ValueKind: RecorderValueKind.Number, ValueAccessorKind: RecorderValueAccessorKind.GridCellValue,
+            CheckpointId: Guid.NewGuid(), CheckpointVariableName: "firstQuantity", DoubleValue: 10)
+        {
+            GridRowConditions = firstConditions, GridTargetColumnName = "Quantity", GridCapturedRowPosition = 1,
+            GridRowSourceMode = RecorderGridRowSourceMode.CurrentTableRow, CanCaptureGridRowKey = true
+        };
+        var second = first with
+        {
+            StepId = Guid.NewGuid(), CheckpointId = Guid.NewGuid(), CheckpointVariableName = "secondQuantity",
+            GridRowConditions = secondConditions, GridCapturedRowPosition = 0
+        };
+        var formula = first with
+        {
+            ActionKind = RecordedActionKind.AssertValue, StepId = Guid.NewGuid(), CheckpointId = null,
+            CheckpointVariableName = null, GridRowSourceMode = RecorderGridRowSourceMode.RecordedStableKey,
+            ComparisonKind = RecorderComparisonKind.Equal,
+            NumericExpectedExpression = new(RecorderArithmeticOperation.Add,
+                RecorderNumericOperand.FromControl(GridDescriptor(), RecorderValueAccessorKind.GridCellValue,
+                    new RecorderGridValueReference(secondConditions, "Quantity")), RecorderNumericOperand.FromLiteral(1))
+        };
+        var select = new RecordedStep(RecordedActionKind.SelectGridRows, GridDescriptor(), StepId: Guid.NewGuid())
+        {
+            GridSelectedRows = [new(firstConditions), new(secondConditions)]
+        };
+        var edit = formula with
+        {
+            ActionKind = RecordedActionKind.EditGridCellNumber, StepId = Guid.NewGuid(), DoubleValue = 12,
+            NumericExpectedExpression = null
+        };
+        var steps = new[] { first, second, formula, select, edit };
+        var graph = RecorderScenarioGraphValidator.Validate([formula]);
+        await Assert.That(graph.Success).IsFalse();
+        await Assert.That(graph.Error).Contains("Current table row");
+        var preview = CreateGenerator().GeneratePreview(steps);
+        await Assert.That(preview).Contains("GridRowKeyReader.Capture(Page.OrdersGrid, 1)");
+        await Assert.That(preview).Contains("GridValueReader.ReadCellNumber(Page.OrdersGrid, gridRow1, \"Quantity\")");
+        await Assert.That(preview).Contains("GridValueReader.ReadCellNumber(Page.OrdersGrid, gridRow2, \"Quantity\")");
+        await Assert.That(preview).Contains("[gridRow1, gridRow2]");
+        await Assert.That(preview).DoesNotContain(firstKey);
+        await Assert.That(preview).DoesNotContain(secondKey);
+        await Assert.That(preview).DoesNotContain("CaptureFirst");
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.CompilableMainWindowPage, RecorderScenarioDestinationSources.CompilableScenario);
+        var state = new RecorderAutosaveState("Object rows", "object-rows", "ObjectRows", DateTimeOffset.UtcNow, steps);
+        var autosave = Path.Combine(project.RootPath, "object-rows.autosave.cs");
+        await File.WriteAllTextAsync(autosave, RecorderAutosaveStateSerializer.CreateMarker(state));
+        await Assert.That(RecorderAutosaveStateSerializer.TryRead(autosave, out var restored, out var error)).IsTrue().Because(error);
+        await Assert.That(CreateGenerator().GeneratePreview(restored!.Steps)).IsEqualTo(preview);
+        var saved = await project.SaveAsync(project.CreateSaveContext("Object rows", "object-rows"), restored.Steps);
+        await Assert.That(RecorderGeneratedSourceCompiler.Compile(project.RootPath)).IsEmpty();
+        await Assert.That(await File.ReadAllTextAsync(saved.ScenarioFilePath!)).DoesNotContain(firstKey);
+    }
+
+    [Test]
     public async Task GridRowSetRestoresAndCompilesCompositeKeysAndAnEmptySelection()
     {
         var selection = new RecordedStep(RecordedActionKind.SelectGridRows, GridDescriptor(), StepId: Guid.NewGuid())

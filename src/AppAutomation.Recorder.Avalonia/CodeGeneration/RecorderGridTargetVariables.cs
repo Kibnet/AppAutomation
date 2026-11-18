@@ -6,9 +6,19 @@ namespace AppAutomation.Recorder.Avalonia.CodeGeneration;
 internal sealed class RecorderGridTargetVariables
 {
     private readonly Dictionary<RecordedStep, Target> _targets = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<RecordedStep, Dictionary<object, Target>> _references = new(ReferenceEqualityComparer.Instance);
     internal sealed record Target(string Name, RecordedStep Definition, bool IsHeader, IReadOnlyList<string>? ExcludedRows = null);
     public IEnumerable<string> Names => _targets.Values.Select(static target => target.Name).Distinct(StringComparer.Ordinal);
     public Target? Find(RecordedStep step) => _targets.GetValueOrDefault(step);
+    public Target? Find(RecordedStep? step, object reference) => step is not null
+        && _references.TryGetValue(step, out var references) ? references.GetValueOrDefault(reference) : null;
+
+    private void MapReference(RecordedStep step, object reference, Target target)
+    {
+        if (!_references.TryGetValue(step, out var references))
+            _references.Add(step, references = new Dictionary<object, Target>(ReferenceEqualityComparer.Instance));
+        references[reference] = target;
+    }
 
     public static RecorderGridTargetVariables Create(IReadOnlyList<RecordedStep> steps,
         RecorderScenarioGraphValidationResult graph, IReadOnlyDictionary<Guid, string> rowAnchorNames)
@@ -38,7 +48,7 @@ internal sealed class RecorderGridTargetVariables
                 if (target is not null) result._targets.Add(step, target);
             }
             else if (step.GridRowConditions is { Count: > 0 } conditions
-                && step.NumericExpectedExpression is null
+                && (step.NumericExpectedExpression is null || conditions.Any(static condition => condition.IsObjectKey))
                 && step.GridRowAnchorCheckpointId is null
                 && step.GridRowSourceMode != RecorderGridRowSourceMode.CurrentTableRow
                 && conditions.All(static condition => condition.ValueReference is null))
@@ -51,13 +61,30 @@ internal sealed class RecorderGridTargetVariables
                 var isFirstGroupedRowAction = step.ActionKind is (RecordedActionKind.SelectGridRow or RecordedActionKind.OpenGridRow)
                     && headers.Any(target => SameGrid(step, target.Definition))
                     && !rows.Any(target => SameGrid(step, target.Definition));
-                if (target is null && (needsRuntimeRow || isFirstGroupedRowAction))
+                if (target is null && !conditions.Any(static condition => condition.IsObjectKey)
+                    && (needsRuntimeRow || isFirstGroupedRowAction))
                 {
                     var excludedRows = rows.Where(target => SameGrid(step, target.Definition)).Select(static target => target.Name).ToArray();
                     target = new(RecorderNaming.EnsureUniqueName("gridRow", names), step, IsHeader: false, excludedRows);
                     rows.Add(target);
                 }
                 if (target is not null) result._targets.Add(step, target);
+            }
+            foreach (var operand in step.NumericExpectedExpression?.Operands() ?? [])
+            {
+                if (operand.Control is not { } control || operand.GridValueReference is not { } reference
+                    || !reference.RowConditions.Any(static condition => condition.IsObjectKey)) continue;
+                var target = rows.LastOrDefault(target => control.LocatorKind == target.Definition.Control.LocatorKind
+                    && string.Equals(control.LocatorValue, target.Definition.Control.LocatorValue, StringComparison.Ordinal)
+                    && SameRow(reference.RowConditions, target.Definition.GridRowConditions!));
+                if (target is not null) result.MapReference(step, reference, target);
+            }
+            foreach (var row in step.GridSelectedRows ?? [])
+            {
+                if (!row.Conditions.Any(static condition => condition.IsObjectKey)) continue;
+                var target = rows.LastOrDefault(target => SameGrid(step, target.Definition)
+                    && SameRow(row.Conditions, target.Definition.GridRowConditions!));
+                if (target is not null) result.MapReference(step, row, target);
             }
         }
         return result;

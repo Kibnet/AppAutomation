@@ -67,6 +67,16 @@ public partial class MainWindow : Window
         }
         DataContext = _viewModel;
         InitializeNativeGridRuntimeFixture();
+        if (Environment.GetEnvironmentVariable("APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE") == "presentation")
+        {
+            var presentationTab = new TabItem
+            {
+                Header = "Grid presentation", Content = GridPresentationFixture.CreateContent()
+            };
+            AutomationProperties.SetAutomationId(presentationTab, "GridPresentationTab");
+            MainTabs.Items.Add(presentationTab);
+            MainTabs.SelectedItem = presentationTab;
+        }
 
         UpdateModeLabel(ComputeMode.Gcd, useAbsoluteValues: false, showSteps: false);
         StartDatePicker.SelectedDate = DateTime.Today;

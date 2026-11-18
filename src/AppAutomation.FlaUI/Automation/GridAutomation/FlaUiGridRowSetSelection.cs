@@ -17,7 +17,9 @@ public sealed partial class FlaUiControlResolver
         public IReadOnlyList<GridRowSelector> ReadSelectedRows(GridRowSetIdentity identity, UiOperationTimeoutBudget budget)
         {
             var root = RequireRowSetRoot(budget);
-            return ReadRowSet(root, FindNativeSelection(root), identity, budget).Selected.Values.ToArray();
+            var selected = ReadRowSet(root, FindNativeSelection(root), identity, budget).Selected.Values.ToArray();
+            RequireObjectRowSetInCurrentView(identity, selected, budget);
+            return selected;
         }
 
         public void SetSelectedRows(GridRowSetIdentity identity, IReadOnlyDictionary<string, GridRowSelector> expected,
@@ -26,6 +28,7 @@ public sealed partial class FlaUiControlResolver
             var root = RequireRowSetRoot(budget);
             var selection = FindNativeSelection(root);
             var initial = ReadRowSet(root, selection, identity, budget);
+            RequireObjectRowSetInCurrentView(identity, expected.Values.Concat(initial.Selected.Values), budget);
             if (expected.Count == 0 && !initial.AllowsEmpty)
                 throw new NotSupportedException($"Grid '{AutomationId}' does not allow an empty selection.");
             if (SameSelection(initial.Selected, expected)) return;
@@ -33,6 +36,14 @@ public sealed partial class FlaUiControlResolver
             if (selection is not null && initial.Native is not null
                 && TrySetNativeSelectedRows(root, selection, initial, identity, expected, budget)) return;
             SetSelectedRowsWithGestures(root, selection, initial, identity, expected, budget);
+        }
+
+        private void RequireObjectRowSetInCurrentView(GridRowSetIdentity identity,
+            IEnumerable<GridRowSelector> rows, UiOperationTimeoutBudget budget)
+        {
+            if (!identity.RuntimeColumns.Any(static column => column.IsObjectKey)) return;
+            foreach (var row in rows.DistinctBy(GridRowSelectionSet.Key))
+                RequireObjectRowInCurrentView(identity.ToRuntimeSelector(row), Stopwatch.StartNew(), budget.RemainingMilliseconds);
         }
 
         private bool TrySetNativeSelectedRows(AutomationElement root, SelectionPattern selection, RowSetState initial,
@@ -177,11 +188,14 @@ public sealed partial class FlaUiControlResolver
         }
 
         private static string? ReadRowIdentityValue(AutomationElement row, IReadOnlyList<AutomationElement> cells,
-            IReadOnlyDictionary<GridRuntimeColumn, int> indexes, GridRuntimeColumn column) =>
-            column.RowIdentityAutomationProperty is { } property
+            IReadOnlyDictionary<GridRuntimeColumn, int> indexes, GridRuntimeColumn column)
+        {
+            var value = column.RowIdentityAutomationProperty is { } property
                 ? FlaUiGridRowAutomationValueReader.Read(row, property)
                 : indexes.TryGetValue(column, out var index) && index < cells.Count && cells[index] is { } cell
                     ? ReadGridCellText(cell, preserveEmpty: true) : null;
+            return column.IsObjectKey && string.IsNullOrWhiteSpace(value) ? null : value;
+        }
 
         private Dictionary<GridRuntimeColumn, int> ReadVisibleIdentityCellIndexes(
             GridRowSetIdentity identity, NativeGridColumnHeader[] headers)
@@ -509,6 +523,11 @@ public sealed partial class FlaUiControlResolver
 
         private IReadOnlyDictionary<string, int> ProveRowSetTargets(AutomationElement root, GridRowSetIdentity identity,
             IReadOnlyDictionary<string, GridRowSelector> expected, UiOperationTimeoutBudget budget)
+            => ProveRowSetTargets(root, identity, expected, budget, out _);
+
+        private IReadOnlyDictionary<string, int> ProveRowSetTargets(AutomationElement root, GridRowSetIdentity identity,
+            IReadOnlyDictionary<string, GridRowSelector> expected, UiOperationTimeoutBudget budget,
+            out Dictionary<string, int> ambiguous)
         {
             var stopwatch = Stopwatch.StartNew();
             var timeoutMs = budget.RemainingMilliseconds;
@@ -544,7 +563,7 @@ public sealed partial class FlaUiControlResolver
             }
 
             var positions = new Dictionary<string, int>(StringComparer.Ordinal);
-            var ambiguous = new HashSet<string>(StringComparer.Ordinal);
+            ambiguous = new Dictionary<string, int>(StringComparer.Ordinal);
             for (var index = 0; index < rows.Count; index++)
             {
                 _ = budget.Remaining;
@@ -552,9 +571,9 @@ public sealed partial class FlaUiControlResolver
                 if (positions.TryAdd(key, index)) continue;
                 if (expected.ContainsKey(key))
                     throw new InvalidOperationException($"Grid '{AutomationId}' has more than one row for a requested stable key.");
-                ambiguous.Add(key);
+                ambiguous[key] = ambiguous.GetValueOrDefault(key, 1) + 1;
             }
-            foreach (var key in ambiguous) positions.Remove(key);
+            foreach (var key in ambiguous.Keys) positions.Remove(key);
 
             foreach (var (key, row) in expected)
                 if (!positions.ContainsKey(key))

@@ -1120,11 +1120,27 @@ public sealed partial class FlaUiControlResolver
                 }
             }
 
+            return LocateProvenUniqueNativeRow(selector, stopwatch, timeoutMs, allowUserInput);
+        }
+
+        private NativeFlaUiRow LocateProvenUniqueNativeRow(
+            GridIndexedRowSelector selector,
+            Stopwatch stopwatch,
+            int timeoutMs,
+            bool allowUserInput = true,
+            bool metadataOnly = false)
+        {
+            var scroll = FindGridScrollState();
             MoveGridScrollToStart(scroll, stopwatch, timeoutMs, allowUserInput);
             do
             {
-                var visibleRows = TakePrefetchedNativeRows();
-                var match = visibleRows.FirstOrDefault(row => NativeRowMatches(row, selector));
+                var visibleRows = metadataOnly ? ReadNativeDataRows(includeCells: false) : TakePrefetchedNativeRows();
+                var matches = visibleRows.Where(row => NativeRowMatches(row, selector))
+                    .Take(metadataOnly ? 2 : 1).ToArray();
+                if (matches.Length > 1)
+                    throw new InvalidOperationException(
+                        $"Grid '{AutomationId}' exposes multiple rows for the proved object key in the current viewport.");
+                var match = matches.FirstOrDefault();
                 if (match is not null)
                 {
                     return match;
@@ -1154,6 +1170,13 @@ public sealed partial class FlaUiControlResolver
             Stopwatch stopwatch,
             int timeoutMs)
         {
+            if (UsesObjectRowIdentity(selector))
+            {
+                RequireObjectRowInCurrentView(selector, stopwatch, timeoutMs);
+                EnsureNativeColumnVisible(targetColumn, stopwatch, timeoutMs);
+                return ResolveCurrentObjectRow(selector, stopwatch, timeoutMs);
+            }
+
             var visibleSelectorColumns = selector.Conditions
                 .Where(static condition => condition.Column.RowIdentityAutomationProperty is null)
                 .Select(static condition => condition.Column)
@@ -1821,6 +1844,8 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            if (UsesObjectRowIdentity(row))
+                return ReadObjectRowResolution(row, Stopwatch.StartNew(), timeoutMs);
             if (HasNativeDataRows(prefetchCells: false))
             {
                 var scan = ScanNativeRows(row, Stopwatch.StartNew(), timeoutMs);
@@ -1850,6 +1875,7 @@ public sealed partial class FlaUiControlResolver
         {
             ArgumentNullException.ThrowIfNull(column);
             var stopwatch = Stopwatch.StartNew();
+            RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
             if (HasNativeDataRows(prefetchCells: false))
             {
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
@@ -1862,6 +1888,8 @@ public sealed partial class FlaUiControlResolver
                     nativeRuntimeColumnIndex,
                     column.SourceFieldName,
                     headers);
+                if (column.ReadsDisplayedText)
+                    return ReadPublishedCellPresentation(nativeCell, column, AutomationId);
                 var nativeDisplayText = ReadVisualGridCellText(nativeCell);
                 if (column.ValueKind is GridCellValueKind.Date or GridCellValueKind.DateTime
                     && IsEmptyNativeDateCellProjection(
@@ -1881,6 +1909,7 @@ public sealed partial class FlaUiControlResolver
                     column);
             }
 
+            RejectObjectIdentityCellFallback(row);
             var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
             var runtimeColumnIndex = column.RuntimeColumnIndex ?? column.ColumnIndex;
             var cell = FindVisualCellWithTraversal(
@@ -1889,6 +1918,8 @@ public sealed partial class FlaUiControlResolver
                     RemainingGridMilliseconds(stopwatch, timeoutMs))
                 ?? throw new InvalidOperationException(
                     $"Grid '{AutomationId}' row {rowIndex} no longer exposes column {runtimeColumnIndex}.");
+            if (column.ReadsDisplayedText)
+                return ReadPublishedCellPresentation(cell, column, AutomationId);
             var displayText = ReadVisualGridCellText(cell);
             return GridCellValueNormalizer.Normalize(AutomationId,
                 new GridCellValueSnapshot(displayText, displayText, column.ValueKind) { IsDisplayOnly = true },
@@ -1901,9 +1932,13 @@ public sealed partial class FlaUiControlResolver
             int timeoutMs)
         {
             ArgumentNullException.ThrowIfNull(column);
+            if (column.ReadsDisplayedText)
+                return ReadCell(row, column, timeoutMs).DisplayText ?? string.Empty;
+            var operation = Stopwatch.StartNew();
+            RequireObjectRowInCurrentView(row, operation, timeoutMs);
             if (HasNativeDataRows())
             {
-                var stopwatch = Stopwatch.StartNew();
+                var stopwatch = operation;
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
                 var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
                 var nativeCell = ResolveNativeTargetCell(
@@ -1923,6 +1958,7 @@ public sealed partial class FlaUiControlResolver
                 return ReadVisualGridCellText(nativeCell) ?? string.Empty;
             }
 
+            RejectObjectIdentityCellFallback(row);
             var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
             var runtimeColumnIndex = column.RuntimeColumnIndex ?? column.ColumnIndex;
             var cell = FindVisualCellWithTraversal(rowIndex, runtimeColumnIndex, timeoutMs)
@@ -1949,6 +1985,7 @@ public sealed partial class FlaUiControlResolver
             ArgumentNullException.ThrowIfNull(column);
             ArgumentNullException.ThrowIfNull(request);
             var stopwatch = Stopwatch.StartNew();
+            RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
             if (HasNativeDataRows(prefetchCells: false))
             {
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
@@ -1964,7 +2001,9 @@ public sealed partial class FlaUiControlResolver
                 var initialCell = ResolveEditCell(nativeRow);
                 EditResolvedCell(
                     initialCell,
-                    timeout => ResolveEditCell(metadataIdentity
+                    timeout => ResolveEditCell(UsesObjectRowIdentity(row)
+                        ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
+                        : metadataIdentity
                         ? TryResolveVisibleNativeRow(row, forSelection: true)
                             ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)
                         : RebindNativeRowAfterHorizontalScroll(
@@ -1975,8 +2014,10 @@ public sealed partial class FlaUiControlResolver
                         request,
                         RemainingGridMilliseconds(stopwatch, timeoutMs),
                         request.EditorParts ?? column.EditorParts),
-                    timeout => (TryResolveVisibleNativeRow(row, forSelection: true)
-                        ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)).Element);
+                    timeout => (UsesObjectRowIdentity(row)
+                        ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
+                        : TryResolveVisibleNativeRow(row, forSelection: true)
+                            ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)).Element);
                 return;
 
                 AutomationElement ResolveEditCell(NativeFlaUiRow currentRow)
@@ -1989,6 +2030,7 @@ public sealed partial class FlaUiControlResolver
                 }
             }
 
+            RejectObjectIdentityCellFallback(row);
             var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
             var runtimeColumnIndex = column.RuntimeColumnIndex ?? column.ColumnIndex;
             var cell = FindVisualCellWithTraversal(
@@ -2012,23 +2054,29 @@ public sealed partial class FlaUiControlResolver
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
         {
             var stopwatch = Stopwatch.StartNew();
+            RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
             if (FindGridRoot() is { } gridRoot)
             {
                 RevealInAncestorScrollViewport(gridRoot, stopwatch, timeoutMs);
             }
             if (HasNativeDataRows(prefetchCells: false))
             {
-                var nativeRow = (row.HasDeclaredUniqueIdentity
+                var nativeRow = UsesObjectRowIdentity(row)
+                    ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
+                    : (row.HasDeclaredUniqueIdentity
                     ? TryResolveVisibleNativeRow(row, forSelection: true)
                     : null) ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs);
                 OpenNativeRow(
                     nativeRow,
-                    () => TryResolveVisibleNativeRow(row, forSelection: true)
-                        ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs),
+                    () => UsesObjectRowIdentity(row)
+                        ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
+                        : TryResolveVisibleNativeRow(row, forSelection: true)
+                            ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs),
                     stopwatch, timeoutMs);
                 return;
             }
 
+            RejectObjectIdentityCellFallback(row);
             var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
             var target = FindVisualCellWithTraversal(
                     rowIndex,
@@ -2156,12 +2204,15 @@ public sealed partial class FlaUiControlResolver
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var stopwatch = Stopwatch.StartNew();
+            RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
             AutomationElement target;
             Func<AutomationElement?> refreshTarget;
             Func<AutomationElement, bool>? isCurrentRowMatch = null;
             if (HasNativeDataRows(prefetchCells: false))
             {
-                var visibleMatch = row.HasDeclaredUniqueIdentity
+                var visibleMatch = UsesObjectRowIdentity(row)
+                    ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
+                    : row.HasDeclaredUniqueIdentity
                     ? TryResolveVisibleNativeRow(row, forSelection: true)
                     : null;
                 if (visibleMatch is null && row.HasDeclaredUniqueIdentity
@@ -2183,15 +2234,21 @@ public sealed partial class FlaUiControlResolver
                         $"Grid '{AutomationId}' did not materialize the requested stable row within the operation timeout.");
                 }
                 target = visibleMatch?.Element ?? ResolveUniqueNativeRow(row, stopwatch, timeoutMs).Element;
-                refreshTarget = () => TryResolveVisibleNativeRow(row, forSelection: true)?.Element;
+                refreshTarget = () => UsesObjectRowIdentity(row)
+                    ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs).Element
+                    : TryResolveVisibleNativeRow(row, forSelection: true)?.Element;
                 if (row.Conditions.All(static condition => condition.Column.RowIdentityAutomationProperty is not null))
                 {
-                    isCurrentRowMatch = candidate => NativeRowMatches(
-                        new NativeFlaUiRow(candidate, Array.Empty<AutomationElement>()), row);
+                    isCurrentRowMatch = candidate =>
+                    {
+                        RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
+                        return NativeRowMatches(new NativeFlaUiRow(candidate, Array.Empty<AutomationElement>()), row);
+                    };
                 }
             }
             else
             {
+                RejectObjectIdentityCellFallback(row);
                 var rowIndex = ResolveUniqueRowIndex(row, timeoutMs);
                 target = FindVisualCellWithTraversal(
                         rowIndex,

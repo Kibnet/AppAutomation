@@ -97,6 +97,23 @@ internal static class RecorderScenarioGraphValidator
                 continue;
             }
 
+            var objectRows = new[] { (step.Control, step.GridRowConditions) }
+                .Concat((step.GridSelectedRows ?? []).Select(row => (step.Control, (IReadOnlyList<RecordedGridRowCondition>?)row.Conditions)))
+                .Concat((step.NumericExpectedExpression?.Operands() ?? [])
+                    .Where(static operand => operand.Control is not null && operand.GridValueReference is not null)
+                    .Select(operand => (operand.Control!, (IReadOnlyList<RecordedGridRowCondition>?)operand.GridValueReference!.RowConditions)));
+            if (objectRows.Any(target => target.Item2?.Any(static condition => condition.IsObjectKey) == true
+                && !(step.GridRowSourceMode == RecorderGridRowSourceMode.CurrentTableRow
+                    && ReferenceEquals(target.Item2, step.GridRowConditions))
+                && !tableRowAnchors.Values.Any(anchor =>
+                    anchor.Control.LocatorKind == target.Item1.LocatorKind
+                    && string.Equals(anchor.Control.LocatorValue, target.Item1.LocatorValue, StringComparison.Ordinal)
+                    && anchor.GridRowConditions!.SequenceEqual(target.Item2))))
+            {
+                stepErrors[step.StepId] = "An object-key row has no proven replay-time source. Use Remember on the intended row in 'Current table row' mode before recording actions or calculated checks for it; recorded object keys cannot be replayed as literals or replaced with the first row.";
+                continue;
+            }
+
             var rowReferenceValidation = ValidateGridRowReferences(
                 step,
                 index,

@@ -13,6 +13,14 @@ public sealed record GridColumnDefinition
 
     public string SourceFieldName { get; private init; }
 
+    /// <summary>Gets whether this hidden identity reads the reference-lifetime key instead of a model field.</summary>
+    public bool IsObjectKey { get; private init; }
+
+    /// <summary>Gets whether the real addressed cell's published UI Automation Name is the display source.</summary>
+    public bool ReadsDisplayedText { get; private init; }
+
+    internal bool HasObjectKeyFieldOverride { get; private init; }
+
     /// <summary>
     /// Gets the provider-facing runtime column name, such as a visible UIA header.
     /// When omitted, the logical and source names remain valid runtime matches.
@@ -50,11 +58,19 @@ public sealed record GridColumnDefinition
 
     public static GridColumnDefinition Map(string logicalName) => new(logicalName);
 
+    /// <summary>Declares a hidden reference-object key, published in the real row's ItemStatus by default.</summary>
+    public static GridColumnDefinition ObjectKey(string logicalName) => new(logicalName)
+    {
+        IsObjectKey = true,
+        RowIdentityAutomationProperty = GridRowAutomationProperty.ItemStatus
+    };
+
     public GridColumnDefinition FromField(string sourceFieldName)
     {
         return this with
         {
-            SourceFieldName = GridAutomationDefinition.NormalizeRequired(sourceFieldName, nameof(sourceFieldName))
+            SourceFieldName = GridAutomationDefinition.NormalizeRequired(sourceFieldName, nameof(sourceFieldName)),
+            HasObjectKeyFieldOverride = IsObjectKey
         };
     }
 
@@ -79,6 +95,21 @@ public sealed record GridColumnDefinition
         return this with
         {
             DisplayValuePath = GridPropertyPath.Normalize(propertyPath, nameof(propertyPath))
+        };
+    }
+
+    /// <summary>Reads the published display text without applying model projection or formatting again.</summary>
+    public GridColumnDefinition ReadDisplayedText(string? cultureName = null)
+    {
+        if (cultureName is not null)
+        {
+            GridNumericText.ValidateCultureName(cultureName, nameof(cultureName));
+        }
+
+        return this with
+        {
+            ReadsDisplayedText = true,
+            CultureName = cultureName?.Trim()
         };
     }
 

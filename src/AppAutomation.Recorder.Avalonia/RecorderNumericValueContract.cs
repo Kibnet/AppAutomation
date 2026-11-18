@@ -132,9 +132,11 @@ internal static class RecorderNumericValueContract
         }
 
         var normalizedConditions = gridRowConditions
-            .Select(static condition => new RecordedGridRowCondition(
-                condition.ColumnName.Trim(),
-                condition.Value ?? string.Empty))
+            .Select(static condition => condition with
+            {
+                ColumnName = condition.ColumnName.Trim(),
+                Value = condition.Value ?? string.Empty
+            })
             .ToArray();
         var duplicateColumn = normalizedConditions
             .GroupBy(static condition => condition.ColumnName, StringComparer.Ordinal)

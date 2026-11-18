@@ -20,6 +20,11 @@ internal class ConfiguredGridControl :
     private IReadOnlyList<string> RuntimeMetadataNames => Inner is IGridColumnMetadataControl metadata
         ? metadata.ColumnNames : Array.Empty<string>();
     private readonly Dictionary<string, int> _columnIndexes;
+    private bool UsesObjectRowIdentity => Definition.RowIdentityColumns.Any(name =>
+        Definition.FindColumn(name)?.IsObjectKey == true);
+    private GridRowAutomationProperty? ObjectRowKeyAutomationProperty => Definition.RowIdentityColumns
+        .Select(Definition.FindColumn).FirstOrDefault(static column => column?.IsObjectKey == true)
+        ?.RowIdentityAutomationProperty;
 
     public ConfiguredGridControl(
         IGridControl inner,
@@ -47,6 +52,7 @@ internal class ConfiguredGridControl :
                     StringComparer.Ordinal));
         _declaredRuntimeColumnNames = definition.Columns.Count > 0
             ? Array.AsReadOnly(definition.Columns
+                .Where(static column => !column.IsObjectKey)
                 .Select(static column => column.RuntimeColumnName ?? column.SourceFieldName)
                 .ToArray())
             : _runtimeColumnNames;
@@ -597,6 +603,7 @@ internal class ConfiguredGridControl :
         IReadOnlyList<string>? runtimeNames = null)
     {
         if (_indexedGrid is null) return false;
+        if (UsesObjectRowIdentity) return true;
         var names = runtimeNames ?? RuntimeMetadataNames;
         return row.Conditions.Any(RequiresIndexedAccess)
             || targetColumnIndex is { } columnIndex && FindRuntimeColumnIndex(_columns[columnIndex], names) is null;
@@ -641,7 +648,7 @@ internal class ConfiguredGridControl :
                 MapColumn(ResolveColumnIndex(condition.ColumnName), names),
                 condition.Value)));
 
-        return IsDeclaredIdentitySelector(row)
+        return IsDeclaredIdentitySelector(row) && !UsesObjectRowIdentity
             ? mapped.WithDeclaredUniqueIdentity()
             : mapped;
     }
@@ -664,7 +671,7 @@ internal class ConfiguredGridControl :
             condition => _columns[ResolveColumnIndex(condition.ColumnName)],
             StringComparer.Ordinal));
 
-        return IsDeclaredIdentitySelector(row)
+        return IsDeclaredIdentitySelector(row) && !UsesObjectRowIdentity
             ? mapped.WithDeclaredUniqueIdentity()
             : mapped;
     }
@@ -704,6 +711,10 @@ internal class ConfiguredGridControl :
             RuntimeColumnIndex = FindRuntimeColumnIndex(column, runtimeNames),
             RuntimeColumnName = column.RuntimeColumnName ?? column.SourceFieldName,
             RowIdentityAutomationProperty = column.RowIdentityAutomationProperty,
+            IsObjectKey = column.IsObjectKey,
+            ReadsDisplayedText = column.ReadsDisplayedText,
+            UsesObjectRowIdentity = UsesObjectRowIdentity,
+            ObjectRowKeyAutomationProperty = ObjectRowKeyAutomationProperty,
             BooleanTrueDisplayText = column.BooleanTrueDisplayText,
             BooleanFalseDisplayText = column.BooleanFalseDisplayText
         };
@@ -711,6 +722,11 @@ internal class ConfiguredGridControl :
 
     private static int? FindRuntimeColumnIndex(GridColumnDefinition column, IReadOnlyList<string> runtimeNames)
     {
+        if (column.IsObjectKey)
+        {
+            return null;
+        }
+
         var runtimeName = string.IsNullOrWhiteSpace(column.RuntimeColumnName) ? column.SourceFieldName : column.RuntimeColumnName;
         var matches = runtimeNames
             .Select((name, index) => (name, index))
@@ -733,7 +749,7 @@ internal class ConfiguredGridControl :
 
     private string NormalizeCopiedValue(string copied, GridColumnDefinition column)
     {
-        if (!string.IsNullOrWhiteSpace(column.DisplayValuePath))
+        if (column.ReadsDisplayedText || !string.IsNullOrWhiteSpace(column.DisplayValuePath))
         {
             return copied;
         }
