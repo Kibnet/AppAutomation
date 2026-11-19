@@ -93,7 +93,7 @@ public sealed partial class FlaUiControlResolver
                             ResolvePhysicalTarget,
                             element => { TryScrollIntoView(element); TryFocus(element); },
                             element => clickPoint = GetVisibleGridRowPoint(element, selectionContainer),
-                            options: new PointerClickOptions { Timeout = RemainingPointerTimeout() });
+                            options: new PointerClickOptions { Timeout = RemainingPointerTimeout() }, hasFreshIntent: true);
                         completedClickPoint = clickPoint;
                     }
                     catch (Exception pointerFallbackException) when (!DesktopPointer.IsTerminalFailure(pointerFallbackException)
@@ -107,7 +107,7 @@ public sealed partial class FlaUiControlResolver
                             ResolvePhysicalTarget,
                             element => { TryScrollIntoView(element); TryFocus(element); },
                             element => clickPoint = GetVisibleGridRowPoint(element, selectionContainer),
-                            options: new PointerClickOptions { Timeout = RemainingPointerTimeout() });
+                            options: new PointerClickOptions { Timeout = RemainingPointerTimeout() }, hasFreshIntent: true);
                         completedClickPoint = clickPoint;
                     }
                 }
@@ -285,6 +285,10 @@ public sealed partial class FlaUiControlResolver
                     var point = new System.Drawing.Point(x, y);
                     try
                     {
+                        if (FlaUiPointerPreparation.Capture()?.IsRegisteredBlocker(row, point) == true)
+                            throw new PointerOcclusionException(point,
+                                row.FrameworkAutomationElement.RuntimeId.ValueOrDefault
+                                ?? throw new InvalidOperationException("The grid row has no native identity for pre-press preparation."));
                         if (DesktopPointerTargetResolver.FindHitTarget(row.Automation.FromPoint(point), row.Equals,
                                 rejectInteractiveDescendantHit: true) is not null) return point;
                     }

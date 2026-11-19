@@ -25,6 +25,7 @@ public sealed partial class FlaUiControlResolver
         public void SetSelectedRows(GridRowSetIdentity identity, IReadOnlyDictionary<string, GridRowSelector> expected,
             UiOperationTimeoutBudget budget)
         {
+            using var preparation = EnterPointerPreparation();
             var root = RequireRowSetRoot(budget);
             var selection = FindNativeSelection(root);
             var initial = ReadRowSet(root, selection, identity, budget);

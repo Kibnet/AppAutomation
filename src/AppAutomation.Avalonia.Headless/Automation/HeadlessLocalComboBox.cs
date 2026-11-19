@@ -27,7 +27,8 @@ internal static class HeadlessLocalComboBox
         Func<LocalComboBoxSurface<Control>?> resolveResults,
         Action open,
         Func<bool>? isPopupOpen = null,
-        Func<string?>? readCommittedText = null)
+        Func<string?>? readCommittedText = null,
+        HeadlessPointerIntent? ownerIntent = null)
     {
         var standalone = readCommittedText is not null;
         Func<bool>? selectionApplied = null;
@@ -57,17 +58,32 @@ internal static class HeadlessLocalComboBox
                 $"ComboBox '{editorName}' results did not expose exact item '{itemText}'.");
             _ = budget.Remaining;
             var input = resolveInput();
-            HeadlessRuntime.Dispatch(() =>
+            var needsPointer = HeadlessRuntime.Dispatch(() =>
             {
                 ValidateTarget();
                 selectionApplied = ObserveSelection(editor, match.Item);
-                if (!TrySelectWithKeyboard(input, list, itemText, (match.Index, match.Item), commit, standalone, budget, selectionApplied)
-                    && IsVisible(list))
-                {
-                    ValidateTarget();
-                    HeadlessPointerInput.ClickItem(list, match.Index, ValidateTarget);
-                }
+                return !TrySelectWithKeyboard(input, list, itemText, (match.Index, match.Item), commit, standalone, budget, selectionApplied)
+                    && IsVisible(list);
             });
+            if (needsPointer)
+            {
+                // Re-resolve only the requested item. Opening/keyboard/value-provider preparation above is one-shot.
+                AutomationElement ResolveTarget()
+                {
+                    var current = ResolveVisibleList()?.Native as ListBox
+                        ?? throw new InvalidOperationException("The ComboBox results are no longer available.");
+                    return HeadlessRuntime.Dispatch(() =>
+                    {
+                        var fresh = FindItem(current, itemText, budget, captureCaptions: false);
+                        if (fresh.Index < 0 || !Equals(fresh.Item, match.Item))
+                            throw new InvalidOperationException("The requested ComboBox item changed before the pointer action.");
+                        return AutomationElement.WrapControl(HeadlessPointerInput.ResolveItemTarget(current, fresh.Index));
+                    });
+                }
+                var targetIntent = ownerIntent is null ? null
+                    : new HeadlessPointerIntent(ownerIntent.SearchRoot, ResolveTarget, ownerIntent.Context);
+                HeadlessPointerInput.ClickControl(ResolveTarget().Control, targetIntent, budget);
+            }
             return match.Captions ?? [];
 
             void ValidateTarget()

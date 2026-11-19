@@ -47,7 +47,9 @@ internal readonly record struct DesktopPointerTarget(Point Point, int ProcessId,
             throw new PointerInterferenceException("The pointer target is covered by another application or no longer owns the foreground window.");
     }
 
-    internal void ValidateExact()
+    internal void ValidateExact() => ValidateExact(null);
+
+    internal void ValidateExact(FlaUiPointerPreparation? preparation)
     {
         ValidateOwner();
         using var dpi = WindowsPointerBackend.PhysicalDpiScope.Enter();
@@ -55,13 +57,19 @@ internal readonly record struct DesktopPointerTarget(Point Point, int ProcessId,
         // Every late UIA hit test gets a local COM lifetime on the thread that performs it.
         using var automation = new UIA3Automation();
         var runtimeId = RuntimeId;
-        var hit = DesktopPointerTargetResolver.FindHitTarget(automation.FromPoint(Point), candidate =>
+        var actualHit = automation.FromPoint(Point);
+        bool Matches(AutomationElement candidate)
         {
             var candidateId = candidate.FrameworkAutomationElement.RuntimeId.ValueOrDefault;
             return candidateId != null && runtimeId.AsSpan().SequenceEqual(candidateId);
-        }, RejectInteractiveDescendantHit);
+        }
+        var hit = DesktopPointerTargetResolver.FindHitTarget(actualHit, Matches, false);
+        if (hit is not null && preparation?.IsRegisteredBlocker(hit, Point) == true)
+            throw new PointerOcclusionException(Point, RuntimeId, late: true);
+        if (RejectInteractiveDescendantHit)
+            hit = DesktopPointerTargetResolver.FindHitTarget(actualHit, Matches, true);
         if (hit is null)
-            throw new PointerInterferenceException("The exact pointer target was replaced or covered before input was sent.");
+            throw new PointerOcclusionException(Point, RuntimeId, late: true);
         if (hit.IsOffscreen || !hit.BoundingRectangle.Contains(Point) || RequireEnabled && !hit.IsEnabled)
             throw new PointerInterferenceException("The target moved or became hidden before input was sent.");
     }
@@ -72,8 +80,10 @@ internal static class DesktopPointerTargetResolver
     internal static DesktopPointerTarget Resolve(Func<AutomationElement> resolve, bool requireEnabled,
         Action<AutomationElement>? prepare = null, Func<AutomationElement, Point>? pointFactory = null,
         int? expectedProcessId = null, bool allowPreparation = true, bool activateWindow = true,
-        PointerPhaseTrace? profile = null, bool rejectInteractiveDescendantHit = false)
+        PointerPhaseTrace? profile = null, bool rejectInteractiveDescendantHit = false, Action? check = null,
+        bool checkBeforePreparation = false, FlaUiPointerPreparation? preparation = null)
     {
+        check?.Invoke();
         profile?.Mark("resolve-first");
         var element = resolve() ?? throw new InvalidOperationException("The pointer target resolver returned null.");
         profile?.Mark("check-process-first");
@@ -92,16 +102,51 @@ internal static class DesktopPointerTargetResolver
                 if (!activateWindow)
                     throw new PointerInterferenceException("The popup owner lost the foreground before the click.");
                 profile?.Mark("foreground-activate");
+                check?.Invoke();
                 WindowsPointerBackend.Activate(window);
             }
+            // Activation can still be pending. Do not let an optional early hit probe bypass
+            // the existing focus/reveal preparation that establishes foreground ownership.
+            var foregroundReadyForProbe = !activationRequested
+                || WindowsPointerBackend.ForegroundBelongsTo(element.Properties.ProcessId.Value);
             profile?.Mark("scroll-check");
             var scrollIntoViewRequested = element.IsOffscreen && element.Patterns.ScrollItem.IsSupported;
             if (scrollIntoViewRequested)
             {
                 profile?.Mark("scroll-into-view");
+                check?.Invoke();
                 element.Patterns.ScrollItem.Pattern.ScrollIntoView();
             }
+            if (checkBeforePreparation && foregroundReadyForProbe && !element.IsOffscreen)
+            {
+                using var preparationDpi = WindowsPointerBackend.PhysicalDpiScope.Enter();
+                // A ready geometry hit can reject an overlay before one-time selection/focus
+                // preparation. Geometry that still requires reveal retains the normal path.
+                Point? beforePreparation = null;
+                try
+                {
+                    beforePreparation = ChoosePoint(element.BoundingRectangle, element.IsOffscreen,
+                        element.IsEnabled, requireEnabled,
+                        element.TryGetClickablePoint(out var firstClickable) ? firstClickable : null,
+                        pointFactory?.Invoke(element));
+                }
+                catch (InvalidOperationException error) when (error is not PointerInterferenceException
+                    and not PointerOcclusionException) { }
+                if (beforePreparation is { } initialPoint)
+                {
+                    check?.Invoke();
+                    var id = element.FrameworkAutomationElement.RuntimeId.ValueOrDefault;
+                    if (id is not { Length: > 0 }) throw new InvalidOperationException("The pointer target has no stable native runtime ID.");
+                    new DesktopPointerTarget(initialPoint, element.Properties.ProcessId.Value, window, "", id,
+                        requireEnabled, rejectInteractiveDescendantHit).ValidateOwner();
+                    if (preparation?.IsRegisteredBlocker(element, initialPoint) == true
+                        || FindHitTarget(element.Automation.FromPoint(initialPoint), element.Equals,
+                            rejectInteractiveDescendantHit) is null)
+                        throw new PointerOcclusionException(initialPoint, id.ToArray());
+                }
+            }
             profile?.Mark("prepare");
+            check?.Invoke();
             prepare?.Invoke(element);
             profile?.Mark("resolve-second", $"activated={activationRequested}, scrolled={scrollIntoViewRequested}");
             try
@@ -132,10 +177,13 @@ internal static class DesktopPointerTargetResolver
         var target = new DesktopPointerTarget(point, process, finalWindow, element.Properties.AutomationId.ValueOrDefault ?? "",
             runtimeId.ToArray(), requireEnabled, rejectInteractiveDescendantHit);
         profile?.Mark("hit-test");
+        check?.Invoke();
         target.ValidateOwner();
+        if (preparation?.IsRegisteredBlocker(element, point) == true)
+            throw new PointerOcclusionException(point, runtimeId.ToArray());
         if (FindHitTarget(element.Automation.FromPoint(point), element.Equals, rejectInteractiveDescendantHit) is not null)
             return target;
-        throw new InvalidOperationException("The physical hit test did not reach the target or one of its descendants.");
+        throw new PointerOcclusionException(point, runtimeId.ToArray());
     }
 
     internal static AutomationElement? FindHitTarget(AutomationElement? hit, Predicate<AutomationElement> matches,
@@ -185,16 +233,18 @@ internal static class DesktopPointerTargetResolver
         return WindowsPointerBackend.DescribeForeground(targetWindow, expectedProcessId);
     }
 
-    internal static void EnsureForeground(AutomationElement owner, int processId)
+    internal static void EnsureForeground(AutomationElement owner, int processId, Action? check = null)
     {
         if (WindowsPointerBackend.ForegroundBelongsTo(processId)) return;
         CheckProcess(owner, processId);
-        WindowsPointerBackend.Activate(FindWindow(owner));
+        var window = FindWindow(owner);
+        check?.Invoke();
+        WindowsPointerBackend.Activate(window);
         if (!WindowsPointerBackend.ForegroundBelongsTo(processId))
             throw new PointerInterferenceException("The selection owner could not acquire the foreground.");
     }
 
-    private static IntPtr FindWindow(AutomationElement element)
+    internal static IntPtr FindWindow(AutomationElement element)
     {
         for (var current = element; current != null; current = current.Parent)
         {

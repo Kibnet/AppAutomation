@@ -576,6 +576,10 @@ public sealed partial class HeadlessControlResolver
         {
             ArgumentNullException.ThrowIfNull(row);
             var operation = System.Diagnostics.Stopwatch.StartNew();
+            var active = this;
+            var intent = Inner.PointerIntent;
+            var preparation = new HeadlessPointerPreparation(intent, () => TimeSpan.FromMilliseconds(Remaining()));
+            var originalDownAttempted = false;
             var rowPaths = row.Conditions
                 .Select(static condition => condition.Column.CellContext.RowPath)
                 .Distinct(StringComparer.Ordinal)
@@ -589,68 +593,94 @@ public sealed partial class HeadlessControlResolver
             while (true)
             {
                 // Resolve the key again after navigation or layout, which can replace row containers and items.
-                var match = ResolveUniqueRow(row, Remaining());
+                var match = active.ResolveUniqueRow(row, Remaining());
                 var objectIdentity = UsesObjectIdentity(row);
-                var result = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                OpenRowAttempt result;
+                try
                 {
-                    _ = Remaining();
-                    if (!focusPrepared)
+                    result = AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
                     {
-                        focusPrepared = true;
-                        if (!Inner.Control.IsKeyboardFocusWithin)
-                        {
-                            Inner.Control.Focus();
-                            RefreshLayout();
-                            return OpenRowAttempt.ResolveAgain;
-                        }
-                    }
-
-                    var target = FindOpenRowTarget(match, rowPaths, objectIdentity);
-                    if (target is not null && !ReferenceEquals(broughtTarget, target) && BringIntoOuterViewport(target))
-                    {
-                        broughtTarget = target;
-                        return OpenRowAttempt.ResolveAgain;
-                    }
-
-                    var topLevel = target is not null ? TopLevel.GetTopLevel(target) : null;
-                    var visible = target is not null && topLevel is not null
-                        ? GetVisibleRowBounds(target, topLevel) : default;
-                    if ((visible.Width <= 0 || visible.Height <= 0) && match.Item is { } item)
-                    {
-                        if (ReferenceEquals(revealedItem, item))
-                            return OpenRowAttempt.AwaitContainer;
-
                         _ = Remaining();
-                        if (HeadlessGridRuntimeAccess.RevealRow(Inner.Control, item, objectIdentity))
+                        if (!focusPrepared)
                         {
-                            revealedItem = item;
-                            RefreshLayout();
+                            focusPrepared = true;
+                            if (!active.Inner.Control.IsKeyboardFocusWithin)
+                            {
+                                active.Inner.Control.Focus();
+                                RefreshLayout();
+                                return OpenRowAttempt.ResolveAgain;
+                            }
+                        }
+
+                        var target = active.FindOpenRowTarget(match, rowPaths, objectIdentity);
+                        if (target is not null && !ReferenceEquals(broughtTarget, target) && BringIntoOuterViewport(target))
+                        {
+                            broughtTarget = target;
                             return OpenRowAttempt.ResolveAgain;
                         }
-                    }
 
-                    if (target is null)
-                        throw new NotSupportedException(
-                            $"Visual grid '{_gridDescription}' does not expose a visible row target for opening the stable row.");
-                    if (topLevel is null)
-                        throw new InvalidOperationException(
-                            $"Visual grid '{_gridDescription}' row target has no owning top-level window.");
+                        var topLevel = target is not null ? TopLevel.GetTopLevel(target) : null;
+                        var visible = target is not null && topLevel is not null
+                            ? GetVisibleRowBounds(target, topLevel) : default;
+                        if ((visible.Width <= 0 || visible.Height <= 0) && match.Item is { } item)
+                        {
+                            if (ReferenceEquals(revealedItem, item))
+                                return OpenRowAttempt.AwaitContainer;
 
-                    var point = GetVisibleRowPoint(target, topLevel, visible);
-                    RequireCurrentObjectRow(match, objectIdentity);
-                    if (objectIdentity && !ReferenceEquals(target.DataContext, match.Item)
-                        && !(target.DataContext is { } context && rowPaths.Any(path =>
-                            GridPropertyValueReader.TryReadPath(context, path, out var current)
-                            && ReferenceEquals(current, match.Item))))
-                        throw new InvalidOperationException($"Grid '{_gridDescription}' row target was recycled before the double click.");
-                    _ = Remaining();
-                    topLevel.MouseDown(point, MouseButton.Left);
-                    topLevel.MouseUp(point, MouseButton.Left);
-                    topLevel.MouseDown(point, MouseButton.Left);
-                    topLevel.MouseUp(point, MouseButton.Left);
-                    Inner.Control.Dispatcher.RunJobs();
-                    return OpenRowAttempt.Opened;
-                });
+                            _ = Remaining();
+                            if (HeadlessGridRuntimeAccess.RevealRow(active.Inner.Control, item, objectIdentity))
+                            {
+                                revealedItem = item;
+                                RefreshLayout();
+                                return OpenRowAttempt.ResolveAgain;
+                            }
+                        }
+
+                        if (target is null)
+                            throw new NotSupportedException(
+                                $"Visual grid '{_gridDescription}' does not expose a visible row target for opening the stable row.");
+                        if (topLevel is null)
+                            throw new InvalidOperationException(
+                                $"Visual grid '{_gridDescription}' row target has no owning top-level window.");
+
+                        var point = GetVisibleRowPoint(target, topLevel, visible, preparation);
+                        active.RequireCurrentObjectRow(match, objectIdentity);
+                        if (objectIdentity && !ReferenceEquals(target.DataContext, match.Item)
+                            && !(target.DataContext is { } context && rowPaths.Any(path =>
+                                GridPropertyValueReader.TryReadPath(context, path, out var current)
+                                && ReferenceEquals(current, match.Item))))
+                            throw new InvalidOperationException($"Grid '{_gridDescription}' row target was recycled before the double click.");
+                        _ = Remaining();
+                        // A handler may perform its action and then throw. Never recover/replay after this boundary.
+                        originalDownAttempted = true;
+                        try { topLevel.MouseDown(point, MouseButton.Left); }
+                        finally { topLevel.MouseUp(point, MouseButton.Left); }
+                        preparation.RequireOriginalHit(target, topLevel, point);
+                        _ = Remaining();
+                        try { topLevel.MouseDown(point, MouseButton.Left); }
+                        finally { topLevel.MouseUp(point, MouseButton.Left); }
+                        active.Inner.Control.Dispatcher.RunJobs();
+                        return OpenRowAttempt.Opened;
+                    });
+                }
+                catch (HeadlessPointerOcclusion occlusion) when (!originalDownAttempted)
+                {
+                    preparation.Recover(occlusion, () =>
+                    {
+                        var probe = new HeadlessVisualGridControl(_searchRoot, intent!.Resolve());
+                        var current = probe.ResolveUniqueRow(row, Remaining());
+                        return Session.HeadlessRuntime.Dispatch(() => probe.FindOpenRowTarget(current, rowPaths, objectIdentity)
+                            ?? throw new InvalidOperationException("The original stable row no longer has a pointer target."));
+                    }, static (target, owner) => HeadlessPointerPreparation.VisibleBounds(target, owner).Center);
+                    // Dismiss handlers may replace the entire grid, not just a row container.
+                    var refreshed = intent!.Resolve();
+                    refreshed.PointerIntent = intent;
+                    active = new HeadlessVisualGridControl(_searchRoot, refreshed);
+                    revealedItem = null;
+                    broughtTarget = null;
+                    focusPrepared = false;
+                    continue;
+                }
 
                 if (result == OpenRowAttempt.Opened) return;
                 if (result == OpenRowAttempt.AwaitContainer) Thread.Sleep(Math.Min(20, Remaining()));
@@ -658,8 +688,8 @@ public sealed partial class HeadlessControlResolver
 
             void RefreshLayout()
             {
-                Inner.Control.Dispatcher.RunJobs();
-                TopLevel.GetTopLevel(Inner.Control)?.UpdateLayout();
+                active.Inner.Control.Dispatcher.RunJobs();
+                TopLevel.GetTopLevel(active.Inner.Control)?.UpdateLayout();
             }
 
             int Remaining()
@@ -673,39 +703,22 @@ public sealed partial class HeadlessControlResolver
 
         private enum OpenRowAttempt { ResolveAgain, AwaitContainer, Opened }
 
-        private Point GetVisibleRowPoint(Control target, TopLevel topLevel, Rect visible)
+        private Point GetVisibleRowPoint(Control target, TopLevel topLevel, Rect visible, HeadlessPointerPreparation preparation)
         {
             if (target.IsEffectivelyVisible && visible.Width > 0 && visible.Height > 0)
             {
                 var point = visible.Center;
                 topLevel.MouseMove(point);
-                var inputHit = topLevel.InputHitTest(point);
-                if (inputHit is Visual hit
-                    && (ReferenceEquals(hit, target) || hit.GetVisualAncestors().Contains(target)))
-                    return point;
-                throw new InvalidOperationException($"Visual grid '{_gridDescription}' stable row is occluded at {point}: "
-                    + $"hit={inputHit?.GetType().Name ?? "<none>"}, target={target.GetType().Name}, bounds={target.Bounds}.");
+                preparation.RequireOriginalHit(target, topLevel, point);
+                return point;
             }
 
             throw new InvalidOperationException(
                 $"Visual grid '{_gridDescription}' stable row is occluded or outside its clipped viewport ({visible}).");
         }
 
-        private Rect GetVisibleRowBounds(Control target, TopLevel topLevel)
-        {
-            var visible = new Rect(topLevel.ClientSize);
-            foreach (var visual in target.GetVisualAncestors().Prepend(target))
-            {
-                if (visual.TransformToVisual(topLevel) is not { } transform)
-                    throw new InvalidOperationException($"Grid '{_gridDescription}' row is detached from its top-level window.");
-                if (ReferenceEquals(visual, target) || visual.ClipToBounds)
-                    visible = visible.Intersect(new Rect(visual.Bounds.Size).TransformToAABB(transform));
-                if (visual.Clip is { } clip)
-                    visible = visible.Intersect(clip.Bounds.TransformToAABB(transform));
-                if (ReferenceEquals(visual, topLevel)) break;
-            }
-            return visible;
-        }
+        private static Rect GetVisibleRowBounds(Control target, TopLevel topLevel) =>
+            HeadlessPointerPreparation.VisibleBounds(target, topLevel);
 
         private static bool BringIntoOuterViewport(Control target)
         {
@@ -976,7 +989,7 @@ public sealed partial class HeadlessControlResolver
                         throw new InvalidOperationException(
                             $"Grid '{AutomationId}' ComboBox open button was not found in the active cell.");
                     }
-                });
+                }, ownerIntent: Inner.PointerIntent);
             return true;
         }
 

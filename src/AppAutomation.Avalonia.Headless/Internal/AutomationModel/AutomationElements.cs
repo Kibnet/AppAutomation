@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using AppAutomation.Abstractions;
+using AppAutomation.Avalonia.Headless.Automation;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Conditions;
 using AppAutomation.Avalonia.Headless.Internal.AutomationModel.Definitions;
 using Avalonia;
@@ -23,6 +24,8 @@ internal class AutomationElement
     }
 
     internal Control Control { get; }
+
+    internal HeadlessPointerIntent? PointerIntent { get; set; }
 
     public string AutomationId => Ui(() => AutomationProperties.GetAutomationId(Control) ?? string.Empty);
 
@@ -48,29 +51,33 @@ internal class AutomationElement
 
         Ui(() =>
         {
-            switch (Control)
-            {
-                case global::Avalonia.Controls.Primitives.ToggleButton toggleButton:
-                    InvokeButton(toggleButton);
-                    break;
-                case global::Avalonia.Controls.Button button:
-                    InvokeButton(button);
-                    break;
-                default:
-                    var peer = global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(Control);
-                    if (peer is not global::Avalonia.Automation.Provider.IInvokeProvider invokeProvider)
-                    {
-                        throw new InvalidOperationException(
-                            $"Control '{Control.GetType().Name}' does not expose semantic invoke interaction.");
-                    }
-
-                    invokeProvider.Invoke();
-                    Control.Dispatcher.RunJobs();
-                    break;
-            }
-
+            InvokeOnUi(Control);
             return true;
         });
+    }
+
+    internal static void InvokeOnUi(Control control)
+    {
+        switch (control)
+        {
+            case global::Avalonia.Controls.Primitives.ToggleButton toggleButton:
+                InvokeButton(toggleButton);
+                break;
+            case global::Avalonia.Controls.Button button:
+                InvokeButton(button);
+                break;
+            default:
+                var peer = global::Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement(control);
+                if (peer is not global::Avalonia.Automation.Provider.IInvokeProvider invokeProvider)
+                {
+                    throw new InvalidOperationException(
+                        $"Control '{control.GetType().Name}' does not expose semantic invoke interaction.");
+                }
+
+                invokeProvider.Invoke();
+                control.Dispatcher.RunJobs();
+                break;
+        }
     }
 
     public AutomationElement[] FindAllDescendants()
@@ -100,13 +107,15 @@ internal class AutomationElement
         });
     }
 
-    public TextBox AsTextBox() => this as TextBox ?? new TextBox(RequireControlOrDescendant<global::Avalonia.Controls.TextBox>());
+    public TextBox AsTextBox() => this as TextBox ?? new TextBox(RequireControlOrDescendant<global::Avalonia.Controls.TextBox>())
+    { PointerIntent = PointerIntent?.Select(static element => element.AsTextBox()) };
 
     public Button AsButton() => this as Button ?? new Button(RequireControl<global::Avalonia.Controls.Button>());
 
     public Label AsLabel() => this as Label ?? new Label(RequireControl<Control>());
 
-    public ListBox AsListBox() => this as ListBox ?? new ListBox(RequireControl<global::Avalonia.Controls.ListBox>());
+    public ListBox AsListBox() => this as ListBox ?? new ListBox(RequireControl<global::Avalonia.Controls.ListBox>())
+    { PointerIntent = PointerIntent?.Select(static element => element.AsListBox()) };
 
     public CheckBox AsCheckBox() => this as CheckBox ?? new CheckBox(RequireControl<global::Avalonia.Controls.CheckBox>());
 
@@ -354,11 +363,7 @@ internal class TextBox : AutomationElement
 
     private global::Avalonia.Controls.TextBox Native => (global::Avalonia.Controls.TextBox)Control;
 
-    public override void Click() => Ui(() =>
-    {
-        HeadlessPointerInput.ClickControl(Native);
-        return true;
-    });
+    public override void Click() => HeadlessPointerInput.ClickControl(Native, PointerIntent);
 
     public string Text
     {
@@ -525,17 +530,52 @@ internal static class HeadlessPointerInput
 {
     public static void ClickItem(global::Avalonia.Controls.ListBox listBox, int index, Action? validateTarget = null)
     {
+        var container = ResolveItemTarget(listBox, index);
+        validateTarget?.Invoke();
+        ClickControl(container);
+    }
+
+    internal static Control ResolveItemTarget(global::Avalonia.Controls.ListBox listBox, int index)
+    {
         listBox.ScrollIntoView(index);
         listBox.UpdateLayout();
         listBox.Dispatcher.RunJobs();
         var container = listBox.ContainerFromIndex(index)
             ?? throw new InvalidOperationException(
                 $"ListBox item at index {index} did not materialize a clickable container.");
-        validateTarget?.Invoke();
-        ClickControl(container);
+        return container;
     }
 
-    public static void ClickControl(Control control)
+    public static void ClickControl(Control control, HeadlessPointerIntent? intent = null,
+        UiOperationTimeoutBudget? budget = null)
+    {
+        budget ??= UiOperationTimeoutBudget.Start(5000, "pointer click");
+        if (control.Dispatcher.CheckAccess())
+        {
+            // Raw callers already executing on the UI thread have no outer recovery boundary.
+            // Preserve their strict single gesture without nesting the serialized session queue.
+            ClickCore(control, () => { _ = budget.Remaining; }, HeadlessPointerPreparation.RequireHit);
+            return;
+        }
+        var preparation = new HeadlessPointerPreparation(intent, () => budget.Remaining);
+        var originalDownAttempted = false;
+        while (true)
+        {
+            try
+            {
+                AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
+                    ClickCore(control, () => { _ = budget.Remaining; originalDownAttempted = true; }, preparation.RequireOriginalHit));
+                return;
+            }
+            catch (HeadlessPointerOcclusion occlusion) when (!originalDownAttempted)
+            {
+                preparation.Recover(occlusion);
+                control = intent!.Resolve().Control;
+            }
+        }
+    }
+
+    private static void ClickCore(Control control, Action beforeDown, Action<Control, global::Avalonia.Controls.TopLevel, global::Avalonia.Point> validate)
     {
         control.BringIntoView();
         control.UpdateLayout();
@@ -547,8 +587,10 @@ internal static class HeadlessPointerInput
             ?? throw new InvalidOperationException(
                 "The pointer target has no position in its top-level window.");
         topLevel.MouseMove(point);
-        topLevel.MouseDown(point, global::Avalonia.Input.MouseButton.Left);
-        topLevel.MouseUp(point, global::Avalonia.Input.MouseButton.Left);
+        validate(control, topLevel, point);
+        beforeDown();
+        try { topLevel.MouseDown(point, global::Avalonia.Input.MouseButton.Left); }
+        finally { topLevel.MouseUp(point, global::Avalonia.Input.MouseButton.Left); }
         control.Dispatcher.RunJobs();
     }
 }

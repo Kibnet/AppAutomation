@@ -41,7 +41,8 @@ public abstract class UiPage
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="resolver"/> is <see langword="null"/>.</exception>
     protected UiPage(IUiControlResolver resolver, ILogger? logger = null)
     {
-        Resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
+        ArgumentNullException.ThrowIfNull(resolver);
+        Resolver = UiControlResolverExtensions.WithPageInputPreparation(resolver, GetType());
         Logger = logger ?? NullLogger.Instance;
     }
 

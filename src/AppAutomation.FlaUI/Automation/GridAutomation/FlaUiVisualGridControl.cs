@@ -74,6 +74,7 @@ public sealed partial class FlaUiControlResolver
     {
         private readonly Window _searchRoot;
         private readonly IGridControl? _fallback;
+        private readonly FlaUiPointerPreparation? _pointerPreparation = FlaUiPointerPreparation.Capture();
         private AutomationElement? _gridRoot;
         private NativeFlaUiRow[]? _prefetchedNativeRows;
         private int[] _nativeSignatureColumnIndexes = [];
@@ -94,6 +95,8 @@ public sealed partial class FlaUiControlResolver
         }
 
         public string AutomationId { get; }
+
+        private IDisposable EnterPointerPreparation() => FlaUiPointerPreparation.EnterCaptured(_pointerPreparation);
 
         public string Name => AutomationId;
 
@@ -728,6 +731,7 @@ public sealed partial class FlaUiControlResolver
             GridCellValueEditRequest request,
             int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(request);
             ArgumentNullException.ThrowIfNull(address);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
@@ -752,7 +756,7 @@ public sealed partial class FlaUiControlResolver
                         request,
                         RemainingGridMilliseconds(stopwatch, timeoutMs)),
                     remaining => ResolveNativeAddressRow(address.Row, ReadNativeColumnHeaders(), stopwatch, timeoutMs, out _).Element,
-                    profile: trace?.Profile);
+                    profile: trace?.Profile, hasFreshIntent: true);
                 return;
 
                 AutomationElement RefreshTarget()
@@ -791,6 +795,7 @@ public sealed partial class FlaUiControlResolver
 
         public void OpenRow(GridRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var stopwatch = Stopwatch.StartNew();
@@ -814,6 +819,7 @@ public sealed partial class FlaUiControlResolver
 
         public void SelectRow(GridRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var stopwatch = Stopwatch.StartNew();
@@ -1982,6 +1988,7 @@ public sealed partial class FlaUiControlResolver
             GridCellValueEditRequest request,
             int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(column);
             ArgumentNullException.ThrowIfNull(request);
             var stopwatch = Stopwatch.StartNew();
@@ -1991,9 +1998,6 @@ public sealed partial class FlaUiControlResolver
                 var nativeRow = ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs);
                 var nativeRuntimeColumnIndex = ResolveRuntimeColumnIndex(column);
                 var metadataIdentity = row.Conditions.All(static condition => condition.Column.RowIdentityAutomationProperty is not null);
-                var editScroll = metadataIdentity ? new GridScrollPosition(null, null)
-                    : ReadGridScrollPosition(FindGridScrollState(includeNavigationControls: false));
-                var editAnchor = CaptureNativeRowAnchor(nativeRow);
                 var runtimeColumnName = column.RuntimeColumnName
                     ?? ReadNativeColumnHeaders()[nativeRuntimeColumnIndex].Name
                     ?? throw new InvalidOperationException(
@@ -2006,8 +2010,7 @@ public sealed partial class FlaUiControlResolver
                         : metadataIdentity
                         ? TryResolveVisibleNativeRow(row, forSelection: true)
                             ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)
-                        : RebindNativeRowAfterHorizontalScroll(
-                            editAnchor, editScroll, observedRows: ReadNativeDataRows(includeCells: false))),
+                        : ResolveIndexedNativeRowForColumn(row, column, stopwatch, timeoutMs)),
                     GridCellEditRequestValidation.CreateIndexedRequest(
                         0,
                         nativeRuntimeColumnIndex,
@@ -2017,7 +2020,8 @@ public sealed partial class FlaUiControlResolver
                     timeout => (UsesObjectRowIdentity(row)
                         ? ResolveCurrentObjectRow(row, stopwatch, timeoutMs)
                         : TryResolveVisibleNativeRow(row, forSelection: true)
-                            ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)).Element);
+                            ?? ResolveUniqueNativeRow(row, Stopwatch.StartNew(), timeout)).Element,
+                    hasFreshIntent: true);
                 return;
 
                 AutomationElement ResolveEditCell(NativeFlaUiRow currentRow)
@@ -2042,17 +2046,19 @@ public sealed partial class FlaUiControlResolver
             var remaining = RemainingGridMilliseconds(stopwatch, timeoutMs);
             EditResolvedCell(
                 cell,
-                timeout => FindVisualCellWithTraversal(rowIndex, runtimeColumnIndex, timeout),
+                timeout => FindVisualCellWithTraversal(ResolveUniqueRowIndex(row, timeout),
+                    ResolveRuntimeColumnIndex(column), RemainingGridMilliseconds(stopwatch, timeoutMs)),
                 GridCellEditRequestValidation.CreateIndexedRequest(
                     rowIndex,
                     runtimeColumnIndex,
                     request,
                     remaining,
-                    request.EditorParts ?? column.EditorParts));
+                    request.EditorParts ?? column.EditorParts), hasFreshIntent: true);
         }
 
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             var stopwatch = Stopwatch.StartNew();
             RequireObjectRowInCurrentView(row, stopwatch, timeoutMs);
             if (FindGridRoot() is { } gridRoot)
@@ -2184,7 +2190,7 @@ public sealed partial class FlaUiControlResolver
             {
                 ClickCount = 2,
                 Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs))
-            }, reason: "open stable grid row through a non-interactive cell");
+            }, reason: "open stable grid row through a non-interactive cell", hasFreshIntent: true);
         }
 
         private static bool HasInteractiveRowOpenContent(AutomationElement cell) =>
@@ -2201,6 +2207,7 @@ public sealed partial class FlaUiControlResolver
 
         public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var stopwatch = Stopwatch.StartNew();
@@ -2258,8 +2265,13 @@ public sealed partial class FlaUiControlResolver
                         ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == rowIndex)
                     ?? throw new InvalidOperationException(
                         $"Grid '{AutomationId}' stable row was resolved but is not visible after bounded traversal.");
-                refreshTarget = () => ReadRows().FirstOrDefault(candidate =>
-                    ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == rowIndex);
+                refreshTarget = () =>
+                {
+                    var currentIndex = ResolveUniqueRowIndex(row, RemainingGridMilliseconds(stopwatch, timeoutMs));
+                    return ReadRows().FirstOrDefault(candidate =>
+                        ParseVisualGridIndex(TryRead(() => candidate.AutomationId), "_Row") == currentIndex)
+                        ?? FindVisualCellWithTraversal(currentIndex, 0, RemainingGridMilliseconds(stopwatch, timeoutMs));
+                };
             }
 
             SelectAndConfirmGridRow(
@@ -2274,6 +2286,7 @@ public sealed partial class FlaUiControlResolver
 
         public void EditCell(GridCellEditRequest request)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(request);
             if (request.TimeoutMs <= 0)
             {
@@ -2295,7 +2308,8 @@ public sealed partial class FlaUiControlResolver
             Func<int, AutomationElement?> resolveCurrentCell,
             GridCellEditRequest request,
             Func<int, AutomationElement>? resolveCurrentRow = null,
-            PointerPhaseTrace? profile = null)
+            PointerPhaseTrace? profile = null,
+            bool hasFreshIntent = false)
         {
             var stopwatch = Stopwatch.StartNew();
             var activeCell = cell;
@@ -2313,7 +2327,7 @@ public sealed partial class FlaUiControlResolver
                         out var activationException,
                         RefreshCellForActivation,
                         RemainingGridMilliseconds(stopwatch, request.TimeoutMs),
-                        profile))
+                        profile, hasFreshIntent))
                 {
                     throw new InvalidOperationException(
                         $"Visual grid cell [{request.RowIndex},{request.ColumnIndex}] in grid '{AutomationId}' "
@@ -2580,7 +2594,8 @@ public sealed partial class FlaUiControlResolver
             out Exception? exception,
             Func<AutomationElement?>? refreshCell = null,
             int timeoutMs = 5000,
-            PointerPhaseTrace? profile = null)
+            PointerPhaseTrace? profile = null,
+            bool hasFreshIntent = false)
         {
             var stopwatch = Stopwatch.StartNew();
             try
@@ -2590,31 +2605,31 @@ public sealed partial class FlaUiControlResolver
                     .FirstOrDefault(candidate =>
                         TryRead(() => candidate.ControlType) == ControlType.DataItem
                         && TryRead(() => candidate.Patterns.SelectionItem.IsSupported));
-                profile?.Mark("activation-select-row");
-                if (row is not null
-                    && !TryRead(() => row.Patterns.SelectionItem.Pattern.IsSelected.Value))
-                {
-                    TryRead(() =>
-                    {
-                        row.Patterns.SelectionItem.Pattern.Select();
-                        return true;
-                    });
-                }
-
                 AutomationElement ResolveCurrentCell() => refreshCell?.Invoke()
                     ?? throw new InvalidOperationException(
                         $"Grid '{AutomationId}' cell disappeared before pointer activation.");
 
-                Action<AutomationElement> prepare = profile is null
-                    ? PrepareForPhysicalGridInput
-                    : target => PrepareForPhysicalInput(target, _searchRoot, profile);
+                Action<AutomationElement> prepare = target =>
+                {
+                    row = EnumerateSelfAndParents(target).FirstOrDefault(candidate =>
+                        TryRead(() => candidate.ControlType) == ControlType.DataItem
+                        && TryRead(() => candidate.Patterns.SelectionItem.IsSupported));
+                    profile?.Mark("activation-select-row");
+                    if (row is not null && !TryRead(() => row.Patterns.SelectionItem.Pattern.IsSelected.Value))
+                    {
+                        _ = RemainingGridMilliseconds(stopwatch, timeoutMs);
+                        TryRead(() => { row.Patterns.SelectionItem.Pattern.Select(); return true; });
+                    }
+                    if (profile is null) PrepareForPhysicalGridInput(target);
+                    else PrepareForPhysicalInput(target, _searchRoot, profile);
+                };
                 DesktopPointer.ClickPrepared(
                     refreshCell is null ? () => cell : ResolveCurrentCell,
                     prepare,
                     GetVisibleGridCellCenter,
                     new PointerClickOptions { Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)) },
                     initialTarget: _searchRoot,
-                    profile: profile);
+                    profile: profile, hasFreshIntent: hasFreshIntent);
                 if (row is not null)
                 {
                     var selectionWait = Stopwatch.StartNew();
@@ -2640,7 +2655,7 @@ public sealed partial class FlaUiControlResolver
                     GetVisibleGridCellCenter,
                     new PointerClickOptions { Timeout = TimeSpan.FromMilliseconds(RemainingGridMilliseconds(stopwatch, timeoutMs)) },
                     initialTarget: _searchRoot,
-                    profile: profile);
+                    profile: profile, hasFreshIntent: false);
                 exception = null;
                 return true;
             }
@@ -2768,6 +2783,7 @@ public sealed partial class FlaUiControlResolver
 
         public void OpenRow(int rowIndex)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentOutOfRangeException.ThrowIfNegative(rowIndex);
 
             var candidates = FindOpenRowTargets(rowIndex);

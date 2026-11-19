@@ -42,7 +42,11 @@ public sealed partial class FlaUiControlResolver
         private FlaUiVisualGridControl CreateRowSetRuntime() => new(_searchRoot, _gridLocator, gridRoot: Inner);
 
         public void SetSelectedRows(GridRowSetIdentity identity, IReadOnlyDictionary<string, GridRowSelector> expected,
-            UiOperationTimeoutBudget budget) => CreateRowSetRuntime().SetSelectedRows(identity, expected, budget);
+            UiOperationTimeoutBudget budget)
+        {
+            using var preparation = EnterPointerPreparation();
+            CreateRowSetRuntime().SetSelectedRows(identity, expected, budget);
+        }
 
         public IReadOnlyList<GridRowSelector> ReadSelectedRows(GridRowSetIdentity identity, UiOperationTimeoutBudget budget) =>
             CreateRowSetRuntime().ReadSelectedRows(identity, budget);
@@ -120,6 +124,7 @@ public sealed partial class FlaUiControlResolver
 
         public void EditCell(GridCellAddress address, GridCellValueEditRequest request, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(address);
             ArgumentNullException.ThrowIfNull(request);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
@@ -270,6 +275,7 @@ public sealed partial class FlaUiControlResolver
             GridCellValueEditRequest request,
             int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(column);
             ArgumentNullException.ThrowIfNull(request);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
@@ -290,6 +296,7 @@ public sealed partial class FlaUiControlResolver
 
         public void OpenRow(GridIndexedRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             if (UsesObjectRowIdentity(row))
@@ -297,41 +304,32 @@ public sealed partial class FlaUiControlResolver
                 CreateRowSetRuntime().OpenRow(row, timeoutMs);
                 return;
             }
-            var resolved = ResolveUniqueRow(row, timeoutMs, out var scannedRows);
-            TryRead(() =>
-            {
-                resolved.ScrollIntoView();
-                return true;
-            });
-            if (!TryDoubleClick(resolved, out var exception))
-            {
-                throw new InvalidOperationException(
-                    $"Grid indexed row '{DescribeIndexedResolution(row, 1, scannedRows)}' could not be opened by double-click.",
-                    exception);
-            }
+            OpenStableNativeRow(remaining => ResolveUniqueRow(row, remaining, out _), timeoutMs);
         }
 
         public void OpenRow(GridRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
-            var columnNames = ColumnNames;
-            var resolved = ResolveUniqueRow(row, columnNames, timeoutMs);
-            TryRead(() =>
-            {
-                resolved.ScrollIntoView();
-                return true;
-            });
-            if (!TryDoubleClick(resolved, out var exception))
-            {
-                throw new InvalidOperationException(
-                    $"Grid row '{GridRuntimeResolver.DescribeRowSelector(row)}' could not be opened in grid '{AutomationId}'.",
-                    exception);
-            }
+            OpenStableNativeRow(remaining => ResolveUniqueRow(row, ColumnNames, remaining), timeoutMs);
+        }
+
+        private static void OpenStableNativeRow(Func<int, GridRow> resolve, int timeoutMs)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            DesktopPointer.ClickPrepared(() => resolve(RemainingMilliseconds(stopwatch, timeoutMs)),
+                target => { TryScrollIntoView(target); TryFocus(target); },
+                options: new PointerClickOptions
+                {
+                    ClickCount = 2,
+                    Timeout = TimeSpan.FromMilliseconds(RemainingMilliseconds(stopwatch, timeoutMs))
+                }, hasFreshIntent: true);
         }
 
         public void SelectRow(GridRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var stopwatch = Stopwatch.StartNew();
@@ -348,6 +346,7 @@ public sealed partial class FlaUiControlResolver
 
         public void SelectRow(GridIndexedRowSelector row, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(row);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             if (UsesObjectRowIdentity(row))

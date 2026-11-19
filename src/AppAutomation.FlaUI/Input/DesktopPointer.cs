@@ -41,7 +41,8 @@ public static class DesktopPointer
     public static void Click(AutomationElement target, PointerClickOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(target);
-        ClickAsync(() => target, options).GetAwaiter().GetResult();
+        ClickCore(() => target, options ?? new PointerClickOptions(), null, null, default,
+            hasFreshIntent: false).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -100,22 +101,24 @@ public static class DesktopPointer
     {
         ArgumentNullException.ThrowIfNull(target);
         ClickCore(() => target, new PointerClickOptions { Button = button, ClickCount = clickCount },
-            prepare == null ? null : _ => prepare(), _ => point, default, reason).GetAwaiter().GetResult();
+            prepare == null ? null : _ => prepare(), _ => point, default, reason, hasFreshIntent: false).GetAwaiter().GetResult();
     }
 
     internal static void ClickPrepared(Func<AutomationElement> target, Action<AutomationElement> prepare,
         Func<AutomationElement, Point>? pointFactory = null, PointerClickOptions? options = null,
-        string reason = "grid physical fallback", AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null)
+        string reason = "grid physical fallback", AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null,
+        bool hasFreshIntent = false)
     {
         ArgumentNullException.ThrowIfNull(prepare);
-        ClickCore(target, options ?? new PointerClickOptions(), prepare, pointFactory, default, reason, initialTarget, profile)
+        ClickCore(target, options ?? new PointerClickOptions(), prepare, pointFactory, default, reason, initialTarget, profile, hasFreshIntent)
             .GetAwaiter().GetResult();
     }
 
     internal static void ClickFallback(AutomationElement target, string reason, PointerClickOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(target);
-        ClickFallback(() => target, reason, options);
+        ClickCore(() => target, options ?? new PointerClickOptions(), null, null, default, reason,
+            hasFreshIntent: false).GetAwaiter().GetResult();
     }
 
     internal static void ClickFallback(Func<AutomationElement> target, string reason, PointerClickOptions? options = null,
@@ -131,28 +134,30 @@ public static class DesktopPointer
 
     internal static void WithSelectionClicks(AutomationElement owner, TimeSpan timeout, Action<SelectionClick> select)
     {
+        var preparation = FlaUiPointerPreparation.Capture();
         var (session, remaining, processId) = PrepareCall(() => owner, timeout, default, owner);
         Controller.RunAsync("grid-row-set", remaining, operation =>
         {
             select((target, point, modifier, verifyBeforeClick, validateOnly) =>
             {
-                operation.Check();
-                // Activate before resolving a row: activation can rebuild its UIA projection.
-                DesktopPointerTargetResolver.EnsureForeground(owner, processId);
-                operation.Check();
-                var resolved = DesktopPointerTargetResolver.Resolve(target, true,
-                    pointFactory: point, expectedProcessId: processId, allowPreparation: false,
-                    rejectInteractiveDescendantHit: true);
-                if (validateOnly)
+                operation.RunBeforeOriginalPress(() =>
                 {
                     operation.Check();
-                    return;
-                }
-                operation.ClickForSelection(resolved.Point, modifier, () =>
-                {
-                    verifyBeforeClick();
-                    resolved.ValidateExact();
-                });
+                    // Activate before resolving a row: activation can rebuild its UIA projection.
+                    DesktopPointerTargetResolver.EnsureForeground(owner, processId, operation.Check);
+                    operation.Check();
+                    DesktopPointerTarget ResolveCurrent() => DesktopPointerTargetResolver.Resolve(target, true,
+                        pointFactory: point, expectedProcessId: processId, allowPreparation: false,
+                        rejectInteractiveDescendantHit: true, check: operation.Check, preparation: preparation);
+                    var resolved = ResolveCurrent();
+                    if (operation.WaitForGestureSeparation(resolved.Point)) resolved = ResolveCurrent();
+                    if (validateOnly) { operation.Check(); return; }
+                    operation.ClickForSelection(resolved.Point, modifier, () =>
+                    {
+                        verifyBeforeClick();
+                        resolved.ValidateExact(preparation);
+                    });
+                }, obstruction => preparation?.Recover(target(), obstruction, operation) == true);
             });
             return Task.CompletedTask;
         }, session: session).GetAwaiter().GetResult();
@@ -161,6 +166,7 @@ public static class DesktopPointer
     internal static T WithForegroundClick<T>(AutomationElement owner, TimeSpan timeout, string reason,
         Action prepareForeground, Func<Action<Func<AutomationElement>>, T> execute)
     {
+        var preparation = FlaUiPointerPreparation.Capture();
         var (session, remaining, processId) = PrepareCall(() => owner, timeout, default);
         T result = default!;
         Controller.RunAsync("click", remaining, operation =>
@@ -184,7 +190,7 @@ public static class DesktopPointer
                     operation.Check();
                     RequireForeground("The popup owner lost the foreground before the click.");
                     ClickInOperation(operation, target, new PointerClickOptions(), null, null, processId, reason,
-                        activateWindow: false).GetAwaiter().GetResult();
+                        activateWindow: false, preparation: preparation).GetAwaiter().GetResult();
                 });
             }
             finally
@@ -244,28 +250,41 @@ public static class DesktopPointer
 
     private static Task ClickCore(Func<AutomationElement> target, PointerClickOptions options,
         Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory, CancellationToken token,
-        string? reason = null, AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null)
+        string? reason = null, AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null,
+        bool hasFreshIntent = true)
     {
+        var preparation = FlaUiPointerPreparation.Capture();
         profile?.Mark("pointer-register-session");
         var (session, remaining, processId) = PrepareCall(target, options.Timeout, token, initialTarget);
         return Controller.RunAsync(options.ClickCount == 2 ? "double-click" : "click", remaining,
-            operation => ClickInOperation(operation, target, options, prepare, pointFactory, processId, reason, profile: profile),
+            operation => ClickInOperation(operation, target, options, prepare, pointFactory, processId, reason,
+                profile: profile, preparation: preparation, hasFreshIntent: hasFreshIntent),
             token, session, profile);
     }
 
     private static Task ClickInOperation(DesktopPointerController.PointerOperation operation, Func<AutomationElement> target,
         PointerClickOptions options, Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory,
-        int processId, string? reason, bool activateWindow = true, PointerPhaseTrace? profile = null)
+        int processId, string? reason, bool activateWindow = true, PointerPhaseTrace? profile = null,
+        FlaUiPointerPreparation? preparation = null, bool hasFreshIntent = true)
     {
         if (reason != null) operation.Log("physical-fallback", detail: reason);
-        var resolved = DesktopPointerTargetResolver.Resolve(target, true, prepare, pointFactory, processId,
-            activateWindow: activateWindow, profile: profile,
-            rejectInteractiveDescendantHit: options.RejectInteractiveDescendantHit);
-        profile?.Mark("pointer-check-before-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
-        operation.Check();
-        operation.Log("target", resolved.Point, $"pid={resolved.ProcessId}; hwnd={resolved.Window}; locator={resolved.Locator}");
-        profile?.Mark("pointer-send-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
-        return operation.ClickAsync(resolved.Point, options, resolved.ValidateExact);
+        var preparationOnce = new PointerPreparationOnce();
+        operation.RunBeforeOriginalPress(() =>
+        {
+            DesktopPointerTarget ResolveCurrent() => DesktopPointerTargetResolver.Resolve(target, true, element =>
+                preparationOnce.Run(() => prepare?.Invoke(element)), pointFactory, processId,
+                activateWindow: activateWindow, profile: profile,
+                rejectInteractiveDescendantHit: options.RejectInteractiveDescendantHit, check: operation.Check,
+                checkBeforePreparation: hasFreshIntent, preparation: preparation);
+            var resolved = ResolveCurrent();
+            if (operation.WaitForGestureSeparation(resolved.Point)) resolved = ResolveCurrent();
+            profile?.Mark("pointer-check-before-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
+            operation.Check();
+            operation.Log("target", resolved.Point, $"pid={resolved.ProcessId}; hwnd={resolved.Window}; locator={resolved.Locator}");
+            profile?.Mark("pointer-send-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
+            operation.ClickAsync(resolved.Point, options, () => resolved.ValidateExact(preparation)).GetAwaiter().GetResult();
+        }, obstruction => hasFreshIntent && preparation?.Recover(target(), obstruction, operation) == true);
+        return Task.CompletedTask;
     }
 
     private static (PointerSession Session, TimeSpan Remaining, int ProcessId) PrepareCall(
