@@ -9,6 +9,20 @@ internal sealed class RecorderSelectorResolver
 {
     private readonly AppAutomationRecorderOptions _options;
     private readonly Func<Control?>? _validationRootProvider;
+    private readonly Dictionary<Guid, WeakReference<Control>> _presenterTimeSources = new();
+
+    internal void RememberPresenterTimeSource(RecordedStep step, Control? source)
+    {
+        if (source is not null && step.Control.ControlType == UiControlType.TimePicker
+            && RecorderTimePickerBinding.TryResolve(_options, _validationRootProvider?.Invoke(), source, out var binding, out _)
+            && binding.Hint.LocatorKind == step.Control.LocatorKind
+            && binding.Hint.LocatorValue.Trim() == step.Control.LocatorValue)
+            _presenterTimeSources[step.StepId] = new(binding.Root);
+    }
+
+    internal void ForgetPresenterTimeSource(Guid stepId) => _presenterTimeSources.Remove(stepId);
+
+    internal void ClearPresenterTimeSources() => _presenterTimeSources.Clear();
 
     public RecorderSelectorResolver(
         AppAutomationRecorderOptions options,
@@ -211,9 +225,27 @@ internal sealed class RecorderSelectorResolver
             validation.CanPersist);
     }
 
-    internal ExistingControlResolutionResult ResolveExisting(RecordedStep step)
+    internal ExistingControlResolutionResult ResolveExisting(RecordedStep step, Control? source = null)
     {
         ArgumentNullException.ThrowIfNull(step);
+
+        var presenterHints = _options.TimePickerHints.Where(RecorderTimePickerBinding.IsPresenterHint)
+            .Where(hint => step.Control.ControlType == UiControlType.TimePicker && hint.LocatorKind == step.Control.LocatorKind
+                && hint.LocatorValue.Trim() == step.Control.LocatorValue).ToArray();
+        if (presenterHints.Length > 0)
+        {
+            if (presenterHints.Length != 1) return InvalidExistingControl("The time value matches multiple presenter hints.");
+            var owner = source;
+            if (owner is null && _presenterTimeSources.TryGetValue(step.StepId, out var weak) && !weak.TryGetTarget(out owner))
+                return InvalidExistingControl("The recorded presenter time owner is no longer available.");
+            if (!RecorderTimePickerBinding.TryResolve(_options, _validationRootProvider?.Invoke(), owner,
+                    out var binding, out var error, presenterHints[0]))
+                return InvalidExistingControl(error);
+            var usesName = step.Control.LocatorKind == UiLocatorKind.Name;
+            return new ExistingControlResolutionResult(true, binding.Root,
+                usesName ? RecorderValidationStatus.Warning : RecorderValidationStatus.Valid,
+                usesName ? "Using Name locator; prefer AutomationId for long-term stability." : null, true);
+        }
 
         if (step.ActionKind is RecordedActionKind.WaitUntilNotificationContains or RecordedActionKind.WaitUntilExists
             && step.Control.ControlType == UiControlType.Notification)

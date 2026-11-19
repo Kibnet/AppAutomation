@@ -295,6 +295,18 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        if (definition.TimePickerIntent is not null)
+        {
+            if (definition.ControlType == UiControlType.TimePicker)
+                return ResolvePresenterTimeControl(definition) as TControl
+                    ?? throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                        $"Time-picker part '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
+            if (definition.ControlType == UiControlType.Button)
+                return new FlaUiTimePickerButtonControl(this, definition, RequireTimePickerBinding(definition)) as TControl
+                    ?? throw new UiControlResolutionException(UiControlResolutionFailure.TypeMismatch,
+                        $"Time-picker button '{definition.PropertyName}' cannot be cast to '{typeof(TControl).FullName}'.");
+        }
+
         if (typeof(TControl) == typeof(IMultiSelectItemsControl))
         {
             return (TControl)(object)new FlaUiMultiSelectItemsControl(FindElement(definition));
@@ -327,7 +339,8 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         object resolved = definition.ControlType switch
         {
-            UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox(), _window),
+            UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox(), _window,
+                () => FindElement(definition)),
             UiControlType.Button => new FlaUiButtonControl(FindElement(definition).AsButton(), () => FindElement(definition).AsButton()),
             UiControlType.Label => new FlaUiLabelControl(FindElement(definition).AsLabel()),
             UiControlType.ListBox => new FlaUiListBoxControl(FindElement(definition).AsListBox(), () => FindElement(definition)),
@@ -427,6 +440,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private AutomationElement FindElement(UiControlDefinition definition)
     {
+        if (definition.TimePickerIntent is not null)
+            return FindTimePickerPart(definition, RequireTimePickerBinding(definition));
+
         if (definition.RequireVisibleExactMatch)
         {
             return FindExactVisibleComboBoxResults(definition)
@@ -1113,13 +1129,25 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl, IBudgetedTextEntry
+    private sealed class FlaUiTextBoxControl : FlaUiControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl, IBudgetedTextEntry, IBudgetedControlClick
     {
         private readonly Window? _ownerWindow;
+        private readonly Func<AutomationElement>? _resolveCurrent;
 
-        public FlaUiTextBoxControl(TextBox inner, Window? ownerWindow = null) : base(inner)
+        public FlaUiTextBoxControl(TextBox inner, Window? ownerWindow = null, Func<AutomationElement>? resolveCurrent = null) : base(inner)
         {
             _ownerWindow = ownerWindow;
+            _resolveCurrent = resolveCurrent;
+        }
+
+        void IBudgetedControlClick.Click(UiOperationTimeoutBudget budget)
+        {
+            using var preparation = EnterPointerPreparation();
+            DesktopPointer.ClickFallback(() =>
+            {
+                _ = budget.Remaining;
+                return _resolveCurrent?.Invoke() ?? Inner;
+            }, "open time picker from its real input", new PointerClickOptions { Timeout = budget.Remaining });
         }
 
         public string Text

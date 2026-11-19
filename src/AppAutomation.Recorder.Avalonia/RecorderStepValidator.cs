@@ -50,6 +50,16 @@ internal sealed class RecorderStepValidator
                 BuildUnsupportedActionMessage(step.ActionKind, source));
     }
 
+    private bool SupportsPresenterTime(RecordedStep step, Control source)
+    {
+        var root = TopLevel.GetTopLevel(source) as Control
+            ?? RecorderControlTree.EnumerateRelatedControls(source, true).LastOrDefault();
+        return RecorderTimePickerBinding.TryResolve(_options, root, source, out var binding, out _)
+            && step.Control.ControlType == UiControlType.TimePicker
+            && step.Control.LocatorKind == binding.Hint.LocatorKind
+            && step.Control.LocatorValue == binding.Hint.LocatorValue.Trim();
+    }
+
     private bool SupportsAction(RecordedStep step, Control source)
     {
         return step.ActionKind switch
@@ -63,7 +73,7 @@ internal sealed class RecorderStepValidator
                     || SupportsConfiguredSearchAction(step, source),
             RecordedActionKind.SetSpinnerValue => source is TextBox or NumericUpDown,
             RecordedActionKind.SetMultiItemSpinnerValue => SupportsMultiItemSpinnerAction(step, source),
-            RecordedActionKind.SetTime => source is TimePicker,
+            RecordedActionKind.SetTime => source is TimePicker || SupportsPresenterTime(step, source),
             RecordedActionKind.SetExpanded => source is Expander,
             RecordedActionKind.SetColor => source is Control,
             RecordedActionKind.InvokeMenuItem => source is Menu or MenuItem,
@@ -81,7 +91,7 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.WaitUntilTextEquals or RecordedActionKind.WaitUntilTextContains =>
                 source is TextBox or TextBlock or Label or Button,
             RecordedActionKind.WaitUntilValueEquals => source is TextBox or NumericUpDown,
-            RecordedActionKind.WaitUntilTimeEquals => source is TimePicker or TextBox,
+            RecordedActionKind.WaitUntilTimeEquals => source is TimePicker or TextBox || SupportsPresenterTime(step, source),
             RecordedActionKind.WaitUntilIsExpanded => source is Expander,
             RecordedActionKind.WaitUntilColorEquals => source is Control,
             RecordedActionKind.WaitUntilIsChecked => source is CheckBox,

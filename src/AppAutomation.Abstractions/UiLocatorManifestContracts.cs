@@ -25,6 +25,9 @@ public sealed record UiControlDefinition(
 
     // Carries the read intent through scoped resolver wrappers without changing locator resolution.
     internal UiValueReadKind ValueReadKind { get; init; }
+
+    // An opt-in composite time editor keeps its owner while crossing ordinary scoped resolver wrappers.
+    internal TimePickerResolveDescriptor? TimePickerIntent { get; init; }
 }
 
 internal enum UiValueReadKind

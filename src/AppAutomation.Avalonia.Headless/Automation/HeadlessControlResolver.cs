@@ -209,6 +209,11 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
     {
         ArgumentNullException.ThrowIfNull(definition);
 
+        if (definition.TimePickerIntent is not null)
+        {
+            return ResolveConfiguredTimePicker<TControl>(definition);
+        }
+
         if (typeof(TControl) == typeof(IMultiSelectItemsControl))
         {
             return (TControl)(object)new HeadlessMultiSelectItemsControl(FindElement(definition));
@@ -361,6 +366,11 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
 
     private AutomationElement FindElementCore(UiControlDefinition definition)
     {
+        if (definition.TimePickerIntent is not null)
+        {
+            return FindTimePickerPart(definition);
+        }
+
         if (definition.RequireVisibleExactMatch)
         {
             return FindVisibleComboBoxResults(definition)
@@ -1167,7 +1177,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         }
     }
 
-    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl
+    private sealed class HeadlessTextBoxControl : HeadlessControlBase<TextBox>, IClipboardPasteTarget, IReadOnlyStateControl, IBudgetedControlClick
     {
         public HeadlessTextBoxControl(TextBox inner) : base(inner)
         {
@@ -1182,6 +1192,19 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         public void Enter(string value)
         {
             Inner.Enter(value);
+        }
+
+        void IBudgetedControlClick.Click(UiOperationTimeoutBudget budget)
+        {
+            ArgumentNullException.ThrowIfNull(budget);
+            _ = budget.Remaining;
+            var target = Inner.PointerIntent?.Resolve() ?? Inner;
+            HeadlessPointerInput.ClickControl(target.Control, Inner.PointerIntent, budget, () =>
+            {
+                if (Inner.PointerIntent is { } intent && !ReferenceEquals(intent.Resolve().Control, target.Control))
+                    throw new InvalidOperationException("The time-picker input changed before the pointer gesture.");
+                _ = budget.Remaining;
+            });
         }
 
         public bool TryGetIsReadOnly(out bool isReadOnly)

@@ -400,6 +400,8 @@ internal sealed partial class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        InvalidatePresenterTimeTransaction();
+        ReconcilePresenterTimeTransaction();
         ResetGridSelectionGesture();
         _textEditInputTarget = null;
         _pendingCatalogGridEdit = null;
@@ -425,6 +427,7 @@ internal sealed partial class RecorderSession :
         }
 
         CancelTargetSelectionCore();
+        InvalidatePresenterTimeTransaction();
         ClearPendingCopiedValuePaste();
         ResetGridSelectionGesture();
         FlushPendingState();
@@ -461,6 +464,7 @@ internal sealed partial class RecorderSession :
         }
 
         CancelTargetSelectionCore();
+        InvalidatePresenterTimeTransaction();
         ClearPendingCopiedValuePaste();
         ResetGridSelectionGesture();
         FlushPendingState();
@@ -472,6 +476,7 @@ internal sealed partial class RecorderSession :
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
         _steps.Clear();
+        _selectorResolver.ClearPresenterTimeSources();
         _stepMoveHistory.Clear();
         InvalidateScenarioGraphValidation();
         _activeCopiedValue = null;
@@ -591,6 +596,7 @@ internal sealed partial class RecorderSession :
     public string ExportPreview()
     {
         FlushPendingState();
+        FlushConfirmedPresenterTime();
         var activeSteps = _steps.Where(static step => !step.IsIgnored).ToArray();
         return activeSteps.Length == 0
             ? string.Empty
@@ -623,6 +629,7 @@ internal sealed partial class RecorderSession :
         }
 
         _lifetimeCancellation.Cancel();
+        InvalidatePresenterTimeTransaction();
         CancelTargetSelectionCore();
         ClearPendingCopiedValuePaste();
         ResetGridSelectionGesture();
@@ -655,6 +662,7 @@ internal sealed partial class RecorderSession :
         }
 
         _steps.RemoveAt(index);
+        _selectorResolver.ForgetPresenterTimeSource(stepId);
         _stepMoveHistory.Clear();
         var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
@@ -805,6 +813,7 @@ internal sealed partial class RecorderSession :
         _steps.Clear();
         _stepMoveHistory.Clear();
         _steps.AddRange(result.Steps);
+        _selectorResolver.ClearPresenterTimeSources();
         _recordingGeneratedValueSeries = null;
         _lastGeneratedValueOrdinal = _steps
             .Where(static step => step.DefinesGeneratedValue)
@@ -1363,6 +1372,7 @@ internal sealed partial class RecorderSession :
 
     internal void CaptureButtonClickForTesting(Control? source)
     {
+        if (TryHandlePresenterTimeButton(source)) return;
         DiscardPendingTimePickerIfSwitchingTo(source);
         DiscardPendingSingleSelectIfSwitchingTo(source);
         DiscardPendingColorPickerIfSwitchingTo(source);
@@ -1666,6 +1676,7 @@ internal sealed partial class RecorderSession :
     private void RefreshObservedControls()
     {
         var currentControls = CollectObservableControls();
+        QueuePresenterTimeReconcile();
         RebindPopupInputRoots(currentControls);
 
         if (_pendingTextBox is not null && !currentControls.Contains(_pendingTextBox))
@@ -1706,6 +1717,7 @@ internal sealed partial class RecorderSession :
 
     private void OnPopupOpened(object? sender, EventArgs e)
     {
+        OnPresenterTimePopupOpened(sender as Control);
         RefreshObservedControls();
         Dispatcher.UIThread.Post(RefreshObservedControlsAfterPopupLayout, DispatcherPriority.Loaded);
     }
@@ -1734,6 +1746,7 @@ internal sealed partial class RecorderSession :
 
     private Action AttachObservedControl(Control control)
     {
+        if (AttachPresenterTimeObservation(control) is { } detachPresenterTime) return detachPresenterTime;
         switch (control)
         {
             case Popup popup:
@@ -1807,8 +1820,9 @@ internal sealed partial class RecorderSession :
         }
     }
 
-    private static bool IsObservableControl(Control control)
+    private bool IsObservableControl(Control control)
     {
+        if (IsPresenterTimeObservation(control)) return true;
         if (control.ContextFlyout is not null
             || control is Button { Flyout: not null }
             || control is SplitButton { Flyout: not null }
@@ -1854,6 +1868,12 @@ internal sealed partial class RecorderSession :
         _pendingGridSelection = null;
         BeginPointerGesture();
         var source = e.Source as Control;
+        if (_targetSelectionMode == RecorderTargetSelectionMode.None && HandlePresenterTimeInput(source))
+        {
+            RememberSpatialCaptureTarget(source, e);
+            RegisterPointerInput(source);
+            return;
+        }
         if (FindAncestorOrSelf<ListBox>(source) is { } listBox
             && !_observations.IsObserved(listBox))
         {
@@ -2075,6 +2095,11 @@ internal sealed partial class RecorderSession :
         var focused = GetFocusedWindowControl();
         if (focused is not null)
         {
+            if (HandlePresenterTimeInput(focused, e.Key))
+            {
+                RegisterKeyboardInput(focused);
+                return;
+            }
             if (focused is TextBox textBox
                 && CanRecordTextInput(textBox)
                 && (e.Key is Key.Back or Key.Delete
@@ -2238,6 +2263,7 @@ internal sealed partial class RecorderSession :
         _handledButtonClickEvents.Add(e, HandledButtonClickMarker);
 
         var eventSource = e.Source as Control;
+        if (TryHandlePresenterTimeButton(eventSource)) return;
         DiscardPendingTimePickerIfSwitchingTo(eventSource);
         DiscardPendingSingleSelectIfSwitchingTo(eventSource);
         DiscardPendingColorPickerIfSwitchingTo(eventSource);
@@ -2369,6 +2395,12 @@ internal sealed partial class RecorderSession :
     {
         if (_state != RecorderSessionState.Recording)
         {
+            return;
+        }
+
+        if (_stepFactory.IsPresenterTimeSource(comboBox))
+        {
+            QueuePresenterTimeReconcile();
             return;
         }
 
@@ -2649,6 +2681,12 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        if (_stepFactory.IsPresenterTimeSource(listBox))
+        {
+            QueuePresenterTimeReconcile();
+            return;
+        }
+
         if (ShouldSuppressCompletedCompositeEvent(listBox))
         {
             return;
@@ -2905,6 +2943,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        if (_stepFactory.IsPresenterTimeSource(spinner)) return;
         FlushPendingTextIfSwitchingTo(spinner);
         FlushPendingSliderIfSwitchingTo(spinner);
         if (TryRecordCatalogGridCellEdit(spinner, "GridSpinnerEdit", deferUntilCommit: true))
@@ -4022,6 +4061,7 @@ internal sealed partial class RecorderSession :
         }
 
         _steps.RemoveAt(index);
+        _selectorResolver.ForgetPresenterTimeSource(stepId);
         ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
     }
@@ -4724,7 +4764,7 @@ internal sealed partial class RecorderSession :
 
         var replaceTail = replaceAdjacent.HasValue && _steps.LastOrDefault()?.StepId == replaceAdjacent.Value;
         var precedingSteps = replaceTail ? _steps.Take(_steps.Count - 1) : _steps;
-        var recordedStep = LinkGridRowAnchors(RevalidateStep(result.Step), precedingSteps);
+        var recordedStep = LinkGridRowAnchors(RevalidateStep(result.Step, source), precedingSteps);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
         var tentativeSteps = precedingSteps
             .Where(static step => !step.IsIgnored)
@@ -4755,8 +4795,13 @@ internal sealed partial class RecorderSession :
 
         RemovePointerLinkedGridSelection(recordedStep);
 
-        if (replaceTail) _steps.RemoveAt(_steps.Count - 1);
+        if (replaceTail)
+        {
+            _selectorResolver.ForgetPresenterTimeSource(_steps[^1].StepId);
+            _steps.RemoveAt(_steps.Count - 1);
+        }
         _steps.Add(recordedStep);
+        _selectorResolver.RememberPresenterTimeSource(recordedStep, source);
         var graphValidation = ApplyScenarioGraphValidation();
         _lastFingerprint = fingerprint;
         _lastRecordedAt = now;
@@ -4906,6 +4951,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
+        _selectorResolver.ForgetPresenterTimeSource(_steps[^1].StepId);
         _steps.RemoveAt(_steps.Count - 1);
         _lastFingerprint = null;
     }
@@ -6196,6 +6242,7 @@ internal sealed partial class RecorderSession :
         try
         {
             FlushPendingState();
+            FlushConfirmedPresenterTime();
             return _steps.Where(static step => !step.IsIgnored).ToArray();
         }
         finally
@@ -6204,7 +6251,7 @@ internal sealed partial class RecorderSession :
         }
     }
 
-    private RecordedStep RevalidateStep(RecordedStep step)
+    private RecordedStep RevalidateStep(RecordedStep step, Control? source = null)
     {
         step = RestoreValidationBeforeGraphError(step);
         if (step.ActionKind == RecordedActionKind.SetMultiItemSpinnerValue
@@ -6236,7 +6283,7 @@ internal sealed partial class RecorderSession :
             };
         }
 
-        var validation = _selectorResolver.ResolveExisting(step);
+        var validation = _selectorResolver.ResolveExisting(step, source);
         var revalidated = step with
         {
             ValidationStatus = validation.ValidationStatus,

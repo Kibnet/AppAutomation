@@ -33,6 +33,45 @@ public sealed record TimePickerParts(
     UiLocatorKind LocatorKind = UiLocatorKind.AutomationId,
     bool FallbackToName = true)
 {
+    /// <summary>Defaults to the existing native TimePicker path.</summary>
+    public TimePickerSurfaceKind SurfaceKind { get; init; }
+    /// <summary>ClickInput uses the real InputLocator without treating it as a button.</summary>
+    public TimePickerOpenKind OpenKind { get; init; }
+    /// <summary>The declared public TimeSpan/TimeSpan? UI property on the committed root.</summary>
+    public string? CommittedValueProperty { get; init; }
+    /// <summary>Required real component panels for presenter mode.</summary>
+    public TimePickerPresenterParts? PresenterParts { get; init; }
+    /// <summary>Optional exact detached-popup search scope; ownership is verified independently.</summary>
+    public UiControlScope? PopupScope { get; init; }
+
+    internal void ValidateConfiguration()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(RootLocator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(TimePickerLocator);
+        if (!Enum.IsDefined(SurfaceKind) || !Enum.IsDefined(OpenKind) || !Enum.IsDefined(CommitMode))
+            throw new ArgumentException("Invalid time-picker surface, opening or commit mode.");
+        if (CommitMode == TimePickerCommitMode.Confirm && string.IsNullOrWhiteSpace(ConfirmButtonLocator))
+            throw new ArgumentException("A confirmation button locator is required for confirmed time pickers.");
+        if (OpenKind == TimePickerOpenKind.ClickInput && string.IsNullOrWhiteSpace(InputLocator))
+            throw new ArgumentException("ClickInput requires an input locator.");
+        if (SurfaceKind != TimePickerSurfaceKind.TimePickerPresenter) return;
+        if (CommitMode != TimePickerCommitMode.Confirm || PresenterParts is null
+            || string.IsNullOrWhiteSpace(PopupRootLocator))
+            throw new ArgumentException("A presenter requires Confirm mode, component parts and a popup locator.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(CommittedValueProperty);
+        if (CommittedValueProperty.Any(static character => !char.IsLetterOrDigit(character) && character != '_')
+            || !(char.IsLetter(CommittedValueProperty[0]) || CommittedValueProperty[0] == '_'))
+            throw new ArgumentException("The committed source must name one public UI property, not a model path.");
+        if (OpenKind == TimePickerOpenKind.ClickInput && !string.IsNullOrWhiteSpace(OpenButtonLocator))
+            throw new ArgumentException("ClickInput cannot also configure a separate open button.");
+        if (OpenKind == TimePickerOpenKind.InvokeButton && string.IsNullOrWhiteSpace(OpenButtonLocator))
+            throw new ArgumentException("A presenter opened by InvokeButton requires an open button locator.");
+        foreach (var component in new[] { PresenterParts.Hours, PresenterParts.Minutes, PresenterParts.Seconds, PresenterParts.Period })
+            if (component is not null) ArgumentException.ThrowIfNullOrWhiteSpace(component.SelectorLocator);
+        ArgumentNullException.ThrowIfNull(PresenterParts.Hours);
+        ArgumentNullException.ThrowIfNull(PresenterParts.Minutes);
+    }
+
     public static TimePickerParts ByAutomationIds(
         string rootAutomationId,
         string timePickerAutomationId,
@@ -85,13 +124,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
         _propertyName = propertyName.Trim();
         _parts = parts ?? throw new ArgumentNullException(nameof(parts));
-        ArgumentException.ThrowIfNullOrWhiteSpace(parts.RootLocator);
-        ArgumentException.ThrowIfNullOrWhiteSpace(parts.TimePickerLocator);
-        if (parts.CommitMode == TimePickerCommitMode.Confirm
-            && string.IsNullOrWhiteSpace(parts.ConfirmButtonLocator))
-        {
-            throw new ArgumentException("A confirmation button locator is required for confirmed time pickers.", nameof(parts));
-        }
+        parts.ValidateConfiguration();
     }
 
     public bool CanResolve(Type requestedType, UiControlDefinition definition)
@@ -99,6 +132,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(requestedType);
         ArgumentNullException.ThrowIfNull(definition);
         return requestedType == typeof(ITimePickerControl)
+            && definition.TimePickerIntent is null
             && definition.ControlType == UiControlType.TimePicker
             && string.Equals(definition.PropertyName, _propertyName, StringComparison.Ordinal);
     }
@@ -106,7 +140,7 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
     public object Resolve(Type requestedType, UiControlDefinition definition, IUiControlResolver innerResolver)
     {
         ArgumentNullException.ThrowIfNull(innerResolver);
-        return new CompositeTimePickerControl(definition.LocatorValue, _propertyName, _parts, innerResolver);
+        return new CompositeTimePickerControl(definition, _propertyName, _parts, innerResolver);
     }
 
     private sealed class CompositeTimePickerControl : ITimePickerControl, IUiControlAvailability, ITimePickerOperationControl
@@ -114,14 +148,16 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
         private readonly string _propertyName;
         private readonly TimePickerParts _parts;
         private readonly IUiControlResolver _resolver;
+        private readonly UiControlDefinition _definition;
 
         public CompositeTimePickerControl(
-            string logicalAutomationId,
+            UiControlDefinition definition,
             string propertyName,
             TimePickerParts parts,
             IUiControlResolver resolver)
         {
-            AutomationId = logicalAutomationId;
+            _definition = definition;
+            AutomationId = definition.LocatorValue;
             _propertyName = propertyName;
             _parts = parts;
             _resolver = resolver;
@@ -157,9 +193,19 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                 throw new ArgumentOutOfRangeException(nameof(timeoutMs), timeoutMs, "Timeout must be positive.");
             }
 
-            var budget = UiOperationTimeoutBudget.Start(timeoutMs, "time-picker");
+            SetSelectedTime(value, UiOperationTimeoutBudget.Start(timeoutMs, "time-picker"));
+        }
+
+        public void SetSelectedTime(TimeSpan value, UiOperationTimeoutBudget budget)
+        {
+            _ = budget.Remaining;
             WaitForRoot(budget.Remaining);
-            InvokeOptionalButton(_parts.OpenButtonLocator, "Open", budget.Remaining);
+            if (_parts.SurfaceKind == TimePickerSurfaceKind.TimePickerPresenter)
+            {
+                SetPresenterTime(value, budget);
+                return;
+            }
+            OpenEditor(budget);
             var timePicker = WaitForTimePicker(budget.Remaining);
             timePicker.SelectedTime = value;
 
@@ -215,6 +261,11 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
 
         private TimeSpan? TryReadCommittedTime()
         {
+            if (_parts.SurfaceKind == TimePickerSurfaceKind.TimePickerPresenter)
+            {
+                using var committed = ResolveCommittedRoot();
+                return committed.SelectedTime;
+            }
             if (_parts.CommitMode == TimePickerCommitMode.Immediate
                 && TryResolveTimePicker()?.SelectedTime is { } selectedTime)
             {
@@ -401,7 +452,102 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
                 type,
                 locator,
                 _parts.LocatorKind,
-                _parts.FallbackToName);
+                _parts.FallbackToName)
+            {
+                Scope = suffix == "PopupRoot" && _parts.PopupScope is not null ? _parts.PopupScope : _definition.Scope
+            };
+        }
+
+        private ITimePickerCommittedControl ResolveCommittedRoot()
+        {
+            var definition = CreateTimeDefinition("CommittedRoot", UiControlType.TimePicker,
+                _parts.RootLocator, TimePickerPartKind.CommittedRoot);
+            return _resolver.Resolve<ITimePickerControl>(definition) as ITimePickerCommittedControl
+                ?? throw new NotSupportedException("The provider cannot read the declared committed UI time value.");
+        }
+
+        private UiControlDefinition CreateTimeDefinition(string suffix, UiControlType type, string locator,
+            TimePickerPartKind part, object? identity = null) => CreateDefinition(suffix, type, locator) with
+        {
+            TimePickerIntent = new TimePickerResolveDescriptor(_parts,
+                CreateDefinition("Owner", UiControlType.AutomationElement, _parts.RootLocator), part,
+                OwnerIdentity: identity)
+        };
+
+        private void OpenEditor(UiOperationTimeoutBudget budget, object? identity = null)
+        {
+            if (_parts.OpenKind == TimePickerOpenKind.ClickInput)
+            {
+                var definition = _parts.SurfaceKind == TimePickerSurfaceKind.TimePickerPresenter
+                    ? CreateTimeDefinition("Input", UiControlType.TextBox, _parts.InputLocator!, TimePickerPartKind.Input, identity)
+                    : CreateDefinition("Input", UiControlType.TextBox, _parts.InputLocator!);
+                var input = _resolver.Resolve<ITextBoxControl>(definition);
+                if (input is not IBudgetedControlClick clickable)
+                    throw new NotSupportedException("The provider cannot open the time editor by clicking its input.");
+                clickable.Click(budget);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(_parts.OpenButtonLocator)) return;
+            if (_parts.SurfaceKind == TimePickerSurfaceKind.TimePickerPresenter)
+                InvokeTimePart(_parts.OpenButtonLocator, "Open", TimePickerPartKind.Input, identity!, budget);
+            else InvokeOptionalButton(_parts.OpenButtonLocator, "Open", budget.Remaining);
+        }
+
+        private void InvokeTimePart(string locator, string suffix, TimePickerPartKind part, object identity,
+            UiOperationTimeoutBudget budget)
+        {
+            var definition = CreateTimeDefinition(suffix, UiControlType.Button, locator, part, identity);
+            var button = _resolver.Resolve<IButtonControl>(definition);
+            if (button is not IBudgetedControlInvoke invokable)
+                throw new NotSupportedException("The provider cannot invoke a time-editor part within the original budget.");
+            invokable.Invoke(budget);
+        }
+
+        private void SetPresenterTime(TimeSpan value, UiOperationTimeoutBudget budget)
+        {
+            using var committed = ResolveCommittedRoot();
+            committed.ValidateWrite(value);
+            _ = budget.Remaining;
+            var identity = committed.OwnerIdentity;
+            if (!committed.IsPopupOpen) OpenEditor(budget, identity);
+            ITimePickerPresenterControl? surface = null;
+            try
+            {
+                UiWait.Until(() =>
+                {
+                    try
+                    {
+                        surface = _resolver.Resolve<ITimePickerControl>(CreateTimeDefinition("Presenter",
+                            UiControlType.TimePicker, _parts.TimePickerLocator, TimePickerPartKind.Presenter, identity))
+                            as ITimePickerPresenterControl
+                            ?? throw new NotSupportedException("The provider does not support the declared presenter surface.");
+                        surface.ValidateOwner(requireOpen: true);
+                        return true;
+                    }
+                    catch (UiControlResolutionException error) when (error.IsTransient)
+                    {
+                        surface?.Dispose();
+                        surface = null;
+                        return false;
+                    }
+                }, static ready => ready, new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(50) },
+                    "The owner-bound time presenter did not open.");
+                surface!.SetPendingTime(value, budget);
+                surface.ValidateOwner(requireOpen: true);
+                _ = budget.Remaining;
+                InvokeTimePart(_parts.ConfirmButtonLocator!, "Confirm", TimePickerPartKind.Confirm, identity, budget);
+                UiWait.Until(() => !surface.IsPopupOpen, static closed => closed,
+                    new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(50) },
+                    "The confirmed time presenter did not close.");
+                UiWait.Until(() =>
+                {
+                    surface.ValidateOwner(requireOpen: false);
+                    return committed.SelectedTime == value;
+                }, static equal => equal, new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(50) },
+                    "The time editor did not commit the requested exact value.");
+                _ = budget.Remaining;
+            }
+            finally { surface?.Dispose(); }
         }
     }
 }
@@ -409,4 +555,5 @@ public sealed class TimePickerControlAdapter : IUiControlAdapter
 internal interface ITimePickerOperationControl
 {
     void SetSelectedTime(TimeSpan value, int timeoutMs);
+    void SetSelectedTime(TimeSpan value, UiOperationTimeoutBudget budget) => SetSelectedTime(value, budget.RemainingMilliseconds);
 }
