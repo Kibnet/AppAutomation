@@ -187,6 +187,167 @@ public sealed class DesktopPointerControllerTests
     }
 
     [Test]
+    public async Task AuxiliaryAndOriginalClicks_InOneLeaseRemainSeparateNativeGestures()
+    {
+        var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(45) };
+        var coordinator = new FakeCoordinator();
+        await Controller(fake, coordinator).RunAsync("dismiss-original", TimeSpan.FromSeconds(1), async operation =>
+        {
+            await operation.ClickAsync(Target, new());
+            await operation.ClickAsync(Target, new());
+        });
+
+        await Assert.That(fake.DownTimes[1] - fake.DownTimes[0] >= fake.DoubleClickTime).IsTrue();
+        await Assert.That(coordinator.Acquisitions).IsEqualTo(1);
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(2);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
+    }
+
+    [Test]
+    public async Task LateFirstPressOcclusion_UsesAnAuxiliaryClickInTheSameLease()
+    {
+        var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromMilliseconds(35) };
+        var coordinator = new FakeCoordinator();
+        var validations = 0;
+        var dismissals = 0;
+        await Controller(fake, coordinator).RunAsync("recover", TimeSpan.FromSeconds(1), operation =>
+        {
+            operation.RunBeforeOriginalPress(() => operation.ClickAsync(Target, new(), () =>
+            {
+                if (++validations == 1) throw new PointerOcclusionException(Target, [1], late: true);
+            }).GetAwaiter().GetResult(), _ =>
+            {
+                dismissals++;
+                operation.ClickAsync(Target, new(), auxiliary: true).GetAwaiter().GetResult();
+                return true;
+            });
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(dismissals).IsEqualTo(1);
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(2);
+        await Assert.That(fake.DownTimes[1] - fake.DownTimes[0] >= fake.DoubleClickTime).IsTrue();
+        await Assert.That(coordinator.Acquisitions).IsEqualTo(1);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
+    }
+
+    [Test]
+    public async Task OcclusionAfterFirstOriginalDown_DoesNotDismissOrReplayDoubleClick()
+    {
+        var fake = new FakeBackend();
+        var validations = 0;
+        var dismissals = 0;
+        var error = await Capture(() => Controller(fake).RunAsync("late-blocker", TimeSpan.FromSeconds(1), operation =>
+        {
+            operation.RunBeforeOriginalPress(() => operation.ClickAsync(Target,
+                new PointerClickOptions { ClickCount = 2 }, () =>
+                {
+                    if (++validations == 2) throw new PointerOcclusionException(Target, [1], late: true);
+                }).GetAwaiter().GetResult(), _ => { dismissals++; return true; });
+            return Task.CompletedTask;
+        }));
+
+        await Assert.That(error is PointerInterferenceException).IsTrue();
+        await Assert.That(dismissals).IsEqualTo(0);
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(1);
+        await Assert.That(fake.UpPositions.Count).IsEqualTo(1);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
+    }
+
+    [Test]
+    public async Task OriginalDownBoundary_IsSetBeforeBackendCanThrowAfterDelivery()
+    {
+        var fake = new FakeBackend { FailDownAfterDelivery = true };
+        var markedBeforeFailureEscaped = false;
+        var error = await Capture(() => Controller(fake).RunAsync("delivered-down", TimeSpan.FromSeconds(1), operation =>
+        {
+            try { operation.ClickAsync(Target, new()).GetAwaiter().GetResult(); }
+            catch { markedBeforeFailureEscaped = operation.OriginalDownAttempted; throw; }
+            return Task.CompletedTask;
+        }));
+
+        await Assert.That(error is InvalidOperationException).IsTrue();
+        await Assert.That(markedBeforeFailureEscaped).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(1);
+        await Assert.That(fake.State.Buttons).IsEqualTo(PointerButtons.None);
+    }
+
+    [Test]
+    public async Task LateOcclusion_DoesNotRepeatOneTimePopupKeyboardValueOrCommitPreparation()
+    {
+        var fake = new FakeBackend();
+        var prepare = new PointerPreparationOnce();
+        var counters = new int[5];
+        var validations = 0;
+        await Controller(fake).RunAsync("one-time-preparation", TimeSpan.FromSeconds(1), operation =>
+        {
+            operation.RunBeforeOriginalPress(() =>
+            {
+                prepare.Run(() =>
+                {
+                    for (var index = 0; index < counters.Length; index++) counters[index]++;
+                });
+                operation.ClickAsync(Target, new(), () =>
+                {
+                    if (++validations == 1) throw new PointerOcclusionException(Target, [1], late: true);
+                }).GetAwaiter().GetResult();
+            }, _ =>
+            {
+                operation.ClickAsync(Target, new(), auxiliary: true).GetAwaiter().GetResult();
+                return true;
+            });
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(counters.SequenceEqual([1, 1, 1, 1, 1])).IsTrue();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task AuxiliaryGestureSeparation_DoesNotRenewTheOriginalDeadline()
+    {
+        var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromSeconds(1) };
+        var originalStarted = false;
+        var error = await Capture(() => Controller(fake).RunAsync("short-recovery", TimeSpan.FromMilliseconds(80), operation =>
+        {
+            operation.ClickAsync(Target, new(), auxiliary: true).GetAwaiter().GetResult();
+            try { operation.ClickAsync(Target, new()).GetAwaiter().GetResult(); }
+            finally { originalStarted = operation.OriginalDownAttempted; }
+            return Task.CompletedTask;
+        }));
+
+        await Assert.That(error is TimeoutException).IsTrue();
+        await Assert.That(originalStarted).IsFalse();
+        await Assert.That(fake.DownPositions.Count).IsEqualTo(1);
+        await Assert.That(fake.State.Position).IsEqualTo(Saved);
+    }
+
+    [Test]
+    public async Task ModifiedSelectionStartsOriginalSeries_AndForeignInterferenceNeverRecovers()
+    {
+        var fake = new FakeBackend();
+        var recoveries = 0;
+        var error = await Capture(() => Controller(fake).RunAsync("selection-series", TimeSpan.FromSeconds(1), operation =>
+        {
+            operation.ClickForSelection(Target, PointerModifier.Control, () => { });
+            operation.RunBeforeOriginalPress(() => throw new PointerOcclusionException(Target, [1]),
+                _ => { recoveries++; return true; });
+            return Task.CompletedTask;
+        }));
+        await Assert.That(error is PointerOcclusionException).IsTrue();
+        await Assert.That(recoveries).IsEqualTo(0);
+
+        var interference = await Capture(() => Controller(new FakeBackend()).RunAsync("interference", TimeSpan.FromSeconds(1), operation =>
+        {
+            operation.RunBeforeOriginalPress(() => throw new PointerInterferenceException("foreign input"),
+                _ => { recoveries++; return true; });
+            return Task.CompletedTask;
+        }));
+        await Assert.That(interference is PointerInterferenceException).IsTrue();
+        await Assert.That(recoveries).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task LongDoubleClickInterval_DoesNotDelayRestoreOrSessionDispose_NextCallTimesOutBeforeSnapshot()
     {
         var fake = new FakeBackend { DoubleClickTime = TimeSpan.FromSeconds(5) };

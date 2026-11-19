@@ -222,6 +222,8 @@ internal sealed class WindowsPointerBackend : IPointerBackend
     }
 
     internal static bool ForegroundBelongsTo(int process) => WindowProcess(GetForegroundWindow()) == process;
+
+    internal static IntPtr RootWindow(IntPtr window) => window == IntPtr.Zero ? IntPtr.Zero : GetAncestor(window, 2);
     internal static void Activate(IntPtr handle)
     {
         if (handle != IntPtr.Zero) _ = SetForegroundWindow(GetAncestor(handle, 2));

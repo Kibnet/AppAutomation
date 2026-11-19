@@ -153,13 +153,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
     {
         return HeadlessRuntime.Dispatch(() =>
         {
-            var searchRoots = rootDefinition.Scope is null
-                ? new AvaloniaControl[] { _window.Native }
-                : ControlTree.EnumerateDescendants(_window.Native)
-                    .Where(control => MatchesLocator(control, rootDefinition.Scope)).ToArray();
-            var roots = FindVisibleNotificationMatches(
-                searchRoots.SelectMany(root => ControlTree.EnumerateDescendants(root).Prepend(root)),
-                rootDefinition.LocatorValue, rootDefinition.LocatorKind, rootDefinition.FallbackToName);
+            var roots = FindNotificationRoots(_window.Native, rootDefinition);
             return (IReadOnlyList<NotificationRuntimeSnapshot>)roots.Select(root =>
             {
                 var text = FindNotificationPart(root, rootDefinition, parts, parts.TextLocator);
@@ -176,7 +170,15 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
         });
     }
 
-    private static AvaloniaControl FindNotificationPart(
+    internal static AvaloniaControl[] FindNotificationRoots(AvaloniaControl window, UiControlDefinition definition)
+    {
+        var scopes = definition.Scope is null ? [window] : ControlTree.EnumerateDescendants(window)
+            .Prepend(window).Where(control => MatchesLocator(control, definition.Scope)).ToArray();
+        return FindVisibleNotificationMatches(scopes.SelectMany(root => ControlTree.EnumerateDescendants(root).Prepend(root)),
+            definition.LocatorValue, definition.LocatorKind, definition.FallbackToName);
+    }
+
+    internal static AvaloniaControl FindNotificationPart(
         AvaloniaControl root, UiControlDefinition definition, NotificationControlParts parts, string locator)
     {
         var matches = FindVisibleNotificationMatches(ControlTree.EnumerateDescendants(root),
@@ -187,7 +189,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             + $"matched {matches.Length} visible controls inside its notification root; expected exactly one.");
     }
 
-    private static AvaloniaControl[] FindVisibleNotificationMatches(
+    internal static AvaloniaControl[] FindVisibleNotificationMatches(
         IEnumerable<AvaloniaControl> candidates,
         string locator,
         UiLocatorKind locatorKind,
@@ -350,6 +352,14 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
     }
 
     private AutomationElement FindElement(UiControlDefinition definition)
+    {
+        var context = UiInputPreparationContext.Capture();
+        var element = FindElementCore(definition);
+        element.PointerIntent = new HeadlessPointerIntent(_window.Native, () => FindElementCore(definition), context);
+        return element;
+    }
+
+    private AutomationElement FindElementCore(UiControlDefinition definition)
     {
         if (definition.RequireVisibleExactMatch)
         {
@@ -894,7 +904,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
                     }
                     _ = budget.Remaining;
                     button.Invoke();
-                }, parts.IsPopupOpen, parts.ReadCommittedText);
+                }, parts.IsPopupOpen, parts.ReadCommittedText, Inner.PointerIntent);
         }
     }
 

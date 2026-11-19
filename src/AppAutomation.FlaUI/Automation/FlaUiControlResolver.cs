@@ -146,6 +146,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(target);
+        using var preparation = FlaUiPointerPreparation.Enter(this, UiInputPreparationContext.Capture());
         return DesktopPointer.ClickAsync(() => FindPointerElement(target), options, cancellationToken);
     }
 
@@ -277,6 +278,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     public TControl Resolve<TControl>(UiControlDefinition definition)
         where TControl : class
     {
+        using var preparation = FlaUiPointerPreparation.Enter(this, UiInputPreparationContext.Capture());
         try
         {
             return ResolveCore<TControl>(definition);
@@ -326,9 +328,9 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         object resolved = definition.ControlType switch
         {
             UiControlType.TextBox => new FlaUiTextBoxControl(FindElement(definition).AsTextBox(), _window),
-            UiControlType.Button => new FlaUiButtonControl(FindElement(definition).AsButton()),
+            UiControlType.Button => new FlaUiButtonControl(FindElement(definition).AsButton(), () => FindElement(definition).AsButton()),
             UiControlType.Label => new FlaUiLabelControl(FindElement(definition).AsLabel()),
-            UiControlType.ListBox => new FlaUiListBoxControl(FindElement(definition).AsListBox()),
+            UiControlType.ListBox => new FlaUiListBoxControl(FindElement(definition).AsListBox(), () => FindElement(definition)),
             UiControlType.CheckBox => new FlaUiCheckBoxControl(FindElement(definition).AsCheckBox()),
             UiControlType.ComboBox => new FlaUiComboBoxControl(FindElement(definition).AsComboBox()),
             UiControlType.RadioButton => new FlaUiRadioButtonControl(FindElement(definition).AsRadioButton()),
@@ -987,6 +989,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
     private abstract class FlaUiControlBase<TControl> : IUiControlAvailability, IContextMenuOwnerControl
         where TControl : AutomationElement
     {
+        private readonly FlaUiPointerPreparation? _pointerPreparation = FlaUiPointerPreparation.Capture();
+
+        protected IDisposable EnterPointerPreparation() => FlaUiPointerPreparation.EnterCaptured(_pointerPreparation);
+
         protected FlaUiControlBase(TControl inner)
         {
             Inner = inner ?? throw new ArgumentNullException(nameof(inner));
@@ -1006,6 +1012,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void InvokeContextMenuItem(IReadOnlyList<string> path, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             FlaUiContextMenuRuntime.Invoke(Inner, path, timeoutMs);
         }
 
@@ -1036,6 +1043,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public IReadOnlyList<string> SelectLocalItem(string itemText, UiOperationTimeoutBudget budget, LocalComboBoxParts parts)
         {
+            using var preparation = EnterPointerPreparation();
             var editor = AutomationId;
             var registration = parts.Registration;
             IButtonControl? button = null;
@@ -1214,8 +1222,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private sealed class FlaUiButtonControl : FlaUiControlBase<Button>, IButtonControl, IReadableTextControl
     {
-        public FlaUiButtonControl(Button inner) : base(inner)
+        private readonly Func<Button>? _resolveCurrent;
+
+        public FlaUiButtonControl(Button inner, Func<Button>? resolveCurrent = null) : base(inner)
         {
+            _resolveCurrent = resolveCurrent;
         }
 
         public string Text => ReadAutomationElementVisibleText(Inner) ?? string.Empty;
@@ -1226,6 +1237,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void Invoke()
         {
+            using var preparation = EnterPointerPreparation();
             if (Inner.Patterns.Toggle.IsSupported && IsOpenToggleButton(Inner))
             {
                 Inner.Patterns.Toggle.Pattern.Toggle();
@@ -1244,7 +1256,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return;
             }
 
-            DesktopPointer.ClickFallback(Inner, "button lacks supported semantic action");
+            if (_resolveCurrent is not null)
+                DesktopPointer.ClickFallback(() => _resolveCurrent(), "button lacks supported semantic action");
+            else
+                DesktopPointer.ClickFallback(Inner, "button lacks supported semantic action");
         }
 
         private static bool IsOpenToggleButton(AutomationElement element)
@@ -1336,6 +1351,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         private IReadOnlyList<string> SelectItem(string itemText, TimeSpan timeout, bool exact, bool activate = false,
             bool verifyListSelection = true, Action<Func<AutomationElement>>? click = null)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
 
             var normalizedTarget = NormalizeLookupText(itemText);
@@ -1671,6 +1687,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SetChecked(bool value, string itemText, AutomationElement viewport)
         {
+            using var preparation = EnterPointerPreparation();
             if (IsChecked == value)
             {
                 return;
@@ -1754,6 +1771,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(values);
             var normalizedValues = NormalizeRequestedItems(values);
             _lastItems = null;
@@ -2455,6 +2473,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private sealed class FlaUiSearchHistoryItemsControl : ISearchHistoryItemsControl, ISearchHistoryPopupControl
     {
+        private readonly FlaUiPointerPreparation? _pointerPreparation = FlaUiPointerPreparation.Capture();
         private readonly Func<AutomationElement[]> _resolveButtons;
         private readonly string _locator;
         private readonly Func<bool> _openPopup;
@@ -2469,7 +2488,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             _openPopup = openPopup;
         }
 
-        public bool TryOpen() => _openPopup();
+        public bool TryOpen()
+        {
+            using var preparation = FlaUiPointerPreparation.EnterCaptured(_pointerPreparation);
+            return _openPopup();
+        }
 
         public string AutomationId => _locator;
 
@@ -2487,6 +2510,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void Apply(string itemText)
         {
+            using var preparation = FlaUiPointerPreparation.EnterCaptured(_pointerPreparation);
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
             var matches = _resolveButtons()
                 .Where(candidate => string.Equals(ReadText(candidate), itemText, StringComparison.Ordinal))
@@ -2569,6 +2593,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectByIndex(int index, UiOperationTimeoutBudget budget)
         {
+            using var preparation = EnterPointerPreparation();
             var items = GetSelectableItems();
             if (index < 0 || index >= items.Count)
             {
@@ -2610,6 +2635,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         internal void SelectItem(string itemText, TimeSpan timeout)
         {
+            using var preparation = EnterPointerPreparation();
             ArgumentException.ThrowIfNullOrWhiteSpace(itemText);
             if (timeout <= TimeSpan.Zero)
             {
@@ -3184,6 +3210,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         private void SetExpanded(bool expanded)
         {
+            using var preparation = EnterPointerPreparation();
             if (IsExpanded == expanded)
             {
                 return;
@@ -3372,6 +3399,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void InvokeItem(IReadOnlyList<string> path, int timeoutMs)
         {
+            using var preparation = EnterPointerPreparation();
             var exactPath = MenuPathValue.Normalize(path);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu");
@@ -3595,6 +3623,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private sealed class FlaUiMenuItemControl : IMenuItemControl
     {
+        private readonly FlaUiPointerPreparation? _pointerPreparation = FlaUiPointerPreparation.Capture();
         private readonly Func<AutomationElement[]> _searchRoots;
         private readonly UiControlDefinition _definition;
 
@@ -3618,6 +3647,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void Invoke(int timeoutMs)
         {
+            using var preparation = FlaUiPointerPreparation.EnterCaptured(_pointerPreparation);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
             var budget = UiOperationTimeoutBudget.Start(timeoutMs, "menu-item");
             var item = UiWait.Until(
@@ -3747,6 +3777,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SetValue(double value, UiOperationTimeoutBudget budget)
         {
+            using var preparation = EnterPointerPreparation();
             try
             {
                 Inner.Value = value;
@@ -3793,6 +3824,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectTabItem(string itemText)
         {
+            using var preparation = EnterPointerPreparation();
             var item = Inner.TabItems.FirstOrDefault(candidate =>
                 string.Equals(candidate.Name, itemText, StringComparison.Ordinal))
                 ?? throw new InvalidOperationException($"Tab item '{itemText}' was not found.");
@@ -3820,6 +3852,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
             void ClickPane(TabItem pane, UiOperationTimeoutBudget budget)
             {
+                using var preparation = EnterPointerPreparation();
                 // A visible docking tab can require real activation, not just SelectionItem.Select.
                 DesktopPointer.ClickFallback(
                     () => UniquePane(Inner.TabItems.Where(item => IsMatchingPane(item) && !item.IsOffscreen))
@@ -3854,6 +3887,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectTab()
         {
+            using var preparation = EnterPointerPreparation();
             if (IsSelected)
             {
                 return;
@@ -3973,6 +4007,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
         public void SelectNode()
         {
+            using var preparation = EnterPointerPreparation();
             if (TrySelectTreeItem(Inner))
             {
                 _selectedByInteraction = true;

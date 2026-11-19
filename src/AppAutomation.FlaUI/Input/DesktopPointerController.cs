@@ -15,6 +15,17 @@ public sealed class PointerInterferenceException(string message) : InvalidOperat
 /// <summary>The operation could not safely release its buttons and restore the saved cursor position.</summary>
 public sealed class PointerCleanupException(string message, Exception? inner = null) : InvalidOperationException(message, inner);
 
+internal sealed class PointerPreparationOnce
+{
+    private bool _attempted;
+    internal void Run(Action prepare)
+    {
+        if (_attempted) return;
+        _attempted = true;
+        prepare();
+    }
+}
+
 /// <summary>A content-free record of a physical pointer operation.</summary>
 public sealed record PointerTraceEntry(Guid OperationId, DateTimeOffset Timestamp, int ProcessId,
     string Kind, string Stage, int? X, int? Y, string? Detail);
@@ -86,7 +97,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
     internal static bool IsFileTraceEnabled => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(TraceFileVariable));
     internal static string GetTraceSnapshot() => string.Join(Environment.NewLine, Trace.Select(entry => JsonSerializer.Serialize(entry))) + Environment.NewLine;
     internal static bool IsTerminalFailure(Exception error) => error.Data.Contains(OperationKey)
-        || error is PointerInterferenceException or PointerCleanupException
+        || error is PointerInterferenceException or PointerCleanupException or PointerOcclusionException
         || error is AggregateException aggregate && aggregate.InnerExceptions.Any(IsTerminalFailure)
         || error.InnerException != null && IsTerminalFailure(error.InnerException);
 
@@ -147,6 +158,8 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 && !cancellationToken.IsCancellationRequested && session?.Token.IsCancellationRequested != true
                 ? new TimeoutException($"Desktop pointer operation '{kind}' exceeded its {timeout.TotalMilliseconds:0}ms timeout.", error)
                 : error;
+            if (primary is PointerOcclusionException { Late: true })
+                primary = new PointerInterferenceException("The exact pointer target was replaced or covered before input was sent.");
             primary.Data[OperationKey] = id.ToString();
             profile?.Mark("pointer-failed", $"{primary.GetType().Name}, remaining={operation.Remaining.TotalMilliseconds:0}ms");
             operation.Log("failed", detail: ErrorCode(primary));
@@ -230,7 +243,9 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         private PointerButtons _expectedButtons;
         private long? _lastButtonTimestamp;
         private long _lastDownTimestamp;
-        private Point? _lastSelectionPoint;
+        private Point? _lastGesturePoint;
+        private readonly HashSet<string> _dismissedBlockers = new(StringComparer.Ordinal);
+        internal bool OriginalDownAttempted { get; private set; }
         internal long? LastButtonTimestamp => _lastButtonTimestamp;
         internal IReadOnlyList<PointerTraceEntry> Entries => _entries;
         internal CancellationToken Token => token;
@@ -274,6 +289,8 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
         internal void Check()
         {
             token.ThrowIfCancellationRequested();
+            if (Remaining <= TimeSpan.Zero)
+                throw new TimeoutException("The pointer operation exhausted its original deadline before input.");
             backend.EnsureDesktopAvailable();
             var state = backend.ReadState();
             if (state.Position != _expected || state.Buttons != _expectedButtons || state.Modifiers != 0)
@@ -304,7 +321,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             Log("moved", actual.Position, deliverMotion ? "input-motion" : null);
         }
 
-        internal void Down(PointerButton button, long? doubleClickStart = null)
+        internal void Down(PointerButton button, long? doubleClickStart = null, bool original = true)
         {
             Check();
             if (doubleClickStart is { } firstDown && Stopwatch.GetElapsedTime(firstDown) >= backend.DoubleClickTime)
@@ -313,6 +330,7 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             _expectedButtons |= WindowsPointerBackend.Mask(button);
             _lastButtonTimestamp = Stopwatch.GetTimestamp();
             _lastDownTimestamp = Stopwatch.GetTimestamp();
+            if (original) OriginalDownAttempted = true;
             backend.Down(button);
             Check();
             Log("down", _expected, button.ToString());
@@ -329,8 +347,9 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             Log("up", _expected, button.ToString());
         }
 
-        internal Task ClickAsync(Point point, PointerClickOptions options, Action? validateOwner = null)
+        internal Task ClickAsync(Point point, PointerClickOptions options, Action? validateOwner = null, bool auxiliary = false)
         {
+            WaitForGestureSeparation(point);
             var pressDuration = backend.ClickPressDuration;
             if (pressDuration > Remaining / options.ClickCount)
                 throw new TimeoutException("The click's button-down phases do not fit within the remaining operation deadline.");
@@ -343,7 +362,8 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
                 validateOwner?.Invoke();
                 if (pressDuration > Remaining)
                     throw new TimeoutException("The click's button-down phase does not fit within the remaining operation deadline.");
-                Down(options.Button, firstDown);
+                _lastGesturePoint = point;
+                Down(options.Button, firstDown, original: !auxiliary);
                 firstDown ??= _lastDownTimestamp;
                 HoldClickPress(pressDuration);
                 Up(options.Button);
@@ -352,21 +372,54 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             return Task.CompletedTask;
         }
 
+        internal void RunBeforeOriginalPress(Action attempt, Func<PointerOcclusionException, bool> recover)
+        {
+            while (true)
+            {
+                Check();
+                try { attempt(); return; }
+                catch (PointerOcclusionException obstruction) when (!OriginalDownAttempted)
+                {
+                    Check();
+                    if (!recover(obstruction)) throw;
+                }
+            }
+        }
+
+        internal bool BeginDismiss(string identity)
+        {
+            Check();
+            if (OriginalDownAttempted)
+                throw new InvalidOperationException("Notification recovery is forbidden after the original press began.");
+            return _dismissedBlockers.Add(identity);
+        }
+
+        internal bool WaitForGestureSeparation(Point? point = null)
+        {
+            Check();
+            if (_lastGesturePoint is not { } previous || _lastButtonTimestamp is not { } timestamp) return false;
+            var size = backend.DoubleClickSize;
+            if (point is { } next && (Math.Abs((long)next.X - previous.X) > size.Width
+                || Math.Abs((long)next.Y - previous.Y) > size.Height)) return false;
+            var waited = false;
+            while (true)
+            {
+                var remaining = backend.DoubleClickTime - Stopwatch.GetElapsedTime(timestamp);
+                if (remaining <= TimeSpan.Zero) return waited;
+                // WaitHandle truncates fractional milliseconds. Round up, then verify the
+                // actual elapsed interval instead of accepting an early wake as separation.
+                var wait = TimeSpan.FromMilliseconds(Math.Ceiling(remaining.TotalMilliseconds));
+                if (wait > Remaining)
+                    throw new TimeoutException("Native gesture separation does not fit the original pointer deadline.");
+                if (token.WaitHandle.WaitOne(wait)) token.ThrowIfCancellationRequested();
+                Check();
+                waited = true;
+            }
+        }
+
         internal void ClickForSelection(Point point, PointerModifier modifier, Action validateTarget)
         {
             Check();
-            if (_lastSelectionPoint is { } previous && _lastButtonTimestamp is { } timestamp)
-            {
-                var size = backend.DoubleClickSize;
-                if (Math.Abs((long)point.X - previous.X) <= size.Width
-                    && Math.Abs((long)point.Y - previous.Y) <= size.Height)
-                {
-                    var remaining = backend.DoubleClickTime - Stopwatch.GetElapsedTime(timestamp);
-                    if (remaining > TimeSpan.Zero && token.WaitHandle.WaitOne(remaining)) token.ThrowIfCancellationRequested();
-                }
-            }
-
-            _lastSelectionPoint = point;
             if (modifier == PointerModifier.None)
             {
                 ClickAsync(point, new PointerClickOptions(), validateTarget).GetAwaiter().GetResult();
@@ -374,9 +427,12 @@ internal sealed class DesktopPointerController(IPointerBackend backend, IDesktop
             }
 
             Move(point);
+            WaitForGestureSeparation(point);
             validateTarget();
             Check();
             Log("modified-click", point, modifier.ToString());
+            _lastGesturePoint = point;
+            OriginalDownAttempted = true;
             try { backend.ClickWithModifier(point, modifier, token); }
             finally { _lastButtonTimestamp = Stopwatch.GetTimestamp(); }
             Check();

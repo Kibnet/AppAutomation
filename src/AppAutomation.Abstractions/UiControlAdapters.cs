@@ -611,6 +611,19 @@ public static partial class UiControlResolverExtensions
         return innerResolver.WithAdapters(new NotificationControlAdapter(propertyName, parts));
     }
 
+    /// <summary>Registers a notification's complete root and parts before its property is first resolved.</summary>
+    public static IUiControlResolver WithNotification(
+        this IUiControlResolver innerResolver,
+        UiControlDefinition rootDefinition,
+        NotificationControlParts parts)
+    {
+        ArgumentNullException.ThrowIfNull(innerResolver);
+        ArgumentNullException.ThrowIfNull(rootDefinition);
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootDefinition.LocatorValue);
+        return innerResolver.WithAdapters(new NotificationControlAdapter(rootDefinition, parts));
+    }
+
     /// <summary>
     /// Registers a folder export composite control for a specific property.
     /// </summary>
@@ -688,6 +701,18 @@ public static partial class UiControlResolverExtensions
         return resolver.WithAdaptersFromAssembly(typeof(IUiControlAdapter).Assembly);
     }
 
+    internal static IUiControlResolver WithPageInputPreparation(IUiControlResolver resolver, Type pageType)
+    {
+        var definitions = new List<UiControlDefinition>();
+        for (var type = pageType; type is not null && type != typeof(UiPage); type = type.BaseType)
+        {
+            definitions.AddRange(type.GetCustomAttributes<UiControlAttribute>(inherit: false).Select(static attribute =>
+                new UiControlDefinition(attribute.PropertyName, attribute.ControlType, attribute.LocatorValue,
+                    attribute.LocatorKind, attribute.FallbackToName)));
+        }
+        return new AdapterAwareUiControlResolver(resolver, [], new UiInputPreparationContextSource(definitions));
+    }
+
     private sealed class AdapterAwareUiControlResolver :
         IUiControlResolver,
         IUiArtifactCollector,
@@ -699,11 +724,27 @@ public static partial class UiControlResolverExtensions
     {
         private readonly IUiControlResolver _innerResolver;
         private readonly IReadOnlyList<IUiControlAdapter> _adapters;
+        private readonly UiInputPreparationContextSource _contextSource;
+        private readonly bool _isPageContext;
+        private readonly UiInputPreparationContext? _boundContext;
 
-        public AdapterAwareUiControlResolver(IUiControlResolver innerResolver, IReadOnlyList<IUiControlAdapter> adapters)
+        public AdapterAwareUiControlResolver(IUiControlResolver innerResolver, IReadOnlyList<IUiControlAdapter> adapters,
+            UiInputPreparationContextSource? pageContext = null, UiInputPreparationContext? boundContext = null)
         {
             _innerResolver = innerResolver;
             _adapters = adapters;
+            _contextSource = pageContext ?? new UiInputPreparationContextSource([]);
+            _isPageContext = pageContext is not null;
+            _boundContext = boundContext;
+        }
+
+        private UiInputPreparationContext BindContext(UiControlDefinition? notificationDefinition = null)
+        {
+            var ambient = UiInputPreparationContext.Capture();
+            var context = _boundContext ?? (_isPageContext ? _contextSource.Snapshot() : ambient ?? _contextSource.Snapshot());
+            if (_boundContext is not null && ambient is not null && !_boundContext.HasSameOwner(ambient))
+                context = context.WithoutRecovery();
+            return context.WithAdapters(this, _adapters, notificationDefinition);
         }
 
         public UiRuntimeCapabilities Capabilities => _innerResolver.Capabilities;
@@ -716,11 +757,15 @@ public static partial class UiControlResolverExtensions
                 : ValueTask.FromResult<IReadOnlyList<UiFailureArtifact>>([]);
 
         public IReadOnlyList<NotificationRuntimeSnapshot>? ReadNotifications(
-            UiControlDefinition rootDefinition, NotificationControlParts parts) =>
-            (_innerResolver as INotificationRuntimeResolver)?.ReadNotifications(rootDefinition, parts);
+            UiControlDefinition rootDefinition, NotificationControlParts parts)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            return (_innerResolver as INotificationRuntimeResolver)?.ReadNotifications(rootDefinition, parts);
+        }
 
         public string? ReadDisplayedValue(UiControlDefinition definition)
         {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
             if (_innerResolver is IComboBoxFilterDisplayValueReader reader)
             {
                 return reader.ReadDisplayedValue(definition);
@@ -736,18 +781,26 @@ public static partial class UiControlResolverExtensions
             };
         }
 
-        public UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition) =>
-            _innerResolver is IComboBoxFilterDisplayValueReader reader
+        public UiDisplayedValueSnapshot ReadDisplayedValueSnapshot(UiControlDefinition definition)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            return _innerResolver is IComboBoxFilterDisplayValueReader reader
                 ? reader.ReadDisplayedValueSnapshot(definition)
                 : new(ReadDisplayedValue(definition));
+        }
 
-        public string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition) =>
-            (_innerResolver as IComboBoxFilterDisplayValueReader)?.ReadDisplayedValueSourceIdentity(definition);
+        public string? ReadDisplayedValueSourceIdentity(UiControlDefinition definition)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            return (_innerResolver as IComboBoxFilterDisplayValueReader)?.ReadDisplayedValueSourceIdentity(definition);
+        }
 
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
             ArgumentNullException.ThrowIfNull(definition);
+            var context = BindContext(typeof(TControl) == typeof(INotificationControl) ? definition : null);
+            using var scope = UiInputPreparationContext.Enter(context);
 
             foreach (var adapter in _adapters)
             {
@@ -756,7 +809,8 @@ public static partial class UiControlResolverExtensions
                     continue;
                 }
 
-                var resolved = adapter.Resolve(typeof(TControl), definition, _innerResolver);
+                var contextualInner = new AdapterAwareUiControlResolver(_innerResolver, [], boundContext: context);
+                var resolved = adapter.Resolve(typeof(TControl), definition, contextualInner);
                 return resolved as TControl
                     ?? throw new InvalidOperationException(
                         $"Adapter '{adapter.GetType().FullName}' resolved '{definition.PropertyName}' to '{resolved.GetType().FullName}', which is incompatible with '{typeof(TControl).FullName}'.");
@@ -770,6 +824,7 @@ public static partial class UiControlResolverExtensions
             string itemKey,
             int timeoutMs)
         {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
             if (_innerResolver is not IMultiItemControlRuntimeResolver runtimeResolver)
             {
                 throw new NotSupportedException(
@@ -781,6 +836,7 @@ public static partial class UiControlResolverExtensions
 
         public MultiItemControlState ReadMultiItemCollectionState(MultiItemControlDefinition definition)
         {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
             if (_innerResolver is not IMultiItemControlRuntimeResolver runtimeResolver)
             {
                 throw new NotSupportedException(
@@ -801,25 +857,34 @@ public static partial class UiControlResolverExtensions
             return clipboardRuntime.SetTextAsync(text, cancellationToken);
         }
 
-        public Task PointerClickAsync(
+        public async Task PointerClickAsync(
             UiControlDefinition target,
             PointerClickOptions? options = null,
-            CancellationToken cancellationToken = default) =>
-            GetPointerRuntime().PointerClickAsync(target, options, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            await GetPointerRuntime().PointerClickAsync(target, options, cancellationToken).ConfigureAwait(false);
+        }
 
-        public Task HoverAsync(
+        public async Task HoverAsync(
             UiControlDefinition target,
             Func<CancellationToken, Task> verifyWhileHovered,
             PointerHoverOptions? options = null,
-            CancellationToken cancellationToken = default) =>
-            GetPointerRuntime().HoverAsync(target, verifyWhileHovered, options, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            await GetPointerRuntime().HoverAsync(target, verifyWhileHovered, options, cancellationToken).ConfigureAwait(false);
+        }
 
-        public Task DragAndDropAsync(
+        public async Task DragAndDropAsync(
             UiControlDefinition source,
             UiControlDefinition target,
             PointerDragOptions? options = null,
-            CancellationToken cancellationToken = default) =>
-            GetPointerRuntime().DragAndDropAsync(source, target, options, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            using var scope = UiInputPreparationContext.Enter(BindContext());
+            await GetPointerRuntime().DragAndDropAsync(source, target, options, cancellationToken).ConfigureAwait(false);
+        }
 
         private IUiPointerRuntime GetPointerRuntime()
         {
@@ -1825,6 +1890,10 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
     private readonly string _propertyName;
     private readonly NotificationControlParts _parts;
 
+    internal string PropertyName => _propertyName;
+    internal NotificationControlParts Parts => _parts;
+    internal UiControlDefinition? RootDefinition { get; }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="NotificationControlAdapter"/> class.
     /// </summary>
@@ -1837,6 +1906,12 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
 
         _propertyName = propertyName.Trim();
         _parts = parts ?? throw new ArgumentNullException(nameof(parts));
+    }
+
+    internal NotificationControlAdapter(UiControlDefinition rootDefinition, NotificationControlParts parts)
+        : this(rootDefinition.PropertyName, parts)
+    {
+        RootDefinition = rootDefinition;
     }
 
     /// <inheritdoc />
@@ -1856,7 +1931,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new NotificationControl(definition.PropertyName, definition, _parts, innerResolver);
+        return new NotificationControl(definition.PropertyName, RootDefinition ?? definition, _parts, innerResolver);
     }
 
     private sealed class NotificationControl : INotificationControl, IReadableTextControl, INotificationMessagesControl
