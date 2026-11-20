@@ -86,29 +86,54 @@ public sealed class NotificationOcclusionFlaUiTests
         var row = GridRowKeyReader.CaptureFirst(page.Table);
         page.EnterText(static p => p.Mode, "async");
         page.ClickButton(static p => p.ShowBackground);
-        var opening = Task.Run(() => page.OpenGridRow(static p => p.Table, row));
+        var pending = page.Marker("Pending");
+        // The watchdog must outlive OpenGridRow's five-second operation budget.
+        var watchdog = TimeSpan.FromSeconds(6);
+        var opening = Task.Factory.StartNew(
+            () => { page.OpenGridRow(static p => p.Table, row); },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         try
         {
             await UiWait.UntilAsync(() =>
             {
-                if (opening.IsFaulted) opening.GetAwaiter().GetResult();
-                return page.Marker("Pending").Text;
+                if (opening.IsCompleted)
+                {
+                    opening.GetAwaiter().GetResult();
+                    throw new InvalidOperationException("The row-opening operation completed before deferred dismissal became pending.");
+                }
+                return pending.Text;
             }, static value => value == "1",
-                new UiWaitOptions { Timeout = TimeSpan.FromSeconds(3), PollInterval = TimeSpan.FromMilliseconds(20) });
+                new UiWaitOptions { Timeout = watchdog, PollInterval = TimeSpan.FromMilliseconds(20) },
+                "The row-opening operation did not reach deferred notification dismissal.");
             await Assert.That(opening.IsCompleted).IsFalse();
             page.ClickButton(static p => p.Heartbeat);
             await Assert.That(page.Marker("Heartbeat").Text).IsEqualTo("1");
             await Assert.That(page.Marker("Down").Text).IsEqualTo("0");
             page.ClickButton(static p => p.CompleteAsyncClose);
-            await opening.WaitAsync(TimeSpan.FromSeconds(6));
+            await opening.WaitAsync(watchdog);
             await Assert.That(page.Marker("DownBeforeAsyncClose").Text).IsEqualTo("0");
             await Assert.That(page.Marker("Down").Text).IsEqualTo("2");
             await Assert.That(page.Marker("Dismiss").Text).IsEqualTo("1");
             await Assert.That(page.Opened.Text).IsEqualTo(row.Conditions.Single().Value);
         }
+        catch
+        {
+            Console.WriteLine($"Deferred dismissal pointer trace:{Environment.NewLine}{DesktopPointer.GetTraceSnapshot()}");
+            throw;
+        }
         finally
         {
-            if (!opening.IsCompleted) page.ClickButton(static p => p.CompleteAsyncClose);
+            try
+            {
+                if (!opening.IsCompleted) page.ClickButton(static p => p.CompleteAsyncClose);
+                await opening.WaitAsync(watchdog);
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine($"Deferred row-opening cleanup failed: {error}");
+            }
         }
     }
 

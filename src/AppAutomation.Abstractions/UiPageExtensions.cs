@@ -1293,7 +1293,7 @@ public static partial class UiPageExtensions
             lastObservedValueFactory: () => $"IsEnabled={timePicker.IsEnabled}");
         if (timePicker is ITimePickerOperationControl operationControl)
         {
-            operationControl.SetSelectedTime(time, budget.RemainingMilliseconds);
+            operationControl.SetSelectedTime(time, budget);
         }
         else
         {
@@ -1307,6 +1307,7 @@ public static partial class UiPageExtensions
             $"Time picker '{timePicker.AutomationId}' did not reach expected time.",
             expectedValue: time.ToString("c", CultureInfo.InvariantCulture),
             lastObservedValueFactory: () => timePicker.SelectedTime?.ToString("c", CultureInfo.InvariantCulture) ?? "<null>");
+        _ = budget.Remaining;
         return page;
     }
 

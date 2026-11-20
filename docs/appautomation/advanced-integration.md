@@ -491,3 +491,10 @@ GridColumnDefinition.Auto("ProductionRate").AtRuntime("Производител�
    старый helper `PresentationRowIdentity` и только соответствующие им исключения в `ComparisonUtils`.
 7. Проверить обычную сборку без Recorder, UI шаблонов и существующие ARM сценарии записи/Headless/FlaUI.
    Зелёные собственные тесты AppAutomation сами по себе не подтверждают такую интеграцию.
+
+### Составной редактор времени
+
+Для подтверждаемого `TimePickerPresenter`, который открывается нажатием на input,
+см. [parts, точное UI-значение и протокол владения popup](time-pickers.md).
+Это opt-in общего `WithTimePicker`; подключение конкретного host и его UIA-публикации
+остаётся отдельным этапом интеграции.

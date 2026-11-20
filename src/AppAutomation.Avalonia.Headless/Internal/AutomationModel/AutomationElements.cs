@@ -547,14 +547,14 @@ internal static class HeadlessPointerInput
     }
 
     public static void ClickControl(Control control, HeadlessPointerIntent? intent = null,
-        UiOperationTimeoutBudget? budget = null)
+        UiOperationTimeoutBudget? budget = null, Action? validateTarget = null)
     {
         budget ??= UiOperationTimeoutBudget.Start(5000, "pointer click");
         if (control.Dispatcher.CheckAccess())
         {
             // Raw callers already executing on the UI thread have no outer recovery boundary.
             // Preserve their strict single gesture without nesting the serialized session queue.
-            ClickCore(control, () => { _ = budget.Remaining; }, HeadlessPointerPreparation.RequireHit);
+            ClickCore(control, () => { _ = budget.Remaining; validateTarget?.Invoke(); }, HeadlessPointerPreparation.RequireHit);
             return;
         }
         var preparation = new HeadlessPointerPreparation(intent, () => budget.Remaining);
@@ -564,7 +564,7 @@ internal static class HeadlessPointerInput
             try
             {
                 AppAutomation.Avalonia.Headless.Session.HeadlessRuntime.Dispatch(() =>
-                    ClickCore(control, () => { _ = budget.Remaining; originalDownAttempted = true; }, preparation.RequireOriginalHit));
+                    ClickCore(control, () => { _ = budget.Remaining; validateTarget?.Invoke(); originalDownAttempted = true; }, preparation.RequireOriginalHit));
                 return;
             }
             catch (HeadlessPointerOcclusion occlusion) when (!originalDownAttempted)

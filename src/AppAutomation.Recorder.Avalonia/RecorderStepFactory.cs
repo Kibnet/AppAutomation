@@ -258,6 +258,8 @@ internal sealed partial class RecorderStepFactory
     public StepCreationResult TryCreateTextEntryStep(TextBox textBox, string? replayText = null)
     {
         ArgumentNullException.ThrowIfNull(textBox);
+        if (IsPresenterTimeSource(textBox))
+            return StepCreationResult.Unsupported("The configured presenter input is recorded only after its committed UI value is confirmed.");
 
         if (TryResolveSearchControlHint(textBox, out var searchHint))
         {
@@ -1049,7 +1051,10 @@ internal sealed partial class RecorderStepFactory
                     hint.Parts.HistoryOpenButtonLocator))
             || _options.TimePickerHints.Any(hint =>
                 !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
-                && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator))
+                && (RecorderTimePickerBinding.IsPresenterHint(hint)
+                    ? TryResolvePresenterTimeBinding(source, out var timeBinding, out _) && Equals(timeBinding.Hint, hint)
+                        && timeBinding.IsButton(source, hint.Parts.OpenButtonLocator)
+                    : MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator)))
             || _options.DatePickerHints.Any(hint =>
                 !string.IsNullOrWhiteSpace(hint.Parts.OpenButtonLocator)
                 && MatchesLocator(source, hint.Parts.LocatorKind, hint.Parts.OpenButtonLocator));
@@ -1496,7 +1501,8 @@ internal sealed partial class RecorderStepFactory
     {
         ArgumentNullException.ThrowIfNull(textBox);
 
-        return MatchesDateRangeTextPart(textBox)
+        return IsPresenterTimeSource(textBox)
+            || MatchesDateRangeTextPart(textBox)
             || MatchesNumericRangeTextPart(textBox)
             || MatchesFolderExportPathPart(textBox)
             || MatchesTimePickerInputPart(textBox)
@@ -2024,6 +2030,9 @@ internal sealed partial class RecorderStepFactory
     {
         ArgumentNullException.ThrowIfNull(textBox);
         ArgumentNullException.ThrowIfNull(hint);
+        if (RecorderTimePickerBinding.IsPresenterHint(hint))
+            return TryResolvePresenterTimeBinding(textBox, out var binding, out _) && Equals(binding.Hint, hint)
+                && binding.IsButton(textBox, hint.Parts.InputLocator);
         return !string.IsNullOrWhiteSpace(hint.Parts.InputLocator)
             && MatchesLocator(textBox, hint.Parts.LocatorKind, hint.Parts.InputLocator);
     }
@@ -2031,6 +2040,9 @@ internal sealed partial class RecorderStepFactory
     public bool IsTimePickerPart(Control? source, RecorderTimePickerHint hint)
     {
         ArgumentNullException.ThrowIfNull(hint);
+        if (RecorderTimePickerBinding.IsPresenterHint(hint))
+            return source is not null && TryResolvePresenterTimeBinding(source, out var binding, out _)
+                && Equals(binding.Hint, hint);
         return source is not null
             && (MatchesLocator(source, hint.LocatorKind, hint.LocatorValue)
                 || MatchesAnyLocator(
@@ -2059,6 +2071,7 @@ internal sealed partial class RecorderStepFactory
 
         foreach (var candidate in _options.TimePickerHints)
         {
+            if (RecorderTimePickerBinding.IsPresenterHint(candidate)) continue;
             if (!string.IsNullOrWhiteSpace(candidate.Parts.ConfirmButtonLocator)
                 && MatchesLocator(source, candidate.Parts.LocatorKind, candidate.Parts.ConfirmButtonLocator))
             {
@@ -2286,6 +2299,15 @@ internal sealed partial class RecorderStepFactory
         if (source is null)
         {
             return StepCreationResult.Unsupported("No control is available for assertion capture.");
+        }
+
+        if (mode is RecorderAssertionMode.Auto or RecorderAssertionMode.Text && IsPresenterTimeSource(source))
+        {
+            if (!TryResolvePresenterTimeBinding(source, out var timeBinding, out var timeError))
+                return StepCreationResult.Unsupported(timeError);
+            return CreateStep(timeBinding.Root, CreateSemanticValueStep(RecordedActionKind.AssertValue,
+                PresenterTimeCandidate(timeBinding), comparisonKind: RecorderComparisonKind.Equal, hasExpectedLiteral: true),
+                "Added exact committed presenter time assertion.");
         }
 
         if (TryCreateGridAssertionStep(source, mode, out var gridResult))
@@ -3238,7 +3260,7 @@ internal sealed partial class RecorderStepFactory
         var validationStep = candidate.Control.ControlType == UiControlType.Notification
             ? result.Step with { ActionKind = RecordedActionKind.WaitUntilNotificationContains }
             : result.Step;
-        var selectorValidation = _selectorResolver.ResolveExisting(validationStep);
+        var selectorValidation = _selectorResolver.ResolveExisting(validationStep, source);
         if (!selectorValidation.CanPersist)
         {
             return StepCreationResult.Unsupported(
@@ -3284,6 +3306,15 @@ internal sealed partial class RecorderStepFactory
         {
             error = "No control is available for value capture.";
             return false;
+        }
+
+        if (IsPresenterTimeSource(source))
+        {
+            isDefinitiveFailure = true;
+            if (!TryResolvePresenterTimeBinding(source, out var binding, out error)) return false;
+            candidate = PresenterTimeCandidate(binding);
+            error = string.Empty;
+            return true;
         }
 
         if (TryResolveMultiItemSpinnerSemanticValue(
@@ -3706,6 +3737,21 @@ internal sealed partial class RecorderStepFactory
             if (!TryCreateConfiguredSemanticValueCandidate(source, target, out candidate, out error))
             {
                 return false;
+            }
+
+            var timeControl = candidate.Control;
+            if (timeControl.ControlType == UiControlType.TimePicker && _options.TimePickerHints.Any(hint =>
+                    RecorderTimePickerBinding.IsPresenterHint(hint) && hint.LocatorKind == timeControl.LocatorKind
+                    && hint.LocatorValue.Trim() == timeControl.LocatorValue))
+            {
+                if (!TryResolvePresenterTimeBinding(source, out var timeBinding, out error)) return false;
+                if (timeBinding.Hint.LocatorKind != candidate.Control.LocatorKind
+                    || timeBinding.Hint.LocatorValue.Trim() != candidate.Control.LocatorValue)
+                {
+                    error = "The semantic time target does not belong to the source's native presenter owner.";
+                    return false;
+                }
+                candidate = PresenterTimeCandidate(timeBinding);
             }
 
             if (requireLiteral && !HasLiteral(candidate))
@@ -8462,7 +8508,8 @@ internal sealed partial class RecorderStepFactory
     private IEnumerable<RecorderTimePickerHint> FindTimePickerHints(TimePicker timePicker)
     {
         return _options.TimePickerHints.Where(hint =>
-            MatchesLocator(timePicker, hint.Parts.LocatorKind, hint.Parts.TimePickerLocator));
+            !RecorderTimePickerBinding.IsPresenterHint(hint)
+            && MatchesLocator(timePicker, hint.Parts.LocatorKind, hint.Parts.TimePickerLocator));
     }
 
     private IEnumerable<RecorderDatePickerHint> FindDatePickerHints(Control source)

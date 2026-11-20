@@ -151,7 +151,7 @@ public sealed class RecorderFullCaptureCoverageTests
                 "Page.EditGridCellDate(static page => page.EditableGrid, 0, 3, new global::System.DateTime(2026, 4, 28));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
-                "Page.EditGridCellTime(static page => page.EditableGrid, 0, 4, new global::System.TimeSpan(351300000000L));",
+                "Page.EditGridCellTime(static page => page.EditableGrid, 0, 4, global::System.TimeSpan.FromHours(9) + global::System.TimeSpan.FromMinutes(45) + global::System.TimeSpan.FromSeconds(30));",
                 StringComparison.Ordinal)).IsEqualTo(true);
             await Assert.That(preview.Contains(
                 "Page.SelectGridCellComboItem(static page => page.EditableGrid, 0, 5, \"Approved\");",

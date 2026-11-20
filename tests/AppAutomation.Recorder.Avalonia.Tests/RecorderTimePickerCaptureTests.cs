@@ -21,7 +21,7 @@ public sealed class RecorderTimePickerCaptureTests
             await Assert.That(recorder.Session.StepJournal.Count).IsEqualTo(1);
             await Assert.That(recorder.OnlyStep.CanPersist).IsTrue();
             await Assert.That(recorder.OnlyStep.Preview).Contains(
-                $"Page.SetTime(static page => page.StartTimePicker, new global::System.TimeSpan({selectedTime.Ticks}L));");
+                "Page.SetTime(static page => page.StartTimePicker, global::System.TimeSpan.FromHours(9) + global::System.TimeSpan.FromMinutes(45) + global::System.TimeSpan.FromSeconds(30));");
             await Assert.That(recorder.OnlyStep.Preview).DoesNotContain("recorder warning");
         }
     }
@@ -116,7 +116,7 @@ public sealed class RecorderTimePickerCaptureTests
         {
             await Assert.That(recorder.OnlyStep.CanPersist).IsTrue();
             await Assert.That(recorder.OnlyStep.Preview).Contains(
-                "await Assert.That(Page.DeliveryTimeEditor.SelectedTime).IsEqualTo(new global::System.TimeSpan(432000000000L));");
+                "await Assert.That(Page.DeliveryTimeEditor.SelectedTime).IsEqualTo(global::System.TimeSpan.FromHours(12));");
         }
     }
 }

@@ -1394,9 +1394,20 @@ internal static class RecorderStatementEmitter
 
     private static string FormatTimeSpan(TimeSpan? value)
     {
-        return value.HasValue
-            ? $"new global::System.TimeSpan({value.Value.Ticks}L)"
-            : "default";
+        if (!value.HasValue) return "default";
+        var time = value.Value;
+        if (time == TimeSpan.Zero) return "global::System.TimeSpan.Zero";
+        var components = new[]
+        {
+            (Unit: "Days", Value: (long)time.Days),
+            (Unit: "Hours", Value: (long)time.Hours),
+            (Unit: "Minutes", Value: (long)time.Minutes),
+            (Unit: "Seconds", Value: (long)time.Seconds),
+            (Unit: "Milliseconds", Value: (long)time.Milliseconds),
+            (Unit: "Ticks", Value: time.Ticks % TimeSpan.TicksPerMillisecond)
+        };
+        return string.Join(" + ", components.Where(static component => component.Value != 0)
+            .Select(static component => FormattableString.Invariant($"global::System.TimeSpan.From{component.Unit}({component.Value})")));
     }
 
     private static string FormatNullableTimeSpan(TimeSpan? value)

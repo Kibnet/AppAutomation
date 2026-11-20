@@ -122,11 +122,63 @@ public static class DesktopPointer
     }
 
     internal static void ClickFallback(Func<AutomationElement> target, string reason, PointerClickOptions? options = null,
-        AutomationElement? initialTarget = null)
+        AutomationElement? initialTarget = null, Action? validateBeforePress = null)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason, initialTarget).GetAwaiter().GetResult();
+        ClickCore(target, options ?? new PointerClickOptions(), null, null, default, reason, initialTarget,
+            validateBeforePress: validateBeforePress).GetAwaiter().GetResult();
+    }
+
+    internal static void SendGuardedKey(Func<AutomationElement> target, UiOperationTimeoutBudget budget,
+        global::FlaUI.Core.WindowsAPI.VirtualKeyShort key, Action<AutomationElement> validateForeground)
+    {
+        _ = budget.Remaining;
+        var (session, remaining, processId) = PrepareCall(target, budget.Remaining, default);
+        Controller.RunAsync("picker-key", remaining, operation =>
+        {
+            void Check()
+            {
+                operation.Check();
+                _ = budget.Remaining;
+            }
+            Check();
+            var panel = target();
+            var identity = panel.Properties.RuntimeId.Value;
+            if (identity is not { Length: > 0 } || !panel.Properties.IsKeyboardFocusable.Value
+                || !panel.IsEnabled || panel.IsOffscreen)
+                throw new InvalidOperationException("The picker panel cannot safely receive a keyboard step.");
+            DesktopPointerTargetResolver.EnsureForeground(panel, processId, Check);
+            validateForeground(panel);
+            Check();
+            panel.Focus();
+            UiWait.Until(() =>
+            {
+                Check();
+                if (!WindowsPointerBackend.ForegroundBelongsTo(processId))
+                    throw new PointerInterferenceException("The picker lost the foreground while acquiring keyboard focus.");
+                var current = target();
+                validateForeground(current);
+                var currentId = current.Properties.RuntimeId.Value;
+                if (currentId is null || !currentId.AsSpan().SequenceEqual(identity))
+                    throw new InvalidOperationException("The picker panel changed while acquiring keyboard focus.");
+                return current.Properties.HasKeyboardFocus.Value;
+            }, static focused => focused,
+                new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(25) },
+                "The picker panel did not acquire keyboard focus.", operation.Token);
+            var fresh = target();
+            var freshIdentity = fresh.Properties.RuntimeId.Value;
+            if (!WindowsPointerBackend.ForegroundBelongsTo(processId) || !fresh.Properties.HasKeyboardFocus.Value
+                || freshIdentity is null || !freshIdentity.AsSpan().SequenceEqual(identity)
+                || !fresh.IsEnabled || fresh.IsOffscreen)
+                throw new PointerInterferenceException("The picker panel lost keyboard ownership before its native step.");
+            Check();
+            validateForeground(fresh);
+            Check();
+            global::FlaUI.Core.Input.Keyboard.Type(key);
+            Check();
+            return Task.CompletedTask;
+        }, session: session).GetAwaiter().GetResult();
     }
 
     internal delegate void SelectionClick(Func<AutomationElement> target, Func<AutomationElement, Point> point,
@@ -251,21 +303,22 @@ public static class DesktopPointer
     private static Task ClickCore(Func<AutomationElement> target, PointerClickOptions options,
         Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory, CancellationToken token,
         string? reason = null, AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null,
-        bool hasFreshIntent = true)
+        bool hasFreshIntent = true, Action? validateBeforePress = null)
     {
         var preparation = FlaUiPointerPreparation.Capture();
         profile?.Mark("pointer-register-session");
         var (session, remaining, processId) = PrepareCall(target, options.Timeout, token, initialTarget);
         return Controller.RunAsync(options.ClickCount == 2 ? "double-click" : "click", remaining,
             operation => ClickInOperation(operation, target, options, prepare, pointFactory, processId, reason,
-                profile: profile, preparation: preparation, hasFreshIntent: hasFreshIntent),
+                profile: profile, preparation: preparation, hasFreshIntent: hasFreshIntent,
+                validateBeforePress: validateBeforePress),
             token, session, profile);
     }
 
     private static Task ClickInOperation(DesktopPointerController.PointerOperation operation, Func<AutomationElement> target,
         PointerClickOptions options, Action<AutomationElement>? prepare, Func<AutomationElement, Point>? pointFactory,
         int processId, string? reason, bool activateWindow = true, PointerPhaseTrace? profile = null,
-        FlaUiPointerPreparation? preparation = null, bool hasFreshIntent = true)
+        FlaUiPointerPreparation? preparation = null, bool hasFreshIntent = true, Action? validateBeforePress = null)
     {
         if (reason != null) operation.Log("physical-fallback", detail: reason);
         var preparationOnce = new PointerPreparationOnce();
@@ -282,7 +335,11 @@ public static class DesktopPointer
             operation.Check();
             operation.Log("target", resolved.Point, $"pid={resolved.ProcessId}; hwnd={resolved.Window}; locator={resolved.Locator}");
             profile?.Mark("pointer-send-click", $"remaining={operation.Remaining.TotalMilliseconds:0}ms");
-            operation.ClickAsync(resolved.Point, options, () => resolved.ValidateExact(preparation)).GetAwaiter().GetResult();
+            operation.ClickAsync(resolved.Point, options, () =>
+            {
+                validateBeforePress?.Invoke();
+                resolved.ValidateExact(preparation);
+            }).GetAwaiter().GetResult();
         }, obstruction => hasFreshIntent && preparation?.Recover(target(), obstruction, operation) == true);
         return Task.CompletedTask;
     }
