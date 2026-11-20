@@ -513,7 +513,7 @@ public sealed class RecorderStepEditingTests
             await Assert.That(preview).Contains("DateTime.Today.AddDays(3)");
             await Assert.That(session.StepJournal[5].ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
             await Assert.That(session.StepJournal[5].StatusMessage).IsEqualTo("Existing selector warning.");
-            await Assert.That(preview).Contains("351000000000L");
+            await Assert.That(preview).Contains("global::System.TimeSpan.FromHours(9) + global::System.TimeSpan.FromMinutes(45)");
             await Assert.That(preview).Contains("\"Alpha\"");
             await Assert.That(preview).Contains("\"Omega\"");
         }
@@ -617,7 +617,7 @@ public sealed class RecorderStepEditingTests
             await Assert.That(timeResult.Success).IsFalse();
             await Assert.That(timeResult.Message).Contains("time-of-day payload");
             await Assert.That(session.StepJournal[0].Preview).Contains("10");
-            await Assert.That(session.StepJournal[1].Preview).Contains("288000000000L");
+            await Assert.That(session.StepJournal[1].Preview).Contains("global::System.TimeSpan.FromHours(8)");
             await Assert.That(repairedResult.Success).IsTrue();
             await Assert.That(repairedJournalEntry.ValidationStatus).IsEqualTo(RecorderValidationStatus.Warning);
             await Assert.That(repairedJournalEntry.CanPersist).IsTrue();
