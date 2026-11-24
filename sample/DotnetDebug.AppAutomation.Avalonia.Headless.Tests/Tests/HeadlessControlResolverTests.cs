@@ -1121,6 +1121,52 @@ public sealed class HeadlessControlResolverTests
     }
 
     [Test]
+    [Arguments("Closed", null)]
+    [Arguments("pending", "ambiguous")]
+    [Arguments("Missing", "not found")]
+    [NotInParallel("DesktopUi")]
+    public async Task ConfirmedFilterValidatesOnlyRequestedCaptions(string requested, string? expectedError)
+    {
+        using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        HeadlessRuntime.Dispatch(() => session.MainWindow.Show());
+        var resolver = new HeadlessControlResolver(session.MainWindow).WithComboBoxFilter(
+            "ArmStatusFilter",
+            ComboBoxFilterParts.ByAutomationIds("ArmStatusFilter", "ArmStatusFilter_OpenButton",
+                "ArmStatusFilter_Results", "ArmStatusFilter_ApplyButton", "ArmStatusFilter_CancelButton"));
+        var page = new MainWindowPage(resolver);
+        page.SelectTabItem(static candidate => candidate.ArmDesktopTabItem);
+        HeadlessRuntime.Dispatch(() =>
+        {
+            var desktop = session.MainWindow.GetVisualDescendants().OfType<global::DotnetDebug.Avalonia.ArmDesktopControl>().Single();
+            desktop.ArmStatusFilterItems.Add(new("Pending"));
+        });
+
+        page.WaitUntilSelectedItemsEqual(static candidate => candidate.ArmStatusFilter, ["Open"]);
+        if (expectedError is null)
+        {
+            page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, [requested]);
+        }
+        else
+        {
+            // A valid value is requested first, but no part of the set may be applied.
+            var error = Assert.Throws<UiOperationException>(() =>
+                page.ApplyFilterSelection(static candidate => candidate.ArmStatusFilter, ["Closed", requested]));
+            await Assert.That(error.InnerException?.Message).Contains(expectedError);
+            await Assert.That(error.InnerException?.Message).Contains(requested, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var filter = page.ArmStatusFilter;
+        var expected = expectedError is null ? requested : "Open";
+        using (Assert.Multiple())
+        {
+            await Assert.That(filter.IsOpen).IsEqualTo(expectedError is not null);
+            await Assert.That(filter.SelectedItems).IsEquivalentTo([expected]);
+            await Assert.That(page.ArmStatusFilterStatusLabel.Text).IsEqualTo($"Filter: {expected}");
+            await Assert.That(filter.Items.Count(static item => item == "Pending")).IsEqualTo(2);
+        }
+    }
+
+    [Test]
     [Arguments("prefix", 2, "ORDER-02")]
     [Arguments("reordered", 21, null)]
     [Arguments("sorted-view", 38, "ORDER-21")]
@@ -1592,6 +1638,9 @@ public sealed class HeadlessControlResolverTests
         var entries = checkboxRows
             ? Enumerable.Range(0, checkboxItemCount).Select(index => new DisplayListEntry(index == 11 ? "Экспорт" : $"Customer {index + 1:00}")).ToArray()
             : [new DisplayListEntry("Customer A"), new DisplayListEntry("Customer B")];
+        if (captionOnAttachment) entries[1].IsChecked = true;
+        var selectionStarted = false;
+        var revisitedUnchangedRow = false;
         var list = HeadlessRuntime.Dispatch(() =>
         {
             var control = new global::Avalonia.Controls.ListBox
@@ -1614,6 +1663,8 @@ public sealed class HeadlessControlResolverTests
                     if (captionOnAttachment)
                         checkBox.AttachedToVisualTree += (_, _) =>
                         {
+                            if (selectionStarted && ReferenceEquals(entry, entries[entries.Length / 2]))
+                                revisitedUnchangedRow = true;
                             checkBox.Content = entry?.Caption;
                             AutomationProperties.SetName(checkBox, entry?.Caption);
                         };
@@ -1624,6 +1675,8 @@ public sealed class HeadlessControlResolverTests
                     {
                         if (args.Property != global::Avalonia.Controls.Primitives.ToggleButton.IsCheckedProperty
                             || !checkBox.IsAttachedToVisualTree()) return;
+                        if (captionOnAttachment && ReferenceEquals(entry, entries[0]) && checkBox.IsChecked == true)
+                            selectionStarted = true;
                         var index = Array.IndexOf(entries, entry);
                         if (checkBox.IsChecked == true) control.Selection.Select(index);
                         else control.Selection.Deselect(index);
@@ -1670,6 +1723,11 @@ public sealed class HeadlessControlResolverTests
         if (checkboxRows)
         {
             items.SetSelectedItems([entries[0].Caption]);
+            if (captionOnAttachment)
+            {
+                await Assert.That(revisitedUnchangedRow).IsFalse();
+                await Assert.That(entries[1].IsChecked).IsFalse();
+            }
             await Assert.That(items.SelectedItems).IsEquivalentTo([entries[0].Caption]);
         }
         var expected = checkboxRows ? new[] { entries[0].Caption, entries[entries.Length / 2].Caption, entries[^1].Caption } : ["Customer B"];
