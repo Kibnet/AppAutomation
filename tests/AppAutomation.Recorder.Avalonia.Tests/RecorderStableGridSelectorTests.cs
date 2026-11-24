@@ -498,12 +498,19 @@ public sealed class RecorderStableGridSelectorTests
     }
 
     [Test]
-    public async Task Recorder_UsesGridSearchPickerCellForCheckpointCapture()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Recorder_UsesGridSearchPickerCellForCheckpointCapture(bool sortedObjectKey)
     {
         var row = new ItemRow("ITEM-42", "Search result");
+        var other = new ItemRow("ITEM-41", "Other row");
         var root = new StackPanel();
-        var sourceGrid = new GridHost { ItemsSource = new[] { row } };
-        var sourceRow = new Border();
+        var sourceGrid = new CatalogGridHost
+        {
+            ItemsSource = sortedObjectKey ? new[] { other, row } : new[] { row },
+            CollectionView = sortedObjectKey ? new[] { row, other } : null
+        };
+        var sourceRow = new Border { DataContext = sortedObjectKey ? row : null };
         var picker = new Border();
         var input = new TextBox { Text = row.Product };
         var targetGrid = new StackPanel();
@@ -519,6 +526,15 @@ public sealed class RecorderStableGridSelectorTests
         AutomationProperties.SetAutomationId(input, "ItemPicker_Input");
         AutomationProperties.SetAutomationId(targetGrid, "ItemsGrid");
         AutomationProperties.SetAutomationId(displayedCell, "ItemsGrid_Row0_ProductCell");
+        var hiddenCell = new Button { Content = "Hidden value", DataContext = row, IsVisible = false };
+        AutomationProperties.SetAutomationId(hiddenCell, "ItemsGrid_Row0_ProductCell");
+        targetGrid.Children.Add(hiddenCell);
+        if (sortedObjectKey)
+        {
+            var otherCell = new Button { Content = other.Product, DataContext = other };
+            AutomationProperties.SetAutomationId(otherCell, "ItemsGrid_Row1_ProductCell");
+            targetGrid.Children.Add(otherCell);
+        }
 
         picker.Child = input;
         sourceRow.Child = picker;
@@ -527,11 +543,20 @@ public sealed class RecorderStableGridSelectorTests
         root.Children.Add(sourceGrid);
         root.Children.Add(targetGrid);
 
-        var options = new AppAutomationRecorderOptions();
-        options.GridHints.Add(new RecorderGridHint(
-            "ItemsGridVisual",
-            "ItemsGrid",
-            ["Key", "Product"]));
+        var catalog = new GridAutomationCatalog();
+        if (sortedObjectKey)
+        {
+            catalog = catalog.Add(
+                GridAutomationDefinition.ByAutomationIds("ItemsGrid", "ItemsGridVisual", "ItemsGrid")
+                    .WithColumns(GridColumnDefinition.ObjectKey("Key"), GridColumnDefinition.Map("Product"))
+                    .IdentifyRowsBy("Key"));
+        }
+
+        var options = new AppAutomationRecorderOptions { GridAutomation = catalog };
+        if (!sortedObjectKey)
+        {
+            options.GridHints.Add(new RecorderGridHint("ItemsGridVisual", "ItemsGrid", ["Key", "Product"]));
+        }
         options.GridSearchPickerHints.Add(new RecorderGridSearchPickerHint(
             "ItemPicker",
             "ItemsGrid",
@@ -540,15 +565,17 @@ public sealed class RecorderStableGridSelectorTests
         var factory = new RecorderStepFactory(options, () => root);
 
         var described = factory.TryDescribeSemanticValue(input, out var description, out var descriptionError);
+        await Assert.That(described).IsTrue().Because(descriptionError ?? string.Empty);
+        await Assert.That(descriptionError).IsEmpty();
+        await Assert.That(description!.ValueKind).IsEqualTo(RecorderValueKind.GridCellText);
+        await Assert.That(description.CurrentValueText).IsEqualTo("Search result");
+        if (sortedObjectKey) return;
+
         var result = factory.TryCreateCheckpointStep(input, "productBeforeSave");
         var preview = CreateGenerator().GeneratePreview(result.Step!);
 
         using (Assert.Multiple())
         {
-            await Assert.That(described).IsTrue();
-            await Assert.That(descriptionError).IsEmpty();
-            await Assert.That(description!.ValueKind).IsEqualTo(RecorderValueKind.GridCellText);
-            await Assert.That(description.CurrentValueText).IsEqualTo("Search result");
             await Assert.That(result.Success).IsTrue();
             await Assert.That(result.Step!.Control.LocatorValue).IsEqualTo("ItemsGrid");
             await Assert.That(result.Step.Control.ControlType).IsEqualTo(UiControlType.Grid);
@@ -943,16 +970,18 @@ public sealed class RecorderStableGridSelectorTests
     [Test]
     public async Task NativeGrid_UsesOnlyExplicitModelKeyAsAutomaticIdentity()
     {
+        var gridColumns = new List<NativeTextColumn>
+        {
+            new("Key", "Key", isReadOnly: true),
+            new("State", "State", isReadOnly: true),
+            new("Localized status", string.Empty, isReadOnly: true)
+        };
         var grid = new NativeGridMetadataHost
         {
-            ItemsSource = new[] { new NativeGridRow("ITEM-42", "Ready") },
-            Columns =
-            [
-                new NativeTextColumn("Key", "Key", isReadOnly: true),
-                new NativeTextColumn("State", "State", isReadOnly: true),
-                new NativeTextColumn("Localized status", string.Empty, isReadOnly: true)
-            ]
+            ItemsSource = new[] { new NativeGridRow("ITEM-42", "Ready", "EUR") },
+            Columns = gridColumns
         };
+        AutomationProperties.SetAutomationId(grid, "NativeGrid");
 
         var columns = GridCellMetadataExtractor.ReadNativeColumns(grid);
 
@@ -965,6 +994,30 @@ public sealed class RecorderStableGridSelectorTests
             await Assert.That(columns.Single(column => column.LogicalName == "Localized status").SourceFieldName)
                 .IsEmpty();
         }
+
+        var options = new AppAutomationRecorderOptions();
+        var selector = new RecorderSelectorResolver(options, () => grid);
+        var capture = new RecorderGridCaptureResolver(options, selector, new RecorderCaptureControlReader(selector), () => grid);
+        await Assert.That(capture.TryCreateNativeGridDefinition(grid, out var originalHint, out var originalDefinition))
+            .IsTrue();
+        await Assert.That(capture.TryCreateNativeGridDefinition(grid, out var sameHint, out var sameDefinition))
+            .IsTrue();
+        await Assert.That(sameHint).IsSameReferenceAs(originalHint);
+        await Assert.That(sameDefinition).IsSameReferenceAs(originalDefinition);
+
+        var currency = new NativeTextColumn("Currency", "Currency", isReadOnly: true);
+        gridColumns.Add(currency);
+        await Assert.That(capture.TryCreateNativeGridDefinition(grid, out var expandedHint, out var expandedDefinition))
+            .IsTrue();
+        await Assert.That(expandedHint.ColumnPropertyNames).Contains("Currency");
+        await Assert.That(expandedDefinition.FindColumn("Currency")).IsNotNull();
+
+        currency.IsVisible = false;
+        await Assert.That(capture.TryCreateNativeGridDefinition(grid, out _, out var visibleDefinition)).IsTrue();
+        await Assert.That(visibleDefinition.FindColumn("Currency")).IsNull();
+
+        gridColumns.Clear();
+        await Assert.That(capture.TryCreateNativeGridDefinition(grid, out _, out _)).IsFalse();
     }
 
     [Test]
@@ -2257,14 +2310,15 @@ public sealed class RecorderStableGridSelectorTests
 
         public string SortMemberPath { get; } = sortMemberPath;
 
-        public bool IsVisible => true;
+        public bool IsVisible { get; set; } = true;
 
         public bool IsReadOnly { get; } = isReadOnly;
     }
 
     private sealed record NativeGridRow(
         [property: Key] string Key,
-        string State);
+        string State,
+        string Currency);
 
     private sealed record OrderRow(string OrderId, string Customer, string Status);
 

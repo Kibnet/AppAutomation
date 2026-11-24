@@ -1,5 +1,10 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
+using AppAutomation.Recorder.Avalonia.SourceScanning;
 using AppAutomation.Recorder.Avalonia.UI;
 using Avalonia;
 using Avalonia.Automation;
@@ -21,6 +26,160 @@ namespace AppAutomation.Recorder.Avalonia.Tests;
 [NotInParallel]
 public sealed class RecorderScenarioDestinationTests
 {
+    [Test]
+    public async Task Save_LeavesDispatcherResponsiveWhileProjectScanIsBlocked()
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario);
+        var context = project.CreateSaveContext();
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderScenarioDestinationTests).Assembly);
+        var releaseScan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = TimeSpan.FromSeconds(10);
+        using var watchdog = new CancellationTokenSource(timeout);
+        var scanEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heartbeat = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scanner = new AuthoringProjectScanner();
+        var generator = new AuthoringCodeGenerator(scanner, logger: null, scan: (target, token) =>
+        {
+            scanEntered.TrySetResult(Dispatcher.UIThread.CheckAccess());
+            releaseScan.Task.Wait(token);
+            return scanner.Scan(target, token);
+        });
+        var saving = headless.Dispatch(async () =>
+        {
+            var window = new Window();
+            try
+            {
+                var saveTask = generator.SaveAsync(window, project.Options,
+                    [RecorderTestSteps.CreateButtonClick("SaveButton")],
+                    outputDirectoryOverride: null, context, watchdog.Token);
+                Dispatcher.UIThread.Post(() => heartbeat.TrySetResult(Dispatcher.UIThread.CheckAccess()));
+                return await saveTask;
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+        RecorderSaveResult? result = null;
+        Exception? observationFailure = null;
+        try
+        {
+            // The watchdog bounds a broken test; assertions use gate ordering, not elapsed time.
+            await Assert.That(await scanEntered.Task.WaitAsync(watchdog.Token)).IsFalse();
+            await Assert.That(await heartbeat.Task.WaitAsync(watchdog.Token)).IsTrue();
+            await Assert.That(saving.IsCompleted).IsFalse();
+        }
+        catch (Exception error)
+        {
+            observationFailure = error;
+            throw;
+        }
+        finally
+        {
+            releaseScan.TrySetResult();
+            try
+            {
+                result = await saving.WaitAsync(timeout);
+            }
+            catch (Exception cleanupFailure) when (observationFailure is not null)
+            {
+                observationFailure.Data["Save cleanup"] = cleanupFailure;
+            }
+        }
+        await Assert.That(result!.Success).IsTrue();
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task InteractiveSession_RejectsMalformedRecoveryWithoutChangingJournal(bool missingControl)
+    {
+        using var project = RecorderScenarioDestinationProject.Create(
+            RecorderScenarioDestinationSources.MainWindowPage,
+            RecorderScenarioDestinationSources.RootScenario);
+        var context = project.CreateSaveContext();
+        var autosave = await project.AutosaveAsync(context);
+        await Assert.That(autosave.Success).IsTrue();
+        var validStep = RecorderTestSteps.CreateButtonClick("SaveButton");
+        var invalidStep = missingControl
+            ? validStep with { Control = null!, StepId = Guid.NewGuid() }
+            : validStep with
+            {
+                StepId = Guid.NewGuid(),
+                ActionKind = RecordedActionKind.SelectGridRows,
+                Control = validStep.Control with { ControlType = UiControlType.Grid },
+                GridSelectedRows = [null!]
+            };
+        var state = new RecorderAutosaveState(context.ScenarioName, context.DraftIdentity,
+            "RestoreMalformed", DateTimeOffset.UtcNow, [validStep, invalidStep]);
+        var marker = RecorderAutosaveStateSerializer.CreateMarker(state);
+        var source = await File.ReadAllLinesAsync(autosave.ScenarioFilePath!);
+        await File.WriteAllLinesAsync(autosave.ScenarioFilePath!, source.Select(line =>
+            line.StartsWith(RecorderAutosaveStateSerializer.MarkerPrefix, StringComparison.Ordinal) ? marker : line));
+        using var recorder = InteractiveScenarioSelectionFixture.Create(project.RootPath);
+        await recorder.WaitForScanAsync();
+        recorder.SelectValidTarget(context.ScenarioName);
+        var originalPreview = recorder.Session.LatestPreview;
+
+        var restored = await recorder.Selection.RestoreAutosaveAsync();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(restored).IsFalse();
+            await Assert.That(recorder.Session.StepJournal).IsEmpty();
+            await Assert.That(recorder.Session.LatestPreview).IsEqualTo(originalPreview);
+            await Assert.That(recorder.Session.LatestStatus)
+                .Contains(missingControl ? "Steps[1].Control" : "Steps[1].GridSelectedRows[0]");
+            await Assert.That(recorder.Session.IsBusy).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task AutosaveRecoveryRejectsMalformedStructuresBeforeReturningSteps()
+    {
+        using var project = RecorderScenarioDestinationProject.Create();
+        var filePath = Path.Combine(project.RootPath, "malformed.autosave.cs");
+        var state = new RecorderAutosaveState("Recovery", string.Empty, "Recovery", DateTimeOffset.UtcNow,
+            [RecorderTestSteps.CreateButtonClick("SaveButton")]);
+        (string Member, Action<JsonNode> Corrupt)[] cases =
+        [
+            ("recorded steps", payload => payload.AsObject().Remove("Steps")),
+            ("recorded steps", payload => payload["Steps"] = null),
+            ("Steps[0]", payload => payload["Steps"]![0] = null),
+            ("Steps[0].Control", payload => payload["Steps"]![0]!["Control"] = null),
+            ("Steps[0].Control.LocatorValue", payload => payload["Steps"]![0]!["Control"]!["LocatorValue"] = null),
+            ("ScenarioName", payload => payload["ScenarioName"] = null),
+            ("Steps[0].GridRowConditions[0]", payload => payload["Steps"]![0]!["GridRowConditions"] = new JsonArray((JsonNode?)null)),
+            ("Steps[0].GridSelectedRows[0]", payload => payload["Steps"]![0]!["GridSelectedRows"] = new JsonArray((JsonNode?)null)),
+            ("Steps[0].GridSelectedRows[0].Conditions", payload => payload["Steps"]![0]!["GridSelectedRows"] =
+                new JsonArray(new JsonObject { ["Conditions"] = null })),
+            ("Steps[0].GridSelectedRows[0].Conditions[0]", payload => payload["Steps"]![0]!["GridSelectedRows"] =
+                new JsonArray(new JsonObject { ["Conditions"] = new JsonArray((JsonNode?)null) })),
+            ("Steps[0].StringValues[0]", payload => payload["Steps"]![0]!["StringValues"] = new JsonArray((JsonNode?)null)),
+            ("Steps[0].RuntimeValidationFindings[0]", payload => payload["Steps"]![0]!["RuntimeValidationFindings"] = new JsonArray((JsonNode?)null)),
+            ("Steps[0].NumericExpectedExpression.Left", payload => payload["Steps"]![0]!["NumericExpectedExpression"] =
+                JsonSerializer.SerializeToNode(new RecorderNumericExpectedExpression(RecorderArithmeticOperation.Add,
+                    null!, RecorderNumericOperand.FromLiteral(1)))),
+            ("Steps[0].NumericExpectedExpression.AdditionalOperations[0]", payload => payload["Steps"]![0]!["NumericExpectedExpression"] =
+                JsonSerializer.SerializeToNode(new RecorderNumericExpectedExpression(RecorderArithmeticOperation.Add,
+                    RecorderNumericOperand.FromLiteral(1), RecorderNumericOperand.FromLiteral(2), [null!])))
+        ];
+        foreach (var (member, corrupt) in cases)
+        {
+            var payload = JsonSerializer.SerializeToNode(state)!;
+            corrupt(payload);
+            await File.WriteAllTextAsync(filePath, RecorderAutosaveStateSerializer.MarkerPrefix
+                + Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString())));
+
+            await Assert.That(RecorderAutosaveStateSerializer.TryRead(filePath, out var restored, out var error)).IsFalse();
+            await Assert.That(restored).IsNull();
+            await Assert.That(error).Contains(member);
+        }
+
+        await File.WriteAllTextAsync(filePath, RecorderAutosaveStateSerializer.CreateMarker(state));
+        await Assert.That(RecorderAutosaveStateSerializer.TryRead(filePath, out var valid, out var validError)).IsTrue().Because(validError);
+        await Assert.That(valid!.Steps.Single()).IsEqualTo(state.Steps.Single());
+    }
+
     [Test]
     public async Task FileReservation_RethrowsNonCollisionIoFailure()
     {
@@ -79,20 +238,26 @@ public sealed class RecorderScenarioDestinationTests
     }
 
     [Test]
-    public async Task InteractiveSession_GatesStartUntilDestinationAndNameAreValid()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task InteractiveSession_GatesStartUntilDestinationAndNameAreValid(bool missingConfiguredDestination)
     {
         using var project = RecorderScenarioDestinationProject.Create(
             RecorderScenarioDestinationSources.CustomerScenarioWithOneTypeParameter);
-        using var recorder = InteractiveScenarioSelectionFixture.Create(project.RootPath);
+        using var recorder = InteractiveScenarioSelectionFixture.Create(project.RootPath,
+            scenarioClassName: missingConfiguredDestination ? "MissingScenario" : null);
 
         recorder.Session.Start();
         await Assert.That(recorder.Session.State).IsEqualTo(RecorderSessionState.Off);
 
         await recorder.WaitForScanAsync();
         await Assert.That(recorder.Selection.CanStartRecording).IsFalse();
+        if (missingConfiguredDestination)
+            await Assert.That(recorder.Selection.ScenarioSelectionError).Contains("MissingScenario");
 
         var destination = recorder.Selection.ScenarioDestinations.Single();
         await Assert.That(recorder.Selection.TrySelectScenarioDestination(destination, "CreateCustomer")).IsTrue();
+        await Assert.That(recorder.Selection.ScenarioSelectionError).IsNull();
         await Assert.That(recorder.Selection.ScenarioName).IsEqualTo("CreateCustomer");
         await Assert.That(recorder.Selection.TrySetScenarioName("../unsafe")).IsTrue();
         await Assert.That(recorder.Selection.CanStartRecording).IsFalse();

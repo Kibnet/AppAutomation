@@ -1405,6 +1405,8 @@ public sealed class HeadlessControlResolverTests
     public async Task ScopedLookup_RequiresOneMatchInsideScope(int matchCount)
     {
         using var session = DesktopAppSession.Launch(DotnetDebugAppLaunchHost.CreateHeadlessLaunchOptions());
+        var insideClicks = 0;
+        var outsideClicks = 0;
         HeadlessRuntime.Dispatch(() =>
         {
             var scope = new global::Avalonia.Controls.StackPanel { Name = "SelectedScope" };
@@ -1413,11 +1415,13 @@ public sealed class HeadlessControlResolverTests
             {
                 var button = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
                 global::Avalonia.Automation.AutomationProperties.SetName(button, "RepeatedItem");
+                button.Click += (_, _) => insideClicks++;
                 scope.Children.Add(button);
             }
 
             var outside = new global::Avalonia.Controls.Button { Name = "RepeatedItem" };
             global::Avalonia.Automation.AutomationProperties.SetName(outside, "RepeatedItem");
+            outside.Click += (_, _) => outsideClicks++;
             session.MainWindow.Content = new global::Avalonia.Controls.StackPanel
             {
                 Children = { scope, outside }
@@ -1431,23 +1435,28 @@ public sealed class HeadlessControlResolverTests
             Scope = new UiControlScope("SelectedScope", UiLocatorKind.Name)
         };
 
-        if (matchCount == 1)
+        var dialog = resolver.WithDialog("SelectedDialog",
+            new DialogControlParts("Message", "RepeatedItem", LocatorKind: UiLocatorKind.Name))
+            .Resolve<IDialogControl>(definition with { PropertyName = "SelectedDialog", ControlType = UiControlType.Dialog });
+        Action[] lookups = [() => _ = resolver.Resolve<IButtonControl>(definition), () => dialog.Complete()];
+        foreach (var lookup in lookups)
         {
-            await Assert.That(resolver.Resolve<IButtonControl>(definition)).IsNotNull();
-            return;
+            if (matchCount == 1)
+            {
+                lookup();
+                continue;
+            }
+
+            UiControlResolutionException? failure = null;
+            try { lookup(); }
+            catch (UiControlResolutionException exception) { failure = exception; }
+            await Assert.That(failure?.Failure).IsEqualTo(matchCount == 0
+                ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous);
         }
 
-        UiControlResolutionException? failure = null;
-        try
-        {
-            resolver.Resolve<IButtonControl>(definition);
-        }
-        catch (UiControlResolutionException exception)
-        {
-            failure = exception;
-        }
-        await Assert.That(failure?.Failure).IsEqualTo(matchCount == 0
-            ? UiControlResolutionFailure.NotFound : UiControlResolutionFailure.Ambiguous);
+        var clicks = HeadlessRuntime.Dispatch(() => (Inside: insideClicks, Outside: outsideClicks));
+        await Assert.That(clicks.Inside).IsEqualTo(matchCount == 1 ? 1 : 0);
+        await Assert.That(clicks.Outside).IsEqualTo(0);
     }
 
     [Test]

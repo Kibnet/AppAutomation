@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using Microsoft.CodeAnalysis;
@@ -60,6 +61,14 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         id: "EUA006",
         title: "Conflicting UiControl locator",
         messageFormat: "Page '{0}' assigns {1} locator '{2}' to both '{3}' and '{4}'",
+        category: "AppAutomation.Authoring",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor UnsupportedPageShapeRule = new(
+        id: "EUA007",
+        title: "Unsupported UiPage shape",
+        messageFormat: "UiControl source generation does not support {1} page '{0}'",
         category: "AppAutomation.Authoring",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -239,7 +248,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         var validCandidates = new List<PageCandidate>();
         foreach (var candidate in candidates)
         {
-            if (!ValidateCandidate(context, candidate, reportDiagnostics: true)
+            if (!ValidateCandidate(context, candidate)
                 || !ValidateControlConflicts(context, candidate))
             {
                 continue;
@@ -258,7 +267,11 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
     private static void EmitPageSource(SourceProductionContext context, PageCandidate candidate)
     {
         var source = RenderPageSource(candidate);
-        context.AddSource($"{candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}.UiControls.g.cs", source);
+        using var hash = SHA256.Create();
+        var identity = candidate.ClassSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        // Roslyn compares hints without case and rejects '@' from escaped identifiers.
+        var suffix = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(identity))).Replace("-", string.Empty);
+        context.AddSource($"{candidate.ClassSymbol.Name}.{suffix}.UiControls.g.cs", source);
     }
 
     private static void EmitManifestSource(
@@ -295,35 +308,33 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         return candidate.Conflicts.IsDefaultOrEmpty;
     }
 
-    private static bool ValidateCandidate(SourceProductionContext context, PageCandidate candidate, bool reportDiagnostics)
+    private static bool ValidateCandidate(SourceProductionContext context, PageCandidate candidate)
     {
         if (!candidate.IsPartial)
         {
-            if (reportDiagnostics)
-            {
-                context.ReportDiagnostic(Diagnostic.Create(NonPartialClassRule, candidate.Location, candidate.ClassSymbol.Name));
-            }
-
+            context.ReportDiagnostic(Diagnostic.Create(NonPartialClassRule, candidate.Location, candidate.ClassSymbol.Name));
             return false;
         }
 
         if (candidate.ClassSymbol.ContainingType is not null)
         {
-            if (reportDiagnostics)
-            {
-                context.ReportDiagnostic(Diagnostic.Create(NestedClassRule, candidate.Location, candidate.ClassSymbol.Name));
-            }
+            context.ReportDiagnostic(Diagnostic.Create(NestedClassRule, candidate.Location, candidate.ClassSymbol.Name));
+            return false;
+        }
 
+        if (candidate.ClassSymbol.IsGenericType || candidate.ClassSymbol.IsFileLocal)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                UnsupportedPageShapeRule,
+                candidate.Location,
+                candidate.ClassSymbol.Name,
+                candidate.ClassSymbol.IsGenericType ? "generic" : "file-local"));
             return false;
         }
 
         if (!InheritsFromUiPage(candidate.ClassSymbol))
         {
-            if (reportDiagnostics)
-            {
-                context.ReportDiagnostic(Diagnostic.Create(NonUiPageRule, candidate.Location, candidate.ClassSymbol.Name));
-            }
-
+            context.ReportDiagnostic(Diagnostic.Create(NonUiPageRule, candidate.Location, candidate.ClassSymbol.Name));
             return false;
         }
 
@@ -331,11 +342,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         {
             if (!SyntaxFacts.IsValidIdentifier(control.PropertyName))
             {
-                if (reportDiagnostics)
-                {
-                    context.ReportDiagnostic(Diagnostic.Create(InvalidPropertyNameRule, control.Location, control.PropertyName));
-                }
-
+                context.ReportDiagnostic(Diagnostic.Create(InvalidPropertyNameRule, control.Location, control.PropertyName));
                 return false;
             }
         }
@@ -371,7 +378,9 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             source.AppendLine();
         }
 
-        source.Append("public static class ")
+        var accessibility = candidate.ClassSymbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal";
+        source.Append(accessibility)
+            .Append(" static class ")
             .Append(candidate.ClassSymbol.Name)
             .AppendLine("Definitions");
         source.AppendLine("{");
@@ -381,24 +390,23 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             source.Append("    public static global::AppAutomation.Abstractions.UiControlDefinition ")
                 .Append(control.PropertyName)
                 .Append(" { get; } = new(")
-                .Append('"')
-                .Append(EscapeStringLiteral(control.PropertyName))
-                .Append("\", global::AppAutomation.Abstractions.UiControlType.")
+                .Append(FormatStringLiteral(control.PropertyName))
+                .Append(", global::AppAutomation.Abstractions.UiControlType.")
                 .Append(ResolveControlType(control.ControlTypeValue))
-                .Append(", \"")
-                .Append(EscapeStringLiteral(control.LocatorValue))
-                .Append("\", global::AppAutomation.Abstractions.UiLocatorKind.")
+                .Append(", ")
+                .Append(FormatStringLiteral(control.LocatorValue))
+                .Append(", global::AppAutomation.Abstractions.UiLocatorKind.")
                 .Append(ResolveLocatorKind(control.LocatorKindValue))
                 .Append(", ")
                 .Append(control.FallbackToName ? "true" : "false")
                 .AppendLine(");");
         }
 
-        source.Append("    public static global::AppAutomation.Abstractions.UiPageDefinition Page { get; } = new(\"")
-            .Append(EscapeStringLiteral(candidate.ClassSymbol.ToDisplayString()))
-            .Append("\", \"")
-            .Append(EscapeStringLiteral(candidate.ClassSymbol.Name))
-            .Append("\", new global::AppAutomation.Abstractions.UiControlDefinition[]");
+        source.Append("    public static global::AppAutomation.Abstractions.UiPageDefinition Page { get; } = new(")
+            .Append(FormatStringLiteral(candidate.ClassSymbol.ToDisplayString()))
+            .Append(", ")
+            .Append(FormatStringLiteral(candidate.ClassSymbol.Name))
+            .Append(", new global::AppAutomation.Abstractions.UiControlDefinition[]");
         source.AppendLine();
         source.AppendLine("    {");
         foreach (var control in candidate.Controls)
@@ -412,8 +420,11 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         source.AppendLine("}");
         source.AppendLine();
 
-        source.Append("public sealed partial class ")
-            .Append(candidate.ClassSymbol.Name)
+        source.Append(accessibility).Append(' ');
+        if (candidate.ClassSymbol.IsAbstract) source.Append("abstract ");
+        if (candidate.ClassSymbol.IsSealed) source.Append("sealed ");
+        source.Append("partial class ")
+            .Append(EscapeIdentifier(candidate.ClassSymbol.Name))
             .AppendLine();
         source.AppendLine("{");
 
@@ -457,9 +468,9 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         source.AppendLine("{");
         source.AppendLine("    public global::AppAutomation.Abstractions.UiLocatorManifest GetManifest() => Manifest;");
         source.AppendLine();
-        source.Append("    public static global::AppAutomation.Abstractions.UiLocatorManifest Manifest { get; } = new(\"1\", \"")
-            .Append(EscapeStringLiteral(assemblyName))
-            .Append("\", new global::AppAutomation.Abstractions.UiPageDefinition[]");
+        source.Append("    public static global::AppAutomation.Abstractions.UiLocatorManifest Manifest { get; } = new(\"1\", ")
+            .Append(FormatStringLiteral(assemblyName))
+            .Append(", new global::AppAutomation.Abstractions.UiPageDefinition[]");
         source.AppendLine();
         source.AppendLine("    {");
         foreach (var candidate in candidates)
@@ -468,7 +479,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
                 ? string.Empty
                 : candidate.ClassSymbol.ContainingNamespace.ToDisplayString();
             var definitionsReference = string.IsNullOrEmpty(fullyQualifiedPageNamespace)
-                ? $"{candidate.ClassSymbol.Name}Definitions.Page"
+                ? $"global::{candidate.ClassSymbol.Name}Definitions.Page"
                 : $"global::{fullyQualifiedPageNamespace}.{candidate.ClassSymbol.Name}Definitions.Page";
 
             source.Append("        ")
@@ -584,12 +595,14 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
         };
     }
 
-    private static string EscapeStringLiteral(string value)
+    private static string FormatStringLiteral(string value)
     {
-        return value
-            .Replace("\\", "\\\\")
-            .Replace("\"", "\\\"");
+        return Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
     }
+
+    private static string EscapeIdentifier(string value) =>
+        SyntaxFacts.GetKeywordKind(value) != SyntaxKind.None
+        || SyntaxFacts.GetContextualKeywordKind(value) != SyntaxKind.None ? "@" + value : value;
 
     private static string SanitizeIdentifier(string value)
     {

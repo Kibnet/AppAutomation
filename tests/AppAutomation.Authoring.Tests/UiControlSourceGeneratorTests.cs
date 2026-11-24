@@ -5,6 +5,7 @@ using System.Linq;
 using AppAutomation.Abstractions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -47,13 +48,13 @@ public sealed partial class MainWindowPage : UiPage
 """;
 
         var result = RunGenerator(source, "Sample.Authoring");
+        await AssertSuccessfulGeneration(result);
         var generatedSources = string.Join(
             Environment.NewLine + Environment.NewLine,
             result.GeneratedSources.Values.OrderBy(static value => value, StringComparer.Ordinal));
 
         using (Assert.Multiple())
         {
-            await Assert.That(result.Diagnostics.Count).IsEqualTo(0);
             await Assert.That(result.GeneratedSources.Count).IsEqualTo(2);
             await Assert.That(generatedSources).Contains("public static class MainWindowPageDefinitions");
             await Assert.That(generatedSources).Contains("public global::AppAutomation.Abstractions.ITextBoxControl NumbersInput => Resolve<global::AppAutomation.Abstractions.ITextBoxControl>(MainWindowPageDefinitions.NumbersInput);");
@@ -81,30 +82,128 @@ public sealed partial class MainWindowPage : UiPage
     }
 
     [Test]
-    public async Task Generator_ReportsDiagnostic_ForNonPartialPage()
+    [Arguments("public sealed class MainWindowPage", false, "EUA001")]
+    [Arguments("public partial class MainWindowPage<T>", false, "EUA007")]
+    [Arguments("file partial class MainWindowPage", false, "EUA007")]
+    [Arguments("public partial class MainWindowPage", true, "EUA004")]
+    public async Task Generator_ReportsDiagnostic_ForUnsupportedPage(string declaration, bool nested, string diagnosticId)
     {
-        const string source = """
+        var source = $$"""
 using AppAutomation.Abstractions;
 
 namespace Sample.Pages;
 
+{{(nested ? "public class Container {" : string.Empty)}}
 [UiControl("ResultText", UiControlType.Label, "ResultText")]
-public sealed class MainWindowPage : UiPage
+{{declaration}} : UiPage
 {
     public MainWindowPage(IUiControlResolver resolver) : base(resolver)
     {
     }
 }
+{{(nested ? "}" : string.Empty)}}
 """;
 
         var result = RunGenerator(source, "Sample.Authoring");
-        var diagnosticIds = string.Join(",", result.Diagnostics.Select(static diagnostic => diagnostic.Id));
 
         using (Assert.Multiple())
         {
             await Assert.That(result.GeneratedSources.Count).IsEqualTo(0);
             await Assert.That(result.Diagnostics.Count).IsEqualTo(1);
-            await Assert.That(diagnosticIds).Contains("EUA001");
+            await Assert.That(result.Diagnostics.Single().Id).IsEqualTo(diagnosticId);
+            await Assert.That(result.GeneratorExceptions.Count).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    [Arguments("public", "MainWindowPage")]
+    [Arguments("internal", "MainWindowPage")]
+    [Arguments("public abstract", "MainWindowPage")]
+    [Arguments("internal abstract", "@class")]
+    public async Task Generator_PreservesSupportedPageShapeAndLiteralValues(string modifiers, string typeName)
+    {
+        var source = $$"""
+using AppAutomation.Abstractions;
+
+namespace Sample.Pages;
+
+[UiControl("ResultText", UiControlType.Label, "line1\r\n\"quoted\"\\path\t\0\u0001\u2028\u2029", LocatorKind = UiLocatorKind.Name)]
+{{modifiers}} partial class {{typeName}} : UiPage
+{
+    protected {{typeName}}(IUiControlResolver resolver) : base(resolver) { }
+}
+
+internal sealed class DerivedPage : {{typeName}}
+{
+    public DerivedPage(IUiControlResolver resolver) : base(resolver) { }
+}
+""";
+
+        var result = RunGenerator(source, "Sample.Authoring");
+        await AssertSuccessfulGeneration(result);
+        var page = result.Compilation.GetTypeByMetadataName("Sample.Pages." + typeName.TrimStart('@'))!;
+        var originalLocator = (string)page.GetAttributes().Single().ConstructorArguments[2].Value!;
+        var generatedTree = result.Compilation.SyntaxTrees.Single(static tree => tree.FilePath.EndsWith(".UiControls.g.cs", StringComparison.Ordinal));
+        var generatedLiterals = generatedTree.GetRoot().DescendantNodes().OfType<LiteralExpressionSyntax>()
+            .Select(static literal => literal.Token.ValueText).ToArray();
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(page.DeclaredAccessibility).IsEqualTo(modifiers.StartsWith("public", StringComparison.Ordinal)
+                ? Accessibility.Public : Accessibility.Internal);
+            await Assert.That(page.IsAbstract).IsEqualTo(modifiers.Contains("abstract", StringComparison.Ordinal));
+            await Assert.That(page.IsSealed).IsFalse();
+            await Assert.That(generatedLiterals.Count(value => value == originalLocator)).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task Generator_UsesDistinctStableHints_ForEqualNamesInDifferentNamespaces()
+    {
+        const string source = """
+using AppAutomation.Abstractions;
+
+namespace A.B
+{
+    [UiControl("ResultText", UiControlType.Label, "ResultText")]
+    public partial class MainWindowPage(IUiControlResolver resolver) : UiPage(resolver);
+}
+
+namespace A_B
+{
+    [UiControl("ResultText", UiControlType.Label, "ResultText")]
+    public partial class MainWindowPage(IUiControlResolver resolver) : UiPage(resolver);
+}
+
+namespace a.b
+{
+    [UiControl("ResultText", UiControlType.Label, "ResultText")]
+    public partial class MainWindowPage(IUiControlResolver resolver) : UiPage(resolver);
+}
+""";
+
+        var first = RunGenerator(source, "Sample.Authoring");
+        var second = RunGenerator(source, "Sample.Authoring");
+        await AssertSuccessfulGeneration(first);
+        await AssertSuccessfulGeneration(second);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(first.GeneratedSources.Count).IsEqualTo(4);
+            await Assert.That(first.GeneratedSources.Keys.OrderBy(static hint => hint, StringComparer.Ordinal)
+                .SequenceEqual(second.GeneratedSources.Keys.OrderBy(static hint => hint, StringComparer.Ordinal))).IsTrue();
+        }
+    }
+
+    private static async Task AssertSuccessfulGeneration(GeneratorExecutionResult result)
+    {
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.Diagnostics.Count).IsEqualTo(0);
+            await Assert.That(result.GeneratorExceptions.Count).IsEqualTo(0);
+            await Assert.That(string.Join(Environment.NewLine,
+                result.Compilation.GetDiagnostics().Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)))
+                .IsEqualTo(string.Empty);
         }
     }
 
@@ -118,7 +217,7 @@ public sealed class MainWindowPage : UiPage
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         GeneratorDriver driver = CSharpGeneratorDriver.Create(new UiControlSourceGenerator().AsSourceGenerator());
-        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var outputCompilation, out var diagnostics);
 
         var runResult = driver.GetRunResult();
         var generatedSources = runResult.Results
@@ -127,11 +226,12 @@ public sealed class MainWindowPage : UiPage
                 static result => result.HintName,
                 static result => result.SourceText.ToString(),
                 StringComparer.Ordinal);
-        var diagnostics = runResult.Results
-            .SelectMany(static result => result.Diagnostics)
+        var generatorExceptions = runResult.Results
+            .Where(static result => result.Exception is not null)
+            .Select(static result => result.Exception!)
             .ToArray();
 
-        return new GeneratorExecutionResult(diagnostics, generatedSources);
+        return new GeneratorExecutionResult(diagnostics, generatedSources, outputCompilation, generatorExceptions);
     }
 
     private static MetadataReference[] CreateMetadataReferences()
@@ -163,5 +263,7 @@ public sealed class MainWindowPage : UiPage
 
     private sealed record GeneratorExecutionResult(
         IReadOnlyList<Diagnostic> Diagnostics,
-        IReadOnlyDictionary<string, string> GeneratedSources);
+        IReadOnlyDictionary<string, string> GeneratedSources,
+        Compilation Compilation,
+        IReadOnlyList<Exception> GeneratorExceptions);
 }

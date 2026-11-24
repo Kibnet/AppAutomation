@@ -140,6 +140,8 @@ selectionSource.ConfirmSelection(searchInput, resultsRoot, selectedDisplayText);
 
 Typing or closing the popup does not call `ConfirmSelection`. Replay still resolves the logical `ISearchPickerControl`; a Headless consumer can provide it directly from the ViewModel through `IUiControlAdapter` without popup controls.
 
+Composite parts inherit the logical control's `Scope`; part locators are not permission to search another card. A detached popup must have an existing explicit scope or a provider-proven owner. If ownership cannot be established inside the declared scope, resolution fails instead of selecting the first matching control in the window.
+
 ## 6. Dynamic selectors and selector contract
 
 Keep one selector contract for both runtimes:
@@ -170,6 +172,8 @@ Use framework helpers:
 
 But don't substitute them for bad selectors. If a control is consistently found only through retry, fix the `AutomationId` first.
 
+`UiWait` checks cancellation before the first read and after callbacks. Polling pauses are capped by the remaining monotonic timeout. A callback already in progress cannot be interrupted, but a result returned after the deadline is not success; no further read starts after timeout or cancellation. `TryUntil` reports failure, while `Until` throws `TimeoutException`; cancellation remains `OperationCanceledException`.
+
 ## 9. Isolated desktop build output
 
 If design-time tools or parallel runners lock the AUT output directory, opt into isolated desktop build output:
@@ -196,6 +200,12 @@ If the application is hard to reset in-process, a normal strategy is:
 ---
 
 <a id="русская-версия"></a>
+
+## 11. Recorder persistence and generated pages
+
+Recorder captures UI-affine context and a fixed step snapshot before scheduling project scanning, C# generation and file writes on a worker. Save and autosave remain serialized. A successful Save acknowledges only its captured content revision: a newer recording change keeps its pending autosave; unchanged validation does not create a new dirty revision. Recovery validates the payload structure before replacing the journal; existing valid autosave files keep the same format.
+
+The `[UiControl]` source generator supports non-generic, non-file-local, top-level `partial` pages derived from `UiPage`. It preserves their accessibility and abstract/sealed intent. Generic, file-local, nested and non-partial declarations receive diagnostics instead of a generated incompatible type. Pages with the same short name in different namespaces have distinct deterministic source hints, and locator strings are emitted as escaped C# literals.
 
 ## Русская версия
 
@@ -339,6 +349,8 @@ selectionSource.ConfirmSelection(searchInput, resultsRoot, selectedDisplayText);
 
 При простом вводе или закрытии popup `ConfirmSelection` не вызывается. Воспроизведение по-прежнему разрешает логический `ISearchPickerControl`; Headless-потребитель может связать его с ViewModel через `IUiControlAdapter` без popup-контролов.
 
+Части составного контрола наследуют `Scope` логического владельца: locator части не разрешает поиск в другой карточке. Для detached popup нужен существующий явный scope либо доказанная провайдером принадлежность. Если принадлежность в объявленном scope установить нельзя, поиск завершается отказом, а не выбирает первое совпадение окна.
+
 ## 6. Динамические селекторы и selector contract
 
 Держите один selector contract для обоих runtime:
@@ -368,6 +380,8 @@ selectionSource.ConfirmSelection(searchInput, resultsRoot, selectedDisplayText);
 - `RetryUntil(...)`
 
 Но не подменяйте ими плохие селекторы. Если элемент стабильно находится только через повторные попытки, сначала исправьте `AutomationId`.
+
+`UiWait` проверяет отмену до первого чтения и после callbacks. Пауза ограничивается остатком монотонного таймаута. Уже начатый callback принудительно не прерывается, но его поздний результат не считается успехом; новое чтение после deadline или отмены не начинается. `TryUntil` возвращает неуспех, `Until` бросает `TimeoutException`, отмена остаётся `OperationCanceledException`.
 
 ## 9. Изолированный desktop build output
 
@@ -436,6 +450,9 @@ Recorder, Headless и UIA-публикация должны использова
 Если приложение публикует полный выбор/текущий view через `GridRowSelectionValue.ToAutomationValue`, для `ObjectKey`-колонки
 оно также вызывает `GridRowObjectKey.Get(item)`, а не читает одноимённое свойство VM. Logical column в snapshot и каталоге должна совпадать.
 Полный текущий view позволяет FlaUI проверить отсутствие дубликатов без обхода всех viewport.
+Для записи множественного выбора со строками вне viewport публикуйте полный выбор на корне грида. Recorder сверяет его
+с фактическим набором выбранных объектов. У материализованных строк (роль `DataItem` или включённая публикация ключа)
+ключ проверяется на самом контейнере. Панель деталей с тем же `DataContext` контейнером строки не считается.
 Нет полного доказательства текущей выборки — нет успешной операции по предположению об уникальности.
 
 В начале каждого запуска тест получает новый runtime selector:
@@ -498,3 +515,9 @@ GridColumnDefinition.Auto("ProductionRate").AtRuntime("Производител�
 см. [parts, точное UI-значение и протокол владения popup](time-pickers.md).
 Это opt-in общего `WithTimePicker`; подключение конкретного host и его UIA-публикации
 остаётся отдельным этапом интеграции.
+
+## 12. Сохранение Recorder и генерируемые страницы
+
+Recorder фиксирует UI-контекст и снимок шагов до передачи scan проекта, генерации C# и записи файлов рабочему потоку. Save и autosave по-прежнему выполняются последовательно. Успешный Save подтверждает только захваченную ревизию содержимого: новое действие сохраняет ожидающий autosave, а неизменная повторная валидация не создаёт dirty-ревизию. Структура recovery payload проверяется до замены журнала; формат валидных прежних autosave не меняется.
+
+Генератор `[UiControl]` поддерживает top-level `partial` страницы `UiPage`, не являющиеся generic или file-local, сохраняя accessibility и намеренные abstract/sealed. Для generic, file-local, nested и non-partial выдаётся диагностика, а не несовместимый тип. Страницы с одинаковым коротким именем в разных namespace получают разные детерминированные hint-имена; locator-строки выводятся с корректным C#-экранированием.

@@ -1,5 +1,6 @@
 using AppAutomation.Abstractions;
 using Avalonia.Controls;
+using static AppAutomation.Recorder.Avalonia.RecorderCaptureControlReader;
 using static AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel;
 
 namespace AppAutomation.Recorder.Avalonia;

@@ -4,9 +4,11 @@ using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using AppAutomation.Recorder.Avalonia.SourceScanning;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using TUnit.Assertions;
+using TUnit.Assertions.Enums;
 using TUnit.Core;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
@@ -226,6 +228,7 @@ public sealed class RecorderGroupedGridTests
         var cell = new Border { DataContext = new Cell(second, new Column("Value", "Value"), 0m), Child = child };
         AutomationProperties.SetName(cell, "0");
         var owner = new Border { DataContext = second, Child = cell };
+        AutomationProperties.SetControlTypeOverride(owner, AutomationControlType.DataItem);
         var property = publication == GridRowAutomationProperty.HelpText
             ? AutomationProperties.HelpTextProperty : AutomationProperties.ItemStatusProperty;
         owner.SetValue(property, GridRowObjectKey.Get(second));
@@ -245,6 +248,28 @@ public sealed class RecorderGroupedGridTests
         await Assert.That(selection.Success).IsTrue().Because(selection.Message);
         await Assert.That(selection.Step!.GridSelectedRows!.Single().Conditions.Single().Value)
             .IsEqualTo(GridRowObjectKey.Get(second));
+
+        var firstKey = GridRowSelector.ByCell("RowKey", GridRowObjectKey.Get(first));
+        var secondKey = GridRowSelector.ByCell("RowKey", GridRowObjectKey.Get(second));
+        var firstOwner = new Border { DataContext = first };
+        AutomationProperties.SetControlTypeOverride(firstOwner, AutomationControlType.DataItem);
+        firstOwner.SetValue(property, GridRowObjectKey.Get(first));
+        root.Children.Insert(0, firstOwner);
+        await Assert.That(factory.CreateGridRowSetStep(root, [first, second]).Success).IsTrue();
+
+        // The details view retains the selection context after the actual row is recycled.
+        root.Children.Remove(firstOwner);
+        root.Children.Add(new Border { DataContext = first });
+        await Assert.That(factory.CreateGridRowSetStep(root, [first, second]).Success).IsFalse();
+        AutomationProperties.SetItemStatus(root, GridRowSelectionValue.ToAutomationValue([firstKey]));
+        await Assert.That(factory.CreateGridRowSetStep(root, [first, second]).Success).IsFalse();
+        AutomationProperties.SetItemStatus(root, GridRowSelectionValue.ToAutomationValue([firstKey, secondKey]));
+        var virtualizedSelection = factory.CreateGridRowSetStep(root, [first, second]);
+        await Assert.That(virtualizedSelection.Success).IsTrue().Because(virtualizedSelection.Message);
+        await Assert.That(virtualizedSelection.Step!.GridSelectedRows!
+            .Select(static selected => selected.Conditions.Single().Value))
+            .IsEquivalentTo(new[] { GridRowObjectKey.Get(first), GridRowObjectKey.Get(second) }, CollectionOrdering.Matching);
+
         root.CollectionView = [first];
         await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Success).IsFalse();
         root.CollectionView = [first, second, second];
@@ -252,9 +277,10 @@ public sealed class RecorderGroupedGridTests
         root.CollectionView = [first, second];
         owner.SetValue(property, GridRowObjectKey.Get(first));
         await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("does not match");
-        await Assert.That(factory.CreateGridRowSetStep(root, [second]).Success).IsFalse();
+        await Assert.That(factory.CreateGridRowSetStep(root, [first, second]).Success).IsFalse();
         owner.ClearValue(property);
         await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("no row key");
+        await Assert.That(factory.CreateGridRowSetStep(root, [first, second]).Success).IsFalse();
         root.CollectionView = null;
         await Assert.That(factory.TryCreateCatalogGridRowGestureStep(child, false).StepResult.Message).Contains("authoritative current view");
         root.CollectionView = [first, second];

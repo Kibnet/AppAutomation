@@ -73,6 +73,9 @@ public sealed partial class FlaUiControlResolver
     private AutomationElement FindTimePickerPopup(FlaUiTimePickerBinding binding, AutomationElement presenter)
     {
         if (string.IsNullOrWhiteSpace(binding.Parts.PopupRootLocator)) return presenter;
+        // Both definitions use the same LocatorKind, FallbackToName and PopupScope.
+        if (string.Equals(binding.Parts.PopupRootLocator, binding.Parts.TimePickerLocator, StringComparison.Ordinal))
+            return presenter;
         var definition = binding.Definition(binding.Parts.PopupRootLocator, UiControlType.AutomationElement,
             TimePickerPartKind.Popup) with { Scope = binding.Parts.PopupScope };
         var candidates = TimePickerCandidates(definition).Where(candidate =>
@@ -81,33 +84,43 @@ public sealed partial class FlaUiControlResolver
         return RequireSingleTimePart(candidates, definition.LocatorValue);
     }
 
-    private AutomationElement FindTimePickerPart(UiControlDefinition definition, FlaUiTimePickerBinding binding)
+    private sealed record TimePickerRead(AutomationElement Root, TimePickerOwnerState Owner, AutomationElement? Presenter);
+
+    private TimePickerRead ReadTimePickerParts(FlaUiTimePickerBinding binding, TimePickerPartKind part)
+    {
+        var (root, owner) = binding.ReadOwnerSnapshot(requireOpen: part != TimePickerPartKind.Input,
+            bindOpening: part != TimePickerPartKind.Input, requireEditable: true);
+        return new(root, owner, part == TimePickerPartKind.Input ? null : FindTimePickerPresenter(binding, owner));
+    }
+
+    private AutomationElement FindTimePickerPart(UiControlDefinition definition, FlaUiTimePickerBinding binding,
+        bool validatePending = true)
     {
         var part = definition.TimePickerIntent!.Part;
         if (part == TimePickerPartKind.CommittedRoot) return binding.ReadRoot();
-        var (element, _) = ResolveTimePickerPart(definition, binding);
-        _ = binding.ReadOwner(requireOpen: part != TimePickerPartKind.Input,
+        var read = ReadTimePickerParts(binding, part);
+        var (element, _) = ResolveTimePickerPart(definition, binding, read);
+        if (part == TimePickerPartKind.Confirm && validatePending) binding.ValidateVerifiedPending(read);
+        else _ = binding.ReadOwner(requireOpen: part != TimePickerPartKind.Input,
             requireEditable: part != TimePickerPartKind.Component);
-        if (part == TimePickerPartKind.Confirm) binding.ValidateVerifiedPending();
         return element;
     }
 
     private (AutomationElement Element, TimePickerOwnerState Owner) ResolveTimePickerPart(
-        UiControlDefinition definition, FlaUiTimePickerBinding binding)
+        UiControlDefinition definition, FlaUiTimePickerBinding binding, TimePickerRead? read = null)
     {
         var part = definition.TimePickerIntent!.Part;
-        var owner = binding.ReadOwner(requireOpen: part != TimePickerPartKind.Input,
-            bindOpening: part != TimePickerPartKind.Input, requireEditable: true);
+        read ??= ReadTimePickerParts(binding, part);
+        var owner = read.Owner;
         if (part == TimePickerPartKind.Input)
         {
-            var input = RequireSingleTimePart(TimePickerCandidates(definition, binding.ReadRoot()), definition.LocatorValue);
+            var input = RequireSingleTimePart(TimePickerCandidates(definition, read.Root), definition.LocatorValue);
             return (input, owner);
         }
-        var presenter = FindTimePickerPresenter(binding, owner);
+        var presenter = read.Presenter!;
         if (part == TimePickerPartKind.Presenter) return (presenter, owner);
-        var popup = FindTimePickerPopup(binding, presenter);
-        if (part == TimePickerPartKind.Popup) return (popup, owner);
-        var container = part == TimePickerPartKind.Component ? presenter : popup;
+        var container = part == TimePickerPartKind.Component ? presenter : FindTimePickerPopup(binding, presenter);
+        if (part == TimePickerPartKind.Popup) return (container, owner);
         var matches = TimePickerCandidates(definition, container);
         if (part == TimePickerPartKind.Component)
         {
@@ -184,6 +197,36 @@ public sealed partial class FlaUiControlResolver
 
         private AutomationElement ResolveRoot() => RequireSingleTimePart(Resolver.TimePickerCandidates(_rootDefinition), Parts.RootLocator);
 
+        private (AutomationElement Root, AutomationElement[] Candidates) ResolveRootSnapshot()
+        {
+            var locator = new UiControlScope(Parts.RootLocator, Parts.LocatorKind, Parts.FallbackToName);
+            var scope = _rootDefinition.Scope;
+            var condition = CreateLocatorCondition(Resolver._conditionFactory, locator.LocatorValue,
+                locator.LocatorKind, locator.FallbackToName);
+            if (scope is not null)
+                condition = condition.Or(CreateLocatorCondition(Resolver._conditionFactory, scope.LocatorValue,
+                    scope.LocatorKind, scope.FallbackToName));
+            var found = DistinctElements(Resolver.GetProcessSearchRoots().SelectMany(root =>
+                    TryRead(() => root.FindAll(TreeScope.Subtree, condition)) ?? []).Where(IsAttachedAndAvailable))
+                .Select(element => (Element: element, Id: element.Properties.AutomationId.ValueOrDefault,
+                    Name: element.Properties.Name.ValueOrDefault)).ToArray();
+            var candidates = Match(found, locator);
+            if (scope is null) return (RequireSingleTimePart(candidates, Parts.RootLocator), candidates);
+            var scopeRoots = Match(found, scope);
+            var scoped = Match(found.Where(candidate => scopeRoots.Any(root => IsWithin(candidate.Element, root))), locator);
+            return (RequireSingleTimePart(scoped, Parts.RootLocator), candidates);
+
+            static AutomationElement[] Match(
+                IEnumerable<(AutomationElement Element, string? Id, string? Name)> elements, UiControlScope target)
+            {
+                var snapshot = elements.ToArray();
+                var primary = snapshot.Where(candidate => (target.LocatorKind == UiLocatorKind.Name
+                    ? candidate.Name : candidate.Id) == target.LocatorValue).Select(candidate => candidate.Element).ToArray();
+                return primary.Length > 0 || !target.FallbackToName || target.LocatorKind == UiLocatorKind.Name ? primary
+                    : snapshot.Where(candidate => candidate.Name == target.LocatorValue).Select(candidate => candidate.Element).ToArray();
+            }
+        }
+
         internal AutomationElement ReadRoot()
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -199,14 +242,18 @@ public sealed partial class FlaUiControlResolver
             return root;
         }
 
-        internal TimePickerOwnerState ReadOwner(bool? requireOpen = null, bool bindOpening = false, bool requireEditable = false)
+        internal TimePickerOwnerState ReadOwner(bool? requireOpen = null, bool bindOpening = false, bool requireEditable = false) =>
+            ReadOwnerSnapshot(requireOpen, bindOpening, requireEditable).Owner;
+
+        internal (AutomationElement Root, TimePickerOwnerState Owner) ReadOwnerSnapshot(
+            bool? requireOpen = null, bool bindOpening = false, bool requireEditable = false)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var candidates = Resolver.TimePickerCandidates(_rootDefinition with { Scope = null });
-            var root = CheckRoot(_rootDefinition.Scope is null
-                ? RequireSingleTimePart(candidates, Parts.RootLocator) : ResolveRoot());
+            var (resolvedRoot, candidates) = ResolveRootSnapshot();
+            var root = CheckRoot(resolvedRoot);
             foreach (var candidate in candidates)
             {
+                if (ReferenceEquals(candidate, root)) continue;
                 var metadata = candidate.Properties.ItemStatus.ValueOrDefault;
                 if (metadata?.StartsWith("AppAutomation.TimePicker/", StringComparison.Ordinal) != true) continue;
                 if (TimePickerRuntimeMetadata.ReadOwner(metadata).OwnerId == OwnerId
@@ -233,7 +280,7 @@ public sealed partial class FlaUiControlResolver
                     open ? "The bound time-picker popup is not open." : "The bound time-picker popup is still open.");
             if (requireEditable && (state.IsReadOnly || !root.IsEnabled))
                 throw new InvalidOperationException("The time editor is disabled or read-only.");
-            return state;
+            return (root, state);
         }
 
         internal void CheckPresenter(AutomationElement presenter)
@@ -263,17 +310,17 @@ public sealed partial class FlaUiControlResolver
             _verifiedPending = targets.Select(target => new PendingComponent(target.Kind, target.Value,
                 identities[target.Kind].ToArray(), capabilities[target.Kind])).ToArray();
 
-        internal void ValidateVerifiedPending()
+        internal void ValidateVerifiedPending(TimePickerRead? read = null)
         {
             var pending = _verifiedPending
                 ?? throw new InvalidOperationException("The time presenter has no verified pending selection to confirm.");
-            _ = ReadOwner(requireOpen: true, requireEditable: true);
+            read ??= Resolver.ReadTimePickerParts(this, TimePickerPartKind.Confirm);
             foreach (var expected in pending)
             {
                 var parts = Parts.PresenterParts!.Get(expected.Kind);
                 var definition = Definition(parts.SelectorLocator, UiControlType.AutomationElement,
                     TimePickerPartKind.Component, expected.Kind);
-                var panel = Resolver.FindTimePickerPart(definition, this);
+                var (panel, _) = Resolver.ResolveTimePickerPart(definition, this, read);
                 RequireTimePickerRuntimeId(panel, expected.RuntimeId);
                 if (!panel.IsEnabled) throw new InvalidOperationException("A pending time component became disabled before confirmation.");
                 var actual = TimePickerRuntimeMetadata.ReadComponent(panel.Properties.ItemStatus.Value, expected.Kind);
@@ -287,8 +334,7 @@ public sealed partial class FlaUiControlResolver
 
         internal TimeSpan? ReadCommitted()
         {
-            _ = ReadOwner();
-            var root = ReadRoot();
+            var (root, _) = ReadOwnerSnapshot();
             if (!root.Patterns.Value.TryGetPattern(out var value))
                 throw new NotSupportedException("The committed time root must publish canonical TimeSpan through ValuePattern.");
             var result = TimePickerRuntimeMetadata.ReadCommittedValue(value.Value.Value);
@@ -341,50 +387,56 @@ public sealed partial class FlaUiControlResolver
         public void Dispose() => binding.Dispose();
     }
 
-    private sealed class FlaUiTimePickerButtonControl : FlaUiControlBase<Button>, IButtonControl, IBudgetedControlInvoke
+    private sealed class FlaUiTimePickerButtonControl(FlaUiControlResolver resolver, UiControlDefinition definition,
+        FlaUiTimePickerBinding binding, Action? validateBeforeStep = null)
+        : IButtonControl, IUiControlAvailability, IBudgetedControlInvoke
     {
-        private readonly FlaUiControlResolver _resolver;
-        private readonly UiControlDefinition _definition;
-        private readonly FlaUiTimePickerBinding _binding;
-        private readonly Action? _validateBeforeStep;
+        private readonly FlaUiPointerPreparation? _preparation = FlaUiPointerPreparation.Capture();
 
-        internal FlaUiTimePickerButtonControl(FlaUiControlResolver resolver, UiControlDefinition definition,
-            FlaUiTimePickerBinding binding, Action? validateBeforeStep = null) : base(resolver.FindTimePickerPart(definition, binding).AsButton())
+        private AutomationElement ReadButton() => resolver.FindTimePickerPart(definition, binding, validatePending: false);
+
+        public string AutomationId => TryRead(() => ReadButton().AutomationId) ?? string.Empty;
+        public string Name => TryRead(() => ReadButton().Name) ?? string.Empty;
+        public bool IsEnabled => TryRead(() => ReadButton().IsEnabled);
+        public bool IsAvailable => TryRead(() =>
         {
-            _resolver = resolver;
-            _definition = definition;
-            _binding = binding;
-            _validateBeforeStep = validateBeforeStep;
-        }
+            var button = ReadButton();
+            return button.IsAvailable && !button.IsOffscreen;
+        });
 
         public void Invoke() => throw new NotSupportedException("A presenter button requires the original operation budget.");
 
         public void Invoke(UiOperationTimeoutBudget budget)
         {
-            using var preparation = EnterPointerPreparation();
-            AutomationElement ResolveCurrent()
-            {
-                _ = budget.Remaining;
-                return _resolver.FindTimePickerPart(_definition, _binding);
-            }
-            var button = ResolveCurrent();
+            using var preparation = FlaUiPointerPreparation.EnterCaptured(_preparation);
+            _ = budget.Remaining;
+            // Probe the pattern first; recheck the owner, target and pending state after the provider returns it.
+            var (button, _) = resolver.ResolveTimePickerPart(definition, binding);
             if (!button.IsEnabled) throw new InvalidOperationException("The time-picker button is disabled.");
+            var identity = TimePickerRuntimeId(button);
+            _ = budget.Remaining;
             if (button.Patterns.Invoke.TryGetPattern(out var invoke))
             {
-                var identity = TimePickerRuntimeId(button);
-                RequireTimePickerRuntimeId(ResolveCurrent(), identity);
-                _validateBeforeStep?.Invoke();
+                _ = budget.Remaining;
+                var current = resolver.FindTimePickerPart(definition, binding);
+                RequireTimePickerRuntimeId(current, identity);
+                if (!current.IsEnabled) throw new InvalidOperationException("The time-picker button is disabled.");
+                validateBeforeStep?.Invoke();
                 _ = budget.Remaining;
                 invoke.Invoke();
                 return;
             }
-            DesktopPointer.ClickFallback(ResolveCurrent, "time-picker button lacks Invoke",
-                new PointerClickOptions { Timeout = budget.Remaining }, validateBeforePress:
-                _definition.TimePickerIntent!.Part == TimePickerPartKind.Confirm ? () =>
+            DesktopPointer.ClickFallback(() =>
                 {
-                    _binding.ValidateVerifiedPending();
                     _ = budget.Remaining;
-                } : _validateBeforeStep);
+                    return ReadButton();
+                }, "time-picker button lacks Invoke",
+                new PointerClickOptions { Timeout = budget.Remaining }, initialTarget: button, validateBeforePress:
+                definition.TimePickerIntent!.Part == TimePickerPartKind.Confirm ? () =>
+                {
+                    binding.ValidateVerifiedPending();
+                    _ = budget.Remaining;
+                } : validateBeforeStep);
         }
     }
 
@@ -435,13 +487,15 @@ public sealed partial class FlaUiControlResolver
             using var preparation = FlaUiPointerPreparation.EnterCaptured(_preparation);
             _ = budget.Remaining;
             _binding.ClearVerifiedPending();
-            var owner = _binding.ReadOwner(requireOpen: true, requireEditable: true);
+            var preflight = _resolver.ReadTimePickerParts(_binding, TimePickerPartKind.Presenter);
+            var owner = preflight.Owner;
             owner.ValidateWrite(value, _binding.Parts);
             var targets = owner.GetComponentValues(value);
+            _ = _resolver.FindTimePickerPopup(_binding, preflight.Presenter!);
 
             foreach (var (kind, target) in targets)
             {
-                var (element, state) = ReadComponent(kind);
+                var (element, state) = ReadComponent(kind, preflight);
                 if (target < state.Minimum || target > state.Maximum || ((long)target - state.Minimum) % state.Step != 0)
                     throw new NotSupportedException("The requested time is outside a real component's selectable range.");
                 var parts = _binding.Parts.PresenterParts!.Get(kind);
@@ -450,10 +504,12 @@ public sealed partial class FlaUiControlResolver
                     var locator = target > state.SelectedValue ? parts.IncreaseButtonLocator : parts.DecreaseButtonLocator;
                     if (string.IsNullOrWhiteSpace(locator) && !element.Properties.IsKeyboardFocusable.Value)
                         throw new NotSupportedException("The picker panel has neither a configured step button nor keyboard focus support.");
-                    if (!string.IsNullOrWhiteSpace(locator)) _ = ResolveStep(kind, locator, target > state.SelectedValue);
+                    if (!string.IsNullOrWhiteSpace(locator))
+                        _ = _resolver.FindTimePickerPart(CreateStepDefinition(kind, locator, target > state.SelectedValue), _binding);
                 }
                 _ = budget.Remaining;
             }
+            ValidateOwner(true);
 
             foreach (var (kind, target) in targets)
             {
@@ -467,18 +523,19 @@ public sealed partial class FlaUiControlResolver
                     var increasing = target > previous.SelectedValue;
                     var parts = _binding.Parts.PresenterParts!.Get(kind);
                     var locator = increasing ? parts.IncreaseButtonLocator : parts.DecreaseButtonLocator;
-                    void ValidatePrevious()
+                    AutomationElement ResolvePrevious()
                     {
-                        if (ReadComponent(kind).State.SelectedValue != previous.SelectedValue)
+                        var current = ReadComponent(kind);
+                        if (current.State.SelectedValue != previous.SelectedValue)
                             throw new InvalidOperationException("The picker component changed while preparing its native step.");
+                        return current.Element;
                     }
-                    if (!string.IsNullOrWhiteSpace(locator)) ResolveStep(kind, locator, increasing, ValidatePrevious).Invoke(budget);
-                    else DesktopPointer.SendGuardedKey(() => ReadComponent(kind).Element, budget,
-                        increasing ? VirtualKeyShort.DOWN : VirtualKeyShort.UP, panel =>
-                        {
-                            _binding.ValidateKeyboardForeground(panel);
-                            ValidatePrevious();
-                        });
+                    void ValidatePrevious() => _ = ResolvePrevious();
+                    if (!string.IsNullOrWhiteSpace(locator))
+                        new FlaUiTimePickerButtonControl(_resolver, CreateStepDefinition(kind, locator, increasing),
+                            _binding, ValidatePrevious).Invoke(budget);
+                    else DesktopPointer.SendGuardedKey(_binding.ProcessId, ResolvePrevious, budget,
+                        increasing ? VirtualKeyShort.DOWN : VirtualKeyShort.UP, _binding.ValidateKeyboardForeground);
                     state = UiWait.Until(() => ReadComponent(kind).State,
                         actual => actual.SelectedValue != previous.SelectedValue,
                         new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(25) },
@@ -487,24 +544,25 @@ public sealed partial class FlaUiControlResolver
                         throw new InvalidOperationException("The picker component changed by an unexpected native step.");
                 }
             }
+            var finalRead = _resolver.ReadTimePickerParts(_binding, TimePickerPartKind.Presenter);
             foreach (var (kind, target) in targets)
-                if (ReadComponent(kind).State.SelectedValue != target)
+                if (ReadComponent(kind, finalRead).State.SelectedValue != target)
                     throw new InvalidOperationException("The pending time changed before confirmation.");
             ValidateOwner(true);
             _binding.CaptureVerifiedPending(targets, _componentIds, _componentCapabilities);
             _ = budget.Remaining;
         }
 
-        private FlaUiTimePickerButtonControl ResolveStep(TimePickerComponentKind kind, string locator, bool increasing,
-            Action? validateBeforeStep = null) =>
-            new(_resolver, _binding.Definition(locator, UiControlType.Button,
-                increasing ? TimePickerPartKind.Increase : TimePickerPartKind.Decrease, kind), _binding, validateBeforeStep);
+        private UiControlDefinition CreateStepDefinition(TimePickerComponentKind kind, string locator, bool increasing) =>
+            _binding.Definition(locator, UiControlType.Button,
+                increasing ? TimePickerPartKind.Increase : TimePickerPartKind.Decrease, kind);
 
-        private (AutomationElement Element, TimePickerComponentState State) ReadComponent(TimePickerComponentKind kind)
+        private (AutomationElement Element, TimePickerComponentState State) ReadComponent(TimePickerComponentKind kind,
+            TimePickerRead? read = null)
         {
             var parts = _binding.Parts.PresenterParts!.Get(kind);
             var definition = _binding.Definition(parts.SelectorLocator, UiControlType.AutomationElement, TimePickerPartKind.Component, kind);
-            var (element, owner) = _resolver.ResolveTimePickerPart(definition, _binding);
+            var (element, owner) = _resolver.ResolveTimePickerPart(definition, _binding, read);
             if (!element.IsEnabled) throw new InvalidOperationException("The picker component is disabled.");
             if (_componentIds.TryGetValue(kind, out var identity)) RequireTimePickerRuntimeId(element, identity);
             else _componentIds.Add(kind, TimePickerRuntimeId(element));
@@ -520,7 +578,7 @@ public sealed partial class FlaUiControlResolver
             if (state.Minimum < range.Minimum || state.Maximum > range.Maximum
                 || (kind is TimePickerComponentKind.Minute or TimePickerComponentKind.Second) && state.Step != range.Step)
                 throw new InvalidDataException("The picker component contradicts the owner clock or increment capabilities.");
-            _ = _binding.ReadOwner(requireOpen: true, requireEditable: true);
+            if (read is null) _ = _binding.ReadOwner(requireOpen: true, requireEditable: true);
             return (element, state);
         }
 

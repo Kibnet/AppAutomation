@@ -15,12 +15,21 @@ namespace AppAutomation.Recorder.Avalonia.CodeGeneration;
 internal sealed class AuthoringCodeGenerator
 {
     private readonly AuthoringProjectScanner _scanner;
+    private readonly Func<AuthoringTargetConfiguration, CancellationToken, AuthoringProjectSnapshot> _scan;
     private readonly ILogger? _logger;
     private readonly Dictionary<string, AutosaveTargetRegistration> _autosaveTargets = new(StringComparer.Ordinal);
 
     public AuthoringCodeGenerator(AuthoringProjectScanner scanner, ILogger? logger)
+        : this(scanner, logger, scan: null)
     {
-        _scanner = scanner ?? throw new ArgumentNullException(nameof(scanner));
+    }
+
+    internal AuthoringCodeGenerator(AuthoringProjectScanner scanner, ILogger? logger,
+        Func<AuthoringTargetConfiguration, CancellationToken, AuthoringProjectSnapshot>? scan)
+    {
+        ArgumentNullException.ThrowIfNull(scanner);
+        _scanner = scanner;
+        _scan = scan ?? scanner.Scan;
         _logger = logger;
     }
 
@@ -31,7 +40,7 @@ internal sealed class AuthoringCodeGenerator
         string? outputDirectoryOverride,
         CancellationToken cancellationToken = default)
     {
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext: null, cancellationToken);
+        return PersistAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext: null, cancellationToken);
     }
 
     internal Task<RecorderSaveResult> SaveAsync(
@@ -43,7 +52,7 @@ internal sealed class AuthoringCodeGenerator
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(saveContext);
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext, cancellationToken);
+        return PersistAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Snapshot, saveContext, cancellationToken);
     }
 
     public Task<RecorderSaveResult> AutosaveAsync(
@@ -53,7 +62,7 @@ internal sealed class AuthoringCodeGenerator
         string? outputDirectoryOverride,
         CancellationToken cancellationToken = default)
     {
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext: null, cancellationToken);
+        return PersistAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext: null, cancellationToken);
     }
 
     internal Task<RecorderSaveResult> AutosaveAsync(
@@ -65,7 +74,7 @@ internal sealed class AuthoringCodeGenerator
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(saveContext);
-        return SaveCoreAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext, cancellationToken);
+        return PersistAsync(window, options, steps, outputDirectoryOverride, AuthoringSaveKind.Autosave, saveContext, cancellationToken);
     }
 
     internal Task<RecorderAutosaveRestoreResult> RestoreAutosaveAsync(
@@ -157,7 +166,7 @@ internal sealed class AuthoringCodeGenerator
             recovery.State.Steps));
     }
 
-    private async Task<RecorderSaveResult> SaveCoreAsync(
+    internal async Task<RecorderSaveResult> PersistAsync(
         Window window,
         AppAutomationRecorderOptions options,
         IReadOnlyList<RecordedStep> steps,
@@ -166,13 +175,33 @@ internal sealed class AuthoringCodeGenerator
         RecorderScenarioSaveContext? saveContext,
         CancellationToken cancellationToken)
     {
-        var previousAutosaveKeys = _autosaveTargets.Keys.ToHashSet(StringComparer.Ordinal);
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(steps);
+        if (steps.Count == 0) return RecorderSaveResult.Failed("Recorder has no supported steps to save.");
+        if (string.IsNullOrWhiteSpace(options.AuthoringProjectDirectory))
+            return RecorderSaveResult.Failed("Authoring project directory is not configured.");
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var target = ResolveTargetConfiguration(window, options,
+            Path.GetFullPath(options.AuthoringProjectDirectory), outputDirectoryOverride, saveContext);
+        var request = new AuthoringSaveRequest(target,
+            RecorderPersistenceSnapshot.FreezeSteps(steps), saveKind, saveContext?.DraftIdentity);
+        return await Task.Run(() => SaveCapturedAsync(request, cancellationToken), cancellationToken);
+    }
+
+    private async Task<RecorderSaveResult> SaveCapturedAsync(
+        AuthoringSaveRequest request, CancellationToken cancellationToken)
+    {
+        var previousAutosaveKeys = request.Kind == AuthoringSaveKind.Autosave
+            ? _autosaveTargets.Keys.ToHashSet(StringComparer.Ordinal)
+            : null;
         var diagnostics = new List<string>();
         var completed = false;
         try
         {
             var result = await GenerateAndSaveAsync(
-                window, options, steps, outputDirectoryOverride, saveKind, saveContext, diagnostics, cancellationToken);
+                request, diagnostics, cancellationToken);
             completed = result.Success;
             return result;
         }
@@ -183,7 +212,7 @@ internal sealed class AuthoringCodeGenerator
         }
         finally
         {
-            if (!completed && saveKind == AuthoringSaveKind.Autosave)
+            if (!completed && previousAutosaveKeys is not null)
             {
                 foreach (var key in _autosaveTargets.Keys.Except(previousAutosaveKeys).ToArray())
                 {
@@ -197,37 +226,17 @@ internal sealed class AuthoringCodeGenerator
     }
 
     private async Task<RecorderSaveResult> GenerateAndSaveAsync(
-        Window window,
-        AppAutomationRecorderOptions options,
-        IReadOnlyList<RecordedStep> steps,
-        string? outputDirectoryOverride,
-        AuthoringSaveKind saveKind,
-        RecorderScenarioSaveContext? saveContext,
+        AuthoringSaveRequest request,
         List<string> diagnostics,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(window);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(steps);
-
-        if (steps.Count == 0)
-        {
-            return RecorderSaveResult.Failed("Recorder has no supported steps to save.");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.AuthoringProjectDirectory))
-        {
-            return RecorderSaveResult.Failed("Authoring project directory is not configured.");
-        }
-
-        var projectDirectory = Path.GetFullPath(options.AuthoringProjectDirectory);
-        if (!Directory.Exists(projectDirectory))
-        {
-            return RecorderSaveResult.Failed($"Authoring project directory '{projectDirectory}' does not exist.");
-        }
-
-        var target = ResolveTargetConfiguration(window, options, projectDirectory, outputDirectoryOverride, saveContext);
-        var snapshot = _scanner.Scan(target, cancellationToken);
+        var target = request.Target;
+        var steps = request.Steps;
+        var saveKind = request.Kind;
+        if (!Directory.Exists(target.ProjectDirectory))
+            return RecorderSaveResult.Failed($"Authoring project directory '{target.ProjectDirectory}' does not exist.");
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = _scan(target, cancellationToken);
         var validationError = ValidateSnapshot(target, snapshot);
         if (validationError is not null)
         {
@@ -242,8 +251,8 @@ internal sealed class AuthoringCodeGenerator
                 $"Recorder scenario graph is invalid: {activeGraphValidation.Error}");
         }
 
-        var persistableSteps = activeSteps.Where(static step => step.CanPersist).ToArray();
         var skippedSteps = activeSteps.Where(static step => !step.CanPersist).ToArray();
+        var persistableSteps = skippedSteps.Length == 0 ? activeSteps : activeSteps.Where(static step => step.CanPersist).ToArray();
         foreach (var skippedStep in skippedSteps)
         {
             diagnostics.Add(
@@ -274,7 +283,9 @@ internal sealed class AuthoringCodeGenerator
                 diagnostics.ToArray());
         }
 
-        var graphValidation = RecorderScenarioGraphValidator.Validate(persistableSteps);
+        var graphValidation = skippedSteps.Length == 0
+            ? activeGraphValidation
+            : RecorderScenarioGraphValidator.Validate(persistableSteps);
         if (!graphValidation.Success)
         {
             return RecorderSaveResult.Failed(
@@ -425,8 +436,8 @@ internal sealed class AuthoringCodeGenerator
                 target,
                 snapshot,
                 fileSafeScenarioName,
-                saveContext?.DraftIdentity,
-                reservePageFile: saveContext is not null && generatedControls.Count > 0)
+                request.DraftIdentity,
+                reservePageFile: request.DraftIdentity is not null && generatedControls.Count > 0)
             : CreateSnapshotTarget(target, snapshot);
         IReadOnlyList<ExistingControlInfo> controlsToWrite;
         if (generatedControls.Count == 0)
@@ -453,7 +464,7 @@ internal sealed class AuthoringCodeGenerator
             ? RecorderAutosaveStateSerializer.CreateMarker(
                 new RecorderAutosaveState(
                     target.ScenarioName,
-                    saveContext?.DraftIdentity ?? string.Empty,
+                    request.DraftIdentity ?? string.Empty,
                     saveTarget.MethodName,
                     DateTimeOffset.UtcNow,
                     persistableSteps))
@@ -658,40 +669,44 @@ internal sealed class AuthoringCodeGenerator
         IReadOnlyList<RecordedStep> scenarioSteps)
     {
         ArgumentNullException.ThrowIfNull(step);
-        ArgumentNullException.ThrowIfNull(scenarioSteps);
-        var graphValidation = RecorderScenarioGraphValidator.Validate(scenarioSteps);
+        return GeneratePreviewForStep(step, scenarioSteps, RecorderScenarioGraphValidator.Validate(scenarioSteps));
+    }
+
+    internal Func<RecordedStep, string> CreateStepPreviewRenderer(IReadOnlyList<RecordedStep> scenarioSteps)
+    {
+        var graph = RecorderScenarioGraphValidator.Validate(scenarioSteps);
+        return step => GeneratePreviewForStep(step, scenarioSteps, graph);
+    }
+
+    private static string GeneratePreviewForStep(RecordedStep step, IReadOnlyList<RecordedStep> scenarioSteps,
+        RecorderScenarioGraphValidationResult graphValidation)
+    {
         if (graphValidation.StepErrors.TryGetValue(step.StepId, out var error))
         {
             return $"// AppAutomation recorder graph error: {RecorderStatementEmitter.SanitizeCommentText(error)}";
         }
 
-        var checkpointVariables = graphValidation.CheckpointVariables;
         if (step.ActionKind == RecordedActionKind.CaptureCheckpoint
             && step.CheckpointId is { } checkpointId
-            && !checkpointVariables.ContainsKey(checkpointId))
+            && !graphValidation.CheckpointVariables.ContainsKey(checkpointId))
         {
-            var variables = new Dictionary<Guid, string>(checkpointVariables);
+            var variables = new Dictionary<Guid, string>(graphValidation.CheckpointVariables);
             var reservedNames = variables.Values.ToHashSet(StringComparer.Ordinal);
             variables[checkpointId] = RecorderNaming.CreateCheckpointVariableName(
                 step.CheckpointVariableName,
                 reservedNames,
                 step.PreserveVariableName);
-            checkpointVariables = variables;
+            graphValidation = graphValidation with { CheckpointVariables = variables };
         }
 
-        var gridRowAnchorNames = RecorderStatementEmitter.CreateGridRowAnchorNames(
-            scenarioSteps,
-            graphValidation with { CheckpointVariables = checkpointVariables });
-        var gridTargets = RecorderGridTargetVariables.Create(scenarioSteps,
-            graphValidation with { CheckpointVariables = checkpointVariables }, gridRowAnchorNames);
-        var spinnerKeyVariables = RecorderStatementEmitter.CreateSpinnerKeyVariables(
-            graphValidation with { CheckpointVariables = checkpointVariables },
-            gridRowAnchorNames);
+        var gridRowAnchorNames = RecorderStatementEmitter.CreateGridRowAnchorNames(scenarioSteps, graphValidation);
+        var gridTargets = RecorderGridTargetVariables.Create(scenarioSteps, graphValidation, gridRowAnchorNames);
+        var spinnerKeyVariables = RecorderStatementEmitter.CreateSpinnerKeyVariables(graphValidation, gridRowAnchorNames);
         RecorderStatementEmitter.PrimeSpinnerKeyVariables(spinnerKeyVariables, scenarioSteps, step.StepId);
         var statement = RecorderStatementEmitter.GenerateStepStatement(
             step,
             step.Control.ProposedPropertyName,
-            checkpointVariables,
+            graphValidation.CheckpointVariables,
             graphValidation.GeneratedValueVariables,
             graphValidation.CopiedValueVariables,
             graphValidation.GeneratedValueSeriesVariable,
@@ -1335,6 +1350,11 @@ internal sealed class AuthoringCodeGenerator
     }
 
 
+    private sealed record AuthoringSaveRequest(
+        AuthoringTargetConfiguration Target,
+        IReadOnlyList<RecordedStep> Steps,
+        AuthoringSaveKind Kind,
+        string? DraftIdentity);
 }
 
 internal enum AuthoringSaveKind

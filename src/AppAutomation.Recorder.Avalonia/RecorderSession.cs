@@ -32,6 +32,12 @@ internal sealed partial class RecorderSession :
     private static readonly object HandledButtonClickMarker = new();
     private static readonly object HandledHotkeyMarker = new();
 
+    private readonly RecorderJournal _journal = new();
+    private readonly RecorderPersistenceCoordinator _persistence;
+    private readonly RecorderScenarioTarget _scenarioTarget;
+    private readonly RecorderDiagnosticWriter _diagnosticWriter;
+    private IReadOnlyList<RecordedStep> Steps => _journal.Steps;
+
     private readonly Window _window;
     private readonly ILogger _logger;
     private readonly RecorderStepFactory _stepFactory;
@@ -40,9 +46,8 @@ internal sealed partial class RecorderSession :
     private readonly RecorderCommandRuntimeValidator _runtimeValidator;
     private readonly AuthoringCodeGenerator _codeGenerator;
     private readonly AuthoringProjectScanner _authoringProjectScanner;
-    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _saveOperation;
-    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>> _autosaveOperation;
-    private readonly List<RecordedStep> _steps = new();
+    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? _saveOperation;
+    private readonly Func<IReadOnlyList<RecordedStep>, string?, CancellationToken, Task<RecorderSaveResult>>? _autosaveOperation;
     private readonly List<Action> _detachActions = new();
     private readonly RecorderObservationSubscriptions _observations;
     private readonly RecorderPointerGestureTracker _pointerGestures = new();
@@ -57,7 +62,6 @@ internal sealed partial class RecorderSession :
     private RecorderHotkeyMap _hotkeyMap;
     private RecorderHotkeySettings _hotkeySettings;
     private readonly Func<Control?> _validationRootProvider;
-    private readonly object _operationSync = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
 
     private RecorderSessionState _state;
@@ -99,30 +103,10 @@ internal sealed partial class RecorderSession :
     private ComboBoxFilterClickSnapshot? _comboBoxFilterClickSnapshot;
     private string _lastFingerprint = string.Empty;
     private DateTimeOffset _lastRecordedAt;
-    private Task<RecorderSaveResult>? _activeOperationTask;
     private Task? _copiedValueCommitTask;
-    private QueuedManagedOperation? _queuedManagedOperation;
-    private string _busyDescription = string.Empty;
-    private bool _activeOperationIsAutosave;
     private readonly RecorderOutputDescription _defaultOutputDescription;
     private readonly bool _hasConfiguredLogger;
-    private readonly string _diagnosticLogFilePath;
-    private bool _isDiagnosticLogFileEnabled;
-    private bool _pendingAutosave;
-    private bool _isCapturingPersistenceSnapshot;
-    private int _diagnosticLogEntryCount;
-    private int _scenarioGraphRevision;
-    private int _cachedJournalContextRevision = -1;
-    private RecorderJournalContext? _cachedJournalContext;
-    private string? _lastScenarioFilePath;
-    private IReadOnlyList<RecordedScenarioDestination> _scenarioDestinations = Array.Empty<RecordedScenarioDestination>();
-    private RecordedScenarioDestination? _selectedScenarioDestination;
-    private bool _hasExplicitScenarioName;
-    private string _scenarioName;
-    private string? _scenarioDiscoveryError;
-    private bool _isScanning;
     private bool _isRestoringAutosave;
-    private string _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
     private Task _scenarioDiscoveryTask = Task.CompletedTask;
     private volatile bool _isDisposed;
 
@@ -158,40 +142,24 @@ internal sealed partial class RecorderSession :
         _hotkeySettings = initialHotkeySettings
             ?? LoadEffectiveHotkeySettings(options, hotkeySettingsStore ?? new RecorderHotkeySettingsStore(), out hotkeySettingsLoadError);
         _hotkeyMap = _hotkeySettings.ToMap();
-        _stepFactory = new RecorderStepFactory(options, _validationRootProvider, () => _steps);
+        _stepFactory = new RecorderStepFactory(options, _validationRootProvider, () => Steps);
         _selectorResolver = new RecorderSelectorResolver(options, _validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _runtimeValidator = new RecorderCommandRuntimeValidator(options);
         _authoringProjectScanner = new AuthoringProjectScanner();
         _codeGenerator = new AuthoringCodeGenerator(_authoringProjectScanner, _logger);
-        _scenarioName = options.ScenarioName?.Trim() ?? string.Empty;
-        _saveOperation = saveOperation ?? ((steps, outputDirectory, cancellationToken) =>
-        {
-            var saveContext = CreateScenarioSaveContext();
-            return IsScenarioSelectionEnabled && saveContext is null
-                ? Task.FromResult(RecorderSaveResult.Failed(ScenarioSelectionError ?? "Scenario destination is not ready."))
-                : saveContext is null
-                    ? _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, cancellationToken)
-                    : _codeGenerator.SaveAsync(_window, _options, steps, outputDirectory, saveContext, cancellationToken);
-        });
-        _autosaveOperation = autosaveOperation
-            ?? saveOperation
-            ?? ((steps, outputDirectory, cancellationToken) =>
-            {
-                var saveContext = CreateScenarioSaveContext();
-                return IsScenarioSelectionEnabled && saveContext is null
-                    ? Task.FromResult(RecorderSaveResult.Failed(ScenarioSelectionError ?? "Scenario destination is not ready."))
-                    : saveContext is null
-                        ? _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, cancellationToken)
-                        : _codeGenerator.AutosaveAsync(_window, _options, steps, outputDirectory, saveContext, cancellationToken);
-            });
+        _scenarioTarget = new RecorderScenarioTarget(options);
+        _persistence = new RecorderPersistenceCoordinator(
+            CapturePersistenceSnapshot,
+            () => _journal.ContentRevision,
+            () => !_isDisposed && _state == RecorderSessionState.Recording,
+            token => PersistSnapshotAsync(AuthoringSaveKind.Autosave, outputDirectory: null, token),
+            PublishPersistenceChange,
+            () => PublishPersistenceChange());
+        _saveOperation = saveOperation;
+        _autosaveOperation = autosaveOperation ?? saveOperation;
         _defaultOutputDescription = _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null);
-        _diagnosticLogFilePath = ResolveDiagnosticLogFilePath(options, _defaultOutputDescription);
-        _isDiagnosticLogFileEnabled = options.DiagnosticLog.WriteToFile;
-        if (_isDiagnosticLogFileEnabled)
-        {
-            EnsureDiagnosticLogFileHeader();
-        }
+        _diagnosticWriter = new RecorderDiagnosticWriter(options, _defaultOutputDescription, _logger);
 
         _textDebounceTimer = new DispatcherTimer
         {
@@ -231,7 +199,6 @@ internal sealed partial class RecorderSession :
 
         if (IsScenarioSelectionEnabled)
         {
-            _isScanning = true;
             _scenarioDiscoveryTask = DiscoverScenarioDestinationsAsync();
         }
     }
@@ -273,15 +240,15 @@ internal sealed partial class RecorderSession :
 
     public RecorderSessionState State => _state;
 
-    public int StepCount => _steps.Count;
+    public int StepCount => Steps.Count;
 
-    public int PersistableStepCount => _steps.Count(static step => step.CanPersist && !step.IsIgnored);
+    public int PersistableStepCount => Steps.Count(static step => step.CanPersist && !step.IsIgnored);
 
-    public IReadOnlyList<RecorderCheckpointOption> Checkpoints => CreateCheckpointOptions();
+    public IReadOnlyList<RecorderCheckpointOption> Checkpoints => _journal.Context.Checkpoints;
 
-    public IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues => CreateGeneratedValueOptions();
+    public IReadOnlyList<RecorderGeneratedValueOption> GeneratedValues => _journal.Context.GeneratedValues;
 
-    public IReadOnlyList<RecorderCopiedValueOption> CopiedValues => CreateCopiedValueOptions();
+    public IReadOnlyList<RecorderCopiedValueOption> CopiedValues => _journal.Context.CopiedValues;
 
     public bool IsCheckTargetSelectionActive => _targetSelectionMode == RecorderTargetSelectionMode.Check;
 
@@ -297,32 +264,38 @@ internal sealed partial class RecorderSession :
 
     public RecorderValidationStatus LatestValidationStatus { get; private set; } = RecorderValidationStatus.Valid;
 
-    public bool IsBusy => _activeOperationTask is not null
+    public bool IsBusy => _persistence.IsBusy
         || _copiedValueCommitTask is not null
         || _isRestoringAutosave;
 
-    public string BusyDescription => _busyDescription;
+    public string BusyDescription => _persistence.IsBusy ? _persistence.BusyDescription
+        : _copiedValueCommitTask is not null ? "Copy value..."
+        : _isRestoringAutosave ? "Restoring autosave..."
+        : string.Empty;
 
     public string SessionSummary => BuildSessionSummary();
 
-    public bool IsDiagnosticLogFileEnabled => _isDiagnosticLogFileEnabled;
+    public bool IsDiagnosticLogFileEnabled => _diagnosticWriter.IsEnabled;
 
-    public string DiagnosticLogFilePath => _diagnosticLogFilePath;
+    public string DiagnosticLogFilePath => _diagnosticWriter.FilePath;
 
-    public int DiagnosticLogEntryCount => _diagnosticLogEntryCount;
+    public int DiagnosticLogEntryCount => _diagnosticWriter.EntryCount;
 
-    public int WarningStepCount => _steps.Count(static step => !step.IsIgnored && step.ValidationStatus == RecorderValidationStatus.Warning);
+    public int WarningStepCount => Steps.Count(static step => !step.IsIgnored && step.ValidationStatus == RecorderValidationStatus.Warning);
 
-    public int InvalidStepCount => _steps.Count(static step => !step.IsIgnored && (step.ValidationStatus == RecorderValidationStatus.Invalid || !step.CanPersist));
+    public int InvalidStepCount => Steps.Count(static step => !step.IsIgnored && (step.ValidationStatus == RecorderValidationStatus.Invalid || !step.CanPersist));
 
-    public int IgnoredStepCount => _steps.Count(static step => step.IsIgnored);
+    public int IgnoredStepCount => Steps.Count(static step => step.IsIgnored);
 
     public IReadOnlyList<RecorderStepJournalEntry> StepJournal
     {
         get
         {
-            var context = GetCurrentJournalContext();
-            return _steps.Select(step => CreateJournalEntry(step, context)).ToArray();
+            if (Steps.Count == 0) return Array.Empty<RecorderStepJournalEntry>();
+
+            var context = _journal.Context;
+            var render = _codeGenerator.CreateStepPreviewRenderer(context.PreviewSteps);
+            return Steps.Select(step => CreateJournalEntry(step, context, render(step))).ToArray();
         }
     }
 
@@ -330,9 +303,9 @@ internal sealed partial class RecorderSession :
     {
         get
         {
-            if (_lastScenarioFilePath is not null)
+            if (_scenarioTarget.LastScenarioFilePath is not null)
             {
-                return _lastScenarioFilePath;
+                return _scenarioTarget.LastScenarioFilePath;
             }
 
             if (!IsScenarioSelectionEnabled)
@@ -340,42 +313,41 @@ internal sealed partial class RecorderSession :
                 return _defaultOutputDescription.ScenarioFilePathDisplay;
             }
 
-            var saveContext = CreateScenarioSaveContext();
+            var saveContext = _scenarioTarget.CaptureSaveContext();
             return saveContext is null
                 ? "Select a scenario destination and enter a scenario name."
                 : _codeGenerator.DescribeOutput(_window, _options, outputDirectoryOverride: null, saveContext).ScenarioFilePathDisplay;
         }
     }
 
-    public bool IsScenarioSelectionEnabled => _options.ScenarioSelection.IsEnabled;
+    public bool IsScenarioSelectionEnabled => _scenarioTarget.IsEnabled;
 
-    public bool IsScanning => _isScanning;
+    public bool IsScanning => _scenarioTarget.IsScanning;
 
-    public string? ScenarioSelectionError => _scenarioDiscoveryError
-        ?? (_selectedScenarioDestination is null ? null : ValidateScenarioName(_scenarioName));
+    public string? ScenarioSelectionError => _scenarioTarget.Error;
 
-    public IReadOnlyList<RecordedScenarioDestination> ScenarioDestinations => _scenarioDestinations;
+    public IReadOnlyList<RecordedScenarioDestination> ScenarioDestinations => _scenarioTarget.Destinations;
 
-    public RecordedScenarioDestination? SelectedScenarioDestination => _selectedScenarioDestination;
+    public RecordedScenarioDestination? SelectedScenarioDestination => _scenarioTarget.Selected;
 
-    public string ScenarioName => _scenarioName;
+    public string ScenarioName => _scenarioTarget.Name;
 
     public bool CanStartRecording => !IsScenarioSelectionEnabled
         || (_state == RecorderSessionState.Off
             && !IsBusy
-            && !_isScanning
+            && !_scenarioTarget.IsScanning
             && ScenarioSelectionError is null
-            && _selectedScenarioDestination is not null);
+            && _scenarioTarget.Selected is not null);
 
     public bool CanChangeScenarioTarget => IsScenarioSelectionEnabled
         && _state == RecorderSessionState.Off
-        && _steps.Count == 0
+        && Steps.Count == 0
         && !IsBusy
-        && !_isScanning;
+        && !_scenarioTarget.IsScanning;
 
     public bool CanRestoreAutosave => CanChangeScenarioTarget
         && ScenarioSelectionError is null
-        && _selectedScenarioDestination is not null;
+        && _scenarioTarget.Selected is not null;
 
     internal Task ScenarioDiscoveryTaskForTesting => _scenarioDiscoveryTask;
 
@@ -389,14 +361,14 @@ internal sealed partial class RecorderSession :
         {
             SetStatus(
                 ScenarioSelectionError
-                    ?? (_isScanning ? "Scenario destinations are still being scanned." : "Select a scenario destination."),
+                    ?? (_scenarioTarget.IsScanning ? "Scenario destinations are still being scanned." : "Select a scenario destination."),
                 RecorderValidationStatus.Warning);
             return;
         }
 
         if (IsScenarioSelectionEnabled)
         {
-            _scenarioName = _scenarioName.Trim();
+            _scenarioTarget.PrepareRecording();
         }
 
         _state = RecorderSessionState.Recording;
@@ -475,16 +447,14 @@ internal sealed partial class RecorderSession :
         _completedCompositeSelection = null;
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
-        _steps.Clear();
+        _journal.Clear();
         _selectorResolver.ClearPresenterTimeSources();
-        _stepMoveHistory.Clear();
-        InvalidateScenarioGraphValidation();
+        _journal.ClearMoveHistory();
         _activeCopiedValue = null;
         _recordingGeneratedValueSeries = null;
         _lastGeneratedValueOrdinal = 0;
         LatestPreview = string.Empty;
-        _lastScenarioFilePath = null;
-        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
+        _scenarioTarget.ResetDraft();
         SetStatus("Recorded steps cleared.", RecorderValidationStatus.Valid);
     }
 
@@ -496,18 +466,13 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        if (destination is not null && !_scenarioDestinations.Contains(destination))
+        if (!_scenarioTarget.Select(destination, suggestedName))
         {
             SetStatus("The selected scenario destination is not available.", RecorderValidationStatus.Warning);
             return false;
         }
 
-        _selectedScenarioDestination = destination;
-        if (!_hasExplicitScenarioName && suggestedName is not null)
-        {
-            _scenarioName = suggestedName;
-        }
-        InvalidateScenarioSaveTarget();
+        _journal.ClearMoveHistory();
         SetStatus(
             destination is null ? "Scenario destination cleared." : $"Scenario destination: {destination.DisplayName}",
             RecorderValidationStatus.Valid);
@@ -522,10 +487,9 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        _scenarioName = scenarioName ?? string.Empty;
-        _hasExplicitScenarioName = true;
-        InvalidateScenarioSaveTarget();
-        var validationError = ValidateScenarioName(_scenarioName);
+        _scenarioTarget.SetName(scenarioName);
+        _journal.ClearMoveHistory();
+        var validationError = RecorderScenarioTarget.ValidateName(_scenarioTarget.Name);
         SetStatus(
             validationError ?? "Scenario name updated.",
             validationError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Warning);
@@ -539,37 +503,29 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        _selectedScenarioDestination = null;
-        _scenarioName = string.Empty;
-        _hasExplicitScenarioName = false;
-        InvalidateScenarioSaveTarget();
+        _scenarioTarget.Reset();
+        _journal.ClearMoveHistory();
         SetStatus("Scenario fields reset.", RecorderValidationStatus.Valid);
         return true;
     }
 
-    private void InvalidateScenarioSaveTarget()
-    {
-        _stepMoveHistory.Clear();
-        _lastScenarioFilePath = null;
-        _autosaveDraftIdentity = Guid.NewGuid().ToString("N");
-    }
-
     public void SetDiagnosticLogFileEnabled(bool isEnabled)
     {
-        if (_isDiagnosticLogFileEnabled == isEnabled)
+        if (_diagnosticWriter.IsEnabled == isEnabled)
         {
             return;
         }
 
-        _isDiagnosticLogFileEnabled = isEnabled;
-        if (isEnabled)
+        _diagnosticWriter.SetEnabled(isEnabled);
+        if (isEnabled && !_diagnosticWriter.IsEnabled)
         {
-            EnsureDiagnosticLogFileHeader();
+            SetStatus("Could not enable the diagnostic log file. See the recorder logger for details.", RecorderValidationStatus.Warning);
+            return;
         }
 
         SetStatus(
             isEnabled
-                ? $"Diagnostic log file enabled: {_diagnosticLogFilePath}"
+                ? $"Diagnostic log file enabled: {_diagnosticWriter.FilePath}"
                 : "Diagnostic log file disabled.",
             LatestValidationStatus);
     }
@@ -597,7 +553,7 @@ internal sealed partial class RecorderSession :
     {
         FlushPendingState();
         FlushConfirmedPresenterTime();
-        var activeSteps = _steps.Where(static step => !step.IsIgnored).ToArray();
+        var activeSteps = Steps.Where(static step => !step.IsIgnored).ToArray();
         return activeSteps.Length == 0
             ? string.Empty
             : _codeGenerator.GeneratePreview(activeSteps);
@@ -616,7 +572,7 @@ internal sealed partial class RecorderSession :
 
     public void Dispose()
     {
-        lock (_operationSync)
+        lock (_persistence.SyncRoot)
         {
             if (_isDisposed)
             {
@@ -624,8 +580,8 @@ internal sealed partial class RecorderSession :
             }
 
             _isDisposed = true;
-            _pendingAutosave = false;
-            _stepMoveHistory.Clear();
+            _persistence.Dispose();
+            _journal.ClearMoveHistory();
         }
 
         _lifetimeCancellation.Cancel();
@@ -655,15 +611,15 @@ internal sealed partial class RecorderSession :
 
     public void RemoveStep(Guid stepId)
     {
-        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var index = _journal.IndexOf(stepId);
         if (index < 0)
         {
             return;
         }
 
-        _steps.RemoveAt(index);
+        _journal.RemoveAt(index);
         _selectorResolver.ForgetPresenterTimeSource(stepId);
-        _stepMoveHistory.Clear();
+        _journal.ClearMoveHistory();
         var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
         SetStatusAfterGraphValidation(
@@ -675,89 +631,46 @@ internal sealed partial class RecorderSession :
 
     public void SetStepIgnored(Guid stepId, bool isIgnored)
     {
-        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var index = _journal.IndexOf(stepId);
         if (index < 0)
         {
             return;
         }
 
-        var step = _steps[index];
-        var updatedStep = step with
+        var step = Steps[index] with { IsIgnored = isIgnored };
+        _journal.Replace(index, step with
         {
-            IsIgnored = isIgnored,
-            ReviewState = ResolveReviewState(step with { IsIgnored = isIgnored }),
-            FailureCode = ResolveFailureCode(step with { IsIgnored = isIgnored })
-        };
-        _steps[index] = updatedStep;
+            ReviewState = ResolveReviewState(step),
+            FailureCode = ResolveFailureCode(step)
+        });
         var graphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
         SetStatusAfterGraphValidation(
             graphValidation,
             isIgnored ? "Recorded step ignored." : "Recorded step restored.",
-            isIgnored ? RecorderValidationStatus.Warning : _steps[index].ValidationStatus);
+            isIgnored ? RecorderValidationStatus.Warning : Steps[index].ValidationStatus);
         RequestAutosaveIfRecording();
     }
 
     public bool RetryStepValidation(Guid stepId)
     {
-        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var index = _journal.IndexOf(stepId);
         if (index < 0)
         {
             return false;
         }
 
-        _steps[index] = RevalidateStep(_steps[index]);
-        var graphValidation = ApplyScenarioGraphValidation();
+        var graphValidation = _journal.RevalidateStep(index, RevalidateStep(Steps[index]));
+        RefreshActiveCopiedValue();
         UpdateLatestPreviewFromSteps();
-        var revalidatedStep = _steps[index];
+        var revalidatedStep = Steps[index];
         LogRecordedStepDiagnostics("RetryStepValidation", null, revalidatedStep);
         SetStatusAfterGraphValidation(
             graphValidation,
-            ResolveJournalStatusMessage(revalidatedStep, GetCurrentJournalContext()),
+            ResolveJournalStatusMessage(revalidatedStep, _journal.Context),
             revalidatedStep.ValidationStatus);
         RequestAutosaveIfRecording();
         return true;
-    }
-
-    public bool CanMoveStep(Guid stepId, RecorderStepMoveDirection direction)
-    {
-        if (IsBusy || _isDisposed)
-        {
-            return false;
-        }
-
-        var index = _steps.FindIndex(step => step.StepId == stepId);
-        if (index < 0)
-        {
-            return false;
-        }
-
-        return direction switch
-        {
-            RecorderStepMoveDirection.Earlier => index > 0,
-            RecorderStepMoveDirection.Later => index < _steps.Count - 1,
-            _ => false
-        };
-    }
-
-    public bool MoveStep(Guid stepId, RecorderStepMoveDirection direction)
-    {
-        if (!CanMoveStep(stepId, direction))
-        {
-            return false;
-        }
-
-        var index = _steps.FindIndex(step => step.StepId == stepId);
-        var targetIndex = direction == RecorderStepMoveDirection.Earlier
-            ? index - 1
-            : index + 1;
-        return MoveStepToIndexCore(
-            stepId,
-            targetIndex,
-            rememberMove: false,
-            direction == RecorderStepMoveDirection.Earlier
-                ? "Recorded step moved earlier."
-                : "Recorded step moved later.");
     }
 
     public async Task<bool> RestoreAutosaveAsync(CancellationToken cancellationToken = default)
@@ -771,7 +684,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var saveContext = CreateScenarioSaveContext();
+        var saveContext = _scenarioTarget.CaptureSaveContext();
         if (saveContext is null)
         {
             SetStatus("Select a valid scenario destination before restoring an autosave.", RecorderValidationStatus.Warning);
@@ -779,7 +692,6 @@ internal sealed partial class RecorderSession :
         }
 
         _isRestoringAutosave = true;
-        _busyDescription = "Restoring autosave...";
         SetStatus("Restoring autosave...", RecorderValidationStatus.Valid);
         RecorderAutosaveRestoreResult result;
         try
@@ -799,7 +711,6 @@ internal sealed partial class RecorderSession :
         finally
         {
             _isRestoringAutosave = false;
-            _busyDescription = string.Empty;
         }
 
         if (!result.Success)
@@ -810,19 +721,18 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        _steps.Clear();
-        _stepMoveHistory.Clear();
-        _steps.AddRange(result.Steps);
+        _journal.ReplaceAll(result.Steps);
+        _journal.ClearMoveHistory();
         _selectorResolver.ClearPresenterTimeSources();
         _recordingGeneratedValueSeries = null;
-        _lastGeneratedValueOrdinal = _steps
+        _lastGeneratedValueOrdinal = Steps
             .Where(static step => step.DefinesGeneratedValue)
             .Select(static step => step.GeneratedValueOrdinal ?? 0)
             .DefaultIfEmpty()
             .Max();
         if (!string.IsNullOrWhiteSpace(result.DraftIdentity))
         {
-            _autosaveDraftIdentity = result.DraftIdentity;
+            _scenarioTarget.RestoreDraft(result.DraftIdentity);
         }
 
         var graphValidation = ApplyScenarioGraphValidation();
@@ -839,7 +749,7 @@ internal sealed partial class RecorderSession :
         out RecorderStepEditDraft? draft,
         out string? error)
     {
-        var index = _steps.FindIndex(candidate => candidate.StepId == stepId);
+        var index = _journal.IndexOf(stepId);
         if (index < 0)
         {
             draft = null;
@@ -847,7 +757,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var step = _steps[index];
+        var step = Steps[index];
         if (step.IsIgnored)
         {
             draft = null;
@@ -855,8 +765,8 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var context = GetCurrentJournalContext();
-        var precedingSteps = _steps
+        var context = _journal.Context;
+        var precedingSteps = Steps
             .Take(index)
             .Where(static candidate => !candidate.IsIgnored && candidate.CanPersist)
             .ToArray();
@@ -875,7 +785,7 @@ internal sealed partial class RecorderSession :
         var generatedPreview = _codeGenerator.GeneratePreviewForStep(step, context.PreviewSteps);
         if (!RecorderStepEditService.TryCreateDraft(
                 step,
-                _scenarioGraphRevision,
+                _journal.EditRevision,
                 DescribeRecordedValue(step),
                 generatedPreview,
                 ResolveEditableVariableName(step, context),
@@ -993,15 +903,17 @@ internal sealed partial class RecorderSession :
             return RecorderStepEditResult.Rejected(error, draft);
         }
 
-        _steps[index] = candidate;
-        RebindEditedGridRowAnchors(_steps, index);
+        var editedSteps = Steps.ToArray();
+        editedSteps[index] = candidate;
+        RebindEditedGridRowAnchors(editedSteps, index);
+        _journal.ReplaceAll(editedSteps);
         var appliedGraphValidation = ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps(notify: false);
-        LogRecordedStepDiagnostics("EditStep", null, _steps[index]);
+        LogRecordedStepDiagnostics("EditStep", null, Steps[index]);
         SetStatusAfterGraphValidation(
             appliedGraphValidation,
             "Recorded step updated.",
-            _steps[index].ValidationStatus);
+            Steps[index].ValidationStatus);
         RequestAutosaveIfRecording();
         return RecorderStepEditResult.Applied("Recorded step updated.");
     }
@@ -1032,7 +944,7 @@ internal sealed partial class RecorderSession :
         out RecordedStep[] graphSteps,
         out string error)
     {
-        index = _steps.FindIndex(step => step.StepId == draft.StepId);
+        index = _journal.IndexOf(draft.StepId);
         if (index < 0)
         {
             candidate = null!;
@@ -1041,7 +953,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var source = RestoreValidationBeforeGraphError(_steps[index]);
+        var source = RecorderJournal.RestoreValidationBeforeGraphError(Steps[index]);
         if (source.IsIgnored)
         {
             candidate = null!;
@@ -1050,7 +962,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        if (draft.Revision != _scenarioGraphRevision)
+        if (draft.Revision != _journal.EditRevision)
         {
             candidate = null!;
             graphSteps = [];
@@ -1102,7 +1014,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var candidateSteps = _steps.Select(RestoreValidationBeforeGraphError).ToArray();
+        var candidateSteps = Steps.Select(RecorderJournal.RestoreValidationBeforeGraphError).ToArray();
         candidateSteps[index] = candidate;
         RebindEditedGridRowAnchors(candidateSteps, index);
         graphSteps = candidateSteps
@@ -1240,7 +1152,7 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var context = GetCurrentJournalContext();
+        var context = _journal.Context;
         var reservedNames = context.Checkpoints
             .Where(option => option.CheckpointId != candidate.CheckpointId)
             .Select(static option => option.VariableName)
@@ -1280,13 +1192,18 @@ internal sealed partial class RecorderSession :
             "Export",
             async operationCancellationToken =>
             {
-                var selectedOutputDirectory = await selectOutputDirectory(operationCancellationToken);
-                if (string.IsNullOrWhiteSpace(selectedOutputDirectory))
+                using var exportCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    operationCancellationToken, _lifetimeCancellation.Token);
+                var token = exportCancellation.Token;
+                token.ThrowIfCancellationRequested();
+                var selectedOutputDirectory = await selectOutputDirectory(token);
+                token.ThrowIfCancellationRequested();
+                if (_isDisposed || string.IsNullOrWhiteSpace(selectedOutputDirectory))
                 {
-                    throw new OperationCanceledException(operationCancellationToken);
+                    throw new OperationCanceledException(token);
                 }
 
-                return await SaveCoreAsync(selectedOutputDirectory, operationCancellationToken);
+                return await PersistSnapshotAsync(AuthoringSaveKind.Snapshot, selectedOutputDirectory, token);
             },
             cancellationToken);
     }
@@ -1361,8 +1278,7 @@ internal sealed partial class RecorderSession :
                 LastValidationAt = DateTimeOffset.UtcNow
             }
             : step;
-        _steps.Add(updatedStep);
-        InvalidateScenarioGraphValidation();
+        _journal.Add(updatedStep);
         if (updatedStep.DefinesGeneratedValue && updatedStep.GeneratedValueOrdinal is { } ordinal)
         {
             _lastGeneratedValueOrdinal = Math.Max(_lastGeneratedValueOrdinal, ordinal);
@@ -1533,7 +1449,15 @@ internal sealed partial class RecorderSession :
             : result.SkippedStepCount > 0
                 ? RecorderValidationStatus.Warning
                 : RecorderValidationStatus.Valid;
-        SetStatus(result.Message, status);
+        if (result.Success && result.ScenarioFilePath is not null)
+        {
+            _scenarioTarget.LastScenarioFilePath = result.ScenarioFilePath;
+            LatestPreview = result.SkippedStepCount > 0
+                ? $"Saved: {Path.GetFileName(result.ScenarioFilePath)} ({result.PersistedStepCount} persisted, {result.SkippedStepCount} skipped)"
+                : $"Saved: {Path.GetFileName(result.ScenarioFilePath)}";
+        }
+
+        PublishPersistenceChange(result.Message, status);
         if (!result.Success)
         {
             var message = result.Diagnostics.Count == 0
@@ -1547,14 +1471,18 @@ internal sealed partial class RecorderSession :
                 findings: Array.Empty<RecorderRuntimeValidationFinding>(),
                 message);
         }
+    }
 
-        if (result.Success && result.ScenarioFilePath is not null)
+    private void PublishPersistenceChange(string? message = null, RecorderValidationStatus? status = null)
+    {
+        try
         {
-            _lastScenarioFilePath = result.ScenarioFilePath;
-            LatestPreview = result.SkippedStepCount > 0
-                ? $"Saved: {Path.GetFileName(result.ScenarioFilePath)} ({result.PersistedStepCount} persisted, {result.SkippedStepCount} skipped)"
-                : $"Saved: {Path.GetFileName(result.ScenarioFilePath)}";
-            NotifySessionChanged();
+            if (message is null) NotifySessionChanged();
+            else SetStatus(message, status ?? LatestValidationStatus);
+        }
+        catch (Exception error)
+        {
+            _logger.LogWarning(error, "Recorder persistence change notification failed.");
         }
     }
 
@@ -1931,14 +1859,14 @@ internal sealed partial class RecorderSession :
                     previousGridSelection, pointer: e.Pointer))
                 return;
 
-            var before = _steps.Count;
+            var before = Steps.Count;
             if (!TryRecordCatalogGridRowGesture(gestureSource, e.ClickCount, precedingGridCollapse))
             {
                 TryRecordGridAction(gestureSource);
             }
-            else if (e.ClickCount == 1 && _steps.Count > before && _steps[^1].ActionKind == RecordedActionKind.SelectGridRow)
+            else if (e.ClickCount == 1 && Steps.Count > before && Steps[^1].ActionKind == RecordedActionKind.SelectGridRow)
             {
-                _lastGridSelectionGestureStepId = _steps[^1].StepId;
+                _lastGridSelectionGestureStepId = Steps[^1].StepId;
             }
         }
     }
@@ -2215,7 +2143,7 @@ internal sealed partial class RecorderSession :
                     break;
                 }
 
-                var checkpoint = CreateCheckpointOptions()
+                var checkpoint = _journal.Context.Checkpoints
                     .LastOrDefault(candidate => candidate.ValueKind == currentValue.ValueKind);
                 if (checkpoint is null)
                 {
@@ -2522,13 +2450,13 @@ internal sealed partial class RecorderSession :
         FlushPendingTextIfSwitchingTo(source);
         FlushPendingSliderIfSwitchingTo(source);
         FlushPendingSpinnerIfSwitchingTo(source);
-        var previousStepCount = _steps.Count;
+        var previousStepCount = Steps.Count;
         AddStep(capture.StepResult, source, "GridComboSelection");
         if (capture.StepResult.Success
-            && _steps.Count > previousStepCount
-            && _steps[^1].ActionKind is RecordedActionKind.SelectGridCellComboItem
+            && Steps.Count > previousStepCount
+            && Steps[^1].ActionKind is RecordedActionKind.SelectGridCellComboItem
                 or RecordedActionKind.SearchAndSelectGridCell
-            && _steps[^1].CanPersist)
+            && Steps[^1].CanPersist)
         {
             _completedCompositeSelection = new CompletedCompositeSelection([source]);
         }
@@ -2654,13 +2582,13 @@ internal sealed partial class RecorderSession :
 
         FlushPendingSliderIfSwitchingTo(results);
         FlushPendingSpinnerIfSwitchingTo(results);
-        var previousStepCount = _steps.Count;
+        var previousStepCount = Steps.Count;
         AddStep(result, results, "SearchPickerSelection");
         if (searchInput is not null
             && result.Step?.ActionKind == RecordedActionKind.SearchAndSelectGridCell
-            && _steps.Count > previousStepCount
-            && _steps[^1].ActionKind == RecordedActionKind.SearchAndSelectGridCell
-            && _steps[^1].CanPersist)
+            && Steps.Count > previousStepCount
+            && Steps[^1].ActionKind == RecordedActionKind.SearchAndSelectGridCell
+            && Steps[^1].CanPersist)
         {
             _completedCompositeSelection = new CompletedCompositeSelection([searchInput, results]);
         }
@@ -3645,9 +3573,7 @@ internal sealed partial class RecorderSession :
         Guid checkpointId,
         RecorderComparisonKind comparisonKind = RecorderComparisonKind.Equal)
     {
-        var checkpoint = CreateCheckpointOptions()
-            .FirstOrDefault(candidate => candidate.CheckpointId == checkpointId);
-        if (checkpoint is null)
+        if (!_journal.Context.CheckpointsById.TryGetValue(checkpointId, out var checkpoint))
         {
             SetStatus("Selected checkpoint is missing or ignored.", RecorderValidationStatus.Invalid);
             return;
@@ -3784,8 +3710,7 @@ internal sealed partial class RecorderSession :
             SetStatus("The generated value format is unsupported.", RecorderValidationStatus.Invalid);
             return;
         }
-        if (generatedValueId is not null
-            && CreateGeneratedValueOptions().All(option => option.GeneratedValueId != generatedValueId.Value))
+        if (generatedValueId is { } id && !_journal.Context.GeneratedValuesById.ContainsKey(id))
         {
             SetStatus("Selected generated value is missing or ignored.", RecorderValidationStatus.Invalid);
             return;
@@ -3929,7 +3854,7 @@ internal sealed partial class RecorderSession :
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(clipboardWriter);
-        lock (_operationSync)
+        lock (_persistence.SyncRoot)
         {
             if (_isDisposed)
             {
@@ -3955,13 +3880,13 @@ internal sealed partial class RecorderSession :
                 return Task.CompletedTask;
             }
 
-            _busyDescription = "Copy value...";
+            _persistence.SuspendAutosave();
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _copiedValueCommitTask = completion.Task;
             if (!AddStep(result, selection.TargetSelection.Target, "CopiedValue"))
             {
                 _copiedValueCommitTask = null;
-                _busyDescription = string.Empty;
+                _persistence.ResumeAutosave();
                 completion.TrySetResult();
                 NotifySessionChanged();
                 return completion.Task;
@@ -3987,13 +3912,12 @@ internal sealed partial class RecorderSession :
         TaskCompletionSource completion,
         CancellationTokenSource commitCancellation)
     {
-        var startPendingAutosave = false;
         string? failureMessage = null;
         try
         {
             await clipboardWriter(selection.CopiedValue.PreviewValue, commitCancellation.Token);
             commitCancellation.Token.ThrowIfCancellationRequested();
-            lock (_operationSync)
+            lock (_persistence.SyncRoot)
             {
                 if (!_isDisposed)
                 {
@@ -4020,27 +3944,18 @@ internal sealed partial class RecorderSession :
         finally
         {
             commitCancellation.Dispose();
-            lock (_operationSync)
+            lock (_persistence.SyncRoot)
             {
                 if (!_isDisposed)
                 {
                     _copiedValueCommitTask = null;
-                    _busyDescription = string.Empty;
-                    if (_pendingAutosave)
-                    {
-                        _pendingAutosave = false;
-                        startPendingAutosave = _state == RecorderSessionState.Recording;
-                    }
+                    _persistence.ResumeAutosave();
                 }
             }
 
             if (!_isDisposed)
             {
                 NotifySessionChanged();
-                if (startPendingAutosave)
-                {
-                    StartAutosaveOrQueue();
-                }
 
                 if (failureMessage is not null)
                 {
@@ -4054,13 +3969,13 @@ internal sealed partial class RecorderSession :
 
     private void RollbackCopiedValueStep(Guid stepId)
     {
-        var index = _steps.FindIndex(step => step.StepId == stepId);
+        var index = _journal.IndexOf(stepId);
         if (index < 0)
         {
             return;
         }
 
-        _steps.RemoveAt(index);
+        _journal.RemoveAt(index);
         _selectorResolver.ForgetPresenterTimeSource(stepId);
         ApplyScenarioGraphValidation();
         UpdateLatestPreviewFromSteps();
@@ -4086,9 +4001,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        var generatedValue = CreateGeneratedValueOptions()
-            .FirstOrDefault(option => option.GeneratedValueId == generatedValueId);
-        if (generatedValue is null)
+        if (!_journal.Context.GeneratedValuesById.TryGetValue(generatedValueId, out var generatedValue))
         {
             SetStatus("Selected generated value is missing or ignored.", RecorderValidationStatus.Invalid);
             return;
@@ -4125,8 +4038,7 @@ internal sealed partial class RecorderSession :
         CancelTargetSelectionCore(RecorderTargetSelectionMode.GeneratedValue);
 
         var existingValue = requestedGeneratedValueId is { } generatedValueId
-            ? CreateGeneratedValueOptions()
-                .FirstOrDefault(option => option.GeneratedValueId == generatedValueId)
+            ? _journal.Context.GeneratedValuesById.GetValueOrDefault(generatedValueId)
             : null;
         if (requestedGeneratedValueId is not null && existingValue is null)
         {
@@ -4250,7 +4162,7 @@ internal sealed partial class RecorderSession :
         RecorderSemanticValueSnapshot snapshot,
         string previewValue)
     {
-        var reservedNames = CreateReservedScenarioVariableNames(GetCurrentScenarioGraphValidation());
+        var reservedNames = CreateReservedScenarioVariableNames(_journal.Context.GraphValidation);
         var controlName = snapshot.Prototype.Control.ProposedPropertyName;
         var variableName = RecorderNaming.CreateCopiedValueVariableName(
             $"copied{controlName}",
@@ -4267,7 +4179,7 @@ internal sealed partial class RecorderSession :
     {
         var ordinal = checked(_lastGeneratedValueOrdinal + 1);
         var format = RecorderGeneratedValueFormats.Get(kind);
-        var reservedNames = CreateReservedScenarioVariableNames(GetCurrentScenarioGraphValidation());
+        var reservedNames = CreateReservedScenarioVariableNames(_journal.Context.GraphValidation);
         var variableName = RecorderNaming.CreateGeneratedValueVariableName(
             kind == RecorderGeneratedValueKind.Text ? $"generatedValue{ordinal}" : format.VariableName,
             reservedNames);
@@ -4762,18 +4674,17 @@ internal sealed partial class RecorderSession :
             return false;
         }
 
-        var replaceTail = replaceAdjacent.HasValue && _steps.LastOrDefault()?.StepId == replaceAdjacent.Value;
-        var precedingSteps = replaceTail ? _steps.Take(_steps.Count - 1) : _steps;
+        var replaceTail = replaceAdjacent.HasValue && Steps.LastOrDefault()?.StepId == replaceAdjacent.Value;
+        var precedingSteps = replaceTail ? Steps.Take(Steps.Count - 1) : Steps;
         var recordedStep = LinkGridRowAnchors(RevalidateStep(result.Step, source), precedingSteps);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
-        var tentativeSteps = precedingSteps
-            .Where(static step => !step.IsIgnored)
-            .Append(recordedStep)
-            .ToArray();
-        var preview = _codeGenerator.GeneratePreviewForStep(recordedStep, tentativeSteps);
         if (!recordedStep.CanPersist && !_options.Validation.CaptureInvalidSteps)
         {
-            LatestPreview = preview;
+            var tentativeSteps = precedingSteps
+                .Where(static step => !step.IsIgnored)
+                .Append(recordedStep)
+                .ToArray();
+            LatestPreview = _codeGenerator.GeneratePreviewForStep(recordedStep, tentativeSteps);
             SetStatus(
                 string.IsNullOrWhiteSpace(recordedStep.ValidationMessage)
                     ? "Invalid recorder step was skipped."
@@ -4787,7 +4698,7 @@ internal sealed partial class RecorderSession :
         if (IsRedundantAdjacentGridRowAction(recordedStep)
             || (suppressRecentDuplicate
                 && recordedStep.ActionKind is not (RecordedActionKind.SelectGridRow or RecordedActionKind.OpenGridRow)
-            && string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal)
+                && string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal)
                 && now - _lastRecordedAt < TimeSpan.FromMilliseconds(250)))
         {
             return false;
@@ -4797,18 +4708,17 @@ internal sealed partial class RecorderSession :
 
         if (replaceTail)
         {
-            _selectorResolver.ForgetPresenterTimeSource(_steps[^1].StepId);
-            _steps.RemoveAt(_steps.Count - 1);
+            _selectorResolver.ForgetPresenterTimeSource(Steps[^1].StepId);
+            _journal.RemoveAt(Steps.Count - 1);
         }
-        _steps.Add(recordedStep);
+        _journal.Add(recordedStep);
         _selectorResolver.RememberPresenterTimeSource(recordedStep, source);
         var graphValidation = ApplyScenarioGraphValidation();
         _lastFingerprint = fingerprint;
         _lastRecordedAt = now;
-        var effectiveStep = _steps[^1];
+        var effectiveStep = Steps[^1];
         LatestPreview = _codeGenerator.GeneratePreviewForStep(
-            effectiveStep,
-            _steps.Where(static step => !step.IsIgnored).ToArray());
+            effectiveStep, _journal.Context.PreviewSteps);
         SetStatusAfterGraphValidation(
             graphValidation,
             ResolveStepStatusMessage(effectiveStep, result.Message),
@@ -4898,11 +4808,11 @@ internal sealed partial class RecorderSession :
             RemoveImmediatelyPrecedingGridSelection(openStep, precedingGridCollapse);
         }
 
-        var stepCount = _steps.Count;
+        var stepCount = Steps.Count;
         AddStep(capture.StepResult, source, clickCount >= 2 ? "GridRowOpen" : "GridRowSelect");
         if (clickCount < 2
-            && _steps.Count > stepCount
-            && _steps[^1] is { ActionKind: RecordedActionKind.SelectGridRow } selectionStep)
+            && Steps.Count > stepCount
+            && Steps[^1] is { ActionKind: RecordedActionKind.SelectGridRow } selectionStep)
         {
             _pointerGestures.RememberGridRowSelection(selectionStep.StepId);
         }
@@ -4918,7 +4828,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        if (_steps.Count == 0 || _steps[^1].StepId != selectionStepId)
+        if (Steps.Count == 0 || Steps[^1].StepId != selectionStepId)
         {
             return;
         }
@@ -4928,12 +4838,12 @@ internal sealed partial class RecorderSession :
 
     private void RemoveImmediatelyPrecedingGridSelection(RecordedStep openStep, Guid? precedingGridCollapse = null)
     {
-        if (_steps.Count == 0)
+        if (Steps.Count == 0)
         {
             return;
         }
 
-        var previous = _steps[^1];
+        var previous = Steps[^1];
         var previousRow = previous.ActionKind switch
         {
             RecordedActionKind.SelectGridRow => previous.GridRowConditions,
@@ -4951,20 +4861,20 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        _selectorResolver.ForgetPresenterTimeSource(_steps[^1].StepId);
-        _steps.RemoveAt(_steps.Count - 1);
+        _selectorResolver.ForgetPresenterTimeSource(Steps[^1].StepId);
+        _journal.RemoveAt(Steps.Count - 1);
         _lastFingerprint = null;
     }
 
     private bool IsRedundantAdjacentGridRowAction(RecordedStep step)
     {
         if (step.ActionKind is not (RecordedActionKind.SelectGridRow or RecordedActionKind.OpenGridRow)
-            || _steps.Count == 0)
+            || Steps.Count == 0)
         {
             return false;
         }
 
-        var previous = _steps[^1];
+        var previous = Steps[^1];
         return previous.ActionKind == step.ActionKind
             && string.Equals(
                 previous.Control.ProposedPropertyName,
@@ -5135,7 +5045,7 @@ internal sealed partial class RecorderSession :
         IReadOnlyList<RecorderRuntimeValidationFinding> findings,
         string? message)
     {
-        if (!_hasConfiguredLogger && !_isDiagnosticLogFileEnabled)
+        if (!_hasConfiguredLogger && !_diagnosticWriter.IsEnabled)
         {
             return;
         }
@@ -5150,7 +5060,7 @@ internal sealed partial class RecorderSession :
                 step,
                 findings,
                 message);
-            AppendDiagnosticLogFile(eventId, diagnostic);
+            if (_diagnosticWriter.Append(eventId, diagnostic)) NotifySessionChanged();
 
             if (_hasConfiguredLogger)
             {
@@ -5166,96 +5076,6 @@ internal sealed partial class RecorderSession :
                 captureAction,
                 ex.Message);
         }
-    }
-
-    private void AppendDiagnosticLogFile(EventId eventId, string diagnostic)
-    {
-        if (!_isDiagnosticLogFileEnabled)
-        {
-            return;
-        }
-
-        try
-        {
-            var directory = Path.GetDirectoryName(_diagnosticLogFilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.AppendAllText(
-                _diagnosticLogFilePath,
-                string.Join(
-                    Environment.NewLine,
-                    $"[{DateTimeOffset.UtcNow:O}] EventId={eventId.Id} EventName={eventId.Name}",
-                    diagnostic,
-                    string.Empty,
-                    new string('-', 80),
-                    string.Empty));
-            _diagnosticLogEntryCount++;
-            NotifySessionChanged();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed,
-                ex,
-                "Failed to append recorder diagnostic log file '{DiagnosticLogFilePath}': {Message}",
-                _diagnosticLogFilePath,
-                ex.Message);
-        }
-    }
-
-    private void EnsureDiagnosticLogFileHeader()
-    {
-        try
-        {
-            var directory = Path.GetDirectoryName(_diagnosticLogFilePath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            if (File.Exists(_diagnosticLogFilePath))
-            {
-                return;
-            }
-
-            File.WriteAllText(
-                _diagnosticLogFilePath,
-                string.Join(
-                    Environment.NewLine,
-                    "AppAutomation recorder diagnostic log",
-                    $"ScenarioName: {_options.ScenarioName}",
-                    $"CreatedUtc: {DateTimeOffset.UtcNow:O}",
-                    string.Empty));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed,
-                ex,
-                "Failed to initialize recorder diagnostic log file '{DiagnosticLogFilePath}': {Message}",
-                _diagnosticLogFilePath,
-                ex.Message);
-        }
-    }
-
-    private static string ResolveDiagnosticLogFilePath(
-        AppAutomationRecorderOptions options,
-        RecorderOutputDescription outputDescription)
-    {
-        if (!string.IsNullOrWhiteSpace(options.DiagnosticLog.FilePath))
-        {
-            return Path.GetFullPath(options.DiagnosticLog.FilePath);
-        }
-
-        var directory = !string.IsNullOrWhiteSpace(outputDescription.OutputDirectory)
-            ? outputDescription.OutputDirectory
-            : Path.Combine(Path.GetTempPath(), "AppAutomation", "Recorder");
-        var scenarioName = RecorderNaming.CreateFileSafeName(options.ScenarioName, "scenario");
-        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        return Path.Combine(directory, $"{scenarioName}.{timestamp}.recorder-diagnostics.log");
     }
 
     private static bool RuntimeFindingsBlockAllTargets(IReadOnlyList<RecorderRuntimeValidationFinding> findings)
@@ -5624,9 +5444,7 @@ internal sealed partial class RecorderSession :
         var replayText = _stepFactory.ReadTextEntryValue(textBox, capturedText);
         if (copiedValueId is { } copiedId)
         {
-            var copiedValue = CreateCopiedValueOptions()
-                .FirstOrDefault(option => option.CopiedValueId == copiedId);
-            if (copiedValue is not null
+            if (_journal.Context.CopiedValuesById.TryGetValue(copiedId, out var copiedValue)
                 && string.Equals(replayText, copiedValue.PreviewValue, StringComparison.Ordinal))
             {
                 AddStep(
@@ -6051,7 +5869,7 @@ internal sealed partial class RecorderSession :
     {
         return RunManagedOperationAsync(
             operationName,
-            operationCancellationToken => SaveCoreAsync(outputDirectory, operationCancellationToken),
+            token => PersistSnapshotAsync(AuthoringSaveKind.Snapshot, outputDirectory, token),
             cancellationToken);
     }
 
@@ -6060,200 +5878,71 @@ internal sealed partial class RecorderSession :
         Func<CancellationToken, Task<RecorderSaveResult>> operation,
         CancellationToken cancellationToken)
     {
-        lock (_operationSync)
+        lock (_persistence.SyncRoot)
         {
             if (_copiedValueCommitTask is not null)
             {
-                SetStatus(
-                    $"{operationName} ignored while a clipboard copy is in progress.",
-                    RecorderValidationStatus.Warning);
+                SetStatus($"{operationName} ignored while a clipboard copy is in progress.", RecorderValidationStatus.Warning);
                 return Task.FromResult(RecorderSaveResult.Failed("Clipboard copy is already in progress."));
             }
-
-            if (_activeOperationTask is not null)
-            {
-                if (_activeOperationIsAutosave && _queuedManagedOperation is null)
-                {
-                    var queuedCompletion = new TaskCompletionSource<RecorderSaveResult>(
-                        TaskCreationOptions.RunContinuationsAsynchronously);
-                    _queuedManagedOperation = new QueuedManagedOperation(
-                        operationName,
-                        operation,
-                        cancellationToken,
-                        queuedCompletion);
-                    _pendingAutosave = false;
-                    SetStatus(
-                        $"{operationName} queued until autosave completes.",
-                        LatestValidationStatus);
-                    return queuedCompletion.Task;
-                }
-
-                SetStatus(
-                    $"{operationName} ignored while '{_busyDescription}' is in progress.",
-                    RecorderValidationStatus.Warning);
-                return Task.FromResult(RecorderSaveResult.Failed($"{_busyDescription} is already in progress."));
-            }
-
-            _busyDescription = $"{operationName}...";
-            _activeOperationIsAutosave = false;
-            SetStatus($"{operationName} in progress...", LatestValidationStatus);
-            var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _activeOperationTask = operationCompletion.Task;
-            _ = ExecuteManagedOperationAsync(operationName, operation, cancellationToken, operationCompletion);
-            return operationCompletion.Task;
+            return _persistence.RunAsync(operationName, operation, cancellationToken);
         }
     }
 
     private void RequestAutosaveIfRecording()
     {
-        if (_state != RecorderSessionState.Recording || _isCapturingPersistenceSnapshot)
-        {
-            return;
-        }
-
-        StartAutosaveOrQueue();
+        if (_state == RecorderSessionState.Recording) _persistence.RequestAutosave();
     }
 
-    private void StartAutosaveOrQueue()
+    private async Task<RecorderSaveResult> PersistSnapshotAsync(
+        AuthoringSaveKind kind, string? outputDirectory, CancellationToken cancellationToken)
     {
-        lock (_operationSync)
-        {
-            if (_copiedValueCommitTask is not null)
-            {
-                _pendingAutosave = true;
-                return;
-            }
-
-            if (_activeOperationTask is not null)
-            {
-                _pendingAutosave = true;
-                return;
-            }
-
-            _pendingAutosave = false;
-            _busyDescription = "Autosave...";
-            _activeOperationIsAutosave = true;
-            SetStatus("Autosave in progress...", LatestValidationStatus);
-            var operationCompletion = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _activeOperationTask = operationCompletion.Task;
-            _ = ExecuteManagedOperationAsync(
-                "Autosave",
-                operationCancellationToken => AutosaveCoreAsync(outputDirectory: null, operationCancellationToken),
-                CancellationToken.None,
-                operationCompletion);
-        }
-    }
-
-    private async Task ExecuteManagedOperationAsync(
-        string operationName,
-        Func<CancellationToken, Task<RecorderSaveResult>> operation,
-        CancellationToken cancellationToken,
-        TaskCompletionSource<RecorderSaveResult> completion)
-    {
-        var startPendingAutosave = false;
-        QueuedManagedOperation? queuedManagedOperation = null;
+        var isAutosave = kind == AuthoringSaveKind.Autosave;
+        var operation = isAutosave ? _autosaveOperation : _saveOperation;
+        var revisionBeforeCapture = _journal.ContentRevision;
+        RecorderPersistenceSnapshot? snapshot = null;
+        var saved = false;
         try
         {
-            completion.TrySetResult(await operation(cancellationToken));
-        }
-        catch (OperationCanceledException)
-        {
-            SetStatus($"{operationName} cancelled.", LatestValidationStatus);
-            completion.TrySetResult(RecorderSaveResult.Failed($"{operationName} cancelled."));
-        }
-        catch (Exception ex)
-        {
-            var message = $"{operationName} failed: {ex.Message}";
-            SetStatus(message, RecorderValidationStatus.Invalid);
-            completion.TrySetResult(RecorderSaveResult.Failed(message, ex.ToString()));
+            snapshot = _persistence.CaptureSnapshot();
+            RecorderSaveResult result;
+            if (operation is not null)
+            {
+                result = await operation(snapshot.Steps, outputDirectory, cancellationToken);
+            }
+            else
+            {
+                var saveContext = _scenarioTarget.CaptureSaveContext();
+                result = IsScenarioSelectionEnabled && saveContext is null
+                    ? RecorderSaveResult.Failed(ScenarioSelectionError ?? "Scenario destination is not ready.")
+                    : await _codeGenerator.PersistAsync(
+                        _window, _options, snapshot.Steps, outputDirectory, kind, saveContext, cancellationToken);
+            }
+
+            saved = result.Success;
+            if (saved) _persistence.MarkSaved(snapshot.ContentRevision);
+            ApplySaveResult(result);
+            return result;
         }
         finally
         {
-            lock (_operationSync)
-            {
-                _activeOperationTask = null;
-                _activeOperationIsAutosave = false;
-                _busyDescription = string.Empty;
-                if (_queuedManagedOperation is not null)
-                {
-                    queuedManagedOperation = _queuedManagedOperation;
-                    _queuedManagedOperation = null;
-                    _pendingAutosave = false;
-                    _busyDescription = $"{queuedManagedOperation.OperationName}...";
-                    _activeOperationTask = queuedManagedOperation.Completion.Task;
-                }
-                else if (_pendingAutosave)
-                {
-                    _pendingAutosave = false;
-                    startPendingAutosave = _state == RecorderSessionState.Recording;
-                }
-            }
-
-            NotifySessionChanged();
-            if (queuedManagedOperation is not null)
-            {
-                SetStatus(
-                    $"{queuedManagedOperation.OperationName} in progress...",
-                    LatestValidationStatus);
-                _ = ExecuteManagedOperationAsync(
-                    queuedManagedOperation.OperationName,
-                    queuedManagedOperation.Operation,
-                    queuedManagedOperation.CancellationToken,
-                    queuedManagedOperation.Completion);
-            }
-            else if (startPendingAutosave)
-            {
-                StartAutosaveOrQueue();
-            }
+            if (!saved && !isAutosave && (snapshot is not null || _journal.ContentRevision != revisionBeforeCapture))
+                RequestAutosaveIfRecording();
         }
     }
 
-    private async Task<RecorderSaveResult> SaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
+    private RecorderPersistenceSnapshot CapturePersistenceSnapshot()
     {
-        var stepsToPersist = CapturePersistenceSnapshot();
-        var result = await _saveOperation(stepsToPersist, outputDirectory, cancellationToken);
-        ApplySaveResult(result);
-        if (result.Success)
-        {
-            lock (_operationSync)
-            {
-                _pendingAutosave = false;
-            }
-        }
-        else
-        {
-            RequestAutosaveIfRecording();
-        }
-
-        return result;
-    }
-
-    private async Task<RecorderSaveResult> AutosaveCoreAsync(string? outputDirectory, CancellationToken cancellationToken)
-    {
-        var stepsToPersist = CapturePersistenceSnapshot();
-        var result = await _autosaveOperation(stepsToPersist, outputDirectory, cancellationToken);
-        ApplySaveResult(result);
-        return result;
-    }
-
-    private RecordedStep[] CapturePersistenceSnapshot()
-    {
-        _isCapturingPersistenceSnapshot = true;
-        try
-        {
-            FlushPendingState();
-            FlushConfirmedPresenterTime();
-            return _steps.Where(static step => !step.IsIgnored).ToArray();
-        }
-        finally
-        {
-            _isCapturingPersistenceSnapshot = false;
-        }
+        FlushPendingState();
+        FlushConfirmedPresenterTime();
+        return new RecorderPersistenceSnapshot(
+            _journal.ContentRevision,
+            RecorderPersistenceSnapshot.FreezeSteps(Steps.Where(static step => !step.IsIgnored)));
     }
 
     private RecordedStep RevalidateStep(RecordedStep step, Control? source = null)
     {
-        step = RestoreValidationBeforeGraphError(step);
+        step = RecorderJournal.RestoreValidationBeforeGraphError(step);
         if (step.ActionKind == RecordedActionKind.SetMultiItemSpinnerValue
             && step.ValidationStatus == RecorderValidationStatus.Invalid
             && !step.CanPersist)
@@ -6306,15 +5995,14 @@ internal sealed partial class RecorderSession :
         };
     }
 
-    private RecorderStepJournalEntry CreateJournalEntry(
+    private static RecorderStepJournalEntry CreateJournalEntry(
         RecordedStep step,
-        RecorderJournalContext context)
+        RecorderJournalContext context,
+        string preview)
     {
         return new RecorderStepJournalEntry(
             step.StepId,
-            _codeGenerator.GeneratePreviewForStep(
-                step,
-                context.PreviewSteps),
+            preview,
             ResolveJournalStatusMessage(step, context),
             step.ValidationStatus,
             step.CanPersist,
@@ -6467,122 +6155,38 @@ internal sealed partial class RecorderSession :
 
     private async Task DiscoverScenarioDestinationsAsync()
     {
-        ScenarioDestinationDiscoveryResult result;
-        try
-        {
-            result = await Task.Run(
-                () => _authoringProjectScanner.DiscoverScenarioDestinations(
-                    _options.AuthoringProjectDirectory,
-                    _options.ScenarioSelection.ScenarioNamespaceRoot,
-                    _options.ScenarioSelection.OutputSubdirectoryRoot));
-        }
-        catch (Exception ex)
-        {
-            result = ScenarioDestinationDiscoveryResult.Failed($"Scenario destination scan failed: {ex.Message}");
-        }
-
-        _scenarioDestinations = result.Destinations;
-        _scenarioDiscoveryError = result.Error;
-
-        if (result.Success
-            && !string.IsNullOrWhiteSpace(_options.ScenarioNamespace)
-            && !string.IsNullOrWhiteSpace(_options.ScenarioClassName))
-        {
-            _selectedScenarioDestination = result.Destinations.SingleOrDefault(destination =>
-                string.Equals(destination.ScenarioNamespace, _options.ScenarioNamespace, StringComparison.Ordinal)
-                && string.Equals(destination.ScenarioClassName, _options.ScenarioClassName, StringComparison.Ordinal));
-            _hasExplicitScenarioName |= _selectedScenarioDestination is not null && !string.IsNullOrWhiteSpace(_scenarioName);
-            if (_selectedScenarioDestination is null)
-            {
-                _scenarioDiscoveryError =
-                    $"Configured scenario destination '{_options.ScenarioNamespace}.{_options.ScenarioClassName}' was not found.";
-            }
-        }
-
-        _isScanning = false;
+        await _scenarioTarget.DiscoverAsync(_authoringProjectScanner);
         SetStatus(
-            _scenarioDiscoveryError
-                ?? $"Found {_scenarioDestinations.Count} scenario destination(s).",
-            _scenarioDiscoveryError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Invalid);
-    }
-
-    private RecorderScenarioSaveContext? CreateScenarioSaveContext()
-    {
-        if (!IsScenarioSelectionEnabled
-            || _selectedScenarioDestination is null
-            || _isScanning
-            || _scenarioDiscoveryError is not null
-            || ValidateScenarioName(_scenarioName) is not null)
-        {
-            return null;
-        }
-
-        return new RecorderScenarioSaveContext(
-            _selectedScenarioDestination,
-            _scenarioName.Trim(),
-            _autosaveDraftIdentity);
-    }
-
-    private static string? ValidateScenarioName(string? scenarioName)
-    {
-        var value = scenarioName?.Trim() ?? string.Empty;
-        if (value.Length == 0)
-        {
-            return "Scenario name is required.";
-        }
-
-        if (value.Any(static character => char.IsControl(character))
-            || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-            || value.Contains(Path.DirectorySeparatorChar)
-            || value.Contains(Path.AltDirectorySeparatorChar)
-            || value.Contains("..", StringComparison.Ordinal))
-        {
-            return "Scenario name contains characters that cannot be used safely in a generated file.";
-        }
-
-        if (string.Equals(RecorderNaming.CreateFileSafeName(value, "scenario"), "scenario", StringComparison.Ordinal)
-            && !string.Equals(value, "scenario", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Scenario name cannot be converted to a generated method and file name.";
-        }
-
-        return null;
+            _scenarioTarget.DiscoveryError ?? $"Found {_scenarioTarget.Destinations.Count} scenario destination(s).",
+            _scenarioTarget.DiscoveryError is null ? RecorderValidationStatus.Valid : RecorderValidationStatus.Invalid);
     }
 
     private string BuildSessionSummary()
     {
+        var stepCount = StepCount;
+        var persistable = PersistableStepCount;
+        var warnings = WarningStepCount;
+        var invalid = InvalidStepCount;
+        var ignored = IgnoredStepCount;
         var parts = new List<string>
         {
-            PersistableStepCount == StepCount
-                ? $"{StepCount} steps"
-                : $"{PersistableStepCount}/{StepCount} steps"
+            persistable == stepCount ? $"{stepCount} steps" : $"{persistable}/{stepCount} steps"
         };
 
-        if (WarningStepCount > 0)
-        {
-            parts.Add($"{WarningStepCount} warnings");
-        }
+        if (warnings > 0) parts.Add($"{warnings} warnings");
+        if (invalid > 0) parts.Add($"{invalid} invalid");
+        if (ignored > 0) parts.Add($"{ignored} ignored");
 
-        if (InvalidStepCount > 0)
+        if (_diagnosticWriter.IsEnabled)
         {
-            parts.Add($"{InvalidStepCount} invalid");
-        }
-
-        if (IgnoredStepCount > 0)
-        {
-            parts.Add($"{IgnoredStepCount} ignored");
-        }
-
-        if (_isDiagnosticLogFileEnabled)
-        {
-            parts.Add(_diagnosticLogEntryCount == 0
+            parts.Add(_diagnosticWriter.EntryCount == 0
                 ? "diagnostic log on"
-                : $"{_diagnosticLogEntryCount} diagnostic log entries");
+                : $"{_diagnosticWriter.EntryCount} diagnostic log entries");
         }
 
         if (IsBusy)
         {
-            parts.Add(_busyDescription.ToLowerInvariant());
+            parts.Add(BusyDescription.ToLowerInvariant());
         }
 
         return string.Join(" | ", parts);
@@ -6590,7 +6194,7 @@ internal sealed partial class RecorderSession :
 
     private void UpdateLatestPreviewFromSteps(bool notify = true)
     {
-        var context = GetCurrentJournalContext();
+        var context = _journal.Context;
         var latestStep = context.PreviewSteps.Length == 0
             ? null
             : context.PreviewSteps[^1];
@@ -6605,15 +6209,6 @@ internal sealed partial class RecorderSession :
         }
     }
 
-    private IReadOnlyList<RecorderCheckpointOption> CreateCheckpointOptions() =>
-        GetCurrentJournalContext().Checkpoints;
-
-    private IReadOnlyList<RecorderGeneratedValueOption> CreateGeneratedValueOptions() =>
-        GetCurrentJournalContext().GeneratedValues;
-
-    private IReadOnlyList<RecorderCopiedValueOption> CreateCopiedValueOptions() =>
-        GetCurrentJournalContext().CopiedValues;
-
     private void RefreshActiveCopiedValue()
     {
         if (_copiedValueCommitTask is not null)
@@ -6623,7 +6218,7 @@ internal sealed partial class RecorderSession :
             return;
         }
 
-        var copiedValues = GetCurrentJournalContext().CopiedValues;
+        var copiedValues = _journal.Context.CopiedValues;
         _activeCopiedValue = copiedValues.Length == 0
             ? null
             : copiedValues[^1];
@@ -6633,162 +6228,11 @@ internal sealed partial class RecorderSession :
         }
     }
 
-    private RecorderScenarioGraphValidationResult GetCurrentScenarioGraphValidation() =>
-        GetCurrentJournalContext().GraphValidation;
-
-    private RecorderJournalContext GetCurrentJournalContext()
-    {
-        if (_cachedJournalContext is not null
-            && _cachedJournalContextRevision == _scenarioGraphRevision)
-        {
-            return _cachedJournalContext;
-        }
-
-        _cachedJournalContext = CreateJournalContext();
-        _cachedJournalContextRevision = _scenarioGraphRevision;
-        return _cachedJournalContext;
-    }
-
-    private RecorderJournalContext CreateJournalContext(
-        RecorderScenarioGraphValidationResult? knownGraphValidation = null)
-    {
-        var previewSteps = _steps
-            .Where(static step => !step.IsIgnored)
-            .ToArray();
-        var graphSteps = previewSteps
-            .Where(static step => step.CanPersist)
-            .ToArray();
-        var graphValidation = knownGraphValidation
-            ?? RecorderScenarioGraphValidator.Validate(graphSteps);
-        var checkpoints = graphSteps
-            .Where(static step => step.ActionKind == RecordedActionKind.CaptureCheckpoint
-                && step.CheckpointId is not null
-                && step.ValueKind is not null)
-            .Select(step => new RecorderCheckpointOption(
-                step.CheckpointId!.Value,
-                graphValidation.CheckpointVariables.TryGetValue(step.CheckpointId.Value, out var variableName)
-                    ? variableName
-                    : step.CheckpointVariableName ?? "checkpointValue",
-                step.ValueKind!.Value,
-                step.Control.ProposedPropertyName))
-            .ToArray();
-        var generatedValues = graphSteps
-            .Where(static step => step.ActionKind == RecordedActionKind.EnterText
-                && step.DefinesGeneratedValue
-                && step.GeneratedValueId is not null
-                && step.GeneratedValueOrdinal is > 0)
-            .Select(step => new RecorderGeneratedValueOption(
-                step.GeneratedValueId!.Value,
-                graphValidation.GeneratedValueVariables.TryGetValue(step.GeneratedValueId.Value, out var variableName)
-                    ? variableName
-                    : step.GeneratedValueVariableName ?? $"generatedValue{step.GeneratedValueOrdinal}",
-                step.GeneratedValueOrdinal!.Value,
-                step.StringValue ?? string.Empty, step.GeneratedValueKind))
-            .ToArray();
-        var copiedValues = graphSteps
-            .Where(static step => step.ActionKind == RecordedActionKind.CaptureCopiedValue
-                && step.CopiedValueId is not null
-                && step.ValueKind is RecorderValueKind.Text or RecorderValueKind.GridCellText)
-            .Select(step => new RecorderCopiedValueOption(
-                step.CopiedValueId!.Value,
-                graphValidation.CopiedValueVariables.TryGetValue(step.CopiedValueId.Value, out var variableName)
-                    ? variableName
-                    : step.CopiedValueVariableName ?? "copiedValue",
-                step.ValueKind!.Value,
-                step.Control.ProposedPropertyName,
-                step.StringValue ?? string.Empty))
-            .ToArray();
-
-        return new RecorderJournalContext(
-            previewSteps,
-            graphValidation,
-            checkpoints,
-            generatedValues,
-            copiedValues,
-            checkpoints.ToDictionary(static option => option.CheckpointId),
-            generatedValues.ToDictionary(static option => option.GeneratedValueId),
-            copiedValues.ToDictionary(static option => option.CopiedValueId));
-    }
-
-    private void InvalidateScenarioGraphValidation()
-    {
-        _scenarioGraphRevision++;
-        _cachedJournalContext = null;
-        _cachedJournalContextRevision = -1;
-    }
-
     private RecorderScenarioGraphValidationResult ApplyScenarioGraphValidation()
     {
-        for (var index = 0; index < _steps.Count; index++)
-        {
-            var step = _steps[index];
-            if (step.IsIgnored
-                || !string.Equals(step.FailureCode, "checkpoint-graph-invalid", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            _steps[index] = RestoreValidationBeforeGraphError(step);
-        }
-
-        InvalidateScenarioGraphValidation();
-        var graphValidation = GetCurrentScenarioGraphValidation();
-        if (graphValidation.Success)
-        {
-            RefreshActiveCopiedValue();
-            return graphValidation;
-        }
-
-        foreach (var entry in graphValidation.StepErrors)
-        {
-            var index = _steps.FindIndex(step => step.StepId == entry.Key);
-            if (index < 0)
-            {
-                continue;
-            }
-
-            var step = _steps[index];
-            var validationBeforeGraphError = step.ValidationBeforeGraphError
-                ?? new RecorderStepValidationState(
-                    step.ValidationStatus,
-                    step.ValidationMessage,
-                    step.CanPersist,
-                    step.ReviewState,
-                    step.FailureCode);
-            _steps[index] = step with
-            {
-                ValidationStatus = RecorderValidationStatus.Invalid,
-                ValidationMessage = entry.Value,
-                CanPersist = false,
-                ReviewState = RecorderStepReviewState.NeedsReview,
-                FailureCode = "checkpoint-graph-invalid",
-                ValidationBeforeGraphError = validationBeforeGraphError
-            };
-        }
-
-        InvalidateScenarioGraphValidation();
-        _cachedJournalContext = CreateJournalContext(graphValidation);
-        _cachedJournalContextRevision = _scenarioGraphRevision;
+        var validation = _journal.ValidateGraph();
         RefreshActiveCopiedValue();
-        return graphValidation;
-    }
-
-    private static RecordedStep RestoreValidationBeforeGraphError(RecordedStep step)
-    {
-        if (step.ValidationBeforeGraphError is not { } validation)
-        {
-            return step;
-        }
-
-        return step with
-        {
-            ValidationStatus = validation.ValidationStatus,
-            ValidationMessage = validation.ValidationMessage,
-            CanPersist = validation.CanPersist,
-            ReviewState = validation.ReviewState,
-            FailureCode = validation.FailureCode,
-            ValidationBeforeGraphError = null
-        };
+        return validation;
     }
 
     private void SetStatusAfterGraphValidation(
@@ -6832,16 +6276,6 @@ internal sealed partial class RecorderSession :
         }
     }
 
-    private sealed record RecorderJournalContext(
-        RecordedStep[] PreviewSteps,
-        RecorderScenarioGraphValidationResult GraphValidation,
-        RecorderCheckpointOption[] Checkpoints,
-        RecorderGeneratedValueOption[] GeneratedValues,
-        RecorderCopiedValueOption[] CopiedValues,
-        IReadOnlyDictionary<Guid, RecorderCheckpointOption> CheckpointsById,
-        IReadOnlyDictionary<Guid, RecorderGeneratedValueOption> GeneratedValuesById,
-        IReadOnlyDictionary<Guid, RecorderCopiedValueOption> CopiedValuesById);
-
     private sealed record SpatialCaptureTarget(
         Control? EventTarget,
         Control PositionRoot,
@@ -6855,11 +6289,5 @@ internal sealed partial class RecorderSession :
         GeneratedValue = 3,
         CopiedValue = 4
     }
-
-    private sealed record QueuedManagedOperation(
-        string OperationName,
-        Func<CancellationToken, Task<RecorderSaveResult>> Operation,
-        CancellationToken CancellationToken,
-        TaskCompletionSource<RecorderSaveResult> Completion);
 
 }

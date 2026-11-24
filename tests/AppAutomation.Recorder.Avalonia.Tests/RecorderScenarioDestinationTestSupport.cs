@@ -252,7 +252,8 @@ internal sealed class RecorderScenarioDestinationProject : IDisposable
 
     public static AppAutomationRecorderOptions CreateInteractiveOptions(
         string projectDirectory,
-        string scenarioName = "RecordedScenario")
+        string scenarioName = "RecordedScenario",
+        string? scenarioClassName = null)
     {
         return new AppAutomationRecorderOptions
         {
@@ -260,6 +261,8 @@ internal sealed class RecorderScenarioDestinationProject : IDisposable
             PageNamespace = "Sample.Authoring.Pages",
             PageClassName = "MainWindowPage",
             ScenarioName = scenarioName,
+            ScenarioNamespace = scenarioClassName is null ? null : ScenarioNamespaceRoot,
+            ScenarioClassName = scenarioClassName,
             ScenarioSelection = new RecorderScenarioSelectionOptions
             {
                 IsEnabled = true,
@@ -286,11 +289,12 @@ internal sealed class InteractiveScenarioSelectionFixture : IDisposable
     private readonly TaskCompletionSource<RecorderSaveResult> _saveCompletion = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private InteractiveScenarioSelectionFixture(string projectDirectory)
+    private InteractiveScenarioSelectionFixture(string projectDirectory, string? scenarioClassName)
     {
         var options = RecorderScenarioDestinationProject.CreateInteractiveOptions(
             projectDirectory,
-            scenarioName: "RecordedSmoke");
+            scenarioName: "RecordedSmoke",
+            scenarioClassName: scenarioClassName);
         Session = new RecorderSession(
             RecorderTestWindow.CreateStub(),
             options,
@@ -305,9 +309,9 @@ internal sealed class InteractiveScenarioSelectionFixture : IDisposable
 
     public IRecorderScenarioSelectionDetails Selection { get; }
 
-    public static InteractiveScenarioSelectionFixture Create(string projectDirectory)
+    public static InteractiveScenarioSelectionFixture Create(string projectDirectory, string? scenarioClassName = null)
     {
-        return new InteractiveScenarioSelectionFixture(projectDirectory);
+        return new InteractiveScenarioSelectionFixture(projectDirectory, scenarioClassName);
     }
 
     public async Task WaitForScanAsync()

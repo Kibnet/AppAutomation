@@ -2,6 +2,7 @@ using AppAutomation.Abstractions;
 using AppAutomation.Recorder.Avalonia.CodeGeneration;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Headless;
 
 namespace AppAutomation.Recorder.Avalonia.Tests;
 
@@ -206,6 +207,66 @@ public sealed class RecorderCopiedValueTests
             await Assert.That(session.StepJournal[0].CanPersist).IsTrue();
         }
     }
+
+    [Test]
+    public Task ClipboardCommit_ReentrantChoiceDoesNotAutosaveAnUnconfirmedStep() =>
+        HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderCopiedValueTests).Assembly)
+            .Dispatch(async () =>
+            {
+                var source = TextBox("SourceValue", "Search result");
+                var autosavedStepIds = new List<Guid[]>();
+                using var session = CreateSession(source, autosaveOperation: (steps, _, _) =>
+                {
+                    autosavedStepIds.Add(steps.Select(static step => step.StepId).ToArray());
+                    return Task.FromResult(RecorderSaveResult.Completed("Autosaved.", null, null, steps.Count, 0));
+                });
+                RecorderCopiedValueTargetSelection? selection = null;
+                session.CopiedValueTargetSelected += (_, args) => selection = args.Selection;
+                session.Start();
+                session.RefreshObservedControlsForTesting();
+                session.BeginCopiedValueTargetSelection();
+                session.SelectCopiedValueTargetForTesting(source);
+                var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Task? secondCommit = null;
+                var startNextChoice = false;
+                session.SessionChanged += (_, _) =>
+                {
+                    if (!startNextChoice || session.IsBusy) return;
+                    startNextChoice = false;
+                    session.BeginCopiedValueTargetSelection();
+                    session.SelectCopiedValueTargetForTesting(source);
+                    secondCommit = session.CommitCopiedValueAsync(selection!, (_, _) => releaseSecond.Task);
+                };
+                var firstCommit = session.CommitCopiedValueAsync(selection!, (_, _) => releaseFirst.Task);
+                Guid firstStepId;
+                try
+                {
+                    firstStepId = session.StepJournal.Single().StepId;
+                    startNextChoice = true;
+                    releaseFirst.SetResult();
+                    await firstCommit;
+
+                    using (Assert.Multiple())
+                    {
+                        await Assert.That(secondCommit).IsNotNull();
+                        await Assert.That(secondCommit!.IsCompleted).IsFalse();
+                        await Assert.That(session.StepCount).IsEqualTo(2);
+                        await Assert.That(autosavedStepIds).IsNotEmpty();
+                    }
+                }
+                finally
+                {
+                    startNextChoice = false;
+                    releaseFirst.TrySetResult();
+                    releaseSecond.TrySetException(new InvalidOperationException("Clipboard unavailable"));
+                    await firstCommit;
+                    if (secondCommit is not null) await secondCommit;
+                }
+                await Assert.That(session.StepJournal.Single().StepId).IsEqualTo(firstStepId);
+                await Assert.That(autosavedStepIds.All(ids => ids is [var id] && id == firstStepId)).IsTrue();
+                return true;
+            }, CancellationToken.None);
 
     [Test]
     public async Task ClipboardCommit_RollsBackReservedStepWhenClipboardWriteFails()

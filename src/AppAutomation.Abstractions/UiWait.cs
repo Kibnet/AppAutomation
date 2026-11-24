@@ -17,6 +17,10 @@ namespace AppAutomation.Abstractions;
 /// For UI test scenarios, prefer the fluent extension methods in <see cref="UiPageExtensions"/>
 /// which provide better diagnostics and automatic retry behavior.
 /// </para>
+/// <para>
+/// A callback already in progress cannot be interrupted by the timeout. Its result is rejected if
+/// it completes after the deadline; no further callback is started after timeout or cancellation.
+/// </para>
 /// </remarks>
 /// <example>
 /// <code>
@@ -57,58 +61,13 @@ public static class UiWait
         CancellationToken cancellationToken = default,
         ILogger? logger = null)
     {
-        ArgumentNullException.ThrowIfNull(valueFactory);
-        ArgumentNullException.ThrowIfNull(condition);
-
-        var log = logger ?? NullLogger.Instance;
-        var waitOptions = ValidateOptions(options);
-        var stopwatch = Stopwatch.StartNew();
-        var retryCount = 0;
-
-        log.LogInformation("Wait started with timeout {TimeoutMs}ms, poll interval {PollIntervalMs}ms",
-            (int)waitOptions.Timeout.TotalMilliseconds, (int)waitOptions.PollInterval.TotalMilliseconds);
-
-        var lastValue = valueFactory();
-
-        while (stopwatch.Elapsed < waitOptions.Timeout)
+        var wait = new PollingWait<T>(valueFactory, condition, options, cancellationToken, logger, "Wait");
+        while (wait.TryPoll(out var delay))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (condition(lastValue))
-            {
-                log.LogInformation("Wait completed successfully after {ElapsedMs}ms and {RetryCount} retries",
-                    (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-                return new UiWaitResult<T>(true, lastValue, stopwatch.Elapsed);
-            }
-
-            var remainingMs = (int)(waitOptions.Timeout - stopwatch.Elapsed).TotalMilliseconds;
-            if (remainingMs < waitOptions.PollInterval.TotalMilliseconds * 2)
-            {
-                log.LogWarning("Timeout approaching: {RemainingMs}ms remaining after {RetryCount} retries",
-                    remainingMs, retryCount);
-            }
-
-            log.LogDebug("Condition not met, retry {RetryCount} after {ElapsedMs}ms",
-                retryCount, (int)stopwatch.Elapsed.TotalMilliseconds);
-
-            Thread.Sleep(waitOptions.PollInterval);
-            lastValue = valueFactory();
-            retryCount++;
+            Thread.Sleep(delay);
         }
 
-        var success = condition(lastValue);
-        if (success)
-        {
-            log.LogInformation("Wait completed successfully after {ElapsedMs}ms and {RetryCount} retries",
-                (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-        }
-        else
-        {
-            log.LogWarning("Wait timed out after {ElapsedMs}ms and {RetryCount} retries",
-                (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-        }
-
-        return new UiWaitResult<T>(success, lastValue, stopwatch.Elapsed);
+        return wait.GetResult();
     }
 
     /// <summary>
@@ -132,18 +91,8 @@ public static class UiWait
         string? timeoutMessage = null,
         CancellationToken cancellationToken = default,
         ILogger? logger = null)
-    {
-        var log = logger ?? NullLogger.Instance;
-        var result = TryUntil(valueFactory, condition, options, cancellationToken, logger);
-        if (result.Success)
-        {
-            return result.Value;
-        }
-
-        var message = timeoutMessage ?? $"Condition was not met within {ValidateOptions(options).Timeout.TotalMilliseconds} ms.";
-        log.LogError("Wait operation failed: {TimeoutMessage}", message);
-        throw new TimeoutException(message);
-    }
+        => GetValueOrThrow(TryUntil(valueFactory, condition, options, cancellationToken, logger),
+            options, timeoutMessage, logger, "Wait");
 
     /// <summary>
     /// Asynchronously polls a value factory until a condition is met, without throwing on timeout.
@@ -164,58 +113,13 @@ public static class UiWait
         CancellationToken cancellationToken = default,
         ILogger? logger = null)
     {
-        ArgumentNullException.ThrowIfNull(valueFactory);
-        ArgumentNullException.ThrowIfNull(condition);
-
-        var log = logger ?? NullLogger.Instance;
-        var waitOptions = ValidateOptions(options);
-        var stopwatch = Stopwatch.StartNew();
-        var retryCount = 0;
-
-        log.LogInformation("Async wait started with timeout {TimeoutMs}ms, poll interval {PollIntervalMs}ms",
-            (int)waitOptions.Timeout.TotalMilliseconds, (int)waitOptions.PollInterval.TotalMilliseconds);
-
-        var lastValue = valueFactory();
-
-        while (stopwatch.Elapsed < waitOptions.Timeout)
+        var wait = new PollingWait<T>(valueFactory, condition, options, cancellationToken, logger, "Async wait");
+        while (wait.TryPoll(out var delay))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (condition(lastValue))
-            {
-                log.LogInformation("Async wait completed successfully after {ElapsedMs}ms and {RetryCount} retries",
-                    (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-                return new UiWaitResult<T>(true, lastValue, stopwatch.Elapsed);
-            }
-
-            var remainingMs = (int)(waitOptions.Timeout - stopwatch.Elapsed).TotalMilliseconds;
-            if (remainingMs < waitOptions.PollInterval.TotalMilliseconds * 2)
-            {
-                log.LogWarning("Timeout approaching: {RemainingMs}ms remaining after {RetryCount} retries",
-                    remainingMs, retryCount);
-            }
-
-            log.LogDebug("Condition not met, retry {RetryCount} after {ElapsedMs}ms",
-                retryCount, (int)stopwatch.Elapsed.TotalMilliseconds);
-
-            await Task.Delay(waitOptions.PollInterval, waitOptions.TimeProvider, cancellationToken);
-            lastValue = valueFactory();
-            retryCount++;
+            await Task.Delay(delay, wait.TimeProvider, cancellationToken);
         }
 
-        var success = condition(lastValue);
-        if (success)
-        {
-            log.LogInformation("Async wait completed successfully after {ElapsedMs}ms and {RetryCount} retries",
-                (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-        }
-        else
-        {
-            log.LogWarning("Async wait timed out after {ElapsedMs}ms and {RetryCount} retries",
-                (int)stopwatch.Elapsed.TotalMilliseconds, retryCount);
-        }
-
-        return new UiWaitResult<T>(success, lastValue, stopwatch.Elapsed);
+        return wait.GetResult();
     }
 
     /// <summary>
@@ -239,17 +143,106 @@ public static class UiWait
         string? timeoutMessage = null,
         CancellationToken cancellationToken = default,
         ILogger? logger = null)
+        => GetValueOrThrow(await TryUntilAsync(valueFactory, condition, options, cancellationToken, logger),
+            options, timeoutMessage, logger, "Async wait");
+
+    private static T GetValueOrThrow<T>(UiWaitResult<T> result, UiWaitOptions? options,
+        string? timeoutMessage, ILogger? logger, string waitKind)
     {
-        var log = logger ?? NullLogger.Instance;
-        var result = await TryUntilAsync(valueFactory, condition, options, cancellationToken, logger);
-        if (result.Success)
+        if (result.Success) return result.Value;
+        var timeout = (options ?? UiWaitOptions.Default).Timeout;
+        var message = timeoutMessage ?? $"Condition was not met within {timeout.TotalMilliseconds} ms.";
+        (logger ?? NullLogger.Instance).LogError("{WaitKind} operation failed: {TimeoutMessage}", waitKind, message);
+        throw new TimeoutException(message);
+    }
+
+    private struct PollingWait<T>
+    {
+        private readonly Func<T> _valueFactory;
+        private readonly Predicate<T> _condition;
+        private readonly UiWaitOptions _options;
+        private readonly CancellationToken _cancellationToken;
+        private readonly ILogger _log;
+        private readonly string _kind;
+        private readonly long _startedAt;
+        private T _lastValue = default!;
+        private int _retryCount;
+        private bool _success;
+
+        public PollingWait(Func<T> valueFactory, Predicate<T> condition, UiWaitOptions? options,
+            CancellationToken cancellationToken, ILogger? logger, string kind)
         {
-            return result.Value;
+            ArgumentNullException.ThrowIfNull(valueFactory);
+            ArgumentNullException.ThrowIfNull(condition);
+            _valueFactory = valueFactory;
+            _condition = condition;
+            _options = ValidateOptions(options);
+            _cancellationToken = cancellationToken;
+            _log = logger ?? NullLogger.Instance;
+            _kind = kind;
+            _startedAt = Stopwatch.GetTimestamp();
+            _log.LogInformation("{WaitKind} started with timeout {TimeoutMs}ms, poll interval {PollIntervalMs}ms",
+                _kind, (int)_options.Timeout.TotalMilliseconds, (int)_options.PollInterval.TotalMilliseconds);
         }
 
-        var message = timeoutMessage ?? $"Condition was not met within {ValidateOptions(options).Timeout.TotalMilliseconds} ms.";
-        log.LogError("Async wait operation failed: {TimeoutMessage}", message);
-        throw new TimeoutException(message);
+        public TimeProvider TimeProvider => _options.TimeProvider;
+        private TimeSpan Elapsed => Stopwatch.GetElapsedTime(_startedAt);
+
+        public bool TryPoll(out TimeSpan delay)
+        {
+            delay = default;
+            if (!CanContinue()) return false;
+
+            _lastValue = _valueFactory();
+            if (!CanContinue()) return false;
+
+            var matches = _condition(_lastValue);
+            if (!CanContinue()) return false;
+            if (matches)
+            {
+                _success = true;
+                return false;
+            }
+
+            var remaining = _options.Timeout - Elapsed;
+            if (remaining <= TimeSpan.Zero) return false;
+            if (remaining.TotalMilliseconds < _options.PollInterval.TotalMilliseconds * 2)
+            {
+                _log.LogWarning("Timeout approaching: {RemainingMs}ms remaining after {RetryCount} retries",
+                    (int)remaining.TotalMilliseconds, _retryCount);
+            }
+
+            _log.LogDebug("Condition not met, retry {RetryCount} after {ElapsedMs}ms", _retryCount, (int)Elapsed.TotalMilliseconds);
+            _cancellationToken.ThrowIfCancellationRequested();
+            remaining = _options.Timeout - Elapsed;
+            if (remaining <= TimeSpan.Zero) return false;
+            delay = remaining < _options.PollInterval ? remaining : _options.PollInterval;
+            _retryCount++;
+            return true;
+        }
+
+        public UiWaitResult<T> GetResult()
+        {
+            var elapsedMs = (int)Elapsed.TotalMilliseconds;
+            if (_success)
+            {
+                _log.LogInformation("{WaitKind} completed successfully after {ElapsedMs}ms and {RetryCount} retries",
+                    _kind, elapsedMs, _retryCount);
+            }
+            else
+            {
+                _log.LogWarning("{WaitKind} timed out after {ElapsedMs}ms and {RetryCount} retries",
+                    _kind, elapsedMs, _retryCount);
+            }
+            _cancellationToken.ThrowIfCancellationRequested();
+            return new UiWaitResult<T>(_success, _lastValue, Elapsed);
+        }
+
+        private bool CanContinue()
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            return Elapsed < _options.Timeout;
+        }
     }
 
     private static UiWaitOptions ValidateOptions(UiWaitOptions? options)
