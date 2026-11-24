@@ -130,12 +130,13 @@ public static class DesktopPointer
             validateBeforePress: validateBeforePress).GetAwaiter().GetResult();
     }
 
-    internal static void SendGuardedKey(Func<AutomationElement> target, UiOperationTimeoutBudget budget,
+    internal static void SendGuardedKey(int processId, Func<AutomationElement> target, UiOperationTimeoutBudget budget,
         global::FlaUI.Core.WindowsAPI.VirtualKeyShort key, Action<AutomationElement> validateForeground)
     {
+        DesktopPointerController.RejectNestedOperation();
         _ = budget.Remaining;
-        var (session, remaining, processId) = PrepareCall(target, budget.Remaining, default);
-        Controller.RunAsync("picker-key", remaining, operation =>
+        var session = Sessions.GetOrAdd(processId, static _ => new PointerSession());
+        Controller.RunAsync("picker-key", budget.Remaining, operation =>
         {
             void Check()
             {
@@ -145,7 +146,8 @@ public static class DesktopPointer
             Check();
             var panel = target();
             var identity = panel.Properties.RuntimeId.Value;
-            if (identity is not { Length: > 0 } || !panel.Properties.IsKeyboardFocusable.Value
+            if (identity is not { Length: > 0 } || panel.Properties.ProcessId.Value != processId
+                || !panel.Properties.IsKeyboardFocusable.Value
                 || !panel.IsEnabled || panel.IsOffscreen)
                 throw new InvalidOperationException("The picker panel cannot safely receive a keyboard step.");
             DesktopPointerTargetResolver.EnsureForeground(panel, processId, Check);
@@ -157,15 +159,16 @@ public static class DesktopPointer
                 Check();
                 if (!WindowsPointerBackend.ForegroundBelongsTo(processId))
                     throw new PointerInterferenceException("The picker lost the foreground while acquiring keyboard focus.");
-                var current = target();
-                validateForeground(current);
-                var currentId = current.Properties.RuntimeId.Value;
+                // Focus polling observes the live peer; only the final fresh resolution can authorize the key.
+                validateForeground(panel);
+                var currentId = panel.Properties.RuntimeId.Value;
                 if (currentId is null || !currentId.AsSpan().SequenceEqual(identity))
                     throw new InvalidOperationException("The picker panel changed while acquiring keyboard focus.");
-                return current.Properties.HasKeyboardFocus.Value;
+                return panel.Properties.HasKeyboardFocus.Value;
             }, static focused => focused,
                 new UiWaitOptions { Timeout = budget.Remaining, PollInterval = TimeSpan.FromMilliseconds(25) },
                 "The picker panel did not acquire keyboard focus.", operation.Token);
+            Check();
             var fresh = target();
             var freshIdentity = fresh.Properties.RuntimeId.Value;
             if (!WindowsPointerBackend.ForegroundBelongsTo(processId) || !fresh.Properties.HasKeyboardFocus.Value

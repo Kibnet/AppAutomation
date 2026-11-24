@@ -1,4 +1,6 @@
 using System.Collections;
+using static AppAutomation.Recorder.Avalonia.RecorderCaptureControlReader;
+using static AppAutomation.Recorder.Avalonia.RecorderGridCaptureResolver;
 using AppAutomation.Abstractions;
 using Avalonia;
 using Avalonia.Automation;
@@ -16,21 +18,15 @@ internal sealed partial class RecorderStepFactory
 {
     internal const string NoGridActionHintMessage = "Recorder does not have a grid action hint for this source.";
     internal const string NoGridSearchPickerHintMessage = "Recorder does not have a grid search picker hint for this editor.";
-    private static readonly string[] GridRowContextPropertyNames = ["Row", "RowData", "DataItem", "Item"];
-    private static readonly string[] GridColumnContextPropertyNames = ["FieldName", "ColumnName", "PropertyName"];
-    private static readonly string[] NestedGridColumnContextPropertyNames = ["FieldName", "ColumnName", "PropertyName", "Name"];
-    private static readonly string[] GridCellValueContextPropertyNames = ["Value", "CellValue", "DisplayValue"];
-
     private readonly AppAutomationRecorderOptions _options;
     private readonly Func<Control?>? _validationRootProvider;
     private readonly Func<IReadOnlyList<RecordedStep>>? _recordedStepsProvider;
     private readonly RecorderSelectorResolver _selectorResolver;
     private readonly RecorderStepValidator _stepValidator;
+    private readonly RecorderCaptureControlReader _controlReader;
+    private readonly RecorderGridCaptureResolver _gridCapture;
     private readonly IReadOnlyList<IRecorderAssertionExtractor> _assertionExtractors;
     private readonly IReadOnlyList<RecorderDialogHint> _dialogHints;
-    private readonly Dictionary<Control, (RecorderGridHint Hint, GridAutomationDefinition Definition)> _nativeGridDefinitions =
-        new(ReferenceEqualityComparer.Instance);
-
     private static StepCreationResult CreateStepFromSnapshot(
         RecorderSemanticValueSnapshot snapshot,
         RecordedStep step,
@@ -73,6 +69,8 @@ internal sealed partial class RecorderStepFactory
         _validationRootProvider = validationRootProvider;
         _recordedStepsProvider = recordedStepsProvider;
         _selectorResolver = new RecorderSelectorResolver(options, validationRootProvider);
+        _controlReader = new RecorderCaptureControlReader(_selectorResolver);
+        _gridCapture = new RecorderGridCaptureResolver(options, _selectorResolver, _controlReader, validationRootProvider);
         _stepValidator = new RecorderStepValidator(options);
         _assertionExtractors = CreateAssertionExtractors(options);
         _dialogHints = options.DialogHints
@@ -493,173 +491,25 @@ internal sealed partial class RecorderStepFactory
     public GridComboSelectionContextResolution ResolveGridComboSelectionContext(Control source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return TryResolveGridComboSelectionContext(source);
+        return _gridCapture.TryResolveGridComboSelectionContext(source);
     }
 
-    public bool IsGridCellContextPart(Control source, GridComboSelectionContext context)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(context);
-        var definition = FindGridDefinition(context.GridHint);
-        var column = definition is null || string.IsNullOrWhiteSpace(context.LogicalColumnName)
-            ? null
-            : definition.FindColumn(context.LogicalColumnName);
-        if (column?.EditorParts is not { } parts)
-        {
-            return ReferenceEquals(source, context.SelectionSource)
-                || IsWithin(source, context.EditorRoot);
-        }
-
-        return EnumerateEditorPartLocators(parts)
-            .Any(part => MatchesScopedEditorPart(source, context, part));
-    }
-
-    private bool MatchesScopedEditorPart(
-        Control source,
-        GridComboSelectionContext context,
-        GridRelativeLocator part)
-    {
-        var matchingParts = EnumerateRelatedControls(source)
-            .Where(candidate => MatchesLocator(candidate, part.LocatorKind, part.LocatorValue))
-            .Take(2)
-            .ToArray();
-        if (matchingParts.Length != 1)
-        {
-            return false;
-        }
-
-        var partSource = matchingParts[0];
-        return part.Scope switch
-        {
-            GridRelativeLocatorScope.Cell => IsUniqueScopedPart(partSource, context.CellSource, part),
-            GridRelativeLocatorScope.EditorRoot => IsUniqueScopedPart(partSource, context.EditorRoot, part),
-            GridRelativeLocatorScope.GridRoot => IsUniqueScopedPart(partSource, context.GridSource, part),
-            GridRelativeLocatorScope.DetachedPopup => IsValidDetachedPartEventSource(source, partSource, part),
-            _ => false
-        };
-    }
-
-    private bool IsValidDetachedPartEventSource(
-        Control eventSource,
-        Control partSource,
-        GridRelativeLocator part)
-    {
-        if (ReferenceEquals(partSource, eventSource)
-            && TopLevel.GetTopLevel(partSource) is null)
-        {
-            return true;
-        }
-
-        return IsUniqueActiveDetachedPart(partSource, part);
-    }
-
-    private static bool IsUniqueScopedPart(
-        Control source,
-        Control scopeRoot,
-        GridRelativeLocator part)
-    {
-        if (!IsWithin(source, scopeRoot))
-        {
-            return false;
-        }
-
-        var matches = EnumerateDescendantControls(scopeRoot)
-            .Where(candidate => TopLevel.GetTopLevel(candidate) is null
-                ? candidate.IsVisible
-                : candidate.IsEffectivelyVisible)
-            .Where(candidate => MatchesLocator(candidate, part.LocatorKind, part.LocatorValue))
-            .Take(2)
-            .ToArray();
-        return matches.Length == 1 && ReferenceEquals(matches[0], source);
-    }
-
-    private bool IsUniqueActiveDetachedPart(Control source, GridRelativeLocator part)
-    {
-        var root = _validationRootProvider?.Invoke();
-        if (root is null)
-        {
-            return source.IsEffectivelyVisible;
-        }
-
-        var scopeRoots = new[]
-            {
-                root,
-                TopLevel.GetTopLevel(source) as Control
-            }
-            .Where(static candidate => candidate is not null)
-            .Cast<Control>()
-            .Distinct<Control>(ReferenceEqualityComparer.Instance);
-        var matches = scopeRoots
-            .SelectMany(EnumerateDescendantControls)
-            .Distinct<Control>(ReferenceEqualityComparer.Instance)
-            .Where(static candidate => TopLevel.GetTopLevel(candidate) is null
-                ? candidate.IsVisible
-                : candidate.IsEffectivelyVisible)
-            .Where(candidate => MatchesLocator(candidate, part.LocatorKind, part.LocatorValue))
-            .Take(2)
-            .ToArray();
-        return matches.Length == 1 && ReferenceEquals(matches[0], source);
-    }
-
-    private static bool IsWithin(Control source, Control scopeRoot)
-    {
-        return EnumerateRelatedControls(source)
-            .Any(candidate => ReferenceEquals(candidate, scopeRoot));
-    }
+    public bool IsGridCellContextPart(Control source, GridComboSelectionContext context) =>
+        _gridCapture.IsGridCellContextPart(source, context);
 
     public bool IsCatalogGridCell(Control source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return TryResolveGridHint(source, out var hint, out _)
-            && FindGridDefinition(hint) is not null;
+        return _gridCapture.TryResolveGridHint(source, out var hint, out _)
+            && _gridCapture.FindGridDefinition(hint) is not null;
     }
 
-    internal IReadOnlyList<Control> ReadMaterializedGridCellControls(Control source)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        var isConfiguredGridRoot = _options.GridAutomation.Any(definition =>
-            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
-            && string.Equals(
-                definition.CaptureLocatorValue,
-                locatorValue,
-                StringComparison.Ordinal));
-        if (!isConfiguredGridRoot)
-        {
-            return Array.Empty<Control>();
-        }
+    internal IReadOnlyList<Control> ReadMaterializedGridCellControls(Control source) =>
+        _gridCapture.ReadMaterializedGridCellControls(source);
 
-        return GridCellMetadataExtractor.ReadMaterializedCellControls(source);
-    }
+    internal IReadOnlyList<Control> ReadConfiguredGridRoots() => _gridCapture.ReadConfiguredGridRoots();
 
-    internal IReadOnlyList<Control> ReadConfiguredGridRoots()
-    {
-        var roots = new List<Control>();
-        var visited = new HashSet<Control>(ReferenceEqualityComparer.Instance);
-        foreach (var definition in _options.GridAutomation)
-        {
-            if (TryFindControl(
-                    definition.CaptureLocatorValue,
-                    definition.CaptureLocatorKind,
-                    out var grid)
-                && visited.Add(grid))
-            {
-                roots.Add(grid);
-            }
-        }
-
-        return roots;
-    }
-
-    internal bool IsConfiguredGridRoot(Control source)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        return _options.GridAutomation.Any(definition =>
-            TryGetLocator(source, definition.CaptureLocatorKind, out var locatorValue)
-            && string.Equals(
-                definition.CaptureLocatorValue,
-                locatorValue,
-                StringComparison.Ordinal));
-    }
+    internal bool IsConfiguredGridRoot(Control source) => _gridCapture.IsConfiguredGridRoot(source);
 
     internal bool IsConfiguredComboBoxFilterRoot(Control source)
     {
@@ -672,7 +522,7 @@ internal sealed partial class RecorderStepFactory
     public bool ShouldSuppressCatalogGridTextEntry(TextBox textBox)
     {
         ArgumentNullException.ThrowIfNull(textBox);
-        return TryGetCatalogGridEditorKind(textBox, out var editorKind)
+        return _gridCapture.TryGetCatalogGridEditorKind(textBox, out var editorKind)
             && editorKind is GridCellEditorKind.ComboBox
                 or GridCellEditorKind.Date
                 or GridCellEditorKind.Time
@@ -805,7 +655,7 @@ internal sealed partial class RecorderStepFactory
         foreach (var locator in new[] { hint.Parts.CurrentValueLocator, hint.Parts.CustomValueLocator })
         {
             if (!string.IsNullOrWhiteSpace(locator)
-                && TryFindControl(locator, hint.Parts.LocatorKind, out var valueControl)
+                && _controlReader.TryFindControl(locator, hint.Parts.LocatorKind, out var valueControl)
                 && ColorValue.TryNormalize(ExtractTextValue(valueControl), out color))
             {
                 return true;
@@ -904,9 +754,9 @@ internal sealed partial class RecorderStepFactory
     {
         var related = EnumerateRelatedControls(source).ToArray();
         if (related.OfType<ComboBox>().Any(comboBox => ResolveGridComboSelectionContext(comboBox).IsConfigured)) return true;
-        if (source is null || !IsCatalogGridEditor(source, GridCellEditorKind.ComboBox)
-            || !TryResolveGridHint(source, out var hint, out _)
-            || FindGridDefinition(hint) is not { } definition) return false;
+        if (source is null || !_gridCapture.IsCatalogGridEditor(source, GridCellEditorKind.ComboBox)
+            || !_gridCapture.TryResolveGridHint(source, out var hint, out _)
+            || _gridCapture.FindGridDefinition(hint) is not { } definition) return false;
         return definition.Columns.Any(column => column.EditorKind == GridCellEditorKind.ComboBox
             && column.EditorParts?.OpenButton is { } part
             && related.Any(control => MatchesLocator(control, part.LocatorKind, part.LocatorValue)));
@@ -1424,7 +1274,7 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported("Recorder does not have a folder export hint for this button.");
         }
 
-        if (!TryFindControl(hint.Parts.FolderPathInputLocator, hint.Parts.LocatorKind, out var folderInput)
+        if (!_controlReader.TryFindControl(hint.Parts.FolderPathInputLocator, hint.Parts.LocatorKind, out var folderInput)
             || folderInput is not TextBox textBox)
         {
             return StepCreationResult.Unsupported("Folder export path input was not found or is not a TextBox.");
@@ -1463,7 +1313,7 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported("Recorder does not have a grid edit hint for this source.");
         }
 
-        if (!TryResolveGridEditHint(source, out var hint))
+        if (!_gridCapture.TryResolveGridEditHint(source, out var hint))
         {
             return StepCreationResult.Unsupported("Recorder does not have a grid edit hint for this source.");
         }
@@ -1546,7 +1396,7 @@ internal sealed partial class RecorderStepFactory
 
         return MatchesSearchPickerTextPart(textBox)
             || MatchesGridSearchPickerTextPart(textBox)
-            || IsCatalogGridEditor(textBox, GridCellEditorKind.SearchPicker)
+            || _gridCapture.IsCatalogGridEditor(textBox, GridCellEditorKind.SearchPicker)
             || MatchesTimePickerInputPart(textBox)
             || _options.SingleSelectHints.Any(hint => IsSingleSelectInput(textBox, hint))
             || _options.ColorPickerHints.Any(hint => IsColorPickerInput(textBox, hint));
@@ -1703,97 +1553,25 @@ internal sealed partial class RecorderStepFactory
         Control? source,
         bool openRow)
     {
-        if (source is null
-            || !TryResolveGridHint(source, out var hint, out var gridSource)
-            || _options.FindGridDefinition(hint) is not { } definition)
-        {
-            return new GridRowGestureCaptureResult(
-                false,
-                StepCreationResult.Unsupported(NoGridActionHintMessage));
-        }
+        var resolution = _gridCapture.ResolveRowGesture(source);
+        if (resolution.Context is not { } context)
+            return new GridRowGestureCaptureResult(resolution.Handled,
+                StepCreationResult.Unsupported(resolution.Error ?? NoGridActionHintMessage));
 
-        if (HasMoreSpecificGridInteraction(source, gridSource))
-        {
-            return new GridRowGestureCaptureResult(
-                false,
-                StepCreationResult.Unsupported(NoGridActionHintMessage));
-        }
-
-        if (definition.RowIdentityColumns.Count == 0)
-        {
-            return new GridRowGestureCaptureResult(
-                true,
-                StepCreationResult.Unsupported(
-                    $"Grid '{definition.PagePropertyName}' cannot record row selection without a declared stable identity. "
-                    + "Configure IdentifyRowsBy(...); visual row indexes are not persisted."));
-        }
-
-        IReadOnlyList<object?> items;
-        if (NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var view)) items = view;
-        else if (definition.Columns.Any(static column => column.IsObjectKey))
-            return new GridRowGestureCaptureResult(true, StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' requires an authoritative current view for object-key recording."));
-        else _ = TryReadItemsSource(gridSource, out items);
-        if (!TryResolveGridRow(source, gridSource, items, out var rowIndex, out _,
-                referenceOnly: definition.Columns.Any(static column => column.IsObjectKey)))
-        {
-            return new GridRowGestureCaptureResult(
-                true,
-                StepCreationResult.Unsupported(
-                    $"Grid '{definition.PagePropertyName}' could not resolve the clicked visual element to a source row."));
-        }
-
-        var descriptor = new RecordedControlDescriptor(
-            definition.PagePropertyName,
-            UiControlType.Grid,
-            definition.RuntimeLocatorValue,
-            definition.RuntimeLocatorKind,
-            definition.RuntimeFallbackToName,
-            gridSource.GetType().FullName ?? gridSource.GetType().Name,
-            Warning: null);
-        var action = openRow
-            ? RecordedActionKind.OpenGridRow
-            : RecordedActionKind.SelectGridRow;
-        var step = new RecordedStep(action, descriptor, RowIndex: rowIndex);
+        var descriptor = CreateGridDescriptor(context.Definition, context.GridSource);
+        var action = openRow ? RecordedActionKind.OpenGridRow : RecordedActionKind.SelectGridRow;
+        var step = new RecordedStep(action, descriptor, RowIndex: context.RowIndex);
         var result = CreateCatalogGridStep(
-            source,
+            context.Source,
             step,
             warning: null,
-            hint,
-            definition,
-            rowIndex,
+            context.Hint,
+            context.Definition,
+            context.RowIndex,
             columnIndex: null,
             excludeTargetColumnFromIdentity: false,
-            captureItems: items);
+            captureItems: context.Items);
         return new GridRowGestureCaptureResult(true, result);
-    }
-
-    private static bool HasMoreSpecificGridInteraction(Control source, Control gridSource)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (ReferenceEquals(current, gridSource))
-            {
-                return false;
-            }
-
-            if (current is Button
-                or ToggleButton
-                or TextBox
-                or ComboBox
-                or ListBox
-                or NumericUpDown
-                or DatePicker
-                or TimePicker
-                or Calendar
-                or Slider
-                or MenuItem)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     public StepCreationResult TryCreateListBoxStep(ListBox listBox)
@@ -2139,71 +1917,28 @@ internal sealed partial class RecorderStepFactory
 
     private bool IsCatalogGridSelectionPair(TextBox input, Control results)
     {
-        var resolution = TryResolveGridComboSelectionContext(input);
+        var resolution = _gridCapture.TryResolveGridComboSelectionContext(input);
         return resolution.Context is { } context
             && IsGridCellContextPart(results, context)
-            && IsCatalogGridEditor(input, GridCellEditorKind.SearchPicker);
+            && _gridCapture.IsCatalogGridEditor(input, GridCellEditorKind.SearchPicker);
     }
 
     public GridCellEditCaptureResult TryCreateGridCellEditStep(
         Control? source,
         GridCellEditCommitMode commitMode = GridCellEditCommitMode.Commit)
     {
-        if (source is null || !TryResolveGridHint(source, out var hint, out var gridSource))
-        {
-            return new GridCellEditCaptureResult(
-                false,
-                StepCreationResult.Unsupported("Control is not an editor inside a configured grid cell."));
-        }
+        var resolution = _gridCapture.ResolveCellEdit(source);
+        if (resolution.Context is not { } context)
+            return new GridCellEditCaptureResult(resolution.Handled, StepCreationResult.Unsupported(resolution.Error!));
 
-        var definition = FindGridDefinition(hint);
-        if (definition is null)
-        {
-            return new GridCellEditCaptureResult(
-                false,
-                StepCreationResult.Unsupported("Control is not an editor inside a GridAutomationCatalog grid."));
-        }
-
-        if (!TryReadItemsSource(gridSource, out var items))
-        {
-            return new GridCellEditCaptureResult(
-                true,
-                StepCreationResult.Unsupported(
-                    $"Grid '{definition.PagePropertyName}' does not expose an ItemsSource for cell action capture."));
-        }
-
-        if (!GridCellMetadataExtractor.TryExtract(
-                source,
-                gridSource,
-                definition,
-                items,
-                ExtractTextValue,
-                out var metadata,
-                out var metadataError))
-        {
-            return new GridCellEditCaptureResult(true, StepCreationResult.Unsupported(metadataError));
-        }
-
-        var column = definition.FindColumnBySourceField(metadata.SourceFieldName);
-        var logicalColumnName = column?.LogicalName ?? metadata.SourceFieldName;
-        var editorKind = column?.EditorKind ?? InferGridEditorKind(source);
-        if (editorKind is null)
-        {
-            return new GridCellEditCaptureResult(
-                true,
-                StepCreationResult.Unsupported(
-                    $"Grid '{definition.PagePropertyName}' column '{logicalColumnName}' does not expose a supported editor. "
-                    + "Configure EditWith(...) when its editor is not a standard Avalonia control."));
-        }
-
-        var descriptor = CreateGridDescriptor(definition, gridSource);
+        var descriptor = CreateGridDescriptor(context.Definition, context.GridSource);
         var prototype = TryCreateCatalogGridEditPrototype(
-            source,
+            context.Source,
             descriptor,
-            editorKind.Value,
-            metadata,
-            logicalColumnName,
-            column?.CultureName,
+            context.EditorKind,
+            context.Metadata,
+            context.LogicalColumnName,
+            context.Column?.CultureName,
             commitMode,
             out var prototypeError);
         if (prototype is null)
@@ -2212,12 +1947,12 @@ internal sealed partial class RecorderStepFactory
         }
 
         var result = CreateGridStep(
-            source,
+            context.Source,
             prototype,
             warning: null,
-            definition.RuntimeLocatorValue,
-            definition.RuntimeLocatorKind,
-            metadata.RowIndex,
+            context.Definition.RuntimeLocatorValue,
+            context.Definition.RuntimeLocatorKind,
+            context.Metadata.RowIndex,
             prototype.ColumnIndex,
             excludeTargetColumnFromIdentity: true);
         return new GridCellEditCaptureResult(true, result);
@@ -2519,7 +2254,7 @@ internal sealed partial class RecorderStepFactory
                 out isDefinitiveFailure))
         {
             isDefinitiveFailure |= source is not null && !string.IsNullOrWhiteSpace(error)
-                && TryResolveGridHint(source, out _, out var failedGrid) && !ReferenceEquals(source, failedGrid);
+                && _gridCapture.TryResolveGridHint(source, out _, out var failedGrid) && !ReferenceEquals(source, failedGrid);
             return false;
         }
 
@@ -2619,7 +2354,7 @@ internal sealed partial class RecorderStepFactory
             resolvedSource = firstFailedSource;
             error = firstError ?? string.Empty;
             isDefinitiveFailure = firstFailedSource is not null
-                && TryResolveGridHint(firstFailedSource, out _, out var failedGrid)
+                && _gridCapture.TryResolveGridHint(firstFailedSource, out _, out var failedGrid)
                 && !ReferenceEquals(firstFailedSource, failedGrid);
             return false;
         }
@@ -3332,7 +3067,7 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (TryResolveGridHeaderSemanticValue(source, out candidate, out error, out var headerHandled)) return true;
+        if (_gridCapture.TryResolveGridHeaderSemanticValue(source, out candidate, out error, out var headerHandled)) return true;
         if (headerHandled) { isDefinitiveFailure = true; return false; }
 
         if (TryResolveConfiguredSemanticValue(
@@ -3351,7 +3086,7 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (TryResolveGridSearchPickerSemanticValue(source, requireLiteral, out candidate, out error))
+        if (_gridCapture.TryResolveGridSearchPickerSemanticValue(source, requireLiteral, out candidate, out error))
         {
             return true;
         }
@@ -3361,7 +3096,7 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (TryResolveGridEditorSemanticValue(source, requireLiteral, out candidate, out error))
+        if (_gridCapture.TryResolveGridEditorSemanticValue(source, requireLiteral, out candidate, out error))
         {
             return true;
         }
@@ -3371,7 +3106,7 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (TryResolveGridSemanticValue(source, requireLiteral, out candidate, out error))
+        if (_gridCapture.TryResolveGridSemanticValue(source, requireLiteral, out candidate, out error))
         {
             return true;
         }
@@ -3441,7 +3176,7 @@ internal sealed partial class RecorderStepFactory
             }
 
             var hint = searchControlHints[0];
-            var text = TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var input)
+            var text = _controlReader.TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var input)
                 ? ExtractTextValue(input)
                 : null;
             if (requireLiteral && text is null)
@@ -3471,7 +3206,7 @@ internal sealed partial class RecorderStepFactory
             }
 
             var hint = searchPickerHints[0];
-            var selectedText = TryFindControl(hint.Parts.ResultsLocator, hint.Parts.LocatorKind, out var results)
+            var selectedText = _controlReader.TryFindControl(hint.Parts.ResultsLocator, hint.Parts.LocatorKind, out var results)
                 ? results switch
                 {
                     ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
@@ -3558,7 +3293,7 @@ internal sealed partial class RecorderStepFactory
             }
 
             var hint = timeHints[0];
-            var timeValue = TryFindControl(hint.Parts.TimePickerLocator, hint.Parts.LocatorKind, out var timeControl)
+            var timeValue = _controlReader.TryFindControl(hint.Parts.TimePickerLocator, hint.Parts.LocatorKind, out var timeControl)
                 && timeControl is TimePicker timePicker
                     ? timePicker.SelectedTime
                     : null;
@@ -3668,7 +3403,7 @@ internal sealed partial class RecorderStepFactory
 
     private DateTime? TryReadDatePickerCommittedValue(RecorderDatePickerHint hint)
     {
-        if (!TryFindControl(hint.Parts.ValueLocator, hint.Parts.LocatorKind, out var valueControl))
+        if (!_controlReader.TryFindControl(hint.Parts.ValueLocator, hint.Parts.LocatorKind, out var valueControl))
         {
             return null;
         }
@@ -3890,140 +3625,6 @@ internal sealed partial class RecorderStepFactory
         };
     }
 
-    private bool TryResolveGridSearchPickerSemanticValue(
-        Control source,
-        bool requireLiteral,
-        out SemanticValueCandidate candidate,
-        out string error)
-    {
-        candidate = null!;
-        error = string.Empty;
-        var matchingHints = _options.GridSearchPickerHints
-            .Where(hint => IsGridSearchPickerPart(source, hint))
-            .ToArray();
-        if (matchingHints.Length == 0)
-        {
-            return false;
-        }
-
-        if (matchingHints.Length != 1)
-        {
-            error = $"Value source matches {matchingHints.Length} grid SearchPicker hints; configure unique source and part locators.";
-            return false;
-        }
-
-        var hint = matchingHints[0];
-        if (!TryResolveGridSearchPickerContext(source, hint, out var rowIndex, out var columnIndex)
-            || !TryResolveGridSearchPickerGridSource(hint, out var gridHint, out var gridSource))
-        {
-            error = "Grid SearchPicker does not expose a resolvable row and column context.";
-            return false;
-        }
-
-        if (columnIndex < 0 || columnIndex >= gridHint.ColumnPropertyNames.Count)
-        {
-            error = "Grid SearchPicker column context is outside the configured grid columns.";
-            return false;
-        }
-
-        string? displayedValue = null;
-        if (TryReadItemsSource(gridSource, out var items)
-            && rowIndex >= 0
-            && rowIndex < items.Count
-            && TryFindControl(hint.TargetGridLocatorValue, hint.TargetGridLocatorKind, out var targetGrid)
-            && TryReadDisplayedGridCellValue(
-                targetGrid,
-                items[rowIndex],
-                rowIndex,
-                columnIndex,
-                gridHint.ColumnPropertyNames[columnIndex],
-                out var value))
-        {
-            displayedValue = value;
-        }
-
-        if (requireLiteral && displayedValue is null)
-        {
-            error = "Grid SearchPicker does not expose a committed displayed value for a literal assertion.";
-            return false;
-        }
-
-        var descriptorSource = TryFindControl(hint.TargetGridLocatorValue, hint.TargetGridLocatorKind, out var displayedGrid)
-            ? displayedGrid
-            : gridSource;
-        candidate = new SemanticValueCandidate(
-            CreateCompositeDescriptor(
-                hint.TargetGridLocatorValue,
-                UiControlType.Grid,
-                hint.TargetGridLocatorKind,
-                hint.TargetFallbackToName,
-                descriptorSource,
-                warning: null),
-            RecorderValueKind.GridCellText,
-            RecorderValueAccessorKind.GridCellText,
-            StringValue: displayedValue,
-            GridContext: new GridValueContext(rowIndex, columnIndex, null, null));
-        return true;
-    }
-
-    private bool TryResolveGridEditorSemanticValue(
-        Control source,
-        bool requireLiteral,
-        out SemanticValueCandidate candidate,
-        out string error)
-    {
-        candidate = null!;
-        error = string.Empty;
-        if (!TryResolveGridEditHint(source, out var hint))
-        {
-            return false;
-        }
-
-        if (hint.RowIndex < 0 || hint.ColumnIndex < 0)
-        {
-            error = "Grid editor does not expose a resolvable row and column context.";
-            return false;
-        }
-
-        string? displayedValue = null;
-        if (TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl))
-        {
-            displayedValue = ExtractTextValue(valueControl)?.Trim();
-            if (displayedValue is null
-                && hint.EditorKind == GridCellEditorKind.Number
-                && RecorderNumericValueReader.TryReadNumericValue(valueControl, out var numericValue))
-            {
-                displayedValue = numericValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            }
-        }
-
-        if (requireLiteral && displayedValue is null)
-        {
-            error = "Grid editor does not expose a committed displayed value for a literal assertion.";
-            return false;
-        }
-
-        var descriptorSource = TryFindControl(
-                hint.TargetGridLocatorValue,
-                hint.TargetGridLocatorKind,
-                out var targetGrid)
-            ? targetGrid
-            : source;
-        candidate = new SemanticValueCandidate(
-            CreateCompositeDescriptor(
-                hint.TargetGridLocatorValue,
-                UiControlType.Grid,
-                hint.TargetGridLocatorKind,
-                hint.TargetFallbackToName,
-                descriptorSource,
-                warning: null),
-            RecorderValueKind.GridCellText,
-            RecorderValueAccessorKind.GridCellText,
-            StringValue: displayedValue,
-            GridContext: new GridValueContext(hint.RowIndex, hint.ColumnIndex, null, null));
-        return true;
-    }
-
     private bool TryResolvePrimitiveSemanticValue(
         Control source,
         bool requireLiteral,
@@ -4135,185 +3736,6 @@ internal sealed partial class RecorderStepFactory
         return true;
     }
 
-    private bool TryResolveGridSemanticValue(
-        Control source,
-        bool requireLiteral,
-        out SemanticValueCandidate candidate,
-        out string error)
-    {
-        candidate = null!;
-        error = string.Empty;
-        if (!TryResolveGridHint(source, out var hint, out var gridSource))
-        {
-            return false;
-        }
-
-        var locator = _selectorResolver.Resolve(gridSource, UiControlType.Grid);
-        if (!locator.Success || locator.Control is null)
-        {
-            error = locator.Message;
-            return false;
-        }
-
-        if (!TryReadItemsSource(gridSource, out var items))
-        {
-            error = "Configured grid does not expose an ItemsSource for stable cell capture.";
-            return false;
-        }
-
-        var definition = FindGridDefinition(hint);
-        if (definition is not null)
-        {
-            if (!GridCellMetadataExtractor.TryExtract(
-                source,
-                gridSource,
-                definition,
-                items,
-                ExtractTextValue,
-                out var metadata,
-                out error))
-            {
-                return false;
-            }
-
-            var configuredColumn = definition.FindColumnBySourceField(metadata.SourceFieldName);
-            var logicalColumnName = configuredColumn?.LogicalName ?? metadata.SourceFieldName;
-            var configuredColumnIndex = FindColumnIndex(hint.ColumnPropertyNames, logicalColumnName);
-            var cellValue = metadata.DisplayText;
-            if (configuredColumn?.ReadsDisplayedText != true && string.IsNullOrWhiteSpace(cellValue)
-                && !TryFormatGridValue(metadata.RawValue, configuredColumn, out cellValue))
-            {
-                error = $"Grid column '{logicalColumnName}' does not expose readable display text. "
-                    + "Configure DisplayValueFrom(...) or FormatWith(...).";
-                return false;
-            }
-
-            if (!TryCreateGridSemanticValue(
-                    locator.Control,
-                    metadata.RowIndex,
-                    configuredColumnIndex,
-                    logicalColumnName,
-                    cellValue ?? string.Empty,
-                    metadata.RawValue,
-                    configuredColumn,
-                    out candidate,
-                    out error))
-            {
-                return false;
-            }
-
-            if (requireLiteral && !HasLiteral(candidate))
-            {
-                error = $"Grid column '{logicalColumnName}' does not expose a current value for a literal assertion.";
-                return false;
-            }
-
-            return true;
-        }
-
-        if (!TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var legacyColumnIndex, out var legacyCellValue))
-        {
-            error = "Select a concrete grid cell before capturing its value.";
-            return false;
-        }
-
-        candidate = new SemanticValueCandidate(
-            locator.Control,
-            RecorderValueKind.GridCellText,
-            RecorderValueAccessorKind.GridCellText,
-            StringValue: legacyCellValue,
-            GridContext: new GridValueContext(rowIndex, legacyColumnIndex, null, null));
-        return true;
-    }
-
-    private static bool TryCreateGridSemanticValue(
-        RecordedControlDescriptor control,
-        int rowIndex,
-        int columnIndex,
-        string logicalColumnName,
-        string displayText,
-        object? rawValue,
-        GridColumnDefinition? column,
-        out SemanticValueCandidate candidate,
-        out string error)
-    {
-        var valueKind = column?.ValueKind ?? RecorderGridValueConversion.InferGridCellValueKind(rawValue, column?.EditorKind);
-        var recorderKind = valueKind switch
-        {
-            GridCellValueKind.Number => RecorderValueKind.Number,
-            GridCellValueKind.Date => RecorderValueKind.Date,
-            GridCellValueKind.DateTime => RecorderValueKind.DateTime,
-            GridCellValueKind.Time => RecorderValueKind.Time,
-            GridCellValueKind.Boolean => RecorderValueKind.Boolean,
-            GridCellValueKind.Color => RecorderValueKind.Color,
-            _ => RecorderValueKind.Text
-        };
-        var gridContext = new GridValueContext(rowIndex, columnIndex, null, logicalColumnName);
-        candidate = recorderKind switch
-        {
-            RecorderValueKind.Number when RecorderGridValueConversion.TryConvertGridNumber(rawValue, displayText, column, out var number) =>
-                new SemanticValueCandidate(
-                    control,
-                    recorderKind,
-                    RecorderValueAccessorKind.GridCellValue,
-                    DoubleValue: number,
-                    GridContext: gridContext),
-            RecorderValueKind.Date when RecorderGridValueConversion.TryConvertGridDate(rawValue, displayText, column, out var date) =>
-                new SemanticValueCandidate(
-                    control,
-                    recorderKind,
-                    RecorderValueAccessorKind.GridCellValue,
-                    DateValue: date,
-                    GridContext: gridContext),
-            RecorderValueKind.DateTime when RecorderGridValueConversion.TryConvertGridDateTime(rawValue, displayText, column, out var dateTime) =>
-                new SemanticValueCandidate(
-                    control,
-                    recorderKind,
-                    RecorderValueAccessorKind.GridCellValue,
-                    DateValue: dateTime,
-                    GridContext: gridContext),
-            RecorderValueKind.Time when RecorderGridValueConversion.TryConvertGridTime(rawValue, displayText, column, out var time) =>
-                new SemanticValueCandidate(
-                    control,
-                    recorderKind,
-                    RecorderValueAccessorKind.GridCellValue,
-                    TimeValue: time,
-                    GridContext: gridContext),
-            RecorderValueKind.Boolean when RecorderGridValueConversion.TryConvertGridBoolean(rawValue, displayText, out var boolean) =>
-                new SemanticValueCandidate(
-                    control,
-                    recorderKind,
-                    RecorderValueAccessorKind.GridCellValue,
-                    BoolValue: boolean,
-                    GridContext: gridContext),
-            RecorderValueKind.Color => new SemanticValueCandidate(
-                control,
-                recorderKind,
-                RecorderValueAccessorKind.GridCellValue,
-                StringValue: displayText,
-                GridContext: gridContext),
-            _ when recorderKind == RecorderValueKind.Text => new SemanticValueCandidate(
-                control,
-                recorderKind,
-                RecorderValueAccessorKind.GridCellValue,
-                StringValue: displayText,
-                GridContext: gridContext),
-            _ => null!
-        };
-
-        if (candidate is not null)
-        {
-            candidate = candidate with { DisplayText = displayText };
-            error = string.Empty;
-            return true;
-        }
-
-        error = $"Grid column '{column?.LogicalName ?? "<unknown>"}' is configured as {valueKind}, "
-            + $"but value '{displayText}' cannot be converted. Configure DisplayValueFrom(...), FormatWith(...), or AsValue(...).";
-        return false;
-    }
-
-
     private bool TryCreateMultiSelectSemanticValue(
         Control source,
         IReadOnlyList<(string LocatorValue, UiLocatorKind LocatorKind, bool FallbackToName, MultiSelectParts Parts, UiControlType ControlType)> hints,
@@ -4329,8 +3751,8 @@ internal sealed partial class RecorderStepFactory
         }
 
         var hint = hints[0];
-        if (TryFindControl(hint.Parts.ItemsContainerLocator, hint.Parts.LocatorKind, out var itemsContainer)
-            && itemsContainer.IsVisible)
+        if (_controlReader.TryFindControl(hint.Parts.ItemsContainerLocator, hint.Parts.LocatorKind, out var itemsContainer)
+            && itemsContainer.IsEffectivelyVisible)
         {
             error = "Apply or cancel the open multi-select popup before remembering or asserting its committed value.";
             return false;
@@ -4471,10 +3893,10 @@ internal sealed partial class RecorderStepFactory
         };
         if (selection is null)
         {
-            TryReadObjectProperty(root, "SelectedItems", out selection);
+            GridPropertyValueReader.TryReadProperty(root, "SelectedItems", out selection);
             if (selection is null)
             {
-                TryReadObjectProperty(root, "SelectedItem", out selection);
+                GridPropertyValueReader.TryReadProperty(root, "SelectedItem", out selection);
             }
         }
 
@@ -4492,7 +3914,7 @@ internal sealed partial class RecorderStepFactory
             var selectedItem = root is ListBox listBox ? listBox.SelectedItem : null;
             if (selectedItem is null)
             {
-                TryReadObjectProperty(root, "SelectedItem", out selectedItem);
+                GridPropertyValueReader.TryReadProperty(root, "SelectedItem", out selectedItem);
             }
 
             if (selectedItem is not null)
@@ -4645,21 +4067,6 @@ internal sealed partial class RecorderStepFactory
                 hint.Parts.ExpandButtonLocator));
     }
 
-    private static bool IsGridSearchPickerPart(Control source, RecorderGridSearchPickerHint hint)
-    {
-        var relatedControls = EnumerateRelatedControls(source).ToArray();
-        var matchesSource = relatedControls.Any(current =>
-            HasExactLocator(current, hint.SourceLocatorKind, hint.SourceLocatorValue));
-        var matchesPart = relatedControls.Any(current =>
-            HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.SearchInputLocator)
-            || HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ResultsLocator)
-            || (!string.IsNullOrWhiteSpace(hint.Parts.ApplyButtonLocator)
-                && HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ApplyButtonLocator!))
-            || (!string.IsNullOrWhiteSpace(hint.Parts.ExpandButtonLocator)
-                && HasExactLocator(current, hint.Parts.LocatorKind, hint.Parts.ExpandButtonLocator!)));
-        return matchesSource && (matchesPart || HasExactLocator(source, hint.SourceLocatorKind, hint.SourceLocatorValue));
-    }
-
     private static bool IsSearchControlPart(Control source, RecorderSearchControlHint hint)
     {
         return EnumerateRelatedControls(source).Any(current =>
@@ -4679,7 +4086,7 @@ internal sealed partial class RecorderStepFactory
         foreach (var locator in new[] { hint.Parts.SelectedValueLocator, hint.Parts.RootLocator, hint.Parts.ResultsLocator })
         {
             if (string.IsNullOrWhiteSpace(locator)
-                || !TryFindControl(locator, hint.Parts.LocatorKind, out var control))
+                || !_controlReader.TryFindControl(locator, hint.Parts.LocatorKind, out var control))
             {
                 continue;
             }
@@ -4758,7 +4165,7 @@ internal sealed partial class RecorderStepFactory
             return false;
         }
 
-        if (!TryResolveGridHint(source, out var hint, out var gridSource))
+        if (!_gridCapture.TryResolveGridHint(source, out var hint, out var gridSource))
         {
             return false;
         }
@@ -4776,7 +4183,7 @@ internal sealed partial class RecorderStepFactory
             return true;
         }
 
-        if (TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var columnIndex, out var cellValue))
+        if (_gridCapture.TryResolveGridCell(source, gridSource, hint, items, out var rowIndex, out var columnIndex, out var cellValue))
         {
             result = CreateGridStep(
                 source,
@@ -4895,7 +4302,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridActionHint hint)
     {
-        if (!TryResolveGridRowIndex(source, hint, out var rowIndex))
+        if (!_gridCapture.TryResolveGridRowIndex(source, hint, out var rowIndex))
         {
             return StepCreationResult.Unsupported("Grid open-row action requires a row index from the hint or grid row/cell context.");
         }
@@ -4947,7 +4354,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridActionHint hint)
     {
-        if (!TryResolveGridCellIndexes(source, hint, out var rowIndex, out var columnIndex))
+        if (!_gridCapture.TryResolveGridCellIndexes(source, hint, out var rowIndex, out var columnIndex))
         {
             return StepCreationResult.Unsupported("Grid copy-cell action requires row and column indexes from the hint or grid cell context.");
         }
@@ -5049,55 +4456,6 @@ internal sealed partial class RecorderStepFactory
         };
     }
 
-    private static string? ExtractTextValue(Control control)
-    {
-        return control switch
-        {
-            TextBox textBox => textBox.Text,
-            TextBlock textBlock => textBlock.Text,
-            Label label => label.Content?.ToString(),
-            Button button => MenuPathValue.TryGetVisibleText(
-                button.Content,
-                AutomationProperties.GetName(button)),
-            ComboBox comboBox => ExtractSelectionText(comboBox.SelectedItem),
-            ListBox listBox => ExtractSelectionText(listBox.SelectedItem),
-            _ => AutomationProperties.GetName(control)
-        };
-    }
-
-    private bool TryResolveGridHint(Control source, out RecorderGridHint hint, out Control gridSource)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (current is Window)
-            {
-                continue;
-            }
-
-            foreach (var candidate in _options.EnumerateGridHints())
-            {
-                if (TryGetLocator(current, candidate.SourceLocatorKind, out var locatorValue)
-                    && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
-                {
-                    hint = candidate;
-                    gridSource = current;
-                    return true;
-                }
-            }
-
-            if (GridCellMetadataExtractor.IsNativeDataGrid(current)
-                && TryCreateNativeGridDefinition(current, out hint, out _))
-            {
-                gridSource = current;
-                return true;
-            }
-        }
-
-        hint = null!;
-        gridSource = null!;
-        return false;
-    }
-
     private bool TryResolveGridActionHint(
         Control source,
         out RecorderGridActionHint hint,
@@ -5139,7 +4497,7 @@ internal sealed partial class RecorderStepFactory
                 gridHint);
         }
 
-        if (TryResolveGridHint(searchInput, out _, out _))
+        if (_gridCapture.TryResolveGridHint(searchInput, out _, out _))
         {
             return StepCreationResult.Unsupported(NoGridSearchPickerHintMessage);
         }
@@ -5194,7 +4552,7 @@ internal sealed partial class RecorderStepFactory
         }
 
         var hint = matchingHints[0];
-        if (!TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var control)
+        if (!_controlReader.TryFindControl(hint.Parts.SearchInputLocator, hint.Parts.LocatorKind, out var control)
             || control is not TextBox searchInput)
         {
             return new SearchPickerSelectionCaptureResult(
@@ -5331,7 +4689,7 @@ internal sealed partial class RecorderStepFactory
             return StepCreationResult.Unsupported("Grid search picker does not have a selected result to record.");
         }
 
-        if (!TryResolveGridSearchPickerContext(searchInput, hint, out var rowIndex, out var columnIndex))
+        if (_gridCapture.ResolveGridSearchPickerContext(searchInput, hint) is not { } context)
         {
             return StepCreationResult.Unsupported(
                 "Grid search picker requires row and column context. Configure RecorderGridSearchPickerHint column metadata or expose stable row context on the editor.");
@@ -5348,22 +4706,20 @@ internal sealed partial class RecorderStepFactory
             warning);
 
         return CreateGridStep(
-            TryResolveGridSearchPickerGridSource(hint, out var gridHint, out _)
-                && FindGridDefinition(gridHint)?.Columns.Any(static column => column.IsObjectKey) == true
-                    ? searchInput : results,
+            context.UsesObjectKey ? searchInput : results,
             new RecordedStep(
                 RecordedActionKind.SearchAndSelectGridCell,
                 descriptor,
                 StringValue: searchText,
                 Warning: warning,
-                RowIndex: rowIndex,
-                ColumnIndex: columnIndex,
+                RowIndex: context.RowIndex,
+                ColumnIndex: context.ColumnIndex,
                 ItemValue: selectedText.Trim()),
             warning,
             hint.TargetGridLocatorValue,
             hint.TargetGridLocatorKind,
-            rowIndex,
-            columnIndex,
+            context.RowIndex,
+            context.ColumnIndex,
             excludeTargetColumnFromIdentity: true);
     }
 
@@ -5665,25 +5021,6 @@ internal sealed partial class RecorderStepFactory
         return false;
     }
 
-    private bool TryResolveGridEditHint(Control source, out RecorderGridEditHint hint)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            foreach (var candidate in _options.GridEditHints)
-            {
-                if (TryGetLocator(current, candidate.SourceLocatorKind, out var locatorValue)
-                    && string.Equals(candidate.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
-                {
-                    hint = candidate;
-                    return true;
-                }
-            }
-        }
-
-        hint = null!;
-        return false;
-    }
-
     private bool TryResolveShellNavigationHint(
         Control source,
         out RecorderShellNavigationHint hint,
@@ -5740,7 +5077,7 @@ internal sealed partial class RecorderStepFactory
 
         if (actionKind == RecordedActionKind.ActivateShellPane
             && !string.IsNullOrWhiteSpace(hint.Parts.ActivePaneLabelLocator)
-            && TryFindControl(hint.Parts.ActivePaneLabelLocator!, hint.Parts.LocatorKind, out var control))
+            && _controlReader.TryFindControl(hint.Parts.ActivePaneLabelLocator!, hint.Parts.LocatorKind, out var control))
         {
             return ExtractTextValue(control);
         }
@@ -5754,7 +5091,7 @@ internal sealed partial class RecorderStepFactory
         GridComboSelectionContextResolution? preparedContext,
         string? capturedSearchText)
     {
-        var currentContext = TryResolveGridComboSelectionContext(results);
+        var currentContext = _gridCapture.TryResolveGridComboSelectionContext(results);
         var effectiveContext = preparedContext?.Context is { } prepared
             && IsGridCellContextPart(results, prepared)
                 ? preparedContext
@@ -5791,7 +5128,7 @@ internal sealed partial class RecorderStepFactory
         }
 
         var hint = context.GridHint;
-        var validationSource = TryFindControl(
+        var validationSource = _controlReader.TryFindControl(
                 hint.TargetLocatorValue,
                 hint.TargetLocatorKind,
                 out var logicalGrid)
@@ -5805,24 +5142,11 @@ internal sealed partial class RecorderStepFactory
             hint.FallbackToName,
             validationSource.GetType().FullName ?? validationSource.GetType().Name,
             Warning: null);
-        var definition = FindGridDefinition(hint);
-        var column = definition is null || string.IsNullOrWhiteSpace(context.LogicalColumnName)
-            ? null
-            : definition.FindColumn(context.LogicalColumnName);
-        var rowIndex = context.RowIndex;
-        var captureSource = validationSource;
-        if (definition?.Columns.Any(static candidate => candidate.IsObjectKey) == true)
-        {
-            if (context.RowObject is null || !NativeGridSelectionAccess.TryReadCurrentView(context.GridSource, out var currentView)
-                || currentView.Count(item => ReferenceEquals(item, context.RowObject)) != 1
-                || !TryResolveGridRow(context.CellSource, context.GridSource, currentView, out _, out var currentRow, referenceOnly: true)
-                || !ReferenceEquals(currentRow, context.RowObject))
-                return new GridComboSelectionCaptureResult(true, true, context, StepCreationResult.Unsupported(
-                    "The selection editor's original object row is no longer unique in the current view; capture its runtime row again."));
-            rowIndex = Array.FindIndex(currentView, item => ReferenceEquals(item, context.RowObject));
-            captureSource = context.CellSource;
-        }
-        var isSearchPicker = column?.EditorKind == GridCellEditorKind.SearchPicker;
+        var captureContext = _gridCapture.ResolveSelectionCaptureContext(context, validationSource, out var captureError);
+        if (captureContext is null)
+            return new GridComboSelectionCaptureResult(true, true, context, StepCreationResult.Unsupported(captureError!));
+        var rowIndex = captureContext.RowIndex;
+        var isSearchPicker = captureContext.IsSearchPicker;
         var searchText = string.IsNullOrWhiteSpace(capturedSearchText)
             ? selectedText.Trim()
             : capturedSearchText.Trim();
@@ -5840,7 +5164,7 @@ internal sealed partial class RecorderStepFactory
             GridTargetColumnName = context.LogicalColumnName
         };
         var result = CreateGridStep(
-            captureSource,
+            captureContext.Source,
             prototype,
             null,
             hint.TargetLocatorValue,
@@ -5856,874 +5180,6 @@ internal sealed partial class RecorderStepFactory
             result);
     }
 
-    private GridComboSelectionContextResolution TryResolveGridComboSelectionContext(Control source)
-    {
-        var matchingGrids = FindRelatedGridHints(source).Take(2).ToArray();
-        if (matchingGrids.Length == 0)
-        {
-            return new GridComboSelectionContextResolution(false, null, null);
-        }
-
-        if (matchingGrids.Length > 1)
-        {
-            return new GridComboSelectionContextResolution(
-                true,
-                null,
-                "Selection editor belongs to multiple configured grids; the logical grid locator is ambiguous.");
-        }
-
-        var (hint, gridSource) = matchingGrids[0];
-        if (!TryReadItemsSource(gridSource, out var items) || items.Count == 0)
-        {
-            return new GridComboSelectionContextResolution(
-                true,
-                null,
-                $"Grid '{hint.TargetLocatorValue}' does not expose a non-empty ItemsSource for selection capture.");
-        }
-
-        var definition = FindGridDefinition(hint);
-        if (definition is not null)
-        {
-            if (!GridCellMetadataExtractor.TryExtract(
-                    source,
-                    gridSource,
-                    definition,
-                    items,
-                    ExtractTextValue,
-                    out var metadata,
-                    out var metadataError))
-            {
-                return new GridComboSelectionContextResolution(true, null, metadataError);
-            }
-
-            var logicalColumnName = definition.FindColumnBySourceField(metadata.SourceFieldName)?.LogicalName
-                ?? metadata.SourceFieldName;
-            var configuredColumnIndex = FindColumnIndex(hint.ColumnPropertyNames, logicalColumnName);
-            return new GridComboSelectionContextResolution(
-                true,
-                new GridComboSelectionContext(
-                    source,
-                    gridSource,
-                    metadata.CellOwner,
-                    metadata.EditorRoot,
-                    hint,
-                    metadata.RowIndex,
-                    configuredColumnIndex,
-                    logicalColumnName,
-                    metadata.Row),
-                null);
-        }
-
-        if (source is not (ComboBox or ListBox))
-        {
-            return new GridComboSelectionContextResolution(false, null, null);
-        }
-
-        var currentCellText = TryReadGridCellContextText(source, out var contextText)
-            ? contextText
-            : null;
-        if (!TryResolveGridCell(
-                source,
-                gridSource,
-                hint,
-                items,
-                currentCellText,
-                out var rowIndex,
-                out var columnIndex,
-                out _))
-        {
-            var missingParts = new List<string>(2);
-            if (!TryResolveGridRow(source, gridSource, items, out _, out _))
-            {
-                missingParts.Add("row");
-            }
-
-            if (!TryResolveGridColumnIndex(
-                    source,
-                    gridSource,
-                    hint,
-                    out _)
-                && string.IsNullOrWhiteSpace(currentCellText))
-            {
-                missingParts.Add("column");
-            }
-
-            var missing = missingParts.Count == 0
-                ? "row or column"
-                : string.Join(" and ", missingParts);
-            return new GridComboSelectionContextResolution(
-                true,
-                null,
-                $"Grid '{hint.TargetLocatorValue}' selection capture could not resolve an unambiguous {missing} context.");
-        }
-
-        return new GridComboSelectionContextResolution(
-            true,
-            new GridComboSelectionContext(source, gridSource, source, source, hint, rowIndex, columnIndex),
-            null);
-    }
-
-    private IEnumerable<(RecorderGridHint Hint, Control GridSource)> FindRelatedGridHints(Control source)
-    {
-        var matchedHints = new HashSet<RecorderGridHint>(ReferenceEqualityComparer.Instance);
-        var relatedControls = EnumerateRelatedControls(source).ToArray();
-        foreach (var current in relatedControls)
-        {
-            if (current is Window)
-            {
-                continue;
-            }
-
-            foreach (var hint in _options.EnumerateGridHints())
-            {
-                if (matchedHints.Contains(hint)
-                    || !TryGetLocator(current, hint.SourceLocatorKind, out var locatorValue)
-                    || !string.Equals(hint.SourceLocatorValue.Trim(), locatorValue, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                matchedHints.Add(hint);
-                yield return (hint, current);
-            }
-        }
-
-        if (matchedHints.Count > 0)
-        {
-            yield break;
-        }
-
-        if (TryResolveGridHint(source, out var nativeHint, out var nativeGrid)
-            && FindGridDefinition(nativeHint) is not null)
-        {
-            yield return (nativeHint, nativeGrid);
-            yield break;
-        }
-
-        foreach (var hint in _options.EnumerateGridHints())
-        {
-            if (!TryFindControl(
-                    hint.SourceLocatorValue,
-                    hint.SourceLocatorKind,
-                    out var gridSource)
-                || !TryReadItemsSource(gridSource, out var items)
-                || !TryResolveGridRow(source, gridSource, items, out _, out _))
-            {
-                continue;
-            }
-
-            yield return (hint, gridSource);
-        }
-    }
-
-    private bool TryResolveGridSearchPickerContext(
-        Control searchInput,
-        RecorderGridSearchPickerHint hint,
-        out int rowIndex,
-        out int columnIndex)
-    {
-        rowIndex = -1;
-        columnIndex = -1;
-
-        if (!TryResolveGridSearchPickerGridSource(hint, out var gridHint, out var gridSource))
-        {
-            return false;
-        }
-
-        var objectIdentity = FindGridDefinition(gridHint)?.Columns.Any(static column => column.IsObjectKey) == true;
-        if (objectIdentity)
-        {
-            if (!NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var currentView)
-                || !TryResolveGridRow(searchInput, gridSource, currentView, out rowIndex, out _, referenceOnly: true))
-                return false;
-        }
-        else if (TryReadItemsSource(gridSource, out var items)
-            && TryResolveGridRow(searchInput, gridSource, items, out rowIndex, out _))
-        {
-            // Row resolved from the live grid context.
-        }
-        else if (!TryResolveGridRowIndexFromAutomationId(searchInput, out rowIndex))
-        {
-            return false;
-        }
-
-        if (hint.ColumnIndex is >= 0)
-        {
-            columnIndex = hint.ColumnIndex.Value;
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(hint.ColumnName))
-        {
-            columnIndex = FindColumnIndex(gridHint.ColumnPropertyNames, hint.ColumnName);
-            return columnIndex >= 0;
-        }
-
-        if (TryResolveGridColumnIndex(searchInput, gridSource, gridHint, out columnIndex))
-        {
-            return true;
-        }
-
-        return TryResolveGridColumnIndexFromAutomationId(searchInput, out columnIndex);
-    }
-
-    private bool TryResolveGridSearchPickerGridSource(
-        RecorderGridSearchPickerHint hint,
-        out RecorderGridHint gridHint,
-        out Control gridSource)
-    {
-        foreach (var candidate in _options.EnumerateGridHints())
-        {
-            if (candidate.TargetLocatorKind == hint.TargetGridLocatorKind
-                && string.Equals(candidate.TargetLocatorValue.Trim(), hint.TargetGridLocatorValue.Trim(), StringComparison.Ordinal)
-                && TryFindControl(candidate.SourceLocatorValue, candidate.SourceLocatorKind, out gridSource))
-            {
-                gridHint = candidate;
-                return true;
-            }
-        }
-
-        gridHint = null!;
-        gridSource = null!;
-        return false;
-    }
-
-    private static int FindColumnIndex(IReadOnlyList<string> columnNames, string columnName)
-    {
-        for (var i = 0; i < columnNames.Count; i++)
-        {
-            if (string.Equals(columnNames[i], columnName.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    private bool TryResolveGridRowIndex(Control source, RecorderGridActionHint hint, out int rowIndex)
-    {
-        if (TryResolveGridHint(source, out var objectHint, out var objectGrid)
-            && FindGridDefinition(objectHint)?.Columns.Any(static column => column.IsObjectKey) == true)
-        {
-            rowIndex = -1;
-            return NativeGridSelectionAccess.TryReadCurrentView(objectGrid, out var currentView)
-                && TryResolveGridRow(source, objectGrid, currentView, out rowIndex, out _, referenceOnly: true);
-        }
-        if (hint.RowIndex is >= 0)
-        {
-            rowIndex = hint.RowIndex.Value;
-            return true;
-        }
-
-        if (TryResolveGridHint(source, out _, out var gridSource)
-            && TryReadItemsSource(gridSource, out var items)
-            && TryResolveGridRow(source, gridSource, items, out rowIndex, out _))
-        {
-            return true;
-        }
-
-        return TryResolveGridRowIndexFromAutomationId(source, out rowIndex);
-    }
-
-    private bool TryResolveGridCellIndexes(
-        Control source,
-        RecorderGridActionHint hint,
-        out int rowIndex,
-        out int columnIndex)
-    {
-        rowIndex = hint.RowIndex is >= 0 ? hint.RowIndex.Value : -1;
-        columnIndex = hint.ColumnIndex is >= 0 ? hint.ColumnIndex.Value : -1;
-        if (TryResolveGridHint(source, out var objectHint, out var objectGrid)
-            && FindGridDefinition(objectHint)?.Columns.Any(static column => column.IsObjectKey) == true)
-            return NativeGridSelectionAccess.TryReadCurrentView(objectGrid, out var currentView)
-                && TryResolveGridCell(source, objectGrid, objectHint, currentView, out rowIndex, out columnIndex, out _);
-        if (rowIndex >= 0 && columnIndex >= 0)
-        {
-            return true;
-        }
-
-        if (TryResolveGridHint(source, out var gridHint, out var gridSource)
-            && TryReadItemsSource(gridSource, out var items)
-            && TryResolveGridCell(source, gridSource, gridHint, items, out var resolvedRowIndex, out var resolvedColumnIndex, out _))
-        {
-            if (rowIndex < 0)
-            {
-                rowIndex = resolvedRowIndex;
-            }
-
-            if (columnIndex < 0)
-            {
-                columnIndex = resolvedColumnIndex;
-            }
-
-            return rowIndex >= 0 && columnIndex >= 0;
-        }
-
-        TryResolveGridRowIndexFromAutomationId(source, out var parsedRowIndex);
-        TryResolveGridColumnIndexFromAutomationId(source, out var parsedColumnIndex);
-        if (rowIndex < 0)
-        {
-            rowIndex = parsedRowIndex;
-        }
-
-        if (columnIndex < 0)
-        {
-            columnIndex = parsedColumnIndex;
-        }
-
-        return rowIndex >= 0 && columnIndex >= 0;
-    }
-
-    private bool TryResolveGridCell(
-        Control source,
-        Control gridSource,
-        RecorderGridHint hint,
-        IReadOnlyList<object?> items,
-        out int rowIndex,
-        out int columnIndex,
-        out string cellValue)
-    {
-        return TryResolveGridCell(
-            source,
-            gridSource,
-            hint,
-            items,
-            observedTextOverride: null,
-            out rowIndex,
-            out columnIndex,
-            out cellValue);
-    }
-
-    private bool TryResolveGridCell(
-        Control source,
-        Control gridSource,
-        RecorderGridHint hint,
-        IReadOnlyList<object?> items,
-        string? observedTextOverride,
-        out int rowIndex,
-        out int columnIndex,
-        out string cellValue)
-    {
-        rowIndex = -1;
-        columnIndex = -1;
-        cellValue = string.Empty;
-
-        if (hint.ColumnPropertyNames.Count == 0)
-        {
-            return false;
-        }
-
-        var definition = FindGridDefinition(hint);
-        if (GridCellMetadataExtractor.TryExtract(
-                source,
-                gridSource,
-                definition,
-                items,
-                ExtractTextValue,
-                out var metadata,
-                out _))
-        {
-            var logicalColumnName = definition?
-                    .FindColumnBySourceField(metadata.SourceFieldName)?
-                    .LogicalName
-                ?? metadata.SourceFieldName;
-            columnIndex = FindColumnIndex(hint.ColumnPropertyNames, logicalColumnName);
-            if (columnIndex >= 0)
-            {
-                rowIndex = metadata.RowIndex;
-                if (definition?.FindColumn(logicalColumnName)?.ReadsDisplayedText == true)
-                {
-                    cellValue = metadata.DisplayText!;
-                    return true;
-                }
-                if (TryReadDisplayedGridCellValue(
-                        gridSource,
-                        metadata.Row,
-                        rowIndex,
-                        columnIndex,
-                        logicalColumnName,
-                        out cellValue))
-                {
-                    return true;
-                }
-
-                var column = definition?.FindColumn(logicalColumnName);
-                if (TryFormatGridValue(metadata.RawValue, column, out cellValue))
-                {
-                    return true;
-                }
-
-                if (!string.IsNullOrWhiteSpace(metadata.DisplayText))
-                {
-                    cellValue = metadata.DisplayText;
-                    return true;
-                }
-            }
-
-        }
-
-        if (definition?.Columns.Any(static column => column.IsObjectKey || column.ReadsDisplayedText) == true)
-            return false;
-
-        if (!TryResolveGridRow(source, gridSource, items, out rowIndex, out var rowItem))
-        {
-            return false;
-        }
-
-        var observedText = string.IsNullOrWhiteSpace(observedTextOverride)
-            ? ExtractTextValue(source)?.Trim()
-            : observedTextOverride.Trim();
-        if (TryResolveGridColumnIndex(
-            source,
-            gridSource,
-            hint,
-            out columnIndex))
-        {
-            if (TryReadDisplayedGridCellValue(
-                    gridSource,
-                    rowItem,
-                    rowIndex,
-                    columnIndex,
-                    hint.ColumnPropertyNames[columnIndex],
-                    out cellValue))
-            {
-                return true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(observedText))
-            {
-                cellValue = observedText;
-                return true;
-            }
-
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(observedText))
-        {
-            return false;
-        }
-
-        var matchedColumnIndex = -1;
-        var matchedValue = string.Empty;
-        var matchedColumnCount = 0;
-        for (var candidateColumnIndex = 0; candidateColumnIndex < hint.ColumnPropertyNames.Count; candidateColumnIndex++)
-        {
-            if (!TryReadDisplayedGridCellValue(
-                    gridSource,
-                    rowItem,
-                    rowIndex,
-                    candidateColumnIndex,
-                    out var candidateValue)
-                || !string.Equals(candidateValue, observedText, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            matchedColumnIndex = candidateColumnIndex;
-            matchedValue = candidateValue;
-            matchedColumnCount++;
-        }
-
-        if (matchedColumnCount == 1)
-        {
-            columnIndex = matchedColumnIndex;
-            cellValue = matchedValue;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TryResolveGridRow(
-        Control source,
-        Control gridSource,
-        IReadOnlyList<object?> items,
-        out int rowIndex,
-        out object item,
-        bool referenceOnly = false)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (ReferenceEquals(current, gridSource))
-            {
-                continue;
-            }
-
-            var dataContext = current.DataContext;
-            if (dataContext is null)
-            {
-                continue;
-            }
-
-            if (TryFindItemIndex(items, dataContext, out rowIndex, out item, referenceOnly))
-            {
-                return true;
-            }
-
-            foreach (var propertyName in GridRowContextPropertyNames)
-            {
-                if (TryReadObjectProperty(dataContext, propertyName, out var rowCandidate)
-                    && rowCandidate is not null
-                    && TryFindItemIndex(items, rowCandidate, out rowIndex, out item, referenceOnly))
-                {
-                    return true;
-                }
-            }
-
-        }
-
-        rowIndex = -1;
-        item = null!;
-        return false;
-    }
-
-    private bool TryResolveGridColumnIndex(
-        Control source,
-        Control gridSource,
-        RecorderGridHint hint,
-        out int columnIndex)
-    {
-        var columnNames = hint.ColumnPropertyNames;
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (ReferenceEquals(current, gridSource))
-            {
-                continue;
-            }
-
-            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Cell", out var candidate)
-                && candidate >= 0
-                && candidate < columnNames.Count)
-            {
-                columnIndex = candidate;
-                return true;
-            }
-
-            if (TryReadGridColumnContextName(current.DataContext, out var contextColumnName)
-                && TryMatchGridColumnName(hint, contextColumnName, out columnIndex))
-            {
-                return true;
-            }
-        }
-
-        columnIndex = -1;
-        return false;
-    }
-
-    private GridAutomationDefinition? FindGridDefinition(RecorderGridHint hint)
-    {
-        var configured = _options.FindGridDefinition(hint);
-        if (configured is not null)
-        {
-            return configured;
-        }
-
-        foreach (var candidate in _nativeGridDefinitions.Values)
-        {
-            if (ReferenceEquals(candidate.Hint, hint))
-            {
-                return candidate.Definition;
-            }
-        }
-
-        return null;
-    }
-
-    private bool TryCreateNativeGridDefinition(
-        Control grid,
-        out RecorderGridHint hint,
-        out GridAutomationDefinition definition)
-    {
-        if (_nativeGridDefinitions.TryGetValue(grid, out var cached))
-        {
-            hint = cached.Hint;
-            definition = cached.Definition;
-            return true;
-        }
-
-        var locator = _selectorResolver.Resolve(grid, UiControlType.Grid);
-        var nativeColumns = GridCellMetadataExtractor.ReadNativeColumns(grid);
-        if (!locator.Success || locator.Control is null || nativeColumns.Count == 0)
-        {
-            hint = null!;
-            definition = null!;
-            return false;
-        }
-
-        var columns = nativeColumns
-            .Where(static metadata => !string.IsNullOrWhiteSpace(metadata.SourceFieldName))
-            .Select(static metadata => CreateNativeColumnDefinition(metadata))
-            .ToArray();
-        if (columns.Length == 0)
-        {
-            hint = null!;
-            definition = null!;
-            return false;
-        }
-        definition = GridAutomationDefinition.ByLocators(
-                locator.Control.ProposedPropertyName,
-                locator.Control.LocatorValue,
-                locator.Control.LocatorKind,
-                locator.Control.LocatorValue,
-                locator.Control.LocatorKind,
-                locator.Control.FallbackToName)
-            .WithColumns(columns);
-        hint = new RecorderGridHint(
-            locator.Control.LocatorValue,
-            locator.Control.LocatorValue,
-            columns.Select(static column => column.LogicalName).ToArray(),
-            locator.Control.LocatorKind,
-            locator.Control.LocatorKind,
-            locator.Control.FallbackToName);
-        _nativeGridDefinitions.Add(grid, (hint, definition));
-        return true;
-    }
-
-    private static GridColumnDefinition CreateNativeColumnDefinition(RecorderNativeGridColumn metadata)
-    {
-        var column = GridColumnDefinition.Map(metadata.LogicalName)
-            .FromField(metadata.SourceFieldName);
-        if (metadata.EditorKind is { } editorKind)
-        {
-            column = column.EditWith(editorKind);
-        }
-
-        if (metadata.ValueKind is { } valueKind)
-        {
-            column = column.AsValue(valueKind);
-        }
-
-        return metadata.IsStableIdentityCandidate
-            ? column.AsStableIdentityCandidate()
-            : column;
-    }
-
-    private static bool TryReadGridColumnContextName(object? dataContext, out string columnName)
-    {
-        columnName = string.Empty;
-        if (dataContext is null)
-        {
-            return false;
-        }
-
-        foreach (var propertyName in GridColumnContextPropertyNames)
-        {
-            if (TryReadObjectProperty(dataContext, propertyName, out var directValue)
-                && directValue is not null
-                && directValue is not Control
-                && directValue is not IEnumerable
-                && directValue.ToString() is { } directText
-                && !string.IsNullOrWhiteSpace(directText))
-            {
-                columnName = directText.Trim();
-                return true;
-            }
-        }
-
-        if (!TryReadObjectProperty(dataContext, "Column", out var column) || column is null)
-        {
-            return false;
-        }
-
-        foreach (var propertyName in NestedGridColumnContextPropertyNames)
-        {
-            if (TryReadObjectProperty(column, propertyName, out var nestedValue)
-                && nestedValue?.ToString() is { } nestedText
-                && !string.IsNullOrWhiteSpace(nestedText))
-            {
-                columnName = nestedText.Trim();
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private bool TryMatchGridColumnName(
-        RecorderGridHint hint,
-        string contextColumnName,
-        out int columnIndex)
-    {
-        var columnNames = hint.ColumnPropertyNames;
-        var definition = FindGridDefinition(hint);
-        var logicalColumnName = definition?.FindColumnBySourceField(contextColumnName)?.LogicalName
-            ?? contextColumnName;
-        columnIndex = FindColumnIndex(columnNames, logicalColumnName);
-        if (columnIndex >= 0)
-        {
-            return true;
-        }
-
-        var suffixMatches = columnNames
-            .Select((name, index) => (Name: name.Trim(), Index: index))
-            .Where(candidate =>
-                contextColumnName.EndsWith(candidate.Name, StringComparison.OrdinalIgnoreCase)
-                || candidate.Name.EndsWith(contextColumnName, StringComparison.OrdinalIgnoreCase))
-            .Take(2)
-            .ToArray();
-        if (suffixMatches.Length != 1)
-        {
-            return false;
-        }
-
-        columnIndex = suffixMatches[0].Index;
-        return true;
-    }
-
-    private static bool TryReadGridCellContextText(Control source, out string value)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            var dataContext = current.DataContext;
-            if (dataContext is null)
-            {
-                continue;
-            }
-
-            foreach (var propertyName in GridCellValueContextPropertyNames)
-            {
-                if (!TryReadObjectProperty(dataContext, propertyName, out var cellValue))
-                {
-                    continue;
-                }
-
-                var displayText = ExtractSelectionText(cellValue)?.Trim();
-                if (!string.IsNullOrWhiteSpace(displayText))
-                {
-                    value = displayText;
-                    return true;
-                }
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    private static bool TryParseVisualGridIndex(string? automationId, string marker, out int index)
-    {
-        index = -1;
-        if (string.IsNullOrWhiteSpace(automationId))
-        {
-            return false;
-        }
-
-        var markerIndex = automationId.LastIndexOf(marker, StringComparison.Ordinal);
-        if (markerIndex < 0)
-        {
-            return false;
-        }
-
-        var digitStart = markerIndex + marker.Length;
-        var digitEnd = digitStart;
-        while (digitEnd < automationId.Length && char.IsDigit(automationId[digitEnd]))
-        {
-            digitEnd++;
-        }
-
-        return digitEnd > digitStart
-            && int.TryParse(
-                automationId[digitStart..digitEnd],
-                System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out index);
-    }
-
-    private static bool TryResolveGridRowIndexFromAutomationId(Control source, out int rowIndex)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Row", out rowIndex))
-            {
-                return true;
-            }
-        }
-
-        rowIndex = -1;
-        return false;
-    }
-
-    private static bool TryResolveGridColumnIndexFromAutomationId(Control source, out int columnIndex)
-    {
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (TryParseVisualGridIndex(AutomationProperties.GetAutomationId(current), "_Cell", out columnIndex))
-            {
-                return true;
-            }
-        }
-
-        columnIndex = -1;
-        return false;
-    }
-
-    private static bool TryReadItemsSource(Control control, out IReadOnlyList<object?> items)
-    {
-        var itemsSourceProperty = control.GetType().GetProperty("ItemsSource");
-        var itemsValue = itemsSourceProperty?.GetValue(control);
-        if (itemsValue is null)
-        {
-            var itemsProperty = control.GetType().GetProperty("Items");
-            itemsValue = itemsProperty?.GetValue(control);
-        }
-
-        if (itemsValue is IEnumerable enumerable and not string)
-        {
-            items = enumerable.Cast<object?>().ToArray();
-            return true;
-        }
-
-        items = Array.Empty<object?>();
-        return false;
-    }
-
-    private static bool TryFindItemIndex(
-        IReadOnlyList<object?> items,
-        object dataContext,
-        out int rowIndex,
-        out object item,
-        bool referenceOnly = false)
-    {
-        for (var i = 0; i < items.Count; i++)
-        {
-            var candidate = items[i];
-            if (candidate is null)
-            {
-                continue;
-            }
-
-            if (ReferenceEquals(candidate, dataContext) || !referenceOnly && candidate.Equals(dataContext))
-            {
-                rowIndex = i;
-                item = candidate;
-                return true;
-            }
-        }
-
-        rowIndex = -1;
-        item = null!;
-        return false;
-    }
-
-    private static bool TryReadPropertyValue(object item, string propertyName, out string value)
-    {
-        value = string.Empty;
-        if (!TryReadObjectProperty(item, propertyName, out var propertyValue))
-        {
-            return false;
-        }
-
-        value = propertyValue?.ToString() ?? string.Empty;
-        return true;
-    }
-
-    private static bool TryReadObjectProperty(object item, string propertyName, out object? value)
-    {
-        return GridPropertyValueReader.TryReadProperty(item, propertyName, out value);
-    }
-
     private StepCreationResult CreateGridStep(
         Control source,
         RecordedStep step,
@@ -6732,144 +5188,10 @@ internal sealed partial class RecorderStepFactory
         UiLocatorKind targetGridLocatorKind,
         int rowIndex,
         int? columnIndex,
-        bool excludeTargetColumnFromIdentity)
-    {
-        var matchingHints = _options.EnumerateGridHints()
-            .Concat(_nativeGridDefinitions.Values.Select(static entry => entry.Hint))
-            .Where(hint => hint.TargetLocatorKind == targetGridLocatorKind
-                && string.Equals(
-                    hint.TargetLocatorValue.Trim(),
-                    targetGridLocatorValue.Trim(),
-                    StringComparison.Ordinal))
-            .ToArray();
-        if (matchingHints.Length == 0)
-        {
-            return CreateStep(source, step, warning);
-        }
-
-        if (matchingHints.Length != 1)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{targetGridLocatorValue}' has multiple RecorderGridHint registrations; named row capture requires exactly one.");
-        }
-
-        var hint = matchingHints[0];
-        var definition = FindGridDefinition(hint);
-        if (definition is not null)
-        {
-            return CreateCatalogGridStep(
-                source,
-                step,
-                warning,
-                hint,
-                definition,
-                rowIndex,
-                columnIndex,
-                excludeTargetColumnFromIdentity);
-        }
-
-        if (hint.RowIdentityColumnPropertyNames is not { Count: > 0 })
-        {
-            return CreateStep(source, step, warning);
-        }
-
-        if (!TryValidateGridIdentityHint(hint, out var identityColumns, out var configurationError))
-        {
-            return StepCreationResult.Unsupported(configurationError);
-        }
-
-        if (!TryFindControl(hint.SourceLocatorValue, hint.SourceLocatorKind, out var gridSource)
-            || !TryReadItemsSource(gridSource, out var items))
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{targetGridLocatorValue}' does not expose the configured ItemsSource for named row capture.");
-        }
-
-        if (rowIndex < 0 || rowIndex >= items.Count || items[rowIndex] is not { } item)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{targetGridLocatorValue}' row index {rowIndex} is outside the current ItemsSource.");
-        }
-
-        string? targetColumnName = null;
-        if (columnIndex is { } resolvedColumnIndex)
-        {
-            if (resolvedColumnIndex < 0 || resolvedColumnIndex >= hint.ColumnPropertyNames.Count)
-            {
-                return StepCreationResult.Unsupported(
-                    $"Grid '{targetGridLocatorValue}' column index {resolvedColumnIndex} is outside ColumnPropertyNames.");
-            }
-
-            targetColumnName = hint.ColumnPropertyNames[resolvedColumnIndex].Trim();
-        }
-
-        var effectiveIdentityColumns = excludeTargetColumnFromIdentity && targetColumnName is not null
-            ? identityColumns
-                .Where(columnName => !string.Equals(columnName, targetColumnName, StringComparison.Ordinal))
-                .ToArray()
-            : identityColumns;
-        if (effectiveIdentityColumns.Count == 0)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{targetGridLocatorValue}' row identity is empty after excluding target column '{targetColumnName}'.");
-        }
-
-        var displayedGrid = TryFindControl(
-                targetGridLocatorValue,
-                targetGridLocatorKind,
-                out var targetGrid)
-            ? targetGrid
-            : gridSource;
-        if (!TryReadGridIdentity(
-                displayedGrid,
-                item,
-                rowIndex,
-                hint,
-                effectiveIdentityColumns,
-                out var conditions,
-                out var readError))
-        {
-            return StepCreationResult.Unsupported(readError);
-        }
-
-        if (!TryReadGridModelIdentity(hint, item, effectiveIdentityColumns, out var modelIdentity, out readError))
-        {
-            return StepCreationResult.Unsupported(readError);
-        }
-
-        var matchingRows = 0;
-        foreach (var candidate in items)
-        {
-            if (candidate is null
-                || !TryReadGridModelIdentity(
-                    hint,
-                    candidate,
-                    effectiveIdentityColumns,
-                    out var candidateIdentity,
-                    out readError))
-            {
-                return StepCreationResult.Unsupported(readError);
-            }
-
-            if (candidateIdentity.SequenceEqual(modelIdentity, StringComparer.Ordinal))
-            {
-                matchingRows++;
-            }
-        }
-
-        if (matchingRows != 1)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{targetGridLocatorValue}' configured row identity matches {matchingRows} rows; named row capture requires exactly one.");
-        }
-
-        var namedStep = step with
-        {
-            GridRowConditions = conditions,
-            GridTargetColumnName = targetColumnName
-        };
-        return CreateStep(source, namedStep, warning);
-    }
+        bool excludeTargetColumnFromIdentity) =>
+        CreateResolvedGridStep(source, step, warning,
+            _gridCapture.CaptureRow(source, step.GridTargetColumnName, targetGridLocatorValue, targetGridLocatorKind,
+                rowIndex, columnIndex, excludeTargetColumnFromIdentity));
 
     private StepCreationResult CreateCatalogGridStep(
         Control source,
@@ -6880,548 +5202,35 @@ internal sealed partial class RecorderStepFactory
         int rowIndex,
         int? columnIndex,
         bool excludeTargetColumnFromIdentity,
-        IReadOnlyList<object?>? captureItems = null)
+        IReadOnlyList<object?>? captureItems = null) =>
+        CreateResolvedGridStep(source, step, warning,
+            _gridCapture.CaptureCatalogRow(source, step.GridTargetColumnName, hint, definition,
+                rowIndex, columnIndex, excludeTargetColumnFromIdentity, captureItems));
+
+    private StepCreationResult CreateResolvedGridStep(
+        Control source, RecordedStep step, string? warning, RecorderGridRowCaptureResult resolution)
     {
-        var items = captureItems;
-        if (!TryFindControl(hint.SourceLocatorValue, hint.SourceLocatorKind, out var gridSource)
-            || items is null && !TryReadItemsSource(gridSource, out items))
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' does not expose the configured ItemsSource for stable row capture.");
-        }
+        if (resolution.Error is not null)
+            return StepCreationResult.Unsupported(resolution.Error);
+        if (resolution.Capture is not { } capture)
+            return CreateStep(source, step, warning);
 
-        var usesObjectIdentity = definition.Columns.Any(static column => column.IsObjectKey);
-        if (usesObjectIdentity)
+        var capturedStep = step with
         {
-            if (!NativeGridSelectionAccess.TryReadCurrentView(gridSource, out var currentView))
-                return StepCreationResult.Unsupported($"Grid '{definition.PagePropertyName}' requires an authoritative current view for object-key recording.");
-            items = currentView;
-        }
-
-        if (rowIndex < 0 || rowIndex >= items.Count || items[rowIndex] is not { } item)
+            GridRowConditions = capture.Conditions,
+            GridTargetColumnName = capture.ColumnName
+        };
+        if (capture.IsCatalog)
         {
-            return StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' row {rowIndex} is no longer present in the current ItemsSource.");
-        }
-
-        var targetColumnName = string.IsNullOrWhiteSpace(step.GridTargetColumnName)
-            ? null
-            : step.GridTargetColumnName.Trim();
-        if (targetColumnName is null && columnIndex is { } resolvedColumnIndex)
-        {
-            if (resolvedColumnIndex < 0 || resolvedColumnIndex >= hint.ColumnPropertyNames.Count)
+            capturedStep = capturedStep with
             {
-                return StepCreationResult.Unsupported(
-                    $"Grid '{definition.PagePropertyName}' did not expose the selected logical column. "
-                    + "Configure the column with GridColumnDefinition.Map(...).FromField(...).");
-            }
-
-            targetColumnName = hint.ColumnPropertyNames[resolvedColumnIndex].Trim();
-        }
-
-        var usesAutomaticIdentity = definition.RowIdentityColumns.Count == 0;
-        var identityColumns = usesAutomaticIdentity
-            ? definition.Columns
-                .Where(static column => column.IsStableIdentityCandidate)
-                .Select(static column => column.LogicalName)
-                .ToArray()
-            : definition.RowIdentityColumns.ToArray();
-        var effectiveIdentityColumns = excludeTargetColumnFromIdentity && targetColumnName is not null
-            ? identityColumns
-                .Where(columnName => !string.Equals(columnName, targetColumnName, StringComparison.Ordinal))
-                .ToArray()
-            : identityColumns;
-        if (effectiveIdentityColumns.Length == 0)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' has no stable row identity for column '{targetColumnName}'. "
-                + "Configure IdentifyRowsBy(...) or expose a native row-model key with KeyAttribute; index-based capture is not used.");
-        }
-
-        if (usesAutomaticIdentity
-            && !TryValidateAutomaticGridIdentityValues(
-                definition,
-                items,
-                effectiveIdentityColumns,
-                out var automaticIdentityError))
-        {
-            return StepCreationResult.Unsupported(automaticIdentityError);
-        }
-
-        if (!TryReadGridModelIdentity(
-                hint,
-                item,
-                effectiveIdentityColumns,
-                out var identityValues,
-                out var readError))
-        {
-            return StepCreationResult.Unsupported(readError);
-        }
-
-        if (usesObjectIdentity && !TryValidateObjectRowPublication(source, gridSource, item, definition, out readError))
-            return StepCreationResult.Unsupported(readError);
-
-        var matchingRows = 0;
-        foreach (var candidate in items)
-        {
-            if (candidate is null
-                || !TryReadGridModelIdentity(
-                    hint,
-                    candidate,
-                    effectiveIdentityColumns,
-                    out var candidateValues,
-                    out readError))
-            {
-                return StepCreationResult.Unsupported(readError);
-            }
-
-            if (candidateValues.SequenceEqual(identityValues, StringComparer.Ordinal))
-            {
-                matchingRows++;
-            }
-        }
-
-        if (matchingRows != 1)
-        {
-            return StepCreationResult.Unsupported(
-                $"Grid '{definition.PagePropertyName}' stable row identity matched {matchingRows} rows; exactly one is required. "
-                + "Add another column to IdentifyRowsBy(...).");
-        }
-
-        var capturedViewPosition = TryResolveCurrentGridViewPosition(
-            gridSource,
-            definition,
-            items,
-            item);
-        var conditions = effectiveIdentityColumns
-            .Select((columnName, index) => new RecordedGridRowCondition(columnName, identityValues[index])
-            {
-                IsObjectKey = definition.FindColumn(columnName)?.IsObjectKey == true
-            })
-            .ToArray();
-        return CreateStep(
-            source,
-            step with
-            {
-                GridRowConditions = conditions,
-                GridTargetColumnName = targetColumnName,
-                GridCapturedRowPosition = capturedViewPosition,
+                GridCapturedRowPosition = capture.ViewPosition,
                 CanCaptureGridRowKey = true,
                 RowIndex = null,
                 ColumnIndex = null
-            },
-            warning);
-    }
-
-    private static int? TryResolveCurrentGridViewPosition(
-        Control gridSource,
-        GridAutomationDefinition definition,
-        IReadOnlyList<object?> items,
-        object selectedRow)
-    {
-        IReadOnlyList<object?> viewItems = items;
-        var hasAuthoritativeView = false;
-        try
-        {
-            var collectionView = gridSource.GetType().GetProperty("CollectionView")?.GetValue(gridSource);
-            if (collectionView is IEnumerable currentView and not string)
-            {
-                viewItems = currentView.Cast<object?>().ToArray();
-                hasAuthoritativeView = true;
-            }
-            else if (gridSource is ItemsControl itemsControl)
-            {
-                viewItems = itemsControl.ItemsView.Cast<object?>().ToArray();
-                hasAuthoritativeView = true;
-            }
+            };
         }
-        catch
-        {
-            return null;
-        }
-
-        var itemIndexes = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
-        for (var index = 0; index < items.Count; index++)
-        {
-            if (items[index] is not { } item || !itemIndexes.TryAdd(item, index))
-            {
-                return null;
-            }
-        }
-
-        var positions = new Dictionary<object, double>(ReferenceEqualityComparer.Instance);
-        foreach (var candidate in EnumerateDescendantControls(gridSource))
-        {
-            if (!(TopLevel.GetTopLevel(candidate) is null
-                    ? candidate.IsVisible
-                    : candidate.IsEffectivelyVisible)
-                || candidate.Opacity <= 0.01
-                || candidate.Bounds.Width <= 0
-                || candidate.Bounds.Height <= 0
-                || candidate.DataContext is not { } context)
-            {
-                continue;
-            }
-
-            var row = itemIndexes.ContainsKey(context)
-                ? context
-                : GridPropertyValueReader.TryReadPath(
-                    context,
-                    definition.CellContext.RowPath,
-                    out var contextRow)
-                    ? contextRow
-                    : null;
-            if (row is null || !itemIndexes.ContainsKey(row))
-            {
-                continue;
-            }
-
-            var point = candidate.TranslatePoint(new Point(0, 0), gridSource);
-            if (point is null || point.Value.Y < 0 || point.Value.Y >= gridSource.Bounds.Height)
-            {
-                continue;
-            }
-
-            if (!positions.TryGetValue(row, out var currentY) || point.Value.Y < currentY)
-            {
-                positions[row] = point.Value.Y;
-            }
-        }
-
-        return GridCurrentViewPositionResolver.FindPosition(
-            viewItems, positions, selectedRow, hasAuthoritativeView);
-    }
-
-    private static bool TryValidateAutomaticGridIdentityValues(
-        GridAutomationDefinition definition,
-        IReadOnlyList<object?> items,
-        IReadOnlyList<string> identityColumns,
-        out string error)
-    {
-        foreach (var item in items)
-        {
-            if (item is null)
-            {
-                error = $"Grid '{definition.PagePropertyName}' contains a null row and cannot prove an automatic stable identity.";
-                return false;
-            }
-
-            foreach (var columnName in identityColumns)
-            {
-                var column = definition.FindColumn(columnName);
-                var path = column?.DisplayValuePath ?? column?.SourceFieldName ?? columnName;
-                if (!TryReadPropertyPathValue(item, path, out var value) || !IsStableGridIdentityScalar(value))
-                {
-                    error = $"Grid '{definition.PagePropertyName}' column '{columnName}' is not a readable scalar stable identity. "
-                        + "Configure IdentifyRowsBy(...) with one or more stable columns.";
-                    return false;
-                }
-            }
-        }
-
-        error = string.Empty;
-        return true;
-    }
-
-    private static bool IsStableGridIdentityScalar(object? value)
-    {
-        if (value is null)
-        {
-            return false;
-        }
-
-        var type = Nullable.GetUnderlyingType(value.GetType()) ?? value.GetType();
-        return type.IsEnum
-            || type.IsPrimitive
-            || type == typeof(string)
-            || type == typeof(decimal)
-            || type == typeof(DateTime)
-            || type == typeof(DateTimeOffset)
-            || type == typeof(TimeSpan)
-            || type == typeof(Guid);
-    }
-
-    private static bool TryValidateGridIdentityHint(
-        RecorderGridHint hint,
-        out IReadOnlyList<string> identityColumns,
-        out string error)
-    {
-        identityColumns = Array.Empty<string>();
-        var columns = hint.ColumnPropertyNames.Select(static name => name?.Trim() ?? string.Empty).ToArray();
-        if (columns.Length == 0
-            || columns.Any(string.IsNullOrWhiteSpace)
-            || columns.Distinct(StringComparer.Ordinal).Count() != columns.Length)
-        {
-            error = $"Grid '{hint.TargetLocatorValue}' ColumnPropertyNames must be non-empty and distinct for named row capture.";
-            return false;
-        }
-
-        var identities = (hint.RowIdentityColumnPropertyNames ?? Array.Empty<string>())
-            .Select(static name => name?.Trim() ?? string.Empty)
-            .ToArray();
-        if (identities.Length == 0
-            || identities.Any(string.IsNullOrWhiteSpace)
-            || identities.Distinct(StringComparer.Ordinal).Count() != identities.Length
-            || identities.Any(identity => !columns.Contains(identity, StringComparer.Ordinal)))
-        {
-            error = $"Grid '{hint.TargetLocatorValue}' RowIdentityColumnPropertyNames must be non-empty, distinct, and contained in ColumnPropertyNames.";
-            return false;
-        }
-
-        identityColumns = identities;
-        error = string.Empty;
-        return true;
-    }
-
-    private static bool TryReadGridIdentity(
-        Control gridSource,
-        object rowItem,
-        int rowIndex,
-        RecorderGridHint hint,
-        IReadOnlyList<string> identityColumns,
-        out IReadOnlyList<RecordedGridRowCondition> conditions,
-        out string error)
-    {
-        var result = new RecordedGridRowCondition[identityColumns.Count];
-        for (var index = 0; index < identityColumns.Count; index++)
-        {
-            var columnName = identityColumns[index];
-            var columnIndex = hint.ColumnPropertyNames
-                .Select(static candidate => candidate.Trim())
-                .ToList()
-                .FindIndex(candidate => string.Equals(candidate, columnName, StringComparison.Ordinal));
-            if (columnIndex < 0
-                || !TryReadDisplayedGridCellValue(gridSource, rowItem, rowIndex, columnIndex, out var value))
-            {
-                conditions = Array.Empty<RecordedGridRowCondition>();
-                error = $"Grid '{hint.TargetLocatorValue}' row {rowIndex} does not expose visible identity cell '{columnName}'.";
-                return false;
-            }
-
-            result[index] = new RecordedGridRowCondition(columnName, value);
-        }
-
-        conditions = result;
-        error = string.Empty;
-        return true;
-    }
-
-    private bool TryReadGridModelIdentity(
-        RecorderGridHint hint,
-        object item,
-        IReadOnlyList<string> identityColumns,
-        out IReadOnlyList<string> values,
-        out string error)
-    {
-        var result = new string[identityColumns.Count];
-        for (var index = 0; index < identityColumns.Count; index++)
-        {
-            var columnName = identityColumns[index];
-            var definition = FindGridDefinition(hint);
-            var column = definition?.FindColumn(columnName);
-            if (column?.IsObjectKey == true)
-            {
-                try { result[index] = GridRowObjectKey.Get(item); }
-                catch (ArgumentException exception)
-                {
-                    values = [];
-                    error = $"Grid '{hint.TargetLocatorValue}' cannot use this object row: {exception.Message}";
-                    return false;
-                }
-                continue;
-            }
-            var valuePath = column?.DisplayValuePath ?? column?.SourceFieldName ?? columnName;
-            if (!TryReadPropertyPathValue(item, valuePath, out var rawValue)
-                || !TryFormatGridValue(rawValue, column, out result[index]))
-            {
-                values = Array.Empty<string>();
-                error = $"Grid row type '{item.GetType().FullName}' does not expose readable identity path '{valuePath}' for logical column '{columnName}'.";
-                return false;
-            }
-        }
-
-        values = result;
-        error = string.Empty;
-        return true;
-    }
-
-    private static bool TryValidateObjectRowPublication(Control source, Control grid, object row,
-        GridAutomationDefinition definition, out string error)
-    {
-        var key = GridRowObjectKey.Get(row);
-        var property = GetObjectRowPublicationProperty(definition);
-        var published = EnumerateRelatedControls(source)
-            .TakeWhile(control => !ReferenceEquals(control, grid))
-            .Where(control => ReferenceEquals(control.DataContext, row))
-            .Select(control => control.GetValue(property))
-            .Where(static value => value is not null)
-            .ToArray();
-        if (published.Length > 0 && published.All(value => string.Equals(value, key, StringComparison.Ordinal)))
-        {
-            error = string.Empty;
-            return true;
-        }
-        error = $"Grid '{definition.PagePropertyName}' object row must publish its current GridRowObjectKey in the actual row {property.Name}; "
-            + (published.Length == 0 ? "no row key was published." : "the published row key does not match the current row object (possibly a recycled container).");
-        return false;
-    }
-
-    private static AttachedProperty<string?> GetObjectRowPublicationProperty(GridAutomationDefinition definition) =>
-        definition.Columns.Single(static column => column.IsObjectKey).RowIdentityAutomationProperty switch
-        {
-            GridRowAutomationProperty.AutomationId => AutomationProperties.AutomationIdProperty,
-            GridRowAutomationProperty.Name => AutomationProperties.NameProperty,
-            GridRowAutomationProperty.HelpText => AutomationProperties.HelpTextProperty,
-            GridRowAutomationProperty.ItemStatus => AutomationProperties.ItemStatusProperty,
-            _ => throw new InvalidOperationException($"Grid '{definition.PagePropertyName}' configures an unsupported object-key publication property.")
-        };
-
-    private static bool TryReadPropertyPathValue(object item, string propertyPath, out object? value)
-    {
-        return GridPropertyValueReader.TryReadPath(item, propertyPath, out value);
-    }
-
-    private static bool TryFormatGridValue(
-        object? value,
-        GridColumnDefinition? column,
-        out string text)
-    {
-        if (value is null)
-        {
-            text = string.Empty;
-            return true;
-        }
-
-        try
-        {
-            text = GridCellValueNormalizer.FormatValue(value, column) ?? string.Empty;
-            return true;
-        }
-        catch (FormatException)
-        {
-            text = string.Empty;
-            return false;
-        }
-    }
-
-    private static bool TryReadDisplayedGridCellValue(
-        Control gridSource,
-        object? rowItem,
-        int rowIndex,
-        int columnIndex,
-        out string value)
-    {
-        return TryReadDisplayedGridCellValue(
-            gridSource,
-            rowItem,
-            rowIndex,
-            columnIndex,
-            columnName: null,
-            out value);
-    }
-
-    private static bool TryReadDisplayedGridCellValue(
-        Control gridSource,
-        object? rowItem,
-        int rowIndex,
-        int columnIndex,
-        string? columnName,
-        out string value)
-    {
-        foreach (var candidate in EnumerateDescendantControls(gridSource))
-        {
-            var automationId = AutomationProperties.GetAutomationId(candidate);
-            var matchesIndexedColumn = TryParseVisualGridIndex(automationId, "_Cell", out var candidateColumnIndex)
-                && candidateColumnIndex == columnIndex;
-            var matchesNamedColumn = !string.IsNullOrWhiteSpace(columnName)
-                && !string.IsNullOrWhiteSpace(automationId)
-                && automationId.EndsWith($"_{columnName.Trim()}Cell", StringComparison.OrdinalIgnoreCase);
-            if (!matchesIndexedColumn && !matchesNamedColumn)
-            {
-                continue;
-            }
-
-            if (rowItem is not null)
-            {
-                if (!ReferenceEquals(candidate.DataContext, rowItem))
-                {
-                    continue;
-                }
-            }
-            else if (!TryParseVisualGridIndex(automationId, "_Row", out var candidateRowIndex)
-                     || candidateRowIndex != rowIndex)
-            {
-                continue;
-            }
-
-            var displayedValue = ExtractTextValue(candidate);
-            if (displayedValue is not null)
-            {
-                value = displayedValue.Trim();
-                return true;
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    private static GridCellEditorKind? InferGridEditorKind(Control source)
-    {
-        foreach (var candidate in EnumerateRelatedControls(source))
-        {
-            switch (candidate)
-            {
-                case CheckBox:
-                    return GridCellEditorKind.CheckBox;
-                case NumericUpDown:
-                    return GridCellEditorKind.Number;
-                case DatePicker or Calendar:
-                    return GridCellEditorKind.Date;
-                case TimePicker:
-                    return GridCellEditorKind.Time;
-                case ComboBox or ListBox:
-                    return GridCellEditorKind.ComboBox;
-                case TextBox:
-                    return GridCellEditorKind.Text;
-            }
-        }
-
-        return null;
-    }
-
-    private bool IsCatalogGridEditor(Control source, GridCellEditorKind editorKind)
-    {
-        return TryGetCatalogGridEditorKind(source, out var resolved) && resolved == editorKind;
-    }
-
-    private bool TryGetCatalogGridEditorKind(Control source, out GridCellEditorKind editorKind)
-    {
-        editorKind = default;
-        if (!TryResolveGridHint(source, out var hint, out var gridSource)
-            || FindGridDefinition(hint) is not { } definition
-            || !TryReadItemsSource(gridSource, out var items)
-            || !GridCellMetadataExtractor.TryExtract(
-                source,
-                gridSource,
-                definition,
-                items,
-                ExtractTextValue,
-                out var metadata,
-                out _))
-        {
-            return false;
-        }
-
-        var column = definition.FindColumnBySourceField(metadata.SourceFieldName);
-        var resolved = column?.EditorKind ?? InferGridEditorKind(source);
-        if (resolved is null)
-        {
-            return false;
-        }
-
-        editorKind = resolved.Value;
-        return true;
+        return CreateStep(source, capturedStep, warning);
     }
 
     private static RecordedControlDescriptor CreateGridDescriptor(
@@ -7593,41 +5402,13 @@ internal sealed partial class RecorderStepFactory
         return EnumerateRelatedControls(source).OfType<T>().FirstOrDefault();
     }
 
-    private static IEnumerable<GridRelativeLocator> EnumerateEditorPartLocators(GridCellEditorParts parts)
-    {
-        if (parts.Input is not null)
-        {
-            yield return parts.Input;
-        }
-
-        if (parts.Results is not null)
-        {
-            yield return parts.Results;
-        }
-
-        if (parts.OpenButton is not null)
-        {
-            yield return parts.OpenButton;
-        }
-
-        if (parts.ConfirmButton is not null)
-        {
-            yield return parts.ConfirmButton;
-        }
-
-        if (parts.CancelButton is not null)
-        {
-            yield return parts.CancelButton;
-        }
-    }
-
     private StepCreationResult TryCreateGridEditTextStep(
         Control source,
         RecordedControlDescriptor descriptor,
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
             || valueControl is not TextBox textBox)
         {
             return StepCreationResult.Unsupported("Grid text edit hint value locator was not found or is not a TextBox.");
@@ -7657,7 +5438,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
             || !RecorderNumericValueReader.TryReadNumericValue(
                 valueControl,
                 valueControl,
@@ -7698,7 +5479,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
             || !TryReadDateValue(valueControl, out var value))
         {
             return StepCreationResult.Unsupported("Grid date edit hint value locator does not expose a date value.");
@@ -7880,7 +5661,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
             || valueControl is not TimePicker { SelectedTime: { } value })
         {
             return StepCreationResult.Unsupported("Grid time edit hint value locator does not expose a selected time.");
@@ -7910,7 +5691,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl)
             || !ColorValue.TryNormalize(ExtractTextValue(valueControl), out var color))
         {
             return StepCreationResult.Unsupported(
@@ -7941,7 +5722,7 @@ internal sealed partial class RecorderStepFactory
         string warning,
         RecorderGridEditHint hint)
     {
-        if (!TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl))
+        if (!_controlReader.TryFindControl(hint.ValueLocatorValue, hint.ValueLocatorKind, out var valueControl))
         {
             return StepCreationResult.Unsupported("Grid combo edit hint value locator was not found.");
         }
@@ -7981,8 +5762,8 @@ internal sealed partial class RecorderStepFactory
         out DateTime? to,
         out string message)
     {
-        if (!TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
-            || !TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
+        if (!_controlReader.TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
+            || !_controlReader.TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
         {
             from = null;
             to = null;
@@ -8010,8 +5791,8 @@ internal sealed partial class RecorderStepFactory
         out double? to,
         out string message)
     {
-        if (!TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
-            || !TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
+        if (!_controlReader.TryFindControl(parts.FromLocator, parts.LocatorKind, out var fromControl)
+            || !_controlReader.TryFindControl(parts.ToLocator, parts.LocatorKind, out var toControl))
         {
             from = null;
             to = null;
@@ -8304,9 +6085,6 @@ internal sealed partial class RecorderStepFactory
             : null;
     }
 
-    private static IEnumerable<Control> EnumerateDescendantControls(Control root) =>
-        RecorderControlTree.EnumerateReachableControls(root);
-
     private static string ReadSelectionItemText(CheckBox checkBox)
     {
         return (ReadRenderedSelectionCaption(checkBox)
@@ -8423,77 +6201,6 @@ internal sealed partial class RecorderStepFactory
             parts.ItemsKind);
     }
 
-    private RecordedControlDescriptor CreateCompositeDescriptor(
-        string locatorValue,
-        UiControlType controlType,
-        UiLocatorKind locatorKind,
-        bool fallbackToName,
-        Control source,
-        string? warning)
-    {
-        return new RecordedControlDescriptor(
-            RecorderNaming.CreateControlPropertyName(locatorValue, controlType),
-            controlType,
-            locatorValue.Trim(),
-            locatorKind,
-            fallbackToName,
-            source.GetType().FullName ?? source.GetType().Name,
-            warning);
-    }
-
-    private bool TryFindControl(string locatorValue, UiLocatorKind locatorKind, out Control control)
-    {
-        control = null!;
-        var descriptor = new RecordedControlDescriptor(
-            "TemporaryLookup",
-            UiControlType.AutomationElement,
-            locatorValue.Trim(),
-            locatorKind,
-            FallbackToName: locatorKind == UiLocatorKind.Name,
-            AvaloniaTypeName: typeof(Control).FullName ?? nameof(Control),
-            Warning: null);
-        var resolved = _selectorResolver.ResolveExisting(descriptor);
-        if (resolved.MatchedControl is null)
-        {
-            return false;
-        }
-
-        control = resolved.MatchedControl;
-        return true;
-    }
-
-    private static bool TryGetLocator(Control control, UiLocatorKind locatorKind, out string locator)
-    {
-        locator = locatorKind switch
-        {
-            UiLocatorKind.AutomationId => AutomationProperties.GetAutomationId(control) ?? string.Empty,
-            UiLocatorKind.Name => AutomationProperties.GetName(control) ?? control.Name ?? string.Empty,
-            _ => string.Empty
-        };
-
-        locator = locator.Trim();
-        return !string.IsNullOrWhiteSpace(locator);
-    }
-
-    private static bool MatchesLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
-    {
-        if (string.IsNullOrWhiteSpace(locatorValue))
-        {
-            return false;
-        }
-
-        foreach (var current in EnumerateRelatedControls(source))
-        {
-            if (TryGetLocator(current, locatorKind, out var currentLocator)
-                && string.Equals(currentLocator, locatorValue.Trim(), StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private bool MatchesTimePickerInputPart(TextBox textBox)
     {
         return _options.TimePickerHints.Any(hint => IsTimePickerInput(textBox, hint));
@@ -8533,25 +6240,10 @@ internal sealed partial class RecorderStepFactory
             && MatchesLocator(results, hint.Parts.LocatorKind, hint.Parts.ResultsLocator);
     }
 
-    private static bool HasExactLocator(Control source, UiLocatorKind locatorKind, string locatorValue)
-    {
-        return !string.IsNullOrWhiteSpace(locatorValue)
-            && TryGetLocator(source, locatorKind, out var currentLocator)
-            && string.Equals(currentLocator, locatorValue.Trim(), StringComparison.Ordinal);
-    }
-
     private static bool MatchesAnyLocator(Control source, UiLocatorKind locatorKind, params string?[] locatorValues)
     {
         return locatorValues.Any(locatorValue => !string.IsNullOrWhiteSpace(locatorValue) && MatchesLocator(source, locatorKind, locatorValue!));
     }
-
-    private static string? FirstNonWhiteSpace(params string?[] values)
-    {
-        return values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
-    }
-
-    private static IEnumerable<Control> EnumerateRelatedControls(Control? control)
-        => RecorderControlTree.EnumerateRelatedControls(control, includePopupPlacementTarget: true);
 
     private static bool TryBuildMenuPath(
         MenuItem leaf,
@@ -8733,29 +6425,6 @@ internal sealed partial class RecorderStepFactory
         }
 
         return ExtractSelectionText(tabControl.SelectedItem);
-    }
-
-    private static string? ExtractSelectionText(object? selectedItem)
-    {
-        return selectedItem switch
-        {
-            null => null,
-            string value => value,
-            TabItem tabItem => FirstNonWhiteSpace(
-                tabItem.Header?.ToString(),
-                ExtractTextValue(tabItem),
-                AutomationProperties.GetAutomationId(tabItem),
-                tabItem.Name),
-            Control control => FirstNonWhiteSpace(
-                ExtractTextValue(control),
-                AutomationProperties.GetAutomationId(control),
-                control.Name),
-            _ when TryReadPropertyValue(selectedItem, "Header", out var header) && !string.IsNullOrWhiteSpace(header) => header,
-            _ when TryReadPropertyValue(selectedItem, "Title", out var title) && !string.IsNullOrWhiteSpace(title) => title,
-            _ when TryReadPropertyValue(selectedItem, "Text", out var text) && !string.IsNullOrWhiteSpace(text) => text,
-            _ when TryReadPropertyValue(selectedItem, "Name", out var name) && !string.IsNullOrWhiteSpace(name) => name,
-            _ => selectedItem?.ToString()
-        };
     }
 
     private static bool CanReadShellPaneNameFromSource(Control source)

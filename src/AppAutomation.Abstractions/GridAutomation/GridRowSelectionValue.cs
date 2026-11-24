@@ -21,7 +21,13 @@ public static class GridRowSelectionValue
             orderedView is null ? null : Encode(orderedView), allowsEmpty));
     }
 
-    internal static Snapshot? Read(string? value, GridRowSetIdentity identity)
+    internal static Snapshot? Read(string? value, GridRowSetIdentity identity) =>
+        Read(value, identity.LogicalColumns, index => identity.RuntimeColumns[index].IsObjectKey);
+
+    internal static Snapshot? ReadObjectKey(string? value, string columnName) =>
+        Read(value, [columnName], static _ => true);
+
+    private static Snapshot? Read(string? value, IReadOnlyList<string> columns, Func<int, bool> isObjectKey)
     {
         if (value is null || !value.StartsWith(Prefix, StringComparison.Ordinal)) return null;
         if (!value.StartsWith(Version, StringComparison.Ordinal))
@@ -42,14 +48,14 @@ public static class GridRowSelectionValue
 
         GridRowSelector Decode(GridRowCondition[] conditions)
         {
-            if (conditions is null || conditions.Length != identity.LogicalColumns.Count
-                || conditions.Any(part => part is null || part.Value is null || !identity.LogicalColumns.Contains(part.ColumnName))
+            if (conditions is null || conditions.Length != columns.Count
+                || conditions.Any(part => part is null || part.Value is null || !columns.Contains(part.ColumnName))
                 || conditions.Select(static part => part.ColumnName).Distinct(StringComparer.Ordinal).Count() != conditions.Length)
                 throw new InvalidOperationException("A published grid row does not use the configured stable identity columns.");
-            for (var index = 0; index < identity.LogicalColumns.Count; index++)
+            for (var index = 0; index < columns.Count; index++)
             {
-                if (identity.RuntimeColumns[index].IsObjectKey
-                    && string.IsNullOrWhiteSpace(conditions.Single(part => part.ColumnName == identity.LogicalColumns[index]).Value))
+                if (isObjectKey(index)
+                    && string.IsNullOrWhiteSpace(conditions.Single(part => part.ColumnName == columns[index]).Value))
                     throw new InvalidOperationException("A published grid row does not expose a readable object key.");
             }
             var row = GridRowSelector.ByCell(conditions[0].ColumnName, conditions[0].Value);

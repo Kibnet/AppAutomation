@@ -338,9 +338,8 @@ public sealed class RecorderPopupObservationTests
     [NotInParallel]
     public async Task PopupRecordsSelectionAndStopsObservingAfterClose()
     {
-        using var headless = HeadlessUnitTestSession.StartNew(
-            typeof(TestApplication), AvaloniaTestIsolationLevel.PerTest);
-        var fixture = headless.Dispatch(() =>
+        var headless = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RecorderPopupObservationTests).Assembly);
+        var result = await headless.Dispatch(() =>
         {
             var openButton = new Button { Content = "Open filter" };
             AutomationProperties.SetAutomationId(openButton, "StatusFilterOpenButton");
@@ -355,47 +354,40 @@ public sealed class RecorderPopupObservationTests
             content.Children.Add(openButton);
             content.Children.Add(popup);
             var window = new Window { Width = 400, Height = 300, Content = content };
-            window.Show();
-            window.UpdateLayout();
-            var options = new AppAutomationRecorderOptions { ShowOverlay = false };
-            options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
-                "StatusFilter",
-                ComboBoxFilterParts.ByAutomationIds(
-                    "StatusFilterRoot", "StatusFilterOpenButton", "StatusFilterItems")));
-            var session = new RecorderSession(window, options);
-            session.Start();
-            popup.IsOpen = true;
-            window.UpdateLayout();
-            return (window, session, popup, results);
-        }, CancellationToken.None).GetAwaiter().GetResult();
-        try
-        {
-            var result = headless.Dispatch(() =>
+            try
             {
-                fixture.session.RegisterPointerInputForTesting(fixture.results);
-                fixture.results.SelectedItem = "First";
-                var recordedSteps = fixture.session.StepJournal.ToArray();
-                fixture.session.AttachInputHandlersForTesting();
-                fixture.results.SelectedItem = "Second";
-                return (recordedSteps, fixture.session.StepJournal.Count, fixture.popup.IsOpen);
-            }, CancellationToken.None).GetAwaiter().GetResult();
+                window.Show();
+                window.UpdateLayout();
+                var options = new AppAutomationRecorderOptions { ShowOverlay = false };
+                options.ComboBoxFilterHints.Add(new RecorderComboBoxFilterHint(
+                    "StatusFilter",
+                    ComboBoxFilterParts.ByAutomationIds(
+                        "StatusFilterRoot", "StatusFilterOpenButton", "StatusFilterItems")));
+                using var session = new RecorderSession(window, options);
+                session.Start();
+                popup.IsOpen = true;
+                window.UpdateLayout();
 
-            using (Assert.Multiple())
-            {
-                await Assert.That(result.recordedSteps.Length).IsEqualTo(1);
-                await Assert.That(result.recordedSteps[0].Preview).Contains(
-                    "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"First\" });");
-                await Assert.That(result.Count).IsEqualTo(1);
-                await Assert.That(result.IsOpen).IsFalse();
+                session.RegisterPointerInputForTesting(results);
+                results.SelectedItem = "First";
+                var recordedSteps = session.StepJournal.ToArray();
+                session.AttachInputHandlersForTesting();
+                results.SelectedItem = "Second";
+                return (recordedSteps, session.StepJournal.Count, popup.IsOpen);
             }
-        }
-        finally
-        {
-            headless.Dispatch(() =>
+            finally
             {
-                fixture.session.Dispose();
-                fixture.window.Close();
-            }, CancellationToken.None).GetAwaiter().GetResult();
+                window.Close();
+            }
+        }, CancellationToken.None);
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(result.recordedSteps.Length).IsEqualTo(1);
+            await Assert.That(result.recordedSteps[0].Preview).Contains(
+                "Page.ApplyFilterSelection(static page => page.StatusFilter, new[] { \"First\" });");
+            await Assert.That(result.Count).IsEqualTo(1);
+            await Assert.That(result.IsOpen).IsFalse();
         }
     }
 

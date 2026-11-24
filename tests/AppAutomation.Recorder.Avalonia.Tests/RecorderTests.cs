@@ -16,6 +16,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using TUnit.Assertions;
 using TUnit.Core;
 
@@ -1336,44 +1337,59 @@ public sealed class RecorderTests
     {
         using var directory = new TemporaryDirectory();
         var logPath = Path.Combine(directory.Path, "recorder-diagnostics.log");
-        var session = new RecorderSession(
-            CreateWindowStub(),
-            new AppAutomationRecorderOptions
+        var options = new AppAutomationRecorderOptions
+        {
+            ShowOverlay = false,
+            DiagnosticLog = new RecorderDiagnosticLogOptions
             {
-                ShowOverlay = false,
-                DiagnosticLog = new RecorderDiagnosticLogOptions
-                {
-                    FilePath = logPath
-                }
-            },
+                FilePath = logPath
+            }
+        };
+        using var session = new RecorderSession(
+            CreateWindowStub(),
+            options,
             validationRootProvider: null,
             attachWindowHandlers: false);
         var details = (IAppAutomationRecorderSessionDetails)session;
 
+        var originalHeader = await File.ReadAllTextAsync(logPath);
+        var output = new RecorderOutputDescription(false, string.Empty, null, null);
+        var writes = await Task.WhenAll(Enumerable.Range(1, 2).Select(index => Task.Run(() =>
+            new RecorderDiagnosticWriter(options, output, NullLogger.Instance)
+                .Append(RecorderDiagnosticsEventIds.CaptureFailed, $"shared-entry-{index}"))));
         var logSource = await File.ReadAllTextAsync(logPath);
 
         using (Assert.Multiple())
         {
             await Assert.That(details.IsDiagnosticLogFileEnabled).IsEqualTo(true);
             await Assert.That(details.DiagnosticLogFilePath).IsEqualTo(logPath);
-            await Assert.That(logSource).Contains("AppAutomation recorder diagnostic log");
+            await Assert.That(originalHeader).Contains("AppAutomation recorder diagnostic log");
+            await Assert.That(writes.All(static written => written)).IsTrue();
+            await Assert.That(logSource).StartsWith(originalHeader);
+            await Assert.That(logSource).Contains("shared-entry-1");
+            await Assert.That(logSource).Contains("shared-entry-2");
+            await Assert.That(logSource.Split("AppAutomation recorder diagnostic log", StringSplitOptions.None).Length).IsEqualTo(2);
         }
     }
 
     [Test]
-    public async Task RecorderSession_DiagnosticLogFileToggle_WritesDiagnosticsToFile()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task RecorderSession_DiagnosticLogFileToggle_WritesDiagnosticsToFile(bool invalidPath)
     {
         using var directory = new TemporaryDirectory();
-        var logPath = Path.Combine(directory.Path, "recorder-diagnostics.log");
+        var logPath = invalidPath ? "invalid\0log" : Path.Combine(directory.Path, "recorder-diagnostics.log");
+        var logger = new TestLogger();
         var root = new StackPanel();
         var unsupported = new Border();
         AutomationProperties.SetAutomationId(unsupported, "UnsupportedBorder");
         root.Children.Add(unsupported);
-        var session = new RecorderSession(
+        using var session = new RecorderSession(
             CreateWindowStub(),
             new AppAutomationRecorderOptions
             {
                 ShowOverlay = false,
+                Logger = logger,
                 DiagnosticLog = new RecorderDiagnosticLogOptions
                 {
                     WriteToFile = false,
@@ -1383,6 +1399,19 @@ public sealed class RecorderTests
             () => root,
             attachWindowHandlers: false);
         var details = (IAppAutomationRecorderSessionDetails)session;
+        if (invalidPath)
+        {
+            await Assert.That(details.IsDiagnosticLogFileEnabled).IsFalse();
+            await Assert.That(logger.Entries.Any(entry => entry.EventId.Id == RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed.Id))
+                .IsFalse();
+
+            details.SetDiagnosticLogFileEnabled(true);
+            await Assert.That(details.IsDiagnosticLogFileEnabled).IsFalse();
+            await Assert.That(session.LatestStatus).Contains("Could not enable the diagnostic log file");
+            await Assert.That(logger.Entries.Count(entry => entry.EventId.Id == RecorderDiagnosticsEventIds.DiagnosticsSnapshotFailed.Id))
+                .IsEqualTo(1);
+            return;
+        }
 
         session.Start();
         session.CaptureButtonClickForTesting(unsupported);
@@ -2822,14 +2851,18 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task RecorderSession_FinalSaveOnlyKeepsAutosaveWhenSaveFails()
+    [Arguments("result")]
+    [Arguments("exception")]
+    [Arguments("cancelled")]
+    [Arguments("capture")]
+    public async Task RecorderSession_FinalSaveOnlyKeepsAutosaveWhenSaveFails(string failure)
     {
         var root = new StackPanel();
         var textBox = new TextBox();
         AutomationProperties.SetAutomationId(textBox, "SearchBox");
         root.Children.Add(textBox);
         var saveTracker = new RecorderSaveOperationTracker();
-        var session = new RecorderSession(
+        using var session = new RecorderSession(
             CreateWindowStub(),
             new AppAutomationRecorderOptions
             {
@@ -2850,82 +2883,220 @@ public sealed class RecorderTests
         session.RegisterKeyboardInputForTesting(textBox);
         textBox.Text = "Search result";
 
-        await session.SaveAsync();
+        var observedSave = false;
+        EventHandler faultyObserver = (_, _) =>
+        {
+            if (observedSave || session.LatestStatus != "Save in progress...") return;
+            observedSave = true;
+            throw new InvalidOperationException("Persistence observer failed.");
+        };
+        session.SessionChanged += faultyObserver;
+        RecorderSaveResult firstSave;
+        try
+        {
+            firstSave = await session.SaveAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            session.SessionChanged -= faultyObserver;
+        }
         await WaitForConditionAsync(() => !session.IsBusy);
 
         using (Assert.Multiple())
         {
+            await Assert.That(observedSave).IsTrue();
+            await Assert.That(firstSave.Success).IsTrue();
             await Assert.That(saveTracker.ManualSaveCallCount).IsEqualTo(1);
             await Assert.That(saveTracker.SavedStepCount).IsEqualTo(1);
             await Assert.That(saveTracker.AutosaveCallCount).IsEqualTo(0);
         }
 
-        saveTracker.SaveShouldSucceed = false;
+        saveTracker.Failure = failure;
         session.RegisterKeyboardInputForTesting(textBox);
         textBox.Text = "Another result";
 
-        await session.SaveAsync();
+        var failsDuringCapture = failure == "capture";
+        var captureFaulted = false;
+        EventHandler captureObserver = (_, _) =>
+        {
+            if (captureFaulted || session.StepCount != 2) return;
+            captureFaulted = true;
+            throw new InvalidOperationException("Step publication failed during snapshot capture.");
+        };
+        RecorderSaveResult failedSave;
+        if (failsDuringCapture) session.SessionChanged += captureObserver;
+        try
+        {
+            failedSave = await session.SaveAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            if (failsDuringCapture) session.SessionChanged -= captureObserver;
+        }
         await WaitForConditionAsync(() => !session.IsBusy);
 
         using (Assert.Multiple())
         {
-            await Assert.That(saveTracker.ManualSaveCallCount).IsEqualTo(2);
-            await Assert.That(saveTracker.SavedStepCount).IsEqualTo(2);
+            await Assert.That(failedSave.Success).IsFalse();
+            await Assert.That(captureFaulted).IsEqualTo(failsDuringCapture);
+            await Assert.That(saveTracker.ManualSaveCallCount).IsEqualTo(failsDuringCapture ? 1 : 2);
+            await Assert.That(saveTracker.SavedStepCount).IsEqualTo(failsDuringCapture ? 1 : 2);
             await Assert.That(saveTracker.AutosaveCallCount).IsEqualTo(1);
+            await Assert.That(saveTracker.AutosavedText).IsEqualTo("Another result");
         }
     }
 
     [Test]
-    public async Task RecorderSession_SuccessfulFinalSave_DiscardsQueuedAutosave()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task RecorderSession_ExportStartsOnlyWhilePickerOwnerIsLive(bool disposeBeforeSelection)
     {
+        const string outputDirectory = "RecorderExport";
+        string? writtenDirectory = null;
+        var pickerStarted = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pickerSelection = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var session = new RecorderSession(
+            CreateWindowStub(),
+            new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                DiagnosticLog = new RecorderDiagnosticLogOptions { WriteToFile = false }
+            },
+            validationRootProvider: null,
+            attachWindowHandlers: false,
+            saveOperation: (steps, directory, _) =>
+            {
+                writtenDirectory = directory;
+                return Task.FromResult(RecorderSaveResult.Completed("Exported.", null, null, steps.Count, 0));
+            });
+
+        var export = session.ExportWithDirectoryPickerAsync(token =>
+        {
+            pickerStarted.TrySetResult(token);
+            // The picker can report a folder even when its owner has already closed.
+            return pickerSelection.Task;
+        });
+        var watchdog = TimeSpan.FromSeconds(10);
+        CancellationToken pickerToken;
+        try
+        {
+            pickerToken = await pickerStarted.Task.WaitAsync(watchdog);
+            if (disposeBeforeSelection) session.Dispose();
+        }
+        finally
+        {
+            pickerSelection.TrySetResult(outputDirectory);
+        }
+
+        var result = await export.WaitAsync(watchdog);
+        await Assert.That(pickerToken.IsCancellationRequested).IsEqualTo(disposeBeforeSelection);
+        await Assert.That(result.Success).IsEqualTo(!disposeBeforeSelection);
+        await Assert.That(writtenDirectory).IsEqualTo(disposeBeforeSelection ? null : outputDirectory);
+    }
+
+    [Test]
+    [Arguments("unchanged")]
+    [Arguments("ignore")]
+    [Arguments("retry-invalid")]
+    public async Task RecorderSession_SuccessfulFinalSave_PreservesOnlyNewerQueuedAutosave(string change)
+    {
+        var changeDuringSave = change == "ignore";
         var manualSaveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var manualSaveRelease = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var autosaveCallCount = 0;
+        IReadOnlyList<RecordedStep>? savedSteps = null;
+        IReadOnlyList<RecordedStep>? autosavedSteps = null;
+        var selectedValues = new List<string> { "Initial" };
         var stepId = Guid.NewGuid();
-        var session = new RecorderSession(
+        using var session = new RecorderSession(
             CreateWindowStub(),
-            new AppAutomationRecorderOptions { ShowOverlay = false },
+            new AppAutomationRecorderOptions
+            {
+                ShowOverlay = false,
+                Validation = new RecorderValidationOptions { ValidateSelectors = false, ValidateRuntimeTargets = false }
+            },
             validationRootProvider: null,
             attachWindowHandlers: false,
-            saveOperation: (_, _, _) =>
+            saveOperation: (steps, _, _) =>
             {
+                savedSteps = steps;
                 manualSaveStarted.TrySetResult();
                 return manualSaveRelease.Task;
             },
-            autosaveOperation: (_, _, _) =>
+            autosaveOperation: (steps, _, _) =>
             {
+                autosavedSteps = steps;
                 Interlocked.Increment(ref autosaveCallCount);
                 return Task.FromResult(
                     RecorderSaveResult.Completed(
                         "Autosaved.",
                         pageFilePath: "MainWindowPage.controls.g.cs.autosave",
                         scenarioFilePath: "MainWindowScenariosBase.g.cs.autosave",
-                        persistedStepCount: 1,
+                        persistedStepCount: steps.Count,
                         skippedStepCount: 0));
             });
         var details = (IAppAutomationRecorderSessionDetails)session;
-        session.AddRecordedStepForTesting(CreateRecordedButtonStep(stepId, "RunButton"));
+        var sourceStep = CreateRecordedButtonStep(stepId, "Categories");
+        var selectionStep = sourceStep with
+        {
+            ActionKind = RecordedActionKind.SelectMultiItems,
+            Control = sourceStep.Control with { ControlType = UiControlType.MultiSelect },
+            StringValues = selectedValues
+        };
+        if (change == "retry-invalid")
+        {
+            selectionStep = selectionStep with
+            {
+                ActionKind = RecordedActionKind.AssertValue,
+                Control = sourceStep.Control with { ControlType = UiControlType.TextBox },
+                StringValues = null,
+                ValueKind = RecorderValueKind.Text,
+                ValueAccessorKind = RecorderValueAccessorKind.Text,
+                ComparisonKind = RecorderComparisonKind.Equal,
+                ExpectedCheckpointId = Guid.NewGuid(),
+                LastValidationAt = DateTimeOffset.UnixEpoch
+            };
+        }
+        session.AddRecordedStepForTesting(selectionStep);
+        details.SetStepIgnored(stepId, isIgnored: false);
         session.Start();
 
         var saveTask = session.SaveAsync();
-        await manualSaveStarted.Task;
-        details.SetStepIgnored(stepId, isIgnored: true);
-        manualSaveRelease.SetResult(
-            RecorderSaveResult.Completed(
-                "Saved.",
-                pageFilePath: "MainWindowPage.RecorderControls.g.cs",
-                scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
-                persistedStepCount: 1,
-                skippedStepCount: 0));
+        try
+        {
+            await manualSaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (changeDuringSave) selectedValues[0] = "Changed";
+            if (change == "retry-invalid")
+            {
+                await Assert.That(details.RetryStepValidation(stepId)).IsTrue();
+                var revalidated = details.StepJournal.Single();
+                await Assert.That(revalidated.LastValidationAt).IsNotNull();
+                await Assert.That(revalidated.LastValidationAt).IsNotEqualTo(DateTimeOffset.UnixEpoch);
+                await Assert.That(revalidated.CanPersist).IsFalse();
+            }
+            else details.SetStepIgnored(stepId, isIgnored: changeDuringSave);
+        }
+        finally
+        {
+            manualSaveRelease.TrySetResult(
+                RecorderSaveResult.Completed(
+                    "Saved.",
+                    pageFilePath: "MainWindowPage.RecorderControls.g.cs",
+                    scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
+                    persistedStepCount: 1,
+                    skippedStepCount: 0));
+        }
 
-        var result = await saveTask;
+        var result = await saveTask.WaitAsync(TimeSpan.FromSeconds(10));
         await WaitForConditionAsync(() => !session.IsBusy);
-        await Task.Delay(50);
 
         using (Assert.Multiple())
         {
             await Assert.That(result.Success).IsTrue();
-            await Assert.That(autosaveCallCount).IsEqualTo(0);
+            if (change != "retry-invalid")
+                await Assert.That(savedSteps!.Single().StringValues!.Single()).IsEqualTo("Initial");
+            await Assert.That(autosaveCallCount).IsEqualTo(changeDuringSave ? 1 : 0);
+            if (changeDuringSave) await Assert.That(autosavedSteps).IsEmpty();
             await Assert.That(session.IsBusy).IsFalse();
         }
     }
@@ -3005,17 +3176,29 @@ public sealed class RecorderTests
     }
 
     [Test]
-    public async Task RecorderSession_FinalSaveWaitsForActiveAutosave()
+    [Arguments("save")]
+    [Arguments("cancel")]
+    [Arguments("dispose")]
+    public async Task RecorderSession_FinalSaveWaitsForActiveAutosave(string queuedOutcome)
     {
+        var cancelQueuedSave = queuedOutcome == "cancel";
+        var disposeWhileWaiting = queuedOutcome == "dispose";
         var root = new StackPanel();
         var button = new Button { Content = "Run" };
         AutomationProperties.SetAutomationId(button, "RunButton");
+        var nextButton = new Button { Content = "Next" };
+        AutomationProperties.SetAutomationId(nextButton, "NextButton");
         root.Children.Add(button);
+        root.Children.Add(nextButton);
         var autosaveStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var autosaveRelease = new TaskCompletionSource<RecorderSaveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var latestAutosave = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        var watchdog = TimeSpan.FromSeconds(10);
         var manualSaveCallCount = 0;
         var autosaveCallCount = 0;
-        var session = new RecorderSession(
+        string? savedLocators = null;
+        using var session = new RecorderSession(
             CreateWindowStub(),
             new AppAutomationRecorderOptions
             {
@@ -3030,6 +3213,7 @@ public sealed class RecorderTests
             attachWindowHandlers: false,
             saveOperation: (steps, _, _) =>
             {
+                savedLocators = Locators(steps);
                 Interlocked.Increment(ref manualSaveCallCount);
                 return Task.FromResult(
                     RecorderSaveResult.Completed(
@@ -3041,41 +3225,57 @@ public sealed class RecorderTests
             },
             autosaveOperation: (steps, _, _) =>
             {
-                Interlocked.Increment(ref autosaveCallCount);
-                autosaveStarted.TrySetResult();
-                return autosaveRelease.Task;
+                if (Interlocked.Increment(ref autosaveCallCount) == 1)
+                {
+                    autosaveStarted.TrySetResult();
+                    return autosaveRelease.Task;
+                }
+
+                latestAutosave.TrySetResult(Locators(steps));
+                return Task.FromResult(RecorderSaveResult.Completed("Autosaved.", null, null, steps.Count, 0));
             });
 
         session.Start();
         session.CaptureButtonClickForTesting(button);
-        await autosaveStarted.Task;
-
-        var saveTask = session.SaveAsync();
-        await Task.Delay(50);
-
-        using (Assert.Multiple())
+        Task<RecorderSaveResult>? saveTask = null;
+        try
         {
+            await autosaveStarted.Task.WaitAsync(watchdog);
+            session.CaptureButtonClickForTesting(nextButton);
+            saveTask = session.SaveAsync(cancellation.Token);
+            if (cancelQueuedSave) cancellation.Cancel();
+
             await Assert.That(saveTask.IsCompleted).IsFalse();
             await Assert.That(manualSaveCallCount).IsEqualTo(0);
+            if (disposeWhileWaiting)
+            {
+                session.Dispose();
+                var disposedSave = await saveTask.WaitAsync(watchdog);
+                await Assert.That(disposedSave.Message).Contains("disposed");
+                await Assert.That(autosaveRelease.Task.IsCompleted).IsFalse();
+            }
+        }
+        finally
+        {
+            autosaveRelease.TrySetResult(RecorderSaveResult.Completed("Autosaved.", null, null, 1, 0));
         }
 
-        autosaveRelease.SetResult(
-            RecorderSaveResult.Completed(
-                "Autosaved.",
-                pageFilePath: "MainWindowPage.controls.g.cs.autosave",
-                scenarioFilePath: "MainWindowScenariosBase.g.cs.autosave",
-                persistedStepCount: 1,
-                skippedStepCount: 0));
-        var result = await saveTask;
+        var result = await saveTask!.WaitAsync(watchdog);
+        var persistedLocators = cancelQueuedSave ? await latestAutosave.Task.WaitAsync(watchdog) : savedLocators;
         await WaitForConditionAsync(() => !session.IsBusy);
 
         using (Assert.Multiple())
         {
-            await Assert.That(result.Success).IsTrue();
-            await Assert.That(autosaveCallCount).IsEqualTo(1);
-            await Assert.That(manualSaveCallCount).IsEqualTo(1);
+            await Assert.That(result.Success).IsEqualTo(queuedOutcome == "save");
+            await Assert.That(autosaveCallCount).IsEqualTo(cancelQueuedSave ? 2 : 1);
+            await Assert.That(manualSaveCallCount).IsEqualTo(queuedOutcome == "save" ? 1 : 0);
+            if (!disposeWhileWaiting) await Assert.That(persistedLocators).IsEqualTo("RunButton|NextButton");
+            if (cancelQueuedSave) await Assert.That(result.Message).Contains("cancelled");
             await Assert.That(session.IsBusy).IsFalse();
         }
+
+        static string Locators(IReadOnlyList<RecordedStep> steps) =>
+            string.Join("|", steps.Select(static step => step.Control.LocatorValue));
     }
 
     [Test]
@@ -4821,13 +5021,14 @@ public sealed class RecorderTests
 
     private sealed class RecorderSaveOperationTracker
     {
-        public bool SaveShouldSucceed { get; set; } = true;
+        public string? Failure { get; set; }
 
         public int ManualSaveCallCount { get; private set; }
 
         public int AutosaveCallCount { get; private set; }
 
         public int SavedStepCount { get; private set; }
+        public string? AutosavedText { get; private set; }
 
         public Task<RecorderSaveResult> SaveAsync(
             IReadOnlyList<RecordedStep> steps,
@@ -4836,15 +5037,18 @@ public sealed class RecorderTests
         {
             ManualSaveCallCount++;
             SavedStepCount = steps.Count;
-            return Task.FromResult(
-                SaveShouldSucceed
-                    ? RecorderSaveResult.Completed(
-                        "Saved.",
-                        pageFilePath: "MainWindowPage.RecorderControls.g.cs",
-                        scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
-                        persistedStepCount: steps.Count,
-                        skippedStepCount: 0)
-                    : RecorderSaveResult.Failed("Save failed."));
+            return Failure switch
+            {
+                "exception" => Task.FromException<RecorderSaveResult>(new InvalidOperationException("Save failed.")),
+                "cancelled" => Task.FromCanceled<RecorderSaveResult>(new CancellationToken(canceled: true)),
+                not null => Task.FromResult(RecorderSaveResult.Failed("Save failed.")),
+                null => Task.FromResult(RecorderSaveResult.Completed(
+                    "Saved.",
+                    pageFilePath: "MainWindowPage.RecorderControls.g.cs",
+                    scenarioFilePath: "MainWindowScenariosBase.RecorderScenarios.g.cs",
+                    persistedStepCount: steps.Count,
+                    skippedStepCount: 0))
+            };
         }
 
         public Task<RecorderSaveResult> AutosaveAsync(
@@ -4853,6 +5057,7 @@ public sealed class RecorderTests
             CancellationToken cancellationToken)
         {
             AutosaveCallCount++;
+            AutosavedText = steps.LastOrDefault()?.StringValue;
             return Task.FromResult(
                 RecorderSaveResult.Completed(
                     "Autosaved.",

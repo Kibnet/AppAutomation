@@ -1277,7 +1277,7 @@ public static partial class UiPageExtensions
         this TSelf page,
         Expression<Func<TSelf, ITimePickerControl>> selector,
         TimeSpan time,
-        int timeoutMs = 5000)
+        int timeoutMs = 10000)
         where TSelf : UiPage
     {
         ValidateTimeOfDay(time, nameof(time));

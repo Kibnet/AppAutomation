@@ -966,19 +966,20 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        var searchInput = innerResolver.Resolve<ITextBoxControl>(CreateDefinition("SearchInput", UiControlType.TextBox, _parts.SearchInputLocator));
-        var results = new DeferredResultsSurface(ResolveResults, innerResolver);
+        var partDefinitions = new UiControlPartDefinitions(definition, _parts.LocatorKind, _parts.FallbackToName, _propertyName);
+        var searchInput = innerResolver.Resolve<ITextBoxControl>(partDefinitions.Create("SearchInput", UiControlType.TextBox, _parts.SearchInputLocator));
+        var results = new DeferredResultsSurface(resolver => ResolveResults(resolver, partDefinitions), innerResolver);
         var applyButton = string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator)
             ? null
             : new DeferredButtonControl(
                 () => innerResolver.Resolve<IButtonControl>(
-                    CreateDefinition("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator)),
+                    partDefinitions.Create("ApplyButton", UiControlType.Button, _parts.ApplyButtonLocator)),
                 _parts.ApplyButtonLocator);
         var expandButton = string.IsNullOrWhiteSpace(_parts.ExpandButtonLocator)
             ? null
             : new DeferredButtonControl(
                 () => innerResolver.Resolve<IButtonControl>(
-                    CreateDefinition("ExpandButton", UiControlType.Button, _parts.ExpandButtonLocator)),
+                    partDefinitions.Create("ExpandButton", UiControlType.Button, _parts.ExpandButtonLocator)),
                 _parts.ExpandButtonLocator);
 
         return new SearchPickerControl(
@@ -990,26 +991,16 @@ public sealed class SearchPickerControlAdapter : IUiControlAdapter
             _parts.OpensOnSearch);
     }
 
-    private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver)
+    private ISearchPickerResultsSurface ResolveResults(IUiControlResolver innerResolver, UiControlPartDefinitions partDefinitions)
     {
         return _parts.ResultsKind switch
         {
             SearchPickerResultsKind.ComboBox => new ComboBoxResultsSurface(
-                innerResolver.Resolve<IComboBoxControl>(CreateDefinition("Results", UiControlType.ComboBox, _parts.ResultsLocator))),
+                innerResolver.Resolve<IComboBoxControl>(partDefinitions.Create("Results", UiControlType.ComboBox, _parts.ResultsLocator))),
             SearchPickerResultsKind.ListBox => new ListBoxResultsSurface(
-                innerResolver.Resolve<ISelectableListBoxControl>(CreateDefinition("Results", UiControlType.ListBox, _parts.ResultsLocator))),
+                innerResolver.Resolve<ISelectableListBoxControl>(partDefinitions.Create("Results", UiControlType.ListBox, _parts.ResultsLocator))),
             _ => throw new NotSupportedException($"Search picker '{_propertyName}' does not support results kind '{_parts.ResultsKind}'.")
         };
-    }
-
-    private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-    {
-        return new UiControlDefinition(
-            $"{_propertyName}{suffix}",
-            controlType,
-            locatorValue,
-            _parts.LocatorKind,
-            _parts.FallbackToName);
     }
 
     private bool IsSearchInputPartDefinition(UiControlDefinition definition)
@@ -1380,17 +1371,19 @@ public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new DateRangeFilterControl(definition.PropertyName, _parts, innerResolver);
+        return new DateRangeFilterControl(definition, _parts, innerResolver);
     }
 
     private sealed class DateRangeFilterControl : IDateRangeFilterControl
     {
         private readonly DateRangeFilterParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
-        public DateRangeFilterControl(string automationId, DateRangeFilterParts parts, IUiControlResolver innerResolver)
+        public DateRangeFilterControl(UiControlDefinition definition, DateRangeFilterParts parts, IUiControlResolver innerResolver)
         {
-            AutomationId = automationId;
+            AutomationId = definition.PropertyName;
+            _partDefinitions = new UiControlPartDefinitions(definition, parts.LocatorKind, parts.FallbackToName);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -1452,9 +1445,7 @@ public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
 
         private IButtonControl ResolveButton(string suffix, string? locatorValue)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+            return _innerResolver.Resolve<IButtonControl>(_partDefinitions.Create(suffix, UiControlType.Button, locatorValue));
         }
 
         private IDateEndpoint ResolveEndpoint(string suffix, string locatorValue)
@@ -1462,23 +1453,11 @@ public sealed class DateRangeFilterControlAdapter : IUiControlAdapter
             return _parts.EditorKind switch
             {
                 FilterValueEditorKind.DateTimePicker => new DateTimePickerEndpoint(
-                    _innerResolver.Resolve<IDateTimePickerControl>(CreateDefinition(suffix, UiControlType.DateTimePicker, locatorValue))),
+                    _innerResolver.Resolve<IDateTimePickerControl>(_partDefinitions.Create(suffix, UiControlType.DateTimePicker, locatorValue))),
                 FilterValueEditorKind.TextBox => new TextBoxDateEndpoint(
-                    _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue))),
+                    _innerResolver.Resolve<ITextBoxControl>(_partDefinitions.Create(suffix, UiControlType.TextBox, locatorValue))),
                 _ => throw new NotSupportedException($"Date range filter '{AutomationId}' does not support editor kind '{_parts.EditorKind}'.")
             };
-        }
-
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
         }
     }
 
@@ -1585,17 +1564,19 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new NumericRangeFilterControl(definition.PropertyName, _parts, innerResolver);
+        return new NumericRangeFilterControl(definition, _parts, innerResolver);
     }
 
     private sealed class NumericRangeFilterControl : INumericRangeFilterControl
     {
         private readonly NumericRangeFilterParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
-        public NumericRangeFilterControl(string automationId, NumericRangeFilterParts parts, IUiControlResolver innerResolver)
+        public NumericRangeFilterControl(UiControlDefinition definition, NumericRangeFilterParts parts, IUiControlResolver innerResolver)
         {
-            AutomationId = automationId;
+            AutomationId = definition.PropertyName;
+            _partDefinitions = new UiControlPartDefinitions(definition, parts.LocatorKind, parts.FallbackToName);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -1657,9 +1638,7 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
 
         private IButtonControl ResolveButton(string suffix, string? locatorValue)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+            return _innerResolver.Resolve<IButtonControl>(_partDefinitions.Create(suffix, UiControlType.Button, locatorValue));
         }
 
         private INumericEndpoint ResolveEndpoint(string suffix, string locatorValue)
@@ -1667,23 +1646,11 @@ public sealed class NumericRangeFilterControlAdapter : IUiControlAdapter
             return _parts.EditorKind switch
             {
                 FilterValueEditorKind.Spinner => new SpinnerEndpoint(
-                    _innerResolver.Resolve<ISpinnerControl>(CreateDefinition(suffix, UiControlType.Spinner, locatorValue))),
+                    _innerResolver.Resolve<ISpinnerControl>(_partDefinitions.Create(suffix, UiControlType.Spinner, locatorValue))),
                 FilterValueEditorKind.TextBox => new TextBoxNumericEndpoint(
-                    _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue))),
+                    _innerResolver.Resolve<ITextBoxControl>(_partDefinitions.Create(suffix, UiControlType.TextBox, locatorValue))),
                 _ => throw new NotSupportedException($"Numeric range filter '{AutomationId}' does not support editor kind '{_parts.EditorKind}'.")
             };
-        }
-
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
         }
     }
 
@@ -1786,17 +1753,19 @@ public sealed class DialogControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new DialogControl(definition.PropertyName, _parts, innerResolver);
+        return new DialogControl(definition, _parts, innerResolver);
     }
 
     private sealed class DialogControl : IAddressableDialogControl, IReadableTextControl
     {
         private readonly DialogControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
-        public DialogControl(string automationId, DialogControlParts parts, IUiControlResolver innerResolver)
+        public DialogControl(UiControlDefinition definition, DialogControlParts parts, IUiControlResolver innerResolver)
         {
-            AutomationId = automationId;
+            AutomationId = definition.PropertyName;
+            _partDefinitions = new UiControlPartDefinitions(definition, parts.LocatorKind, parts.FallbackToName);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -1854,7 +1823,7 @@ public sealed class DialogControlAdapter : IUiControlAdapter
 
         private ILabelControl ResolveLabel(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+            return _innerResolver.Resolve<ILabelControl>(_partDefinitions.Create(suffix, UiControlType.Label, locatorValue));
         }
 
         private IButtonControl ResolveButton(string suffix, string? locatorValue, DialogActionKind? actionKind)
@@ -1865,20 +1834,9 @@ public sealed class DialogControlAdapter : IUiControlAdapter
                     $"Dialog '{AutomationId}' does not support action '{actionKind}' because '{suffix}' is not configured.");
             }
 
-            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+            return _innerResolver.Resolve<IButtonControl>(_partDefinitions.Create(suffix, UiControlType.Button, locatorValue));
         }
 
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
-        }
     }
 }
 
@@ -1931,7 +1889,13 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new NotificationControl(definition.PropertyName, RootDefinition ?? definition, _parts, innerResolver);
+        var rootDefinition = RootDefinition ?? definition;
+        if (rootDefinition.Scope is null && definition.Scope is { } scope)
+        {
+            rootDefinition = rootDefinition with { Scope = scope };
+        }
+
+        return new NotificationControl(definition.PropertyName, rootDefinition, _parts, innerResolver);
     }
 
     private sealed class NotificationControl : INotificationControl, IReadableTextControl, INotificationMessagesControl
@@ -1939,6 +1903,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         private readonly UiControlDefinition _rootDefinition;
         private readonly NotificationControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
         public NotificationControl(
             string automationId,
@@ -1948,6 +1913,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
         {
             AutomationId = automationId;
             _rootDefinition = rootDefinition;
+            _partDefinitions = new UiControlPartDefinitions(rootDefinition, parts.LocatorKind, parts.FallbackToName, automationId);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -2035,7 +2001,7 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
 
         private ILabelControl ResolveLabel(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+            return _innerResolver.Resolve<ILabelControl>(_partDefinitions.Create(suffix, UiControlType.Label, locatorValue));
         }
 
         private ILabelControl? TryResolveLabel(string suffix, string locatorValue)
@@ -2069,20 +2035,9 @@ public sealed class NotificationControlAdapter : IUiControlAdapter
 
         private IButtonControl ResolveButton(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+            return _innerResolver.Resolve<IButtonControl>(_partDefinitions.Create(suffix, UiControlType.Button, locatorValue));
         }
 
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
-        }
     }
 }
 
@@ -2125,17 +2080,19 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new FolderExportControl(definition.PropertyName, _parts, innerResolver);
+        return new FolderExportControl(definition, _parts, innerResolver);
     }
 
     private sealed class FolderExportControl : IFolderExportControl, IReadableTextControl
     {
         private readonly FolderExportControlParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
-        public FolderExportControl(string automationId, FolderExportControlParts parts, IUiControlResolver innerResolver)
+        public FolderExportControl(UiControlDefinition definition, FolderExportControlParts parts, IUiControlResolver innerResolver)
         {
-            AutomationId = automationId;
+            AutomationId = definition.PropertyName;
+            _partDefinitions = new UiControlPartDefinitions(definition, parts.LocatorKind, parts.FallbackToName);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -2193,30 +2150,19 @@ public sealed class FolderExportControlAdapter : IUiControlAdapter
 
         private IButtonControl ResolveButton(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<IButtonControl>(CreateDefinition(suffix, UiControlType.Button, locatorValue));
+            return _innerResolver.Resolve<IButtonControl>(_partDefinitions.Create(suffix, UiControlType.Button, locatorValue));
         }
 
         private ITextBoxControl ResolveTextBox(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ITextBoxControl>(CreateDefinition(suffix, UiControlType.TextBox, locatorValue));
+            return _innerResolver.Resolve<ITextBoxControl>(_partDefinitions.Create(suffix, UiControlType.TextBox, locatorValue));
         }
 
         private ILabelControl ResolveLabel(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+            return _innerResolver.Resolve<ILabelControl>(_partDefinitions.Create(suffix, UiControlType.Label, locatorValue));
         }
 
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
-        }
     }
 }
 
@@ -2268,17 +2214,19 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(innerResolver);
 
-        return new ShellNavigationControl(definition.PropertyName, _parts, innerResolver);
+        return new ShellNavigationControl(definition, _parts, innerResolver);
     }
 
     private sealed class ShellNavigationControl : IShellNavigationControl, IReadableTextControl
     {
         private readonly ShellNavigationParts _parts;
         private readonly IUiControlResolver _innerResolver;
+        private readonly UiControlPartDefinitions _partDefinitions;
 
-        public ShellNavigationControl(string automationId, ShellNavigationParts parts, IUiControlResolver innerResolver)
+        public ShellNavigationControl(UiControlDefinition definition, ShellNavigationParts parts, IUiControlResolver innerResolver)
         {
-            AutomationId = automationId;
+            AutomationId = definition.PropertyName;
+            _partDefinitions = new UiControlPartDefinitions(definition, parts.LocatorKind, parts.FallbackToName);
             _parts = parts;
             _innerResolver = innerResolver;
         }
@@ -2397,7 +2345,7 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
         {
             if (string.IsNullOrWhiteSpace(_parts.OverflowButtonLocator)) return false;
             var button = _innerResolver.Resolve<IButtonControl>(
-                CreateDefinition("OverflowButton", UiControlType.Button, _parts.OverflowButtonLocator));
+                _partDefinitions.Create("OverflowButton", UiControlType.Button, _parts.OverflowButtonLocator));
             UiWait.Until(() => button.IsEnabled, static enabled => enabled,
                 new UiWaitOptions { Timeout = budget.Remaining }, "The shell overflow button did not become enabled.");
             button.Invoke();
@@ -2406,7 +2354,7 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
                 try
                 {
                     return _innerResolver.Resolve<IMenuControl>(
-                        CreateDefinition("OverflowMenu", UiControlType.Menu, _parts.OverflowMenuLocator!));
+                        _partDefinitions.Create("OverflowMenu", UiControlType.Menu, _parts.OverflowMenuLocator!));
                 }
                 catch (UiControlResolutionException error) when (error.IsTransient) { return null; }
             }, static candidate => candidate is not null,
@@ -2483,17 +2431,17 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private ITreeControl ResolveTree(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ITreeControl>(CreateDefinition(suffix, UiControlType.Tree, locatorValue));
+            return _innerResolver.Resolve<ITreeControl>(_partDefinitions.Create(suffix, UiControlType.Tree, locatorValue));
         }
 
         private IListBoxControl ResolveListBox(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<IListBoxControl>(CreateDefinition(suffix, UiControlType.ListBox, locatorValue));
+            return _innerResolver.Resolve<IListBoxControl>(_partDefinitions.Create(suffix, UiControlType.ListBox, locatorValue));
         }
 
         private ITabControl ResolveTab(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ITabControl>(CreateDefinition(suffix, UiControlType.Tab, locatorValue));
+            return _innerResolver.Resolve<ITabControl>(_partDefinitions.Create(suffix, UiControlType.Tab, locatorValue));
         }
 
         private ITabControl? ResolvePaneTabsOrDefault()
@@ -2505,20 +2453,9 @@ public sealed class ShellNavigationControlAdapter : IUiControlAdapter
 
         private ILabelControl ResolveLabel(string suffix, string locatorValue)
         {
-            return _innerResolver.Resolve<ILabelControl>(CreateDefinition(suffix, UiControlType.Label, locatorValue));
+            return _innerResolver.Resolve<ILabelControl>(_partDefinitions.Create(suffix, UiControlType.Label, locatorValue));
         }
 
-        private UiControlDefinition CreateDefinition(string suffix, UiControlType controlType, string locatorValue)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(locatorValue);
-
-            return new UiControlDefinition(
-                $"{AutomationId}{suffix}",
-                controlType,
-                locatorValue,
-                _parts.LocatorKind,
-                _parts.FallbackToName);
-        }
 
         private static void SelectTreeItem(ITreeControl tree, string paneName)
         {

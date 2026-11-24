@@ -49,7 +49,7 @@ internal sealed partial class RecorderSession
         }
 
         var result = _stepFactory.CreateGridRowSetStep(pending.Grid, selected);
-        var replace = _steps.LastOrDefault() is { } last
+        var replace = Steps.LastOrDefault() is { } last
             && last.StepId == pending.PreviousStep
             && last.ActionKind is RecordedActionKind.SelectGridRow or RecordedActionKind.SelectGridRows
             && result.Step is { } step
@@ -60,7 +60,7 @@ internal sealed partial class RecorderSession
 
         if (AddStep(result, pending.Grid, "GridRowSet", suppressRecentDuplicate: false, replaceAdjacent: replace))
         {
-            _lastGridSelectionGestureStepId = _steps[^1].StepId;
+            _lastGridSelectionGestureStepId = Steps[^1].StepId;
             if (pending.IsPlainPointer && selected.Length == 1)
                 _plainPointerCollapseStepId = _lastGridSelectionGestureStepId;
         }

@@ -4,12 +4,13 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
 using static AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel;
+using static AppAutomation.Recorder.Avalonia.RecorderCaptureControlReader;
 
 namespace AppAutomation.Recorder.Avalonia;
 
-internal sealed partial class RecorderStepFactory
+internal sealed partial class RecorderGridCaptureResolver
 {
-    private bool TryResolveGridHeaderSemanticValue(Control source, out SemanticValueCandidate candidate,
+    internal bool TryResolveGridHeaderSemanticValue(Control source, out SemanticValueCandidate candidate,
         out string error, out bool handled)
     {
         candidate = null!;

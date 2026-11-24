@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using AppAutomation.Abstractions;
+using AppAutomation.FlaUI.Automation;
 using AppAutomation.FlaUI.Session;
 using AppAutomation.Session.Contracts;
 using AppAutomation.TestHost.Avalonia;
@@ -215,7 +217,20 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             text => string.Equals(text, "4 2", StringComparison.Ordinal),
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             "User-entered numbers were not displayed.");
+
+        const string numberEntry = "Page.EnterText(static page => page.NumbersInput, \"4 2\");";
+        var saveWait = new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval };
+        WaitForRecorderPreviews(
+            overlayWindow,
+            () => recordButton is { Name: "Stop", IsEnabled: true },
+            previews => previews.Any(preview => preview.Text.Contains(numberEntry, StringComparison.Ordinal)),
+            "Recorder did not capture the number entry or make Stop available after autosave.");
         recordButton.Invoke();
+        UiWait.Until(
+            () => recordButton.Name == "Record" && saveButton.IsEnabled,
+            static ready => ready,
+            saveWait,
+            "Recorder did not stop and make Save available.");
         saveButton.Invoke();
 
         var selectedOutputDirectory = Path.Combine(outputDirectory.FullPath, "UIAutomationTests");
@@ -233,8 +248,7 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
                 "partial class MainWindowScenariosBase<TSession>");
             await Assert.That(Regex.IsMatch(scenarioSource,
                 @"\bMainWindowScenariosBase_\d{8}_\d{6}\(")).IsTrue();
-            await Assert.That(scenarioSource).Contains(
-                "Page.EnterText(static page => page.NumbersInput, \"4 2\");");
+            await Assert.That(scenarioSource).Contains(numberEntry);
         }
     }
 
@@ -286,25 +300,22 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             ForegroundOverlay();
             Capture.Element(overlay).ToFile(Path.Combine(artifactDirectory.FullName, $"recorder-step-{state}.png"));
         }
-        AutomationElement[] Previews() => overlay.FindAllDescendants(session.ConditionFactory.ByControlType(ControlType.Text))
-            .Where(element => element.Properties.AutomationId.ValueOrDefault?.StartsWith(
-                "RecorderStepPreview_", StringComparison.Ordinal) == true)
-            .OrderBy(element => element.BoundingRectangle.Top).ToArray();
-        string[] PreviewOrder() => Previews().Select(element => element.AutomationId).ToArray();
-        void WaitForOrder(string[] expected) => UiWait.Until(
-            PreviewOrder, actual => actual.SequenceEqual(expected) && record.IsEnabled,
-            new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
+        (string Id, string Text)[] WaitForPreviews(
+            Predicate<(string Id, string Text)[]> ready,
+            string timeoutMessage) => WaitForRecorderPreviews(overlay, () => record.IsEnabled, ready, timeoutMessage);
+
+        void WaitForOrder(string[] expected) => WaitForPreviews(
+            actual => actual.Select(static preview => preview.Id).SequenceEqual(expected),
             "Recorder order or autosave did not settle.");
 
         FindElement(app, session, "ApplyFilterButton").AsButton().Invoke();
         FindElement(app, session, "CalculateButton").AsButton().Invoke();
         FindElement(app, session, "ShowDelayedStatusButton").AsButton().Invoke();
-        var previews = UiWait.Until(Previews, values => values.Length == 3 && record.IsEnabled,
-            new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval },
+        var previews = WaitForPreviews(static values => values.Length == 3,
             "The three recorded steps were not displayed.");
-        var originalOrder = previews.Select(element => element.AutomationId).ToArray();
-        var sourceId = previews.Single(element => element.Name.Contains("ShowDelayedStatusButton", StringComparison.Ordinal)).AutomationId;
-        var targetId = previews.Single(element => element.Name.Contains("ApplyFilterButton", StringComparison.Ordinal)).AutomationId;
+        var originalOrder = previews.Select(static preview => preview.Id).ToArray();
+        var sourceId = previews.Single(preview => preview.Text.Contains("ShowDelayedStatusButton", StringComparison.Ordinal)).Id;
+        var targetId = previews.Single(preview => preview.Text.Contains("ApplyFilterButton", StringComparison.Ordinal)).Id;
         var movedOrder = new[] { sourceId }.Concat(originalOrder.Where(id => id != sourceId)).ToArray();
         var savedCursor = Mouse.Position;
 
@@ -351,9 +362,12 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             var scenarioPath = await WaitForScenarioFileAsync(outputDirectory.FullPath, scenarioName);
             var source = await File.ReadAllTextAsync(scenarioPath);
             await File.WriteAllTextAsync(Path.Combine(artifactDirectory.FullName, "recorder-step-final-source.txt"), source);
+            var finalOrder = WaitForPreviews(values => values.Length == originalOrder.Length,
+                    "Recorder did not display the recorded steps after saving.")
+                .Select(static preview => preview.Id).ToArray();
             using (Assert.Multiple())
             {
-                await Assert.That(PreviewOrder()).IsEquivalentTo(originalOrder);
+                await Assert.That(finalOrder).IsEquivalentTo(originalOrder);
                 await Assert.That(source).Contains("Page.ClickButton(static page => page.ShowDelayedStatusButton);");
                 await Assert.That(source).Contains("Page.ClickButton(static page => page.ApplyFilterButton);");
                 await Assert.That(source).Contains("Page.ClickButton(static page => page.CalculateButton);");
@@ -837,6 +851,45 @@ public sealed class DotnetDebugRecorderDesktopSmokeTests
             static candidate => candidate is not null,
             new UiWaitOptions { Timeout = TimeSpan.FromSeconds(5), PollInterval = PollInterval },
             $"Element '{automationId}' was not found in the selected window.")!;
+    }
+
+    private static (string Id, string Text)[] WaitForRecorderPreviews(
+        Window overlay,
+        Func<bool> isRecorderReady,
+        Predicate<(string Id, string Text)[]> ready,
+        string timeoutMessage)
+    {
+        var conditions = overlay.Automation.ConditionFactory;
+        var journalLocator = conditions.ByAutomationId("RecorderStepJournal");
+        var textLocator = conditions.ByControlType(ControlType.Text);
+        var wait = new UiWaitOptions { Timeout = SaveTimeout, PollInterval = PollInterval };
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            return UiWait.Until(
+                () => FlaUiControlResolver.ReadTransientUiaLookup<(string Id, string Text)[]?>(() =>
+                {
+                    if (!isRecorderReady() || overlay.FindFirstDescendant(journalLocator) is not { } journal)
+                    {
+                        return null;
+                    }
+
+                    var previews = journal.FindAllDescendants(textLocator)
+                        .Select(element => (Element: element, Id: element.Properties.AutomationId.ValueOrDefault))
+                        .Where(preview => preview.Id?.StartsWith("RecorderStepPreview_", StringComparison.Ordinal) == true)
+                        .OrderBy(preview => preview.Element.BoundingRectangle.Top)
+                        .Select(preview => (preview.Id!, preview.Element.Name))
+                        .ToArray();
+                    return ready(previews) && isRecorderReady() ? previews : null;
+                }, () => wait.Timeout - Stopwatch.GetElapsedTime(startedAt)),
+                static previews => previews is not null, wait, timeoutMessage)!;
+        }
+        catch (COMException exception)
+        {
+            throw new InvalidOperationException(
+                $"Recorder step journal read failed (HRESULT 0x{exception.HResult:X8}). {timeoutMessage}",
+                exception);
+        }
     }
 
     private static double ReadVerticalScrollPercent(AutomationElement element)

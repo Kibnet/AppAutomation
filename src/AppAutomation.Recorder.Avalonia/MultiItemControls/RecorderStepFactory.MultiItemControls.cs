@@ -4,6 +4,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
+using static AppAutomation.Recorder.Avalonia.RecorderCaptureControlReader;
 using SemanticValueCandidate = AppAutomation.Recorder.Avalonia.RecorderSemanticValueModel.SemanticValueCandidate;
 
 namespace AppAutomation.Recorder.Avalonia;

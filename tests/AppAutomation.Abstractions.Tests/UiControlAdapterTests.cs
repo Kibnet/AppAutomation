@@ -8,6 +8,75 @@ namespace AppAutomation.Abstractions.Tests;
 public sealed class UiControlAdapterTests
 {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CompositeAdapters_PreserveTheOwnerScopeWithoutCopyingReadIntents(bool scoped)
+    {
+        var inner = new FakeResolver(
+            ("Input", new FakeTextBoxControl("Input")),
+            ("Results", new FakeComboBoxControl("Results", [new FakeComboBoxItem("One", "One")])),
+            ("Open", new FakeButtonControl("Open")),
+            ("Apply", new FakeButtonControl("Apply")),
+            ("Cancel", new FakeButtonControl("Cancel")),
+            ("Text", new FakeLabelControl("Text", "Ready")),
+            ("FromDate", new FakeDateTimePickerControl("FromDate")),
+            ("ToDate", new FakeDateTimePickerControl("ToDate")),
+            ("FromNumber", new FakeSpinnerControl("FromNumber")),
+            ("ToNumber", new FakeSpinnerControl("ToNumber")),
+            ("Navigation", new FakeTreeControl("Navigation", new FakeTreeItemControl("One", "One", "One"))));
+        var scope = scoped ? new UiControlScope("SecondCard", UiLocatorKind.Name, false) { AnchorLocatorValue = "Owner" } : null;
+        var definition = new UiControlDefinition("Composite", UiControlType.AutomationElement, "Owner")
+        {
+            Scope = scope,
+            RequireVisibleExactMatch = true,
+            ValueReadKind = UiValueReadKind.CommittedSelection
+        };
+
+        await Check<ISearchPickerControl>(new SearchPickerControlAdapter("Composite",
+            new("Input", "Results", "Apply", "Open", UiLocatorKind.Name, false)), picker =>
+        {
+            picker.Search("One");
+            picker.Expand();
+            _ = picker.Items;
+        }, "Input", "Apply", "Open", "Results");
+        await Check<IDateRangeFilterControl>(new DateRangeFilterControlAdapter("Composite",
+            new("FromDate", "ToDate", "Apply", "Cancel", "Open", LocatorKind: UiLocatorKind.Name, FallbackToName: false)),
+            filter => filter.SetRange(new(new DateTime(2026, 1, 1), new DateTime(2026, 1, 2))),
+            "Open", "FromDate", "ToDate", "Apply");
+        await Check<INumericRangeFilterControl>(new NumericRangeFilterControlAdapter("Composite",
+            new("FromNumber", "ToNumber", "Apply", "Cancel", "Open", LocatorKind: UiLocatorKind.Name, FallbackToName: false)),
+            filter => filter.SetRange(new(1, 2)), "Open", "FromNumber", "ToNumber", "Apply");
+        await Check<IDialogControl>(new DialogControlAdapter("Composite", new("Text", "Apply", LocatorKind: UiLocatorKind.Name, FallbackToName: false)),
+            dialog => { _ = dialog.MessageText; dialog.Complete(); }, "Text", "Apply");
+        await Check<INotificationControl>(new NotificationControlAdapter("Composite", new("Text", "Apply", UiLocatorKind.Name, false)),
+            notification => { _ = notification.Text; notification.Dismiss(); }, "Text", "Apply");
+        await Check<IFolderExportControl>(new FolderExportControlAdapter("Composite",
+            new("Open", "Input", "Apply", "Cancel", "Text", UiLocatorKind.Name, false)),
+            export => { export.SelectFolder("Exports"); _ = export.StatusText; }, "Open", "Input", "Apply", "Text");
+        await Check<IShellNavigationControl>(new ShellNavigationControlAdapter("Composite",
+            new("Navigation", ActivePaneLabelLocator: "Text", LocatorKind: UiLocatorKind.Name, FallbackToName: false)),
+            shell => { shell.OpenOrActivate(new("One")); _ = shell.ActivePaneName; }, "Navigation", "Text");
+
+        async Task Check<TControl>(IUiControlAdapter adapter, Action<TControl> exercise,
+            params string[] expectedLocators) where TControl : class
+        {
+            inner.Resolutions.Clear();
+            exercise((TControl)adapter.Resolve(typeof(TControl), definition, inner));
+            var actualLocators = inner.Resolutions.Select(static part => part.LocatorValue).ToHashSet(StringComparer.Ordinal);
+            foreach (var locator in expectedLocators)
+                await Assert.That(actualLocators).Contains(locator);
+            foreach (var part in inner.Resolutions)
+            {
+                await Assert.That(part.Scope).IsEqualTo(scope);
+                await Assert.That(part.LocatorKind).IsEqualTo(UiLocatorKind.Name);
+                await Assert.That(part.FallbackToName).IsFalse();
+                await Assert.That(part.RequireVisibleExactMatch).IsFalse();
+                await Assert.That(part.ValueReadKind).IsEqualTo(UiValueReadKind.Display);
+            }
+        }
+    }
+
+    [Test]
     public async Task ConfiguredResolver_PreservesFailureArtifactCollection()
     {
         var resolver = new ArtifactCollectingResolver().WithAdapters(new TestableAdapter());
@@ -1954,6 +2023,8 @@ public sealed class UiControlAdapterTests
 
         public UiRuntimeCapabilities Capabilities { get; } = new("fake-runtime");
 
+        public List<UiControlDefinition> Resolutions { get; } = [];
+
         public string? FailureLocator { get; init; }
 
         public Exception? ResolutionFailure { get; set; }
@@ -1987,6 +2058,7 @@ public sealed class UiControlAdapterTests
         public TControl Resolve<TControl>(UiControlDefinition definition)
             where TControl : class
         {
+            Resolutions.Add(definition);
             if (definition.LocatorValue == FailureLocator && ResolutionFailure is { } failure)
             {
                 throw failure;

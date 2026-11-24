@@ -1504,20 +1504,30 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             return ListItemCaptionReader.ReadSelectionSnapshot(listBox, (read, requireContainer) =>
             {
                 var currentItems = listBox.Items.Cast<object?>().ToArray();
-                var captions = Enumerable.Range(0, currentItems.Length)
-                    .Select(index => read(index)?.Trim() ?? string.Empty).ToArray();
-                ApplySelection(currentItems, captions, read, requireContainer);
+                var captions = new string[currentItems.Length];
+                var hasCheckboxRows = FindFirstRowCheckBox(listBox, requireContainer) is not null;
+                List<int> changedRows = [];
+                for (var index = 0; index < captions.Length; index++)
+                {
+                    var checkBox = hasCheckboxRows ? RequireRowCheckBox(requireContainer(index)) : null;
+                    var caption = read(index)?.Trim() ?? string.Empty;
+                    captions[index] = caption;
+                    if (checkBox is not null && checkBox.IsChecked != requestedValues.Contains(caption))
+                        changedRows.Add(index);
+                }
+
+                ApplySelection(currentItems, captions, hasCheckboxRows ? changedRows : null, read, requireContainer);
                 return captions;
             });
 
-            void ApplySelection(object?[] items, string[] available, Func<int, string?> read,
-                Func<int, AvaloniaControl> requireContainer)
+            void ApplySelection(object?[] items, string[] available, List<int>? changedRows,
+                Func<int, string?> read, Func<int, AvaloniaControl> requireContainer)
             {
                 ValidateAvailableItems(available, requestedValues);
 
-                if (FindFirstRowCheckBox(listBox, requireContainer) is not null)
+                if (changedRows is not null)
                 {
-                    for (var index = 0; index < items.Length; index++)
+                    foreach (var index in changedRows)
                     {
                         var checkBox = RequireRowCheckBox(requireContainer(index));
                         if (!string.Equals(read(index)?.Trim(), available[index], StringComparison.Ordinal))
@@ -1648,15 +1658,19 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             IEnumerable<string> availableValues,
             IReadOnlySet<string> requestedValues)
         {
-            var available = availableValues.ToArray();
-            if (available.Distinct(StringComparer.OrdinalIgnoreCase).Count() != available.Length)
+            var matched = new HashSet<string>(requestedValues.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var caption in availableValues)
             {
-                throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+                if (requestedValues.Contains(caption) && !matched.Add(caption))
+                {
+                    throw new InvalidOperationException(
+                        $"Multi-select item '{caption}' is ambiguous: more than one matching item.");
+                }
             }
 
-            var missing = requestedValues.Where(value => !available.Contains(value, StringComparer.OrdinalIgnoreCase)).ToArray();
-            if (missing.Length > 0)
+            if (matched.Count != requestedValues.Count)
             {
+                var missing = requestedValues.Where(value => !matched.Contains(value));
                 throw new InvalidOperationException(
                     $"Multi-select items were not found: [{string.Join(", ", missing)}].");
             }

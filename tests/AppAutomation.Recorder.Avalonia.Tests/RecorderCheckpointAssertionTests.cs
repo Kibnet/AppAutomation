@@ -1567,7 +1567,9 @@ public sealed class RecorderCheckpointAssertionTests
     }
 
     [Test]
-    public async Task CheckMode_CapturesCalculatedValueFromCheckpointLiteralAndUiControl()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CheckMode_CapturesCalculatedValueFromCheckpointLiteralAndUiControl(bool ignoreInvalidAssertion)
     {
         var root = new StackPanel();
         var quantityBefore = new NumericUpDown { Value = 10 };
@@ -1614,7 +1616,16 @@ public sealed class RecorderCheckpointAssertionTests
         var assertionStepId = session.StepJournal[^1].StepId;
         var movedBeforeCheckpoint = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Earlier);
         var invalidAfterMove = session.StepJournal.Single(entry => entry.StepId == assertionStepId);
+        if (ignoreInvalidAssertion)
+        {
+            session.SetStepIgnored(assertionStepId, isIgnored: true);
+            session.SetStepIgnored(assertionStepId, isIgnored: false);
+            await Assert.That(session.StepJournal.Single(entry => entry.StepId == assertionStepId).CanPersist)
+                .IsFalse();
+            session.SetStepIgnored(assertionStepId, isIgnored: true);
+        }
         var movedBack = session.MoveStep(assertionStepId, RecorderStepMoveDirection.Later);
+        if (ignoreInvalidAssertion) session.SetStepIgnored(assertionStepId, isIgnored: false);
 
         using (Assert.Multiple())
         {
