@@ -1749,10 +1749,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
 
     private sealed class FlaUiMultiSelectItemsControl : FlaUiControlBase<AutomationElement>, IMultiSelectItemsControl
     {
-        private const int BoundaryRealizationAttempts = 4;
-        private const int BoundaryRealizationDelayMs = 50;
-        private const int MaxScrollSteps = 256;
-        private MultiSelectItemSnapshot[]? _lastItems;
+        private const int RealizationAttempts = 4;
+        private const int RealizationDelayMs = 50;
+        private const int MaxScrollSteps = 512;
+        private (MultiSelectScroll? Scroll, FlaUiMultiSelectViewportItems.Viewport Visible, MultiSelectItemSnapshot[] Items)? _lastItems;
 
         public FlaUiMultiSelectItemsControl(AutomationElement inner) : base(inner)
         {
@@ -1763,7 +1763,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             get
             {
                 var descendants = FindAutomationDescendants(Inner);
-                var checkBoxItems = GetItems(ReadCurrentItems(descendants));
+                var checkBoxItems = GetItems(ReadCurrentItems(descendants), descendants);
                 var selectableItems = ReadSelectableItems(descendants);
                 return FlaUiMultiSelectItemProjections.PreferSelectableItems(
                     checkBoxItems.Select(static item => item.Text).ToArray(),
@@ -1782,7 +1782,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 var checkBoxItems = _lastItems is null && TryReadCompleteVisibleSelection(visibleCheckBoxes, out _)
                     ? visibleCheckBoxes.Select(static item => new MultiSelectItemSnapshot(
                         item.Text, item.Control.IsChecked == true)).ToArray()
-                    : GetItems(visibleCheckBoxes);
+                    : GetItems(visibleCheckBoxes, descendants);
                 var selectableItems = ReadSelectableItems(descendants);
                 return FlaUiMultiSelectItemProjections.PreferSelectableItems(
                     checkBoxItems.Select(static item => item.Text).ToArray(),
@@ -1818,34 +1818,30 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 }
             }
 
-            var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
-            DiscoverRequestedItems(items, normalizedValues);
-            if (items.Count > 0)
+            var scroll = FindMultiSelectScroll(Inner, descendants);
+            var (items, current) = ReadAllItems(visibleCheckBoxes, scroll);
+            if (items.Items.Count > 0)
             {
-                ValidateAvailableItems(items.Keys, normalizedValues);
-                ApplyExactSelection(items, normalizedValues);
-                _lastItems = items.Values.ToArray();
-                return _lastItems.Select(static item => item.Text).ToArray();
+                var visible = ApplyCheckBoxChanges(items, current, normalizedValues, scroll);
+                return RememberItems(scroll, visible, items).Select(static item => item.Text).ToArray();
             }
 
             return SetSelectableItems(normalizedValues);
         }
 
-        private MultiSelectItemSnapshot[] GetItems(MultiSelectCheckBox[] initialItems)
+        private MultiSelectItemSnapshot[] GetItems(MultiSelectCheckBox[] initialItems, AutomationElement[] descendants)
         {
-            if (_lastItems is not null)
+            if (_lastItems is { } cached && (cached.Scroll?.IsAt(cached.Visible.Position) ?? true))
             {
-                var known = _lastItems.ToDictionary(static item => item.Text,
-                    static item => item.IsChecked,
-                    StringComparer.OrdinalIgnoreCase);
-                if (initialItems.Any(item => !known.TryGetValue(item.Text, out var isChecked)
-                    || isChecked != (item.Control.IsChecked == true)))
-                {
-                    _lastItems = null;
-                }
+                var visible = ObserveViewport(cached.Visible.Position, initialItems, cached.Scroll is not null);
+                if ((cached.Scroll?.IsAt(cached.Visible.Position) ?? true) && cached.Visible.Matches(visible, compareSelection: true))
+                    return cached.Items;
             }
 
-            return _lastItems ??= ReadAllItems(initialItems);
+            _lastItems = null;
+            var scroll = FindMultiSelectScroll(Inner, descendants);
+            var (items, viewport) = ReadAllItems(initialItems, scroll);
+            return RememberItems(scroll, viewport, items);
         }
 
         private SelectableItemSnapshot[] ReadSelectableItems(AutomationElement[]? descendants = null)
@@ -1870,7 +1866,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             SelectableItemSnapshot[]? knownItems = null)
         {
             var items = knownItems ?? ReadSelectableItems();
-            ValidateAvailableItems(items.Select(static item => item.Text), requestedValues);
+            FlaUiMultiSelectItemProjections.ValidateRequestedItems(items.Select(static item => item.Text), requestedValues);
 
             var allowsMultiple = TryRead(() =>
                 Inner.Patterns.Selection.PatternOrDefault?.CanSelectMultiple.Value);
@@ -1935,271 +1931,198 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             pattern.RemoveFromSelection();
         }
 
-        private MultiSelectItemSnapshot[] ReadAllItems(MultiSelectCheckBox[] initialItems)
+        private MultiSelectItemSnapshot[] RememberItems(
+            MultiSelectScroll? scroll, FlaUiMultiSelectViewportItems.Viewport visible, FlaUiMultiSelectViewportItems items)
         {
-            var items = new Dictionary<string, MultiSelectItemSnapshot>(StringComparer.OrdinalIgnoreCase);
-            var scroll = FindVerticalScrollPattern(Inner);
-            var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
-            AddCurrentItems(items, initialItems);
+            var snapshot = items.Items.Select(static item => new MultiSelectItemSnapshot(
+                item.State.Text, item.IsChecked == true)).ToArray();
+            _lastItems = (scroll, visible, snapshot);
+            return snapshot;
+        }
 
+        private (FlaUiMultiSelectViewportItems Items, FlaUiMultiSelectViewportItems.Viewport Current) ReadAllItems(
+            MultiSelectCheckBox[] initialItems, MultiSelectScroll? scroll)
+        {
+            var position = scroll?.ReadPosition() ?? 0;
+            var current = ObserveViewport(position, initialItems, scroll is not null);
+            // A popup can remember a nonzero offset. Verify the way back as well: moving the
+            // scrollbar alone does not make a tree read at the top trustworthy.
             if (scroll is not null)
             {
-                TraverseItems(items, () => ScrollForward(scroll));
-                TraverseItems(items, () => ScrollBackward(scroll));
-            }
-            else if (scrollBarRange is not null)
-            {
-                TraverseItems(items, () => ScrollForward(scrollBarRange));
-                TraverseItems(items, () => ScrollBackward(scrollBarRange));
-            }
-
-            return items.Values.ToArray();
-        }
-
-        private void TraverseItems(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            Func<bool> scroll)
-        {
-            for (var step = 0; step < MaxScrollSteps; step++)
-            {
-                if (!scroll())
+                for (var attempt = 1; attempt < RealizationAttempts && current.HasKnownGap; attempt++)
                 {
-                    WaitForBoundaryItems(items);
-                    return;
+                    Thread.Sleep(RealizationDelayMs);
+                    if (scroll.IsAt(position))
+                        current = current.Include(ObserveViewport(position, ReadCurrentItems(), trackPosition: true));
                 }
+                if (current.HasKnownGap)
+                    throw new InvalidOperationException("Multi-select item traversal could not read all rows in the initial viewport.");
 
-                AddCurrentItems(items);
+                current = Traverse(scroll, current, forward: false);
             }
 
-            throw new InvalidOperationException(
-                $"Multi-select items traversal exceeded {MaxScrollSteps} vertical scroll steps.");
-        }
-
-        private void AddCurrentItems(
-            IDictionary<string, MultiSelectItemSnapshot> items)
-        {
-            AddCurrentItems(items, ReadCurrentItems());
-        }
-
-        private static void AddCurrentItems(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            IReadOnlyCollection<MultiSelectCheckBox> currentItems)
-        {
-            foreach (var item in currentItems)
-            {
-                items[item.Text] = new MultiSelectItemSnapshot(item.Text, item.Control.IsChecked == true);
-            }
-        }
-
-        private void DiscoverRequestedItems(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            IReadOnlySet<string> requestedValues)
-        {
-            var pendingValues = new HashSet<string>(requestedValues, StringComparer.OrdinalIgnoreCase);
-            AddCurrentItems(items, pendingValues);
-            if (pendingValues.Count == 0)
-            {
-                return;
-            }
-
-            var scroll = FindVerticalScrollPattern(Inner);
-            var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
+            var items = new FlaUiMultiSelectViewportItems();
+            items.Append(current, overlap: 0);
             if (scroll is not null)
-            {
-                var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-                if (startingPosition < 100)
-                {
-                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollForward(scroll));
-                }
-
-                if (pendingValues.Count > 0 && startingPosition > 0)
-                {
-                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollBackward(scroll));
-                }
-
-                return;
-            }
-
-            if (scrollBarRange is not null)
-            {
-                var startingPosition = scrollBarRange.Value.ValueOrDefault;
-                var minimum = scrollBarRange.Minimum.ValueOrDefault;
-                var maximum = scrollBarRange.Maximum.ValueOrDefault;
-                if (startingPosition < maximum)
-                {
-                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollForward(scrollBarRange));
-                }
-
-                if (pendingValues.Count > 0 && startingPosition > minimum)
-                {
-                    TraverseUntilRequestedItemsFound(items, pendingValues, () => ScrollBackward(scrollBarRange));
-                }
-            }
+                current = Traverse(scroll, current, forward: true, items);
+            return (items, current);
         }
 
-        private void TraverseUntilRequestedItemsFound(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            HashSet<string> pendingValues,
-            Func<bool> scroll)
+        private FlaUiMultiSelectViewportItems.Viewport Traverse(
+            MultiSelectScroll scroll,
+            FlaUiMultiSelectViewportItems.Viewport current,
+            bool forward,
+            FlaUiMultiSelectViewportItems? items = null)
         {
-            for (var step = 0; step < MaxScrollSteps && pendingValues.Count > 0; step++)
+            var boundary = forward ? scroll.Maximum : scroll.Minimum;
+            for (var step = 0; !scroll.At(current.Position, boundary); step++)
             {
-                if (!scroll())
-                {
-                    WaitForBoundaryItems(items);
-                    RemoveDiscoveredItems(pendingValues, items.Keys);
-                    return;
-                }
+                if (step == MaxScrollSteps || !scroll.TryStep(current.Position, forward, out var position))
+                    throw new InvalidOperationException("Multi-select items could not be read across the full scroll range.");
 
-                AddCurrentItems(items, pendingValues);
+                var observed = TryReadMovedViewport(scroll, current, position, forward, scroll.At(position, boundary));
+                if (observed is null && scroll.TryShorterStep(current.Position, position, forward, out var intermediate))
+                    observed = TryReadMovedViewport(scroll, current, intermediate, forward, scroll.At(intermediate, boundary));
+                if (observed is not { } observation)
+                    throw new InvalidOperationException("Multi-select item traversal could not verify continuous row coverage across viewports.");
+
+                var (viewport, overlap) = observation;
+                items?.Append(viewport, overlap);
+                current = viewport;
             }
 
-            if (pendingValues.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    $"Multi-select item lookup exceeded {MaxScrollSteps} vertical scroll steps.");
-            }
+            return current;
         }
 
-        private void AddCurrentItems(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            HashSet<string> pendingValues)
+        private (FlaUiMultiSelectViewportItems.Viewport Viewport, int Overlap)? TryReadMovedViewport(
+            MultiSelectScroll scroll, FlaUiMultiSelectViewportItems.Viewport previous, double position, bool forward, bool boundary)
         {
-            AddCurrentItems(items);
-            RemoveDiscoveredItems(pendingValues, items.Keys);
+            FlaUiMultiSelectViewportItems.Viewport? accepted = null;
+            var overlap = 0;
+            var expectedShift = scroll.GetExpectedShift(previous.Position, position);
+            int? FindOverlap(FlaUiMultiSelectViewportItems.Viewport sample) => forward
+                ? FlaUiMultiSelectViewportItems.FindOverlap(previous, sample, expectedShift)
+                : FlaUiMultiSelectViewportItems.FindOverlap(sample, previous, expectedShift);
+
+            for (var attempt = 0; attempt < RealizationAttempts; attempt++)
+            {
+                if (attempt > 0)
+                    Thread.Sleep(RealizationDelayMs);
+                if (!scroll.IsAt(position))
+                    continue;
+
+                var sample = ObserveViewport(position, ReadCurrentItems(), trackPosition: true);
+                if (!scroll.IsAt(position) || (accepted is not null && previous.ContainsUnmovedRowsOf(sample)))
+                    continue;
+
+                // At a boundary, include rows realized late without losing earlier matches
+                // when an intermediate sample temporarily omits some of them.
+                var combined = accepted?.Include(sample) ?? sample;
+                if (FindOverlap(combined) is not { } shared)
+                    continue;
+                if (!boundary)
+                    return (combined, shared);
+                (accepted, overlap) = (combined, shared);
+            }
+
+            return accepted is not null && scroll.IsAt(position) ? (accepted, overlap) : null;
         }
 
-        private static void RemoveDiscoveredItems(HashSet<string> pendingValues, IEnumerable<string> discoveredValues)
+        private FlaUiMultiSelectViewportItems.Viewport ObserveViewport(
+            double position, MultiSelectCheckBox[] items, bool trackPosition, bool readSelection = true) =>
+            new(position, TryRead(() => Inner.BoundingRectangle), items.Select(item =>
+                new FlaUiMultiSelectViewportItems.Observation(
+                    item.Text, readSelection ? item.Control.IsChecked : null, item.Bounds,
+                    trackPosition ? ReadPositionInSet(item.Element) : 0)).ToArray());
+
+        private static int ReadPositionInSet(AutomationElement element)
         {
-            foreach (var value in discoveredValues)
-            {
-                pendingValues.Remove(value);
-            }
+            if (TryRead(() => element.Parent) is { } parent
+                && TryRead(() => parent.ControlType) is ControlType.ListItem or ControlType.DataItem
+                && TryRead(() => parent.FrameworkAutomationElement.PositionInSet.ValueOrDefault) is > 0 and var rowPosition)
+                return rowPosition;
+            return TryRead(() => element.FrameworkAutomationElement.PositionInSet.ValueOrDefault);
         }
 
-        private void ApplyExactSelection(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            IReadOnlySet<string> requestedValues)
-        {
-            var visible = ReadCurrentItems();
-            if (TryReadCompleteVisibleSelection(visible, out var selectedTexts)
-                && FlaUiMultiSelectItemProjections.CanUseVisibleSelection(
-                    requestedValues.ToArray(),
-                    visible.Select(static item => item.Text).ToArray(),
-                    selectedTexts))
-            {
-                ApplyCurrentExactSelection(items, requestedValues);
-                return;
-            }
-
-            ApplyCurrentExactSelection(items, requestedValues);
-
-            var scroll = FindVerticalScrollPattern(Inner);
-            var scrollBarRange = scroll is null ? FindVerticalScrollBarRange(Inner) : null;
-            if (scroll is not null)
-            {
-                var startingPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-                var needsBackwardTraversal = startingPosition > 0;
-                if (startingPosition < 100)
-                {
-                    TraverseExactSelection(items, requestedValues, () => ScrollForward(scroll));
-                }
-
-                if (needsBackwardTraversal)
-                {
-                    TraverseExactSelection(items, requestedValues, () => ScrollBackward(scroll));
-                }
-
-                return;
-            }
-
-            if (scrollBarRange is not null)
-            {
-                var startingPosition = scrollBarRange.Value.ValueOrDefault;
-                var minimum = scrollBarRange.Minimum.ValueOrDefault;
-                var maximum = scrollBarRange.Maximum.ValueOrDefault;
-                var needsBackwardTraversal = startingPosition > minimum;
-                if (startingPosition < maximum)
-                {
-                    TraverseExactSelection(items, requestedValues, () => ScrollForward(scrollBarRange));
-                }
-
-                if (needsBackwardTraversal)
-                {
-                    TraverseExactSelection(items, requestedValues, () => ScrollBackward(scrollBarRange));
-                }
-            }
-        }
-
-        private void TraverseExactSelection(
-            IDictionary<string, MultiSelectItemSnapshot> items,
+        private FlaUiMultiSelectViewportItems.Viewport ApplyCheckBoxChanges(
+            FlaUiMultiSelectViewportItems items,
+            FlaUiMultiSelectViewportItems.Viewport current,
             IReadOnlySet<string> requestedValues,
-            Func<bool> scroll)
+            MultiSelectScroll? scroll)
         {
-            for (var step = 0; step < MaxScrollSteps; step++)
+            // Prove uniqueness across all viewports before changing the first checkbox.
+            var changes = items.PlanChanges(requestedValues);
+            var navigationBudget = MaxScrollSteps * 2;
+            foreach (var viewport in changes.GroupBy(static change => change.Item.Viewport)
+                         .OrderByDescending(static group => group.Key.Position))
             {
-                if (!scroll())
+                var target = viewport.Key;
+                var moved = scroll is not null && !scroll.IsAt(target.Position);
+                if (moved)
+                    scroll!.MoveTo(target.Position, ref navigationBudget);
+                var visible = ReadReboundItems(scroll, target, moved ? current : null);
+                var rows = target.Rows.ToArray();
+                foreach (var (item, shouldBeChecked) in viewport)
                 {
-                    WaitForBoundaryExactSelection(items, requestedValues);
-                    return;
+                    var checkBox = visible[item.Index];
+                    checkBox.Control.SetChecked(shouldBeChecked, checkBox.Text, Inner);
+                    item.IsChecked = shouldBeChecked;
+                    rows[item.Index] = rows[item.Index] with { IsChecked = shouldBeChecked };
                 }
 
-                ApplyCurrentExactSelection(items, requestedValues);
+                current = target with { Rows = rows };
             }
 
-            throw new InvalidOperationException(
-                $"Multi-select selection traversal exceeded {MaxScrollSteps} vertical scroll steps.");
+            return current;
         }
 
-        private void ApplyCurrentExactSelection(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            IReadOnlySet<string> requestedValues)
+        private MultiSelectCheckBox[] ReadReboundItems(
+            MultiSelectScroll? scroll,
+            FlaUiMultiSelectViewportItems.Viewport target,
+            FlaUiMultiSelectViewportItems.Viewport? previous)
         {
-            foreach (var item in ReadCurrentItems())
+            for (var attempt = 0; attempt < RealizationAttempts; attempt++)
             {
-                var shouldBeChecked = requestedValues.Contains(item.Text);
-                item.Control.SetChecked(shouldBeChecked, item.Text, Inner);
-                items[item.Text] = new MultiSelectItemSnapshot(item.Text, shouldBeChecked);
+                if (attempt > 0)
+                    Thread.Sleep(RealizationDelayMs);
+                var checkBoxes = ReadCurrentItems();
+                var sample = ObserveViewport(target.Position, checkBoxes, scroll is not null, readSelection: false);
+                if ((scroll?.IsAt(target.Position) ?? true) && target.Matches(sample)
+                    && (previous is null || !previous.ContainsUnmovedRowsOf(sample)))
+                    return checkBoxes;
             }
-        }
 
-        private void WaitForBoundaryItems(IDictionary<string, MultiSelectItemSnapshot> items)
-        {
-            for (var attempt = 0; attempt < BoundaryRealizationAttempts; attempt++)
-            {
-                Thread.Sleep(BoundaryRealizationDelayMs);
-                AddCurrentItems(items);
-            }
-        }
-
-        private void WaitForBoundaryExactSelection(
-            IDictionary<string, MultiSelectItemSnapshot> items,
-            IReadOnlySet<string> requestedValues)
-        {
-            for (var attempt = 0; attempt < BoundaryRealizationAttempts; attempt++)
-            {
-                Thread.Sleep(BoundaryRealizationDelayMs);
-                ApplyCurrentExactSelection(items, requestedValues);
-            }
+            throw new InvalidOperationException("Multi-select checkboxes could not be rebound to their observed viewport.");
         }
 
         private MultiSelectCheckBox[] ReadCurrentItems(AutomationElement[]? descendants = null)
         {
-            var currentItems = (descendants ?? FindAutomationDescendants(Inner))
-                .Where(candidate => candidate.ControlType == ControlType.CheckBox && IsVisibleItem(candidate))
-                .Select(candidate =>
-                {
-                    var text = ReadMultiSelectItemCaption(candidate)?.Trim() ?? string.Empty;
-                    return new MultiSelectCheckBox(text, candidate, new FlaUiCheckBoxControl(candidate.AsCheckBox()));
-                })
-                .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
-                .ToArray();
+            var viewport = TryRead(() => Inner.BoundingRectangle);
+            if (viewport.Width <= 0 || viewport.Height <= 0)
+                return [];
+
+            var currentItems = new List<MultiSelectCheckBox>();
+            foreach (var candidate in descendants ?? FindAutomationDescendants(Inner))
+            {
+                if (candidate.ControlType != ControlType.CheckBox
+                    || TryRead(() => candidate.IsAvailable && !candidate.IsOffscreen) != true)
+                    continue;
+
+                var bounds = TryRead(() => candidate.BoundingRectangle);
+                if (System.Drawing.Rectangle.Intersect(viewport, bounds) is not { Width: > 0, Height: > 0 })
+                    continue;
+
+                var text = ReadMultiSelectItemCaption(candidate)?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                    currentItems.Add(new(text, candidate, new FlaUiCheckBoxControl(candidate.AsCheckBox()), bounds));
+            }
 
             return FlaUiMultiSelectItemProjections.Normalize(
                 currentItems,
                 static item => item.Text,
-                static item => TryRead(() => item.Element.BoundingRectangle),
-                static item => TryRead(() => item.Element.Patterns.Toggle.IsSupported) == true);
+                static item => item.Bounds,
+                static item => TryRead(() => item.Element.Patterns.Toggle.IsSupported) == true)
+                .OrderBy(static item => item.Bounds.Top).ThenBy(static item => item.Bounds.Left).ToArray();
         }
 
         private static string? ReadMultiSelectItemCaption(AutomationElement item)
@@ -2249,52 +2172,48 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     [], visible.Select(static item => item.Text).ToArray(), selectedTexts);
         }
 
-        private bool IsVisibleItem(AutomationElement candidate)
+        private static MultiSelectScroll? FindMultiSelectScroll(AutomationElement root, AutomationElement[] descendants)
         {
-            if (TryRead(() => candidate.IsAvailable && !candidate.IsOffscreen) != true)
+            if (FindVerticalScrollPattern(root, descendants) is { } source)
             {
-                return false;
+                var (viewport, scroll) = source;
+                var viewSize = scroll.VerticalViewSize.ValueOrDefault;
+                var pixelsPerPercent = viewSize is > 0 and < 100
+                    ? TryRead(() => viewport.BoundingRectangle).Height * (100 / viewSize - 1) / 100
+                    : 0;
+                var step = viewSize is > 0 and < 100 ? 50 * viewSize / (100 - viewSize) : 0;
+                return new(() => scroll.VerticalScrollPercent.Value, 0, 100, 0.001, step, pixelsPerPercent,
+                    position => scroll.SetScrollPercent(-1, position),
+                    amount => scroll.Scroll(ScrollAmount.NoAmount, amount));
             }
 
-            var viewport = TryRead(() => Inner.BoundingRectangle);
-            var bounds = TryRead(() => candidate.BoundingRectangle);
-            if (viewport.Width <= 0 || viewport.Height <= 0 || bounds.Width <= 0 || bounds.Height <= 0)
-            {
-                return false;
-            }
-
-            return System.Drawing.Rectangle.Intersect(viewport, bounds) is { Width: > 0, Height: > 0 };
+            if (FindVerticalScrollBarRange(root, descendants) is not { } range)
+                return null;
+            var minimum = range.Minimum.ValueOrDefault;
+            var maximum = range.Maximum.ValueOrDefault;
+            var largeChange = range.LargeChange.ValueOrDefault;
+            var smallChange = range.SmallChange.ValueOrDefault;
+            if (!double.IsFinite(smallChange) || smallChange <= 0)
+                smallChange = 0;
+            // LargeChange can be smaller than a viewport and the range need not be in pixels.
+            var rangeStep = largeChange > 0 && double.IsFinite(largeChange) ? Math.Clamp(smallChange, largeChange / 2, largeChange)
+                : smallChange > 0 ? smallChange : (maximum - minimum) / MaxScrollSteps;
+            return new(() => range.Value.Value, minimum, maximum, Math.Min(0.001, rangeStep / 100),
+                rangeStep, 0, range.SetValue);
         }
 
-        private static IScrollPattern? FindVerticalScrollPattern(AutomationElement root)
+        private static (AutomationElement Viewport, IScrollPattern Pattern)? FindVerticalScrollPattern(
+            AutomationElement root, AutomationElement[] descendants)
         {
-            var rootScroll = root.Patterns.Scroll.PatternOrDefault;
-            if (rootScroll?.VerticallyScrollable.ValueOrDefault == true)
+            foreach (var candidate in descendants.Prepend(root).Concat(EnumerateLocalScrollAncestors(root)))
             {
-                return rootScroll;
+                if (candidate.Patterns.Scroll.PatternOrDefault is { } scroll && scroll.VerticallyScrollable.ValueOrDefault)
+                    return (candidate, scroll);
             }
-
-            var descendantScroll = FindAutomationDescendants(root)
-                .Select(static candidate => candidate.Patterns.Scroll.PatternOrDefault)
-                .FirstOrDefault(static scroll => scroll?.VerticallyScrollable.ValueOrDefault == true);
-            if (descendantScroll is not null)
-            {
-                return descendantScroll;
-            }
-
-            foreach (var ancestor in EnumerateLocalScrollAncestors(root))
-            {
-                var ancestorScroll = ancestor.Patterns.Scroll.PatternOrDefault;
-                if (ancestorScroll?.VerticallyScrollable.ValueOrDefault == true)
-                {
-                    return ancestorScroll;
-                }
-            }
-
             return null;
         }
 
-        private static IRangeValuePattern? FindVerticalScrollBarRange(AutomationElement root)
+        private static IRangeValuePattern? FindVerticalScrollBarRange(AutomationElement root, AutomationElement[] descendants)
         {
             if (root.ControlType == ControlType.ScrollBar && IsVerticalScrollBar(root))
             {
@@ -2307,7 +2226,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 }
             }
 
-            var descendantRange = FindAutomationDescendants(root)
+            var descendantRange = descendants
                 .Where(static candidate => candidate.ControlType == ControlType.ScrollBar)
                 .Where(IsVerticalScrollBar)
                 .Select(static candidate => candidate.Patterns.RangeValue.PatternOrDefault)
@@ -2390,72 +2309,6 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return bounds.Height > bounds.Width;
         }
 
-        private static bool ScrollBackward(IScrollPattern scroll)
-        {
-            var previousPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-            if (previousPosition <= 0)
-            {
-                return false;
-            }
-
-            scroll.Scroll(ScrollAmount.NoAmount, ScrollAmount.LargeDecrement);
-            Thread.Sleep(50);
-            return scroll.VerticalScrollPercent.ValueOrDefault < previousPosition;
-        }
-
-        private static bool ScrollForward(IScrollPattern scroll)
-        {
-            var previousPosition = scroll.VerticalScrollPercent.ValueOrDefault;
-            if (previousPosition < 0 || previousPosition >= 100)
-            {
-                return false;
-            }
-
-            scroll.Scroll(ScrollAmount.NoAmount, ScrollAmount.LargeIncrement);
-            Thread.Sleep(50);
-            return scroll.VerticalScrollPercent.ValueOrDefault > previousPosition;
-        }
-
-        private static bool ScrollForward(IRangeValuePattern scrollBarRange)
-        {
-            var previousPosition = scrollBarRange.Value.ValueOrDefault;
-            var maximum = scrollBarRange.Maximum.ValueOrDefault;
-            var minimum = scrollBarRange.Minimum.ValueOrDefault;
-            var range = maximum - minimum;
-            var positionTolerance = Math.Max(0.001, range / 10_000);
-            if (previousPosition >= maximum - positionTolerance)
-            {
-                return false;
-            }
-
-            var largeChange = scrollBarRange.LargeChange.ValueOrDefault;
-            largeChange = Math.Max(largeChange, range / 10);
-
-            scrollBarRange.SetValue(Math.Min(maximum, previousPosition + largeChange));
-            Thread.Sleep(50);
-            return scrollBarRange.Value.ValueOrDefault > previousPosition + positionTolerance;
-        }
-
-        private static bool ScrollBackward(IRangeValuePattern scrollBarRange)
-        {
-            var previousPosition = scrollBarRange.Value.ValueOrDefault;
-            var maximum = scrollBarRange.Maximum.ValueOrDefault;
-            var minimum = scrollBarRange.Minimum.ValueOrDefault;
-            var range = maximum - minimum;
-            var positionTolerance = Math.Max(0.001, range / 10_000);
-            if (previousPosition <= minimum + positionTolerance)
-            {
-                return false;
-            }
-
-            var largeChange = scrollBarRange.LargeChange.ValueOrDefault;
-            largeChange = Math.Max(largeChange, range / 10);
-
-            scrollBarRange.SetValue(Math.Max(minimum, previousPosition - largeChange));
-            Thread.Sleep(50);
-            return scrollBarRange.Value.ValueOrDefault < previousPosition - positionTolerance;
-        }
-
         private static HashSet<string> NormalizeRequestedItems(IEnumerable<string> values)
         {
             var normalized = values.Select(static value => value?.Trim() ?? string.Empty).ToArray();
@@ -2468,28 +2321,147 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             return normalized.ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
-        private static void ValidateAvailableItems(
-            IEnumerable<string> availableValues,
-            IReadOnlySet<string> requestedValues)
+        private sealed class MultiSelectScroll(
+            Func<double> readPosition, double minimum, double maximum, double tolerance, double step,
+            double pixelsPerUnit, Action<double> setPosition, Action<ScrollAmount>? scroll = null)
         {
-            var available = availableValues.ToArray();
-            if (available.Distinct(StringComparer.OrdinalIgnoreCase).Count() != available.Length)
+            private bool _canSetPosition = true;
+            private bool _useAbsoluteSteps = step > 0;
+            private bool _useSmallIncrements = true;
+
+            public double Minimum => minimum;
+            public double Maximum => maximum;
+
+            public double ReadPosition()
             {
-                throw new InvalidOperationException("Multi-select items container exposes duplicate item text.");
+                var position = readPosition();
+                return double.IsFinite(position) && position >= minimum - tolerance && position <= maximum + tolerance
+                    ? position
+                    : throw new InvalidOperationException("Multi-select scrollbar did not report a valid position.");
             }
 
-            var missing = requestedValues.Where(value => !available.Contains(value, StringComparer.OrdinalIgnoreCase)).ToArray();
-            if (missing.Length > 0)
+            public bool At(double first, double second) => Math.Abs(first - second) <= tolerance;
+
+            public bool IsAt(double position) => At(ReadPosition(), position);
+
+            public double? GetExpectedShift(double from, double to) =>
+                pixelsPerUnit > 0 ? Math.Abs(to - from) * pixelsPerUnit : null;
+
+            public bool TryStep(double from, bool forward, out double position)
             {
-                throw new InvalidOperationException(
-                    $"Multi-select items were not found: [{string.Join(", ", missing)}].");
+                if (_useAbsoluteSteps)
+                {
+                    var boundary = forward ? maximum : minimum;
+                    // Avoid a final fractional-pixel step that could leave the same realized rows.
+                    var target = pixelsPerUnit > 0 && Math.Abs(boundary - from) <= step * 1.1
+                        ? boundary : Math.Clamp(from + (forward ? step : -step), minimum, maximum);
+                    if (TrySetPosition(target) && WaitForPosition(p => Past(p, from, forward), out position))
+                        return true;
+                    if (scroll is not null)
+                        _useAbsoluteSteps = false;
+                }
+
+                position = from;
+                if (scroll is null)
+                    return false;
+
+                if (_useSmallIncrements)
+                {
+                    var amount = forward ? ScrollAmount.SmallIncrement : ScrollAmount.SmallDecrement;
+                    if (TryScroll(() => scroll(amount)) && WaitForPosition(p => Past(p, from, forward), out position))
+                        return true;
+                    _useSmallIncrements = false;
+                }
+
+                var page = forward ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement;
+                return TryScroll(() => scroll(page)) && WaitForPosition(p => Past(p, from, forward), out position);
+            }
+
+            public bool TryShorterStep(double from, double attempted, bool forward, out double position)
+            {
+                position = from;
+                // An exact row-height step can look identical in a run of equal captions.
+                // Read a shorter interval instead of accepting that uncertain observation.
+                return TrySetPosition(from + (attempted - from) / 2)
+                    && WaitForPosition(p => Past(p, from, forward) && Past(attempted, p, forward), out position);
+            }
+
+            public void MoveTo(double target, ref int remainingSteps)
+            {
+                if (IsAt(target) || TrySetPosition(target) && WaitForPosition(p => At(p, target), out _))
+                    return;
+                if (Follow(target, ref remainingSteps))
+                    return;
+
+                // Quantized providers can miss a target when approaching it from the bottom.
+                // Replaying the forward path is a fallback, with one budget shared by all changes.
+                if ((TrySetPosition(minimum) && WaitForPosition(p => At(p, minimum), out _)
+                     || Follow(minimum, ref remainingSteps)) && Follow(target, ref remainingSteps))
+                    return;
+
+                throw new InvalidOperationException("Multi-select items could not return to an observed viewport.");
+            }
+
+            private bool Follow(double target, ref int remainingSteps)
+            {
+                var position = ReadPosition();
+                var forward = position < target;
+                while (!At(position, target))
+                {
+                    if (remainingSteps <= 0 || Past(position, target, forward))
+                        return false;
+                    remainingSteps--;
+                    if (!TryStep(position, forward, out position))
+                        return false;
+                }
+
+                return true;
+            }
+
+            private bool Past(double position, double reference, bool forward) =>
+                (forward ? position - reference : reference - position) > tolerance;
+
+            private bool TrySetPosition(double position) =>
+                _canSetPosition && (_canSetPosition = TryScroll(() => setPosition(position)));
+
+            private bool WaitForPosition(Func<double, bool> isReady, out double position)
+            {
+                for (var attempt = 0; attempt < RealizationAttempts; attempt++)
+                {
+                    if (attempt > 0)
+                        Thread.Sleep(RealizationDelayMs);
+                    position = ReadPosition();
+                    if (isReady(position))
+                        return true;
+                }
+
+                position = default;
+                return false;
+            }
+
+            private static bool TryScroll(Action action)
+            {
+                try
+                {
+                    action();
+                    return true;
+                }
+                catch (Exception exception) when (
+                    (exception is System.Runtime.InteropServices.COMException or System.NotSupportedException
+                        or global::FlaUI.Core.Exceptions.NotSupportedException or NotImplementedException
+                        or InvalidOperationException or ArgumentException)
+                    && !DesktopPointer.IsTerminalFailure(exception))
+                {
+                    return false;
+                }
             }
         }
 
         private sealed record MultiSelectCheckBox(
             string Text,
             AutomationElement Element,
-            FlaUiCheckBoxControl Control);
+            FlaUiCheckBoxControl Control,
+            System.Drawing.Rectangle Bounds);
 
         private sealed record MultiSelectItemSnapshot(string Text, bool IsChecked);
 

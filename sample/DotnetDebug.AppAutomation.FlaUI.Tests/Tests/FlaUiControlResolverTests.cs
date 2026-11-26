@@ -716,7 +716,8 @@ public sealed class FlaUiControlResolverTests
         var sameRow = new[]
         {
             (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 40, 180, 24), Actionable: false),
-            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(24, 42, 170, 20), Actionable: true)
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 42, 180, 24), Actionable: true),
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 38, 180, 24), Actionable: false)
         };
         var textReads = 0;
         var boundsReads = 0;
@@ -729,22 +730,88 @@ public sealed class FlaUiControlResolverTests
         var separateRows = new[]
         {
             sameRow[0],
-            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 72, 180, 24), Actionable: true)
+            (Text: "Cancelled", Bounds: new System.Drawing.Rectangle(20, 72, 180, 24), Actionable: true),
+            sameRow[1],
+            sameRow[2]
         };
+        var distinct = FlaUiMultiSelectItemProjections.Normalize(
+            separateRows, static item => item.Text, static item => item.Bounds, static item => item.Actionable);
 
         using (Assert.Multiple())
         {
             await Assert.That(logical.Length).IsEqualTo(1);
             await Assert.That(logical[0].Actionable).IsTrue();
-            await Assert.That(textReads).IsEqualTo(2);
-            await Assert.That(boundsReads).IsEqualTo(2);
+            await Assert.That(textReads).IsEqualTo(3);
+            await Assert.That(boundsReads).IsEqualTo(3);
             await Assert.That(actionabilityReads).IsEqualTo(2);
-            await Assert.That(() => FlaUiMultiSelectItemProjections.Normalize(
-                    separateRows,
-                    static item => item.Text,
-                    static item => item.Bounds,
-                    static item => item.Actionable))
-                .Throws<InvalidOperationException>();
+            await Assert.That(distinct).IsEquivalentTo(new[] { sameRow[1], separateRows[1] });
+        }
+    }
+
+    [Test]
+    [Arguments("Target", null)]
+    [Arguments("duplicate", "ambiguous")]
+    [Arguments("Missing", "not found")]
+    public async Task MultiSelectViewportPlansOnlyExactUnambiguousChanges(string requestedText, string? expectedError)
+    {
+        var bounds = new System.Drawing.Rectangle(20, 20, 180, 48);
+        var first = new FlaUiMultiSelectViewportItems.Viewport(0, bounds,
+        [
+            new("Duplicate", true, new(20, 20, 180, 24)),
+            new("Target", false, new(20, 44, 180, 24))
+        ]);
+        var middle = new FlaUiMultiSelectViewportItems.Viewport(50, bounds,
+        [
+            new("Target", false, new(20, 20, 180, 24)),
+            new("Duplicate", true, new(20, 44, 180, 24))
+        ]);
+        var last = new FlaUiMultiSelectViewportItems.Viewport(100, bounds,
+            [new("Duplicate", true, new(20, 20, 180, 24))]);
+
+        var items = new FlaUiMultiSelectViewportItems();
+        items.Append(first, overlap: 0);
+        items.Append(middle.Include(middle with { Rows = [middle.Rows[1]] }).Include(middle),
+            FlaUiMultiSelectViewportItems.FindOverlap(first, middle, expectedShift: 24)!.Value);
+        items.Append(last, FlaUiMultiSelectViewportItems.FindOverlap(middle, last, expectedShift: 24)!.Value);
+
+        var requested = new HashSet<string>(["Target", requestedText], StringComparer.OrdinalIgnoreCase);
+        if (expectedError is not null)
+        {
+            var error = Assert.Throws<InvalidOperationException>(() => items.PlanChanges(requested));
+            await Assert.That(error.Message).Contains(expectedError);
+            await Assert.That(items.Items.Where(static item => item.State.IsChecked == true).Select(static item => item.State.Text))
+                .IsEquivalentTo(["Duplicate", "Duplicate"]);
+            return;
+        }
+
+        var changes = items.PlanChanges(requested);
+        await Assert.That(changes.Select(static change => (change.Item.Viewport.Position, change.Item.State.Text, change.ShouldBeChecked)))
+            .IsEquivalentTo(new[] { (0d, "Duplicate", false), (50d, "Target", true), (100d, "Duplicate", false) });
+    }
+
+    [Test]
+    public async Task MultiSelectViewportRejectsStaleRowsAndGapsAndComparesSelectionBySlot()
+    {
+        var bounds = new System.Drawing.Rectangle(20, 20, 180, 96);
+        var first = new FlaUiMultiSelectViewportItems.Viewport(0, bounds,
+        [
+            new("Open", true, new(20, 68, 180, 24)),
+            new("Open", false, new(20, 92, 180, 24))
+        ]);
+        var later = new FlaUiMultiSelectViewportItems.Viewport(50, bounds, [new("Open", false, new(20, 20, 180, 24))]);
+        var indexedFirst = first with { Rows = [first.Rows[0] with { PositionInSet = 1 }, first.Rows[1] with { PositionInSet = 2 }] };
+
+        using (Assert.Multiple())
+        {
+            await Assert.That(FlaUiMultiSelectViewportItems.FindOverlap(first, first with { Position = 50, Rows = [first.Rows[1]] }, 24))
+                .IsNull();
+            await Assert.That(FlaUiMultiSelectViewportItems.FindOverlap(first, later, expectedShift: null)).IsNull();
+            await Assert.That(FlaUiMultiSelectViewportItems.FindOverlap(indexedFirst,
+                later with { Rows = [later.Rows[0] with { PositionInSet = 4 }] }, 24)).IsNull();
+            await Assert.That(first.Matches(first with
+            {
+                Rows = [first.Rows[0] with { IsChecked = false }, first.Rows[1] with { IsChecked = true }]
+            }, compareSelection: true)).IsFalse();
         }
     }
 
