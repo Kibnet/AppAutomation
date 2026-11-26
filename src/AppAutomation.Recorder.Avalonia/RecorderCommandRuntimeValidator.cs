@@ -146,6 +146,8 @@ internal sealed class RecorderCommandRuntimeValidator
                 ValidateSemanticValue(step, target),
             RecordedActionKind.EnterText => ValidateTextAction(step, target),
             RecordedActionKind.ClickButton => ValidateControlType(step, target, UiControlType.Button),
+            RecordedActionKind.DoubleClickNamedItem => ValidateControlType(step, target, UiControlType.NamedItemSurface)
+                .Concat(RequireString(step, target, allowEmpty: false, "named item")),
             RecordedActionKind.SetChecked => ValidateControlType(step, target, [UiControlType.CheckBox, UiControlType.RadioButton])
                 .Concat(RequireBool(step, target)),
             RecordedActionKind.SetToggled => ValidateControlType(step, target, UiControlType.ToggleButton)

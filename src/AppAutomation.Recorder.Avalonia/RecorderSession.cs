@@ -372,6 +372,7 @@ internal sealed partial class RecorderSession :
         }
 
         _state = RecorderSessionState.Recording;
+        ResetNamedItemPresses();
         InvalidatePresenterTimeTransaction();
         ReconcilePresenterTimeTransaction();
         ResetGridSelectionGesture();
@@ -416,6 +417,7 @@ internal sealed partial class RecorderSession :
         _completedGeneratedValueText = null;
         _lastSpatialCaptureTarget = null;
         _state = RecorderSessionState.Off;
+        ResetNamedItemPresses();
         SetStatus("Recording stopped.", RecorderValidationStatus.Valid);
     }
 
@@ -448,6 +450,7 @@ internal sealed partial class RecorderSession :
         _completedGeneratedValueInput = null;
         _completedGeneratedValueText = null;
         _journal.Clear();
+        ResetNamedItemPresses();
         _selectorResolver.ClearPresenterTimeSources();
         _journal.ClearMoveHistory();
         _activeCopiedValue = null;
@@ -1545,6 +1548,7 @@ internal sealed partial class RecorderSession :
     private void AttachInputHandlers(Control root)
     {
         root.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
+        root.AddHandler(InputElement.DoubleTappedEvent, OnNamedItemDoubleTapped, RoutingStrategies.Bubble, handledEventsToo: true);
         root.AddHandler(
             InputElement.PointerReleasedEvent,
             OnPointerReleased,
@@ -1576,11 +1580,13 @@ internal sealed partial class RecorderSession :
     {
         _lastSpatialCaptureTarget = null;
         _pressedHotkeyKeys.Clear();
+        ResetNamedItemPresses();
     }
 
     private void DetachInputHandlers(Control root)
     {
         root.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+        root.RemoveHandler(InputElement.DoubleTappedEvent, OnNamedItemDoubleTapped);
         root.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerReleased);
         root.RemoveHandler(InputElement.PointerReleasedEvent, OnPointerGestureCompleted);
         root.RemoveHandler(InputElement.PointerMovedEvent, OnPointerMoved);
@@ -1796,6 +1802,7 @@ internal sealed partial class RecorderSession :
         _pendingGridSelection = null;
         BeginPointerGesture();
         var source = e.Source as Control;
+        var namedItemPress = ObserveNamedItemPress(source, e);
         if (_targetSelectionMode == RecorderTargetSelectionMode.None && HandlePresenterTimeInput(source))
         {
             RememberSpatialCaptureTarget(source, e);
@@ -1849,7 +1856,7 @@ internal sealed partial class RecorderSession :
         CommitPendingCatalogGridEditIfSwitchingTo(control);
         RegisterPointerInput(control);
 
-        if (FindAncestorOrSelf<Button>(source) is null)
+        if (!namedItemPress && FindAncestorOrSelf<Button>(source) is null)
         {
             var gestureSource = source ?? control;
             var point = e.GetCurrentPoint(GetPointerPositionRoot(source));
@@ -4661,7 +4668,8 @@ internal sealed partial class RecorderSession :
         Control? source = null,
         string captureAction = "Unknown",
         bool suppressRecentDuplicate = true,
-        Guid? replaceAdjacent = null)
+        Guid? replaceAdjacent = null,
+        bool useCapturedSelectorValidation = false)
     {
         if (!result.Success || result.Step is null)
         {
@@ -4676,7 +4684,8 @@ internal sealed partial class RecorderSession :
 
         var replaceTail = replaceAdjacent.HasValue && Steps.LastOrDefault()?.StepId == replaceAdjacent.Value;
         var precedingSteps = replaceTail ? Steps.Take(Steps.Count - 1) : Steps;
-        var recordedStep = LinkGridRowAnchors(RevalidateStep(result.Step, source), precedingSteps);
+        var recordedStep = LinkGridRowAnchors(
+            RevalidateStep(result.Step, source, useCapturedSelectorValidation), precedingSteps);
         LogRecordedStepDiagnostics(captureAction, source, recordedStep);
         if (!recordedStep.CanPersist && !_options.Validation.CaptureInvalidSteps)
         {
@@ -5940,7 +5949,8 @@ internal sealed partial class RecorderSession :
             RecorderPersistenceSnapshot.FreezeSteps(Steps.Where(static step => !step.IsIgnored)));
     }
 
-    private RecordedStep RevalidateStep(RecordedStep step, Control? source = null)
+    private RecordedStep RevalidateStep(
+        RecordedStep step, Control? source = null, bool useCapturedSelectorValidation = false)
     {
         step = RecorderJournal.RestoreValidationBeforeGraphError(step);
         if (step.ActionKind == RecordedActionKind.SetMultiItemSpinnerValue
@@ -5956,7 +5966,7 @@ internal sealed partial class RecorderSession :
             };
         }
 
-        if (!_options.Validation.ValidateSelectors)
+        if (useCapturedSelectorValidation || !_options.Validation.ValidateSelectors)
         {
             var selectorValidationDisabledStep = _runtimeValidator.Validate(step with
             {
@@ -6062,6 +6072,11 @@ internal sealed partial class RecorderSession :
                     : null;
             return $"Remember {step.Control.ProposedPropertyName}.{DescribeValueAccessor(step.ValueAccessorKind)} as "
                 + (checkpoint?.VariableName ?? step.CheckpointVariableName ?? "checkpointValue");
+        }
+
+        if (step.ActionKind == RecordedActionKind.DoubleClickNamedItem)
+        {
+            return $"Double-click '{step.StringValue}' in {step.Control.ProposedPropertyName}";
         }
 
         if (step.ActionKind == RecordedActionKind.CaptureCopiedValue)

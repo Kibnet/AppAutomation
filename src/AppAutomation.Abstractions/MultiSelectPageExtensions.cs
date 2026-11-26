@@ -83,18 +83,27 @@ public static partial class UiPageExtensions
             lastObservedValueFactory: () => DescribeMultiSelect(control),
             operationName: operationName);
 
-        IReadOnlyList<string> committedItems = expectedItems;
-        if (cancel)
+        IReadOnlyList<string>? committedItems = null;
+        void SelectPendingItems()
         {
-            committedItems = control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
-            EnsureMultiSelectPopupRemainsOpen(
-                page,
-                selector,
-                expectedItems,
-                control,
-                timeoutMs,
-                operationName,
-                startedAtUtc);
+            if (cancel)
+            {
+                if (control is IMultiSelectSelectionSnapshotControl snapshotControl
+                    && snapshotControl.TrySetSelectedItems(expectedItems, (_, selected) =>
+                    {
+                        committedItems = selected.Select(NormalizeMultiSelectItem).ToArray();
+                        return control.IsOpen;
+                    }) is not null)
+                {
+                    return;
+                }
+
+                committedItems ??= control.SelectedItems.Select(NormalizeMultiSelectItem).ToArray();
+                EnsureMultiSelectPopupRemainsOpen(
+                    page, selector, expectedItems, control, timeoutMs, operationName, startedAtUtc);
+            }
+
+            control.SetSelectedItems(expectedItems);
         }
 
         ExecuteMultiSelectAction(
@@ -104,7 +113,7 @@ public static partial class UiPageExtensions
             control,
             timeoutMs,
             startedAtUtc,
-            () => control.SetSelectedItems(expectedItems),
+            SelectPendingItems,
             cancel ? "failed to select the requested pending items" : "failed to select the requested items",
             operationName);
 
@@ -139,7 +148,7 @@ public static partial class UiPageExtensions
             lastObservedValueFactory: () => DescribeMultiSelect(control),
             operationName: operationName);
 
-        return WaitUntilSelectedItemsEqual(page, selector, committedItems, timeoutMs);
+        return WaitUntilSelectedItemsEqual(page, selector, committedItems ?? expectedItems, timeoutMs);
     }
 
     /// <summary>

@@ -75,7 +75,8 @@ public enum RecordedActionKind
     CaptureCopiedValue = 67,
     SelectGridRow = 68,
     InvokeDialogButton = 69,
-    SelectGridRows = 70
+    SelectGridRows = 70,
+    DoubleClickNamedItem = 71
 }
 
 public enum RecorderAssertionMode
@@ -356,7 +357,8 @@ internal static class RecorderAssertionCapabilities
                 or UiControlType.FolderExport
                 or UiControlType.ShellNavigation
                 or UiControlType.Menu
-                or UiControlType.MenuItem => StateOnly(controlType),
+                or UiControlType.MenuItem
+                or UiControlType.NamedItemSurface => StateOnly(controlType),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(controlType),
                 controlType,

@@ -535,6 +535,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             37 => "global::AppAutomation.Abstractions.IMenuControl",
             38 => "global::AppAutomation.Abstractions.IMenuItemControl",
             39 => "global::AppAutomation.Abstractions.IMultiItemControlCollection",
+            40 => "global::AppAutomation.Abstractions.INamedItemSurfaceControl",
             _ => "global::AppAutomation.Abstractions.IUiControl"
         };
     }
@@ -582,6 +583,7 @@ public sealed class UiControlSourceGenerator : IIncrementalGenerator
             37 => "Menu",
             38 => "MenuItem",
             39 => "MultiItemControlCollection",
+            40 => "NamedItemSurface",
             _ => "AutomationElement"
         };
     }

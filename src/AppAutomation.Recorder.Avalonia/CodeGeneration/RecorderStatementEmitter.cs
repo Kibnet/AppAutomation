@@ -208,6 +208,7 @@ internal static class RecorderStatementEmitter
                 copiedValueVariables,
                 generatedValueSeriesVariable),
             RecordedActionKind.ClickButton => $"Page.ClickButton(static page => page.{propertyName});",
+            RecordedActionKind.DoubleClickNamedItem => $"Page.DoubleClickNamedItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",
             RecordedActionKind.SetChecked => $"Page.SetChecked(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SetToggled => $"Page.SetToggled(static page => page.{propertyName}, {FormatBoolean(step.BoolValue)});",
             RecordedActionKind.SelectComboItem => $"Page.SelectComboItem(static page => page.{propertyName}, \"{EscapeString(step.StringValue ?? string.Empty)}\");",

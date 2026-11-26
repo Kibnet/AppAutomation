@@ -207,5 +207,8 @@ public enum UiControlType
     /// <summary>
     /// A logical collection of repeated composite controls. Maps to <see cref="IMultiItemControlCollection"/>.
     /// </summary>
-    MultiItemControlCollection = 39
+    MultiItemControlCollection = 39,
+
+    /// <summary>A surface with named double-click targets. Maps to <see cref="INamedItemSurfaceControl"/>.</summary>
+    NamedItemSurface = 40
 }

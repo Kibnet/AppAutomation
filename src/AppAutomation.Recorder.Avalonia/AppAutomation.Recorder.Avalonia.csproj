@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Shared\Avalonia\NamedItemSurfacePeers.cs" Link="NamedItemSurfacePeers.cs" />
     <ProjectReference Include="..\AppAutomation.Abstractions\AppAutomation.Abstractions.csproj" />
   </ItemGroup>
 </Project>

@@ -104,6 +104,15 @@ public static class DesktopPointer
             prepare == null ? null : _ => prepare(), _ => point, default, reason, hasFreshIntent: false).GetAwaiter().GetResult();
     }
 
+    internal static void ClickAt(Func<AutomationElement> target, Func<AutomationElement, Point> resolvePoint,
+        PointerClickOptions options, AutomationElement initialTarget, Action validateBeforePress)
+    {
+        // A point supplied by semantic bounds must be proved again before each press, not recovered
+        // by clicking through an obstruction or by treating the surface's center as the target.
+        ClickCore(target, options, null, resolvePoint, default, "named surface double click", initialTarget,
+            hasFreshIntent: false, validateBeforePress: validateBeforePress).GetAwaiter().GetResult();
+    }
+
     internal static void ClickPrepared(Func<AutomationElement> target, Action<AutomationElement> prepare,
         Func<AutomationElement, Point>? pointFactory = null, PointerClickOptions? options = null,
         string reason = "grid physical fallback", AutomationElement? initialTarget = null, PointerPhaseTrace? profile = null,
