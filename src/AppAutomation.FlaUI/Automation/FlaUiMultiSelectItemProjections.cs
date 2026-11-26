@@ -10,37 +10,42 @@ internal static class FlaUiMultiSelectItemProjections
         Func<T, Rectangle> readBounds,
         Func<T, bool> isActionable)
     {
-        var result = new List<(T Item, string Text, Rectangle? Bounds, bool? Actionable)>();
-        var indexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<(T Item, Rectangle? Bounds, bool? Actionable)>();
+        var indexes = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var candidate in candidates)
         {
             var text = readText(candidate);
-            if (!indexes.TryGetValue(text, out var matchingIndex))
+            if (!indexes.TryGetValue(text, out var matchingIndexes))
             {
-                indexes.Add(text, result.Count);
-                result.Add((candidate, text, null, null));
+                indexes.Add(text, [result.Count]);
+                result.Add((candidate, null, null));
                 continue;
             }
 
-            var existing = result[matchingIndex];
-            var existingBounds = existing.Bounds ?? readBounds(existing.Item);
             var candidateBounds = readBounds(candidate);
-            if (!HasEquivalentBounds(existingBounds, candidateBounds))
+            var merged = false;
+            foreach (var index in matchingIndexes)
             {
-                throw new InvalidOperationException(
-                    $"Multi-select items container exposes duplicate item text '{text}' "
-                    + $"at bounds {existingBounds} and {candidateBounds}.");
+                var existing = result[index];
+                var existingBounds = existing.Bounds ?? readBounds(existing.Item);
+                if (!HasEquivalentBounds(existingBounds, candidateBounds))
+                {
+                    result[index] = (existing.Item, existingBounds, existing.Actionable);
+                    continue;
+                }
+
+                var existingActionable = existing.Actionable ?? isActionable(existing.Item);
+                result[index] = !existingActionable && isActionable(candidate)
+                    ? (candidate, existingBounds, true)
+                    : (existing.Item, existingBounds, existingActionable);
+                merged = true;
+                break;
             }
 
-            var existingActionable = existing.Actionable ?? isActionable(existing.Item);
-            var candidateActionable = isActionable(candidate);
-            if (!existingActionable && candidateActionable)
+            if (!merged)
             {
-                result[matchingIndex] = (candidate, text, candidateBounds, candidateActionable);
-            }
-            else
-            {
-                result[matchingIndex] = (existing.Item, existing.Text, existingBounds, existingActionable);
+                matchingIndexes.Add(result.Count);
+                result.Add((candidate, candidateBounds, null));
             }
         }
 
@@ -74,7 +79,23 @@ internal static class FlaUiMultiSelectItemProjections
         return requestedTexts.All(visible.Contains) && selectedTexts.All(visible.Contains);
     }
 
-    private static bool HasEquivalentBounds(Rectangle first, Rectangle second)
+    internal static void ValidateRequestedItems(IEnumerable<string> availableTexts, IReadOnlySet<string> requestedTexts)
+    {
+        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var text in availableTexts)
+        {
+            if (requestedTexts.Contains(text) && !matched.Add(text))
+                throw new InvalidOperationException($"Multi-select item '{text}' is ambiguous: more than one matching item.");
+        }
+
+        if (matched.Count != requestedTexts.Count)
+        {
+            var missing = requestedTexts.Where(text => !matched.Contains(text));
+            throw new InvalidOperationException($"Multi-select items were not found: [{string.Join(", ", missing)}].");
+        }
+    }
+
+    internal static bool HasEquivalentBounds(Rectangle first, Rectangle second)
     {
         if (first.Width <= 0 || first.Height <= 0 || second.Width <= 0 || second.Height <= 0)
         {
