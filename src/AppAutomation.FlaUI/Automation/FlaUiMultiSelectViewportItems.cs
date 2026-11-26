@@ -10,6 +10,8 @@ internal sealed class FlaUiMultiSelectViewportItems
 
     internal sealed record Viewport(double Position, Rectangle Bounds, Observation[] Rows)
     {
+        internal int FirstItemIndex { get; init; }
+
         internal bool Matches(Viewport other, bool compareSelection = false)
         {
             if (Rows.Length != other.Rows.Length)
@@ -91,9 +93,10 @@ internal sealed class FlaUiMultiSelectViewportItems
 
     internal IReadOnlyList<Item> Items => _items;
 
-    internal void Append(Viewport viewport, int overlap)
+    internal Viewport Append(Viewport viewport, int overlap)
     {
         var start = _items.Count - overlap;
+        viewport = viewport with { FirstItemIndex = start };
         for (var index = 0; index < viewport.Rows.Length; index++)
         {
             if (index < overlap)
@@ -101,6 +104,17 @@ internal sealed class FlaUiMultiSelectViewportItems
             else
                 _items.Add(new Item(viewport, index));
         }
+        return viewport;
+    }
+
+    internal Viewport WithCurrentSelection(Viewport viewport)
+    {
+        var rows = new Observation[viewport.Rows.Length];
+        for (var index = 0; index < rows.Length; index++)
+        {
+            rows[index] = viewport.Rows[index] with { IsChecked = _items[viewport.FirstItemIndex + index].IsChecked };
+        }
+        return viewport with { Rows = rows };
     }
 
     internal (Item Item, bool ShouldBeChecked)[] PlanChanges(IReadOnlySet<string> requested)

@@ -1962,7 +1962,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             }
 
             var items = new FlaUiMultiSelectViewportItems();
-            items.Append(current, overlap: 0);
+            current = items.Append(current, overlap: 0);
             if (scroll is not null)
                 current = Traverse(scroll, current, forward: true, items);
             return (items, current);
@@ -1987,8 +1987,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                     throw new InvalidOperationException("Multi-select item traversal could not verify continuous row coverage across viewports.");
 
                 var (viewport, overlap) = observation;
-                items?.Append(viewport, overlap);
-                current = viewport;
+                current = items?.Append(viewport, overlap) ?? viewport;
             }
 
             return current;
@@ -2061,19 +2060,17 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 if (moved)
                     scroll!.MoveTo(target.Position, ref navigationBudget);
                 var visible = ReadReboundItems(scroll, target, moved ? current : null);
-                var rows = target.Rows.ToArray();
                 foreach (var (item, shouldBeChecked) in viewport)
                 {
                     var checkBox = visible[item.Index];
                     checkBox.Control.SetChecked(shouldBeChecked, checkBox.Text, Inner);
                     item.IsChecked = shouldBeChecked;
-                    rows[item.Index] = rows[item.Index] with { IsChecked = shouldBeChecked };
                 }
 
-                current = target with { Rows = rows };
+                current = target;
             }
 
-            return current;
+            return changes.Length == 0 ? current : items.WithCurrentSelection(current);
         }
 
         private MultiSelectCheckBox[] ReadReboundItems(

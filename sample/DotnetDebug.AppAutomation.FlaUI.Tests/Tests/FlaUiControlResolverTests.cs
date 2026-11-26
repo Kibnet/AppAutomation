@@ -769,8 +769,8 @@ public sealed class FlaUiControlResolverTests
             [new("Duplicate", true, new(20, 20, 180, 24))]);
 
         var items = new FlaUiMultiSelectViewportItems();
-        items.Append(first, overlap: 0);
-        items.Append(middle.Include(middle with { Rows = [middle.Rows[1]] }).Include(middle),
+        first = items.Append(first, overlap: 0);
+        middle = items.Append(middle.Include(middle with { Rows = [middle.Rows[1]] }).Include(middle),
             FlaUiMultiSelectViewportItems.FindOverlap(first, middle, expectedShift: 24)!.Value);
         items.Append(last, FlaUiMultiSelectViewportItems.FindOverlap(middle, last, expectedShift: 24)!.Value);
 
@@ -787,6 +787,20 @@ public sealed class FlaUiControlResolverTests
         var changes = items.PlanChanges(requested);
         await Assert.That(changes.Select(static change => (change.Item.Viewport.Position, change.Item.State.Text, change.ShouldBeChecked)))
             .IsEquivalentTo(new[] { (0d, "Duplicate", false), (50d, "Target", true), (100d, "Duplicate", false) });
+
+        foreach (var (item, shouldBeChecked) in changes.Reverse())
+            item.IsChecked = shouldBeChecked;
+
+        var expectedFirst = first with
+        {
+            Rows = [first.Rows[0] with { IsChecked = false }, first.Rows[1] with { IsChecked = true }]
+        };
+        var expectedMiddle = middle with
+        {
+            Rows = [middle.Rows[0] with { IsChecked = true }, middle.Rows[1] with { IsChecked = false }]
+        };
+        await Assert.That(items.WithCurrentSelection(first).Matches(expectedFirst, compareSelection: true)).IsTrue();
+        await Assert.That(items.WithCurrentSelection(middle).Matches(expectedMiddle, compareSelection: true)).IsTrue();
     }
 
     [Test]
