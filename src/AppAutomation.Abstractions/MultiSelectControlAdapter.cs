@@ -7,6 +7,14 @@ internal interface IMultiSelectCommittedStateControl
     string DescribeLastObservation();
 }
 
+internal interface IMultiSelectSelectionSnapshotControl
+{
+    // A rejected or unsupported snapshot leaves the selection unchanged.
+    IReadOnlyList<string>? TrySetSelectedItems(
+        IReadOnlyCollection<string> values,
+        Func<IReadOnlyList<string>, IReadOnlyList<string>, bool> acceptSnapshot);
+}
+
 /// <summary>
 /// Configuration for composing a multi-select popup from real primitive controls.
 /// </summary>
@@ -157,7 +165,8 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
         }
     }
 
-    private sealed class MultiSelectControl : IMultiSelectControl, IReadableTextControl, IMultiSelectCommittedStateControl
+    private sealed class MultiSelectControl : IMultiSelectControl, IReadableTextControl, IMultiSelectCommittedStateControl,
+        IMultiSelectSelectionSnapshotControl
     {
         private readonly MultiSelectParts _parts;
         private readonly IUiControlResolver _innerResolver;
@@ -363,20 +372,44 @@ public sealed class MultiSelectControlAdapter : IUiControlAdapter
             _state.BeginOpen();
         }
 
-        public void SetSelectedItems(IReadOnlyCollection<string> values)
+        public void SetSelectedItems(IReadOnlyCollection<string> values) =>
+            SetSelectedItems(values, acceptSnapshot: null);
+
+        public IReadOnlyList<string>? TrySetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool> acceptSnapshot) =>
+            SetSelectedItems(values, acceptSnapshot);
+
+        private IReadOnlyList<string>? SetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool>? acceptSnapshot)
         {
             ArgumentNullException.ThrowIfNull(values);
 
             var items = ResolveItems();
+            var snapshotControl = items as IMultiSelectSelectionSnapshotControl;
+            if (acceptSnapshot is not null && snapshotControl is null)
+                return null;
+
             if (_innerResolver is IComboBoxFilterDisplayValueReader reader)
                 _state.ObserveDisplaySource(reader.ReadDisplayedValueSourceIdentity(CreateDisplayDefinition()));
-            var availableItems = items.SetSelectedItemsAndGetAvailableItems(values);
+            var availableItems = acceptSnapshot is null
+                ? items.SetSelectedItemsAndGetAvailableItems(values)
+                : snapshotControl!.TrySetSelectedItems(values, (available, selected) =>
+                {
+                    _state.Observe(available, selected);
+                    return acceptSnapshot(available, selected);
+                });
+            if (availableItems is null)
+                return null;
+
             _state.ObserveItemsAfterSelection(availableItems);
             if (string.IsNullOrWhiteSpace(_parts.ApplyButtonLocator))
             {
                 _state.InvalidateCommittedAfterApply();
                 _items = null;
             }
+            return availableItems;
         }
 
         public void Apply()

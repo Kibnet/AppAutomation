@@ -358,6 +358,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             UiControlType.Expander => new FlaUiExpanderControl(FindElement(definition)),
             UiControlType.Menu => new FlaUiMenuControl(FindElement(definition).AsMenu()),
             UiControlType.MenuItem => new FlaUiMenuItemControl(GetProcessSearchRoots, definition),
+            UiControlType.NamedItemSurface => new FlaUiNamedItemSurfaceControl(FindElement(definition), () => FindElement(definition)),
             UiControlType.Spinner => new FlaUiSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new FlaUiTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new FlaUiTabItemControl(FindElement(definition).AsTabItem()),
@@ -1747,11 +1748,14 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
         }
     }
 
-    private sealed class FlaUiMultiSelectItemsControl : FlaUiControlBase<AutomationElement>, IMultiSelectItemsControl
+    private sealed class FlaUiMultiSelectItemsControl : FlaUiControlBase<AutomationElement>, IMultiSelectItemsControl,
+        IMultiSelectSelectionSnapshotControl
     {
         private const int RealizationAttempts = 4;
         private const int RealizationDelayMs = 50;
         private const int MaxScrollSteps = 512;
+        private const int MaxStepReductions = 3;
+        private const double FastTraversalScale = 0.8 / 0.5;
         private (MultiSelectScroll? Scroll, FlaUiMultiSelectViewportItems.Viewport Visible, MultiSelectItemSnapshot[] Items)? _lastItems;
 
         public FlaUiMultiSelectItemsControl(AutomationElement inner) : base(inner)
@@ -1787,7 +1791,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 return FlaUiMultiSelectItemProjections.PreferSelectableItems(
                     checkBoxItems.Select(static item => item.Text).ToArray(),
                     selectableItems.Select(static item => item.Text).ToArray())
-                    ? selectableItems.Where(static item => item.IsSelected).Select(static item => item.Text).ToArray()
+                    ? ReadSelectableSelection(selectableItems)
                     : checkBoxItems.Where(static item => item.IsChecked).Select(static item => item.Text).ToArray();
             }
         }
@@ -1797,7 +1801,17 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             _ = SetSelectedItemsAndGetAvailableItems(values);
         }
 
-        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values)
+        public IReadOnlyList<string> SetSelectedItemsAndGetAvailableItems(IReadOnlyCollection<string> values) =>
+            SetSelectedItems(values, acceptSnapshot: null)!;
+
+        public IReadOnlyList<string>? TrySetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool> acceptSnapshot) =>
+            SetSelectedItems(values, acceptSnapshot);
+
+        private IReadOnlyList<string>? SetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool>? acceptSnapshot)
         {
             using var preparation = EnterPointerPreparation();
             ArgumentNullException.ThrowIfNull(values);
@@ -1806,27 +1820,36 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             var descendants = FindAutomationDescendants(Inner);
             var visibleCheckBoxes = ReadCurrentItems(descendants);
             var visibleCheckBoxTexts = visibleCheckBoxes.Select(static item => item.Text).ToArray();
-            if (normalizedValues.Count == 0
-                || !normalizedValues.Overlaps(visibleCheckBoxTexts))
+            var trySelectable = normalizedValues.Count == 0 || !normalizedValues.Overlaps(visibleCheckBoxTexts);
+            var selectableItems = trySelectable || acceptSnapshot is not null ? ReadSelectableItems(descendants) : [];
+            var selectableTexts = selectableItems.Select(static item => item.Text).ToArray();
+            if (trySelectable && FlaUiMultiSelectItemProjections.PreferSelectableItems(visibleCheckBoxTexts, selectableTexts)
+                && normalizedValues.IsSubsetOf(selectableTexts))
             {
-                var selectableItems = ReadSelectableItems(descendants);
-                var selectableTexts = selectableItems.Select(static item => item.Text).ToArray();
-                if (FlaUiMultiSelectItemProjections.PreferSelectableItems(visibleCheckBoxTexts, selectableTexts)
-                    && normalizedValues.IsSubsetOf(selectableTexts))
-                {
-                    return SetSelectableItems(normalizedValues, selectableItems);
-                }
+                return SetSelectableItems(normalizedValues, selectableItems, selectableTexts, acceptSnapshot);
             }
 
             var scroll = FindMultiSelectScroll(Inner, descendants);
             var (items, current) = ReadAllItems(visibleCheckBoxes, scroll);
             if (items.Items.Count > 0)
             {
+                if (acceptSnapshot is not null)
+                {
+                    var checkBoxTexts = items.Items.Select(static item => item.State.Text).ToArray();
+                    var accepted = FlaUiMultiSelectItemProjections.PreferSelectableItems(checkBoxTexts, selectableTexts)
+                        ? acceptSnapshot(selectableTexts, ReadSelectableSelection(selectableItems))
+                        : acceptSnapshot(checkBoxTexts, items.Items.Where(static item => item.IsChecked == true)
+                            .Select(static item => item.State.Text).ToArray());
+                    if (!accepted)
+                        return null;
+                }
+
                 var visible = ApplyCheckBoxChanges(items, current, normalizedValues, scroll);
                 return RememberItems(scroll, visible, items).Select(static item => item.Text).ToArray();
             }
 
-            return SetSelectableItems(normalizedValues);
+            var remaining = ReadSelectableItems();
+            return SetSelectableItems(normalizedValues, remaining, remaining.Select(static item => item.Text).ToArray(), acceptSnapshot);
         }
 
         private MultiSelectItemSnapshot[] GetItems(MultiSelectCheckBox[] initialItems, AutomationElement[] descendants)
@@ -1861,13 +1884,19 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 static item => TryRead(() => item.Control.Patterns.SelectionItem.IsSupported) == true);
         }
 
-        private string[] SetSelectableItems(
-            HashSet<string> requestedValues,
-            SelectableItemSnapshot[]? knownItems = null)
-        {
-            var items = knownItems ?? ReadSelectableItems();
-            FlaUiMultiSelectItemProjections.ValidateRequestedItems(items.Select(static item => item.Text), requestedValues);
+        private static string[] ReadSelectableSelection(SelectableItemSnapshot[] items) =>
+            items.Where(static item => item.IsSelected).Select(static item => item.Text).ToArray();
 
+        private string[]? SetSelectableItems(
+            HashSet<string> requestedValues,
+            SelectableItemSnapshot[] items,
+            string[] texts,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool>? acceptSnapshot)
+        {
+            if (acceptSnapshot is not null && !acceptSnapshot(texts, ReadSelectableSelection(items)))
+                return null;
+
+            FlaUiMultiSelectItemProjections.ValidateRequestedItems(texts, requestedValues);
             var allowsMultiple = TryRead(() =>
                 Inner.Patterns.Selection.PatternOrDefault?.CanSelectMultiple.Value);
             if (requestedValues.Count == 1 && allowsMultiple != true)
@@ -1879,7 +1908,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                         "single-select filter item requires a user click to commit");
                 }
 
-                return items.Select(static item => item.Text).ToArray();
+                return texts;
             }
 
             foreach (var item in items.Where(item => item.IsSelected && !requestedValues.Contains(item.Text)))
@@ -1892,7 +1921,7 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
                 AddToSelection(item);
             }
 
-            return items.Select(static item => item.Text).ToArray();
+            return texts;
         }
 
         private static bool IsSelected(AutomationElement item)
@@ -1975,18 +2004,30 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             FlaUiMultiSelectViewportItems? items = null)
         {
             var boundary = forward ? scroll.Maximum : scroll.Minimum;
+            var increment = scroll.InitialTraversalIncrement;
+            var canIncrease = scroll.CanIncreaseTraversalIncrement;
             for (var step = 0; !scroll.At(current.Position, boundary); step++)
             {
-                if (step == MaxScrollSteps || !scroll.TryStep(current.Position, forward, out var position))
+                if (step == MaxScrollSteps || !scroll.TryStep(current.Position, forward, out var position, increment))
                     throw new InvalidOperationException("Multi-select items could not be read across the full scroll range.");
 
                 var observed = TryReadMovedViewport(scroll, current, position, forward, scroll.At(position, boundary));
-                if (observed is null && scroll.TryShorterStep(current.Position, position, forward, out var intermediate))
-                    observed = TryReadMovedViewport(scroll, current, intermediate, forward, scroll.At(intermediate, boundary));
+                for (var retry = 0; observed is null && retry < MaxStepReductions; retry++)
+                {
+                    if (!scroll.TryShorterStep(current.Position, position, forward, out position))
+                        break;
+                    increment = Math.Abs(position - current.Position);
+                    canIncrease = false;
+                    observed = TryReadMovedViewport(scroll, current, position, forward, scroll.At(position, boundary));
+                }
                 if (observed is not { } observation)
                     throw new InvalidOperationException("Multi-select item traversal could not verify continuous row coverage across viewports.");
 
                 var (viewport, overlap) = observation;
+                // RangeValue steps are not necessarily in pixels. Grow them only when the
+                // previous confirmed viewport kept a substantial overlap.
+                if (canIncrease && overlap >= 3 && overlap * 3 >= 2 * Math.Min(current.Rows.Length, viewport.Rows.Length))
+                    increment = Math.Min(2 * Math.Abs(position - current.Position), scroll.Maximum - scroll.Minimum);
                 current = items?.Append(viewport, overlap) ?? viewport;
             }
 
@@ -2329,6 +2370,10 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             public double Minimum => minimum;
             public double Maximum => maximum;
 
+            public double InitialTraversalIncrement => pixelsPerUnit > 0 ? step * FastTraversalScale : step;
+
+            public bool CanIncreaseTraversalIncrement => scroll is null;
+
             public double ReadPosition()
             {
                 var position = readPosition();
@@ -2344,14 +2389,15 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             public double? GetExpectedShift(double from, double to) =>
                 pixelsPerUnit > 0 ? Math.Abs(to - from) * pixelsPerUnit : null;
 
-            public bool TryStep(double from, bool forward, out double position)
+            public bool TryStep(double from, bool forward, out double position, double? increment = null)
             {
                 if (_useAbsoluteSteps)
                 {
+                    var distance = increment ?? step;
                     var boundary = forward ? maximum : minimum;
                     // Avoid a final fractional-pixel step that could leave the same realized rows.
-                    var target = pixelsPerUnit > 0 && Math.Abs(boundary - from) <= step * 1.1
-                        ? boundary : Math.Clamp(from + (forward ? step : -step), minimum, maximum);
+                    var target = pixelsPerUnit > 0 && Math.Abs(boundary - from) <= distance * 1.1
+                        ? boundary : Math.Clamp(from + (forward ? distance : -distance), minimum, maximum);
                     if (TrySetPosition(target) && WaitForPosition(p => Past(p, from, forward), out position))
                         return true;
                     if (scroll is not null)
@@ -2377,9 +2423,11 @@ public sealed partial class FlaUiControlResolver : IUiControlResolver, IUiArtifa
             public bool TryShorterStep(double from, double attempted, bool forward, out double position)
             {
                 position = from;
-                // An exact row-height step can look identical in a run of equal captions.
-                // Read a shorter interval instead of accepting that uncertain observation.
-                return TrySetPosition(from + (attempted - from) / 2)
+                // Retry the original increment before spending the remaining attempts on smaller steps.
+                var distance = Math.Abs(attempted - from);
+                var shorter = distance > step + tolerance && step > 0
+                    ? step : distance / 2;
+                return TrySetPosition(from + (forward ? shorter : -shorter))
                     && WaitForPosition(p => Past(p, from, forward) && Past(attempted, p, forward), out position);
             }
 

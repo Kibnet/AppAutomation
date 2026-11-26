@@ -605,16 +605,27 @@ public sealed class UiControlAdapterTests
     }
 
     [Test]
-    public async Task CancelMultiSelection_ReReadsCommittedItemsBeforeChangingPendingSelection()
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task CancelMultiSelection_CapturesLiveSelectionBeforeChangingPendingSelection(bool supportsSnapshot)
     {
         var context = CreateComboBoxFilterContext(hasApplyButton: true);
         context.Page.ApplyFilterSelection(static page => page.StatusFilter, ["Pending", "Closed"]);
+        context.SetCommittedItems(["Closed"]);
         context.Items.ResetObservationCounts();
+        context.Items.SupportsSelectionSnapshot = supportsSnapshot;
+        int? readsBeforeChange = null;
+        context.Items.OnSetSelectedItems = values =>
+        {
+            if (values.SequenceEqual(["Open"]))
+                readsBeforeChange = context.Items.ItemsReadCount;
+        };
 
         context.Page.CancelFilterSelection(static page => page.StatusFilter, ["Open"]);
 
-        await Assert.That(context.Items.SelectedItemsReadCount).IsGreaterThan(0);
-        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Pending", "Closed"]);
+        await Assert.That(readsBeforeChange).IsEqualTo(supportsSnapshot ? 0 : 1);
+        await Assert.That(context.Items.SelectionSnapshotCount).IsEqualTo(1);
+        await Assert.That(context.Page.StatusFilter.SelectedItems).IsEquivalentTo(["Closed"]);
     }
 
     [Test]
@@ -2286,7 +2297,8 @@ public sealed class UiControlAdapterTests
         }
     }
 
-    private sealed class FakeMultiSelectItemsControl : FakeControlBase, IMultiSelectItemsControl, IUiControlAvailability
+    private sealed class FakeMultiSelectItemsControl : FakeControlBase, IMultiSelectItemsControl, IUiControlAvailability,
+        IMultiSelectSelectionSnapshotControl
     {
         private string[] _items;
         private string[] _selectedItems;
@@ -2339,6 +2351,8 @@ public sealed class UiControlAdapterTests
 
         public int SelectedItemsReadCount { get; private set; }
 
+        public bool SupportsSelectionSnapshot { get; set; }
+
         public Action? OnSelectedItemsRead { get; set; }
 
         public Action<IReadOnlyCollection<string>>? OnSetSelectedItems { get; set; }
@@ -2366,6 +2380,13 @@ public sealed class UiControlAdapterTests
             SetSelectedItems(values);
             return _items;
         }
+
+        public IReadOnlyList<string>? TrySetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool> acceptSnapshot) =>
+            SupportsSelectionSnapshot && acceptSnapshot(_items, _selectedItems)
+                ? SetSelectedItemsAndGetAvailableItems(values)
+                : null;
 
         public void ResetObservationCounts()
         {

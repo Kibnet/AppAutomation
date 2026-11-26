@@ -75,7 +75,8 @@ public enum RecordedActionKind
     CaptureCopiedValue = 67,
     SelectGridRow = 68,
     InvokeDialogButton = 69,
-    SelectGridRows = 70
+    SelectGridRows = 70,
+    DoubleClickNamedItem = 71
 }
 
 public enum RecorderAssertionMode

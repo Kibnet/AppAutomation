@@ -59,6 +59,25 @@ Good signals:
 - retry action remains available after failure;
 - composer or signed-in shell controls became enabled.
 
+## 6. Named areas on drawn controls
+
+Use `UiControlType.NamedItemSurface` for a drawn control with named areas that handle a real double click (for example, the equipment labels on a schedule). The same command runs in Headless and FlaUI:
+
+```csharp
+[UiControl("Schedule", UiControlType.NamedItemSurface, "Schedule", FallbackToName = false)]
+public partial class SchedulePage(IUiControlResolver resolver) : UiPage(resolver) { }
+```
+
+```csharp
+Page.DoubleClickNamedItem(static page => page.Schedule, "Laser 02");
+```
+
+In Avalonia, publish an explicit root AutomationId and set its attached `AutomationProperties.ItemStatus` with `NamedItemSurfaceMetadata.Format(logicalCount, revision)`. The backing peer publishes that same status and all logical items as direct `ListItem` peers, including offscreen items. Each item has a stable unique AutomationId and its full Name. Update the count and advance the revision when the logical collection changes; scrolling alone does not change the revision. Keep peers attached to the root, and invalidate children on collection changes.
+
+Each peer exposes its enabled state, offscreen state, and current viewport-clipped hit area in Avalonia root coordinates. Expose only the area where the ordinary double-click handler acts, not the full drawn row. Implement the item's `BringIntoViewCore` using the real scroll host; Avalonia's Windows UIA bridge exposes it via `ScrollItem`. The hit must belong to the item or its drawn owner, not to another child or an overlay. Leave the ordinary handler in charge of opening the item.
+
+Recorder stores the root locator and full name only. Matching is exact after trimming, ignoring case. Missing or ambiguous names and incomplete metadata fail before any press. See the [drawn sample](../../sample/DotnetDebug.Avalonia/NamedItemSurfaceFixture.cs) for a publisher.
+
 ---
 
 <a id="русская-версия"></a>
@@ -123,3 +142,11 @@ Assert'ы должны опираться на пользовательское 
 - изменился заголовок главного окна;
 - после ошибки осталась доступна повторная попытка;
 - включились controls signed-in shell или composer.
+
+## 6. Именованные области рисованного контрола
+
+Зарегистрируйте контрол как `UiControlType.NamedItemSurface`. Recorder запишет `Page.DoubleClickNamedItem(static page => page.Schedule, "Laser 02")`; Headless и FlaUI выполняют одну и ту же команду. В сценарии остаются только локатор контрола и полное имя, без координат, номера строки и ключа.
+
+Контрол публикует явный `AutomationId` и `AutomationProperties.ItemStatus` через `NamedItemSurfaceMetadata.Format(числоЦелей, ревизия)`. Его automation peer отдаёт прямых детей `ListItem` для **всех** доступных в текущей выборке целей, включая невидимые. У каждой цели свой стабильный `AutomationId`, полный `Name`, признак видимости и границы фактической зоны клика с учётом viewport. При изменении выборки обновляйте число, ревизию и список peers; при прокрутке обновляются только геометрия и видимость. `BringIntoViewCore` цели использует штатную прокрутку, обычный обработчик двойного клика по-прежнему открывает элемент.
+
+Имя сравнивается целиком, без учёта регистра и внешних пробелов. Если имя отсутствует, относится к двум целям или опубликован неполный список, команда не кликает. Пример реализации — [рисованная поверхность стенда](../../sample/DotnetDebug.Avalonia/NamedItemSurfaceFixture.cs).

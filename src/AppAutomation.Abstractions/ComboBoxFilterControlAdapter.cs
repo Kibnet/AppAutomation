@@ -150,7 +150,8 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
         return new ComboBoxFilterControl(inner);
     }
 
-    private sealed class ComboBoxFilterControl : IComboBoxFilterControl, IReadableTextControl, IMultiSelectCommittedStateControl
+    private sealed class ComboBoxFilterControl : IComboBoxFilterControl, IReadableTextControl, IMultiSelectCommittedStateControl,
+        IMultiSelectSelectionSnapshotControl
     {
         private readonly IMultiSelectControl _inner;
 
@@ -183,6 +184,11 @@ public sealed class ComboBoxFilterControlAdapter : IUiControlAdapter
         public void Open() => _inner.Open();
 
         public void SetSelectedItems(IReadOnlyCollection<string> values) => _inner.SetSelectedItems(values);
+
+        public IReadOnlyList<string>? TrySetSelectedItems(
+            IReadOnlyCollection<string> values,
+            Func<IReadOnlyList<string>, IReadOnlyList<string>, bool> acceptSnapshot) =>
+            (_inner as IMultiSelectSelectionSnapshotControl)?.TrySetSelectedItems(values, acceptSnapshot);
 
         public void Apply() => _inner.Apply();
 

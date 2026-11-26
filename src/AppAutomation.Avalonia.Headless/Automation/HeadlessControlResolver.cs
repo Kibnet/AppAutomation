@@ -270,6 +270,7 @@ public sealed partial class HeadlessControlResolver : IUiControlResolver, IUiArt
             UiControlType.Expander => new HeadlessExpanderControl(FindElement(definition).AsExpander()),
             UiControlType.Menu => new HeadlessMenuControl(FindElement(definition).AsMenu()),
             UiControlType.MenuItem => new HeadlessMenuItemControl(FindElement(definition).AsMenuItem()),
+            UiControlType.NamedItemSurface => new HeadlessNamedItemSurfaceControl(FindElement(definition), definition),
             UiControlType.Spinner => new HeadlessSpinnerControl(FindElement(definition).AsSpinner()),
             UiControlType.Tab => new HeadlessTabControl(FindElement(definition).AsTab()),
             UiControlType.TabItem => new HeadlessTabItemControl(FindElement(definition).AsTabItem()),

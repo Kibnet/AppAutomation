@@ -1,4 +1,5 @@
 using AppAutomation.Abstractions;
+using AppAutomation.Avalonia;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -80,6 +81,8 @@ internal sealed class RecorderStepValidator
             RecordedActionKind.InvokeContextMenuItem =>
                 source.ContextMenu is not null || source.ContextFlyout is MenuFlyout,
             RecordedActionKind.ClickButton => source is Button and not ToggleButton,
+            RecordedActionKind.DoubleClickNamedItem => step.Control.ControlType == UiControlType.NamedItemSurface
+                && NamedItemSurfacePeers.IsPublished(source) && !string.IsNullOrWhiteSpace(step.StringValue),
             RecordedActionKind.SetChecked => source is CheckBox or RadioButton,
             RecordedActionKind.SetToggled => source is ToggleButton and not CheckBox and not RadioButton,
             RecordedActionKind.SelectComboItem => source is ComboBox or ListBox,

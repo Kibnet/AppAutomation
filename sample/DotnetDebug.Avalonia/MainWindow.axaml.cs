@@ -71,6 +71,12 @@ public partial class MainWindow : Window
             return;
         }
         DataContext = _viewModel;
+        if (Environment.GetEnvironmentVariable(NamedItemSurfaceFixture.EnvironmentVariable) == "1")
+        {
+            var namedItemsTab = NamedItemSurfaceFixture.CreateTab();
+            MainTabs.Items.Add(namedItemsTab);
+            MainTabs.SelectedItem = namedItemsTab;
+        }
         InitializeNativeGridRuntimeFixture();
         if (Environment.GetEnvironmentVariable("APPAUTOMATION_NATIVE_GRID_RUNTIME_FIXTURE") == "presentation")
         {
