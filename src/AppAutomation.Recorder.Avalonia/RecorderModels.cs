@@ -357,7 +357,8 @@ internal static class RecorderAssertionCapabilities
                 or UiControlType.FolderExport
                 or UiControlType.ShellNavigation
                 or UiControlType.Menu
-                or UiControlType.MenuItem => StateOnly(controlType),
+                or UiControlType.MenuItem
+                or UiControlType.NamedItemSurface => StateOnly(controlType),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(controlType),
                 controlType,
